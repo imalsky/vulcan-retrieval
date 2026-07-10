@@ -1079,7 +1079,10 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     # culls back to N healthy particles (resume overwrites U from the checkpoint below)
     U = pipe.sample_prior_u(sub, _init_draw_count(pipe, N))
 
-    step = tune_step_size(pipe, key) if (cfg.mcmc_auto_tune and not cfg.mcmc_stage_adapt) else float(cfg.mala_step_size)
+    # fold_in derives an independent stream for the pilot tuner: passing `key` itself
+    # would replay the tuner's splits in the main loop (resample/mutation reuse)
+    step = (tune_step_size(pipe, jax.random.fold_in(key, 1))
+            if (cfg.mcmc_auto_tune and not cfg.mcmc_stage_adapt) else float(cfg.mala_step_size))
     log_step = math.log(min(max(step, cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
     scale = np.ones(n_dim)
     mutate = _make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
@@ -1143,15 +1146,24 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # bisection (L travels with the particles; nothing is re-evaluated here)
         L_np = np.asarray(jax.device_get(L), np.float64)
         if not np.all(np.isfinite(L_np)):
-            L_np = np.where(np.isfinite(L_np), L_np, -1e30)
+            # rejected particles are floored at -1e30 inside eval_batch, so a
+            # non-finite CARRIED likelihood is an invariant violation -- raise, never
+            # normalize it away (loud-error rule)
+            raise FloatingPointError(
+                f"non-finite carried log-likelihood at SMC stage {i} "
+                f"({int(np.sum(~np.isfinite(L_np)))}/{N} particles)")
         dbeta = _next_dbeta(L_np, beta, target_ess)
         beta_new = min(1.0, beta + dbeta)
         # (2) evidence increment + weights (uniform prior weights each stage post-resample)
         a = dbeta * (L_np - L_np.max())
-        w = np.exp(a); w_sum = w.sum()
-        logZ_inc = float(dbeta * L_np.max() + math.log(w_sum) - math.log(N)) if w_sum > 0 else float("nan")
-        logZ += 0.0 if not math.isfinite(logZ_inc) else logZ_inc
-        w_norm = w / w_sum if w_sum > 0 else np.full(N, 1.0 / N)
+        w = np.exp(a); w_sum = w.sum()   # >= 1: the max-shifted best particle is exp(0)
+        logZ_inc = float(dbeta * L_np.max() + math.log(w_sum) - math.log(N))
+        if not math.isfinite(logZ_inc):
+            raise FloatingPointError(
+                f"non-finite evidence increment at SMC stage {i} "
+                f"(beta {beta:.3e} -> {beta_new:.3e}) -- refusing to corrupt logZ")
+        logZ += logZ_inc
+        w_norm = w / w_sum
         ess = float(1.0 / np.sum(w_norm * w_norm))
         # (3) systematic resample (the carried state travels with its particle)
         key, sub = jax.random.split(key)

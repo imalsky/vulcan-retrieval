@@ -12,7 +12,8 @@ against an analytic Gaussian posterior including its evidence estimate).
 **Framework vs case (2026-07-08 reorg).** Everything reusable lives HERE
 (`config_schema.py`, `observations.py`, `tp_profile.py`, `retrieval_forward.py`,
 `pipeline.py`, the `run_smc.py` driver, `plot_smc.py`, the
-`calibrate_count_max.py` / `probe_memory.py` / `smoke_retrieval.py` tools, and
+`calibrate_count_max.py` / `probe_memory.py` / `smoke_retrieval.py` /
+`validate_warm.py` tools, and
 `tests/`). Everything planet-specific lives in a CASE DIRECTORY
 (`../runs/<case>/`): `case.py` with the `PRESETS` dict + planet identity, the PBS
 submit script, `overrides/`, and run outputs. Entry points take the case dir:
@@ -24,7 +25,15 @@ python -m retrieval_framework.smoke_retrieval     runs/w39b_smc_retrieval
 python -m retrieval_framework.calibrate_count_max runs/w39b_smc_retrieval --n-draws 96
 python -m retrieval_framework.probe_memory        runs/w39b_smc_retrieval
 python -m retrieval_framework.plot_smc            runs/w39b_smc_retrieval/data/gpu
+python -m retrieval_framework.validate_warm       runs/w39b_smc_retrieval
 ```
+
+`validate_warm` re-solves a finished run's checkpointed cloud COLD and compares
+against the warm-carried log-likelihoods -- the direct measurement of the
+warm-continuation history dependence (PASS gate: max|dlogL| < 0.1). Run it once
+per production run; a published retrieval should quote its result, along with the
+prior convergence-acceptance fraction (the operational prior is
+p(theta | chemistry converges) -- init logs the reject fraction).
 
 Everything below documents the framework and its engineering history, using the
 original WASP-39b application (`../runs/w39b_smc_retrieval/`, real Carter & May

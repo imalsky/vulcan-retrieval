@@ -66,6 +66,11 @@ def main() -> None:
     s = np.load(out / "posterior_samples.npz", allow_pickle=True)
     theta = np.asarray(s["samples"], float).reshape(-1, len(names))
     obs = np.load(out / "observations.npz", allow_pickle=True)
+    # a governor-stopped run saves a TEMPERED cloud; stamp every headline figure so it
+    # can never be mistaken for the posterior
+    final_beta = float(s["final_beta"]) if "final_beta" in s.files else 1.0
+    tempered_tag = ("" if final_beta >= 1.0 - 1e-6
+                    else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
     # ---------------- corner ----------------
     try:
@@ -75,8 +80,8 @@ def main() -> None:
             title_kwargs={"fontsize": 9}, label_kwargs={"fontsize": 10},
             truths=(truth if synthetic and np.isfinite(truth).any() else None),
             truth_color="#d62728")
-        fig.suptitle(f"{label} VULCAN-JAX retrieval ({'synthetic' if synthetic else 'real data'})",
-                     y=1.02, fontsize=11)
+        fig.suptitle(f"{label} VULCAN-JAX retrieval ({'synthetic' if synthetic else 'real data'})"
+                     f"{tempered_tag}", y=1.02, fontsize=11)
         fig.savefig(plots / "corner.png", dpi=DPI, bbox_inches="tight")
         plt.close(fig)
         print("[plot] corner.png")
@@ -110,7 +115,7 @@ def main() -> None:
                 label="injected truth", zorder=5)
     ax.set_xlabel("wavelength [$\\mu$m]"); ax.set_ylabel("transit depth [ppm]")
     ax.legend(fontsize=8, ncol=2, frameon=False)
-    ax.set_title(f"{label} transmission: data vs posterior predictive")
+    ax.set_title(f"{label} transmission: data vs posterior predictive{tempered_tag}")
     fig.tight_layout(); fig.savefig(plots / "spectrum_fit.png", dpi=DPI); plt.close(fig)
     print("[plot] spectrum_fit.png")
 

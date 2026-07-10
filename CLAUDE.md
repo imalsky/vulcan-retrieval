@@ -159,6 +159,33 @@ wired, suite 18/18):
   the RT is not the dominant cost, so fp32-RT is <2× on a minority term. Precedent
   exists (ExoJAX Gl229B ran fp32) if the RT ever dominates.
 
+## Warm-vs-cold validation + exactness hygiene (2026-07-09, external-review response)
+
+The warm mutation kernel's likelihood is history-dependent at the convergence
+tolerance, so it is only approximately pi_beta-invariant — the one substantive point
+from the external review. The measurement tool is `validate_warm`:
+
+```
+SMC_RETRIEVAL_PRESET=gpu python -m retrieval_framework.validate_warm runs/w39b_smc_retrieval
+```
+
+It cold re-solves the checkpointed cloud (init phase-1-equivalent, ~minutes) and
+compares against the warm-carried logL. PASS gate: max|dlogL| < 0.1 over the cloud
+(tolerance predicts ~1e-2; the cloud's logL spread is ~n_dim/2 ≈ 5). Run once per
+production run; quote the result in the paper together with the init reject fraction
+(the operational prior is p(theta | chemistry converges)). FAIL exits nonzero and
+says what to do (tighten yconv_cri or rerun `smc_chem_mode="cold"`).
+
+Same pass fixed: pilot-tuner PRNG-key reuse (dormant — only the non-default
+`mcmc_auto_tune and not mcmc_stage_adapt` path; now `fold_in`-decorrelated), the
+silent nonfinite-L floor + logZ-increment skip in the SMC loop are now raises (both
+unreachable in a healthy run — invariant checks, not normalizations), and plot_smc
+stamps `[TEMPERED beta=...]` on corner + spectrum figures when a governor-stopped
+run hasn't reached beta=1. Rejected from the same review, with measured reasons (see
+memory/README): steady-state-adjoint gradient swap, stiffness bucketing, delayed
+acceptance (all void under the lockstep per-step cost model), fp32 RT, exojax
+unpinning, remat retuning.
+
 ## RT resolution — R~1000 (nu_pts~1652) is the MEMORY-SAFE DEFAULT (this keeps biting)
 
 **RULE: keep R~1000, i.e. `nu_pts`~1652 for the production band. The RT-vjp gradient
@@ -202,6 +229,7 @@ upstream's default that PRESERVES the longdy-defined steady state (truth bit-ide
 
 - Framework: `retrieval_framework/` (planet-agnostic). Cases: `runs/<case>/case.py`.
 - Run from the bundle dir: `python -m retrieval_framework.run_smc runs/w39b_smc_retrieval`
-  (also `calibrate_count_max`, `probe_memory`, `smoke_retrieval`, `plot_smc`).
+  (also `calibrate_count_max`, `probe_memory`, `smoke_retrieval`, `plot_smc`,
+  `validate_warm`).
 - `config.py` / `zco_lib.py` roots are portable via `$VULCAN_PROJECT_ROOT`.
 - Figures still go to `../jax_paper/figures/`; never modify `../VULCAN-JAX`.
