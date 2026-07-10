@@ -59,6 +59,12 @@
 # On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
 # max|dlogL| < 0.1) run automatically; the verdict lands in the log + validate_warm.npz.
 #
+# XLA A/B experiments (launch-overhead reduction; the GPU sits at ~300-390 W of 700 W,
+# so per-step overhead is the speed lever -- see ../../CLAUDE.md "GPU power headroom").
+# Judge purely by t_mutation_sweep_s in timing.json vs a baseline calibration:
+#   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs
+#   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE' run_nas_w39b.pbs
+#
 # Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_SMC_<jobid>.log
 # =============================================================================
 set -euo pipefail

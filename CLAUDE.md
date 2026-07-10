@@ -169,9 +169,10 @@ wired, suite 18/18):
   the chemistry per sweep step.
 - **6 sweeps/stage** (was 12; schema + gpu preset). Published MALA-within-SMC practice
   is 3-10 with a good preconditioner; each sweep costs one full batched gradient.
-- **N=96, `smc_rt_vjp_chunk=12`** at nu_pts=1652 (96/12 = 8 serialized RT chunks, same
-  count as the old 48/6; chemistry is full-width so N is nearly free; 96 final
-  particles instead of 48 for a 10-D posterior). Run `PROBE_MEMORY=1` once before the
+- **N=96 (2026-07-09) → 144 (2026-07-10), `smc_rt_vjp_chunk=12`** at nu_pts=1652
+  (8 serialized RT chunks at 96, 12 at 144; chemistry is full-width so N is nearly
+  free — the wattage evidence and memory projection live in "GPU power headroom"
+  below). Run `PROBE_MEMORY=1` once before the
   first production submit after ANY nu_pts / chunk / N change.
 - **Per-sweep heartbeat**: `_make_mutation` logs `sweep k/n: accept= rejected= n_bad_grad=`
   via `jax.debug.callback` — a slow stage is visible as it happens, never hours of silence.
@@ -219,6 +220,32 @@ run hasn't reached beta=1. Rejected from the same review, with measured reasons 
 memory/README): steady-state-adjoint gradient swap, stiffness bucketing, delayed
 acceptance (all void under the lockstep per-step cost model), fp32 RT, exojax
 unpinning, remat retuning.
+
+## GPU power headroom → N=144 + XLA A/B candidates (2026-07-10)
+
+Reading the GH200 monitor correctly: nvidia-smi "100% util" only means SOME kernel was
+resident each sample — the WATTAGE is the honest saturation signal (700 W cap). Job
+64854's trace: ~290-300 W during the 192-lane init-1 primal, ~360-390 W during the
+672-lane gradient pass. That jump is the load-bearing observation: **batch width fills
+the GPU**; the sequential solver chain itself cannot be shortened by idle silicon (a
+step can't start before the previous finishes), so headroom converts to WIDTH
+(statistics) or to per-step LAUNCH-OVERHEAD reduction (speed) — nothing else.
+
+- **Width: gpu preset raised N 96 → 144 (2026-07-10, "more aggressive" per Isaac).**
+  Chemistry rides ~free; RT-vjp goes 8 → 12 serialized chunks of 12 (tail ×1.5).
+  Memory projection from the N=96 probe (FULL cold_vg 73.25 GiB; chem tangents ~0.13
+  GiB/particle): ~79.5 GiB — inside the ~81 GiB budget, but **PROBE_MEMORY=1 is
+  REQUIRED before the first submit** (standing rule; the probe is compile-only). If it
+  busts, drop `smc_rt_vjp_chunk` to 9 (16 chunks) before touching N. **N=192 projects
+  ~86 GiB — AT the real pool; do not, without a probe showing margin.**
+- **Speed: two untested XLA A/B experiments** (launch-overhead reduction; judged purely
+  by `t_mutation_sweep_s` vs a baseline calibration — they change scheduling, not math;
+  the PBS XLA_FLAGS line is `${XLA_FLAGS:-...}` so qsub -v overrides it cleanly):
+  `qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs`
+  `qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE' run_nas_w39b.pbs`
+  If a combo crashes or shows nothing, discard it; if command buffers capture the
+  while_loop body as a CUDA graph, every stage gets faster at identical physics.
+  Adopt a winner by editing the PBS default, with a note here.
 
 ## RT resolution — R~1000 (nu_pts~1652) is the MEMORY-SAFE DEFAULT (this keeps biting)
 

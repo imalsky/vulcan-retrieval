@@ -55,5 +55,12 @@ fraction in the paper.
   warm start): flip it only after the same-seed `SYNTH=1` A/B validates it
   (`SMC_RETRIEVAL_OVERRIDES='{"warm_extrapolate": true}'`), then consider
   `warm_count_max` 1500 → ~800.
+- **N=144 as of 2026-07-10** (raised from 96 to spend the measured GPU power
+  headroom on particles — ~300 of 700 W drawn during primal phases; width is
+  nearly free in the lockstep chemistry, RT tail goes 8 → 12 chunks). Projected
+  gradient-eval peak ~79.5 GiB vs the 73.25 GiB probed at N=96: **run
+  `PROBE_MEMORY=1` before the first N=144 submit.** Two XLA launch-overhead A/B
+  candidates (autotune=4, CUDA-graph command buffers) are documented in the PBS
+  header; judge by `t_mutation_sweep_s`.
 - **Before trusting the real-data posterior:** one clean `SYNTH=1` recovery at gpu
   fidelity, and `VERDICT: PASS` from the automatic warm-vs-cold validation.

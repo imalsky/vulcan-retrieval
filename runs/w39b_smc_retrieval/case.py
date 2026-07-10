@@ -114,7 +114,7 @@ def smoke_config(**overrides: Any) -> Config:
 
 def gpu_config(**overrides: Any) -> Config:
     """The <24 h GH200 production preset: nz=50, photo on, full molecule set over the
-    real Carter & May combined NIRISS+G395H band, N=96 forward-mode-jvp MALA particles
+    real Carter & May combined NIRISS+G395H band, N=144 forward-mode-jvp MALA particles
     with per-stage adaptation. Fits the real spectrum (generate_synthetic_data=False).
 
     Band note: the native model band is 1.01-5.26 um (nu 1900-9900). NIRISS SOSS
@@ -139,8 +139,8 @@ def gpu_config(**overrides: Any) -> Config:
     warm re-converge ~500-800 steps, conv_step-window-dominated -- the cold count_max
     only ever binds at init), the warm gradient runs ONE chemistry while_loop (the
     accept_count diag rides the jvp chain), 6 sweeps/stage (was 12), and the RT vjp
-    runs 12-wide at nu_pts=1652 (8 serialized chunks at N=96, same count as the old
-    48/6). Projected ~25-45 min/stage vs the ~3-6 h/stage job 64745 showed.
+    runs 12-wide at nu_pts=1652 (12 serialized chunks at N=144). Projected ~20-40
+    min/stage vs the ~3-6 h/stage job 64745 showed.
     Run `qsub -v PROBE_MEMORY=1` once after any nu_pts / chunk / N change, and
     `qsub -v CALIBRATE_ONLY=1` (~1 h) to get timing.json before committing a full run.
     """
@@ -161,18 +161,24 @@ def gpu_config(**overrides: Any) -> Config:
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N=96: chemistry runs full-width (width is nearly free in the launch-bound
-        # while_loop -- the README's recommended production width), and 96/12 keeps the
-        # serialized RT-vjp chunk count at 8. 96 particles also double the final
-        # posterior sample count (48 was thin for a 10-D posterior).
-        smc_num_particles=96, smc_num_mcmc_steps=6, smc_max_steps=40,
+        # N=144 (raised from 96, 2026-07-10): the GPU power trace showed real headroom
+        # (~300 W of 700 W during the 192-lane primal, ~360-390 W at 672 gradient
+        # lanes) -- width fills the GPU nearly for free in the launch-bound
+        # while_loop, so spend the idle silicon on particles. 144 = 12 exact RT-vjp
+        # chunks of 12 (RT tail x1.5 vs N=96's 8 chunks); projected gradient-eval
+        # peak ~79 GiB vs the 73.25 GiB probed at N=96 (chem tangents ~0.13
+        # GiB/particle) -- PROBE_MEMORY=1 required before the first submit. N=192
+        # would project ~86 GiB, AT the real pool: don't, without a probe + chunk
+        # drop. More particles also directly answer the small-N SMC criticism
+        # (ladder-adaptation noise, evidence variance).
+        smc_num_particles=144, smc_num_mcmc_steps=6, smc_max_steps=40,
         smc_target_ess_frac=0.6,
         # 12-wide RT vjp at nu_pts=1652 (~half the 5000-probed per-lane cost applies;
         # est. ~40-55 GiB vs the ~81 GiB pool). PROBE_MEMORY=1 once before the first
         # production submit -- the probe is compile-only and cannot OOM.
         smc_rt_vjp_chunk=12,
         mcmc_stage_adapt=True, mcmc_auto_tune=True,
-        num_samples=96, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
+        num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall
     )                                     # for build/compile + init + PPC + plots
     base.update(overrides)
@@ -181,7 +187,7 @@ def gpu_config(**overrides: Any) -> Config:
 
 def prod_config(**overrides: Any) -> Config:
     """Higher-fidelity variant (nz=100, more stages, no governor) for when >24 h is
-    available. Inherits the gpu preset's sweep-cost settings (N=96, 6 sweeps/stage,
+    available. Inherits the gpu preset's sweep-cost settings (N=144, 6 sweeps/stage,
     warm_count_max)."""
     base = dict(
         nz=100, smc_num_mcmc_steps=8, smc_max_steps=48,

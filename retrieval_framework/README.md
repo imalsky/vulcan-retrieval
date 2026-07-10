@@ -158,7 +158,7 @@ ExoJax PreMODIT RT is vjp-capable but costs ~GB of intermediates per lane.
 So per mutation sweep:
 
 1. chemistry: 6 fwd-jvp lanes per particle, ALL particles in ONE wide batched
-   `while_loop` (96×6 = 576 tangent-augmented columns at the gpu preset's N=96,
+   `while_loop` (N×6 tangent-augmented columns — 864 at the gpu preset's N=144,
    nz=50). The warm accept_count diagnostic rides this same jvp'd chain (it is
    part of the runner's primal carry, integer-valued so tangent-free) — the
    2026-07-09 rework; an earlier version ran a SECOND primal-only `while_loop`
@@ -297,7 +297,10 @@ errors over silent degradation.)
 Note on `smc_num_particles` (updated after the 2026-07-07 probe): the chemistry
 — primal AND gradient — runs full-width (`smc_chem_chunk=0`), so N widens those
 kernels nearly for free (576 lanes at N=96 ≈ the paper's batch-256 benchmark
-width) — which is why the gpu preset ships N=96. The ONLY N-linear cost is the
+width; the GH200 power trace confirms it — wattage rises with lane count while
+step time barely moves) — which is why the gpu preset ships N=144 as of
+2026-07-10 (raised from 96 to spend the measured ~300-of-700 W headroom on
+particles; see `../CLAUDE.md` "GPU power headroom"). The ONLY N-linear cost is the
 RT VJP stage (ceil(N/`smc_rt_vjp_chunk`) sequential blocks; the per-lane vjp
 memory scales with nu_pts — 18.4 GiB/lane at nu_pts=5000, ~3× less at the
 production 1652, so the gpu preset runs 12-wide: 96/12 = 8 blocks, the same
@@ -842,8 +845,9 @@ the sole memory wall (18.4 GiB/lane; `smc_rt_vjp_chunk` stays 6 = 65.4 GiB);
 (195 vs ~123 naive at the failed setting) — ALWAYS re-probe `FULL cold_vg`
 after chunk/nu changes, and fall back to `smc_rt_vjp_chunk=4` if it exceeds
 ~72 GiB; (4) with 576 full-width gradient lanes at N=96, the chemistry stage
-finally runs at the gpu_throughput-benchmark width — N=96 is the recommended
-production setting.
+finally runs at the gpu_throughput-benchmark width. (Historical note: N=96 was
+the recommendation here; the gpu preset moved to N=144 on 2026-07-10 on the
+power-headroom evidence.)
 
 **count_max tightened + reject-on-nonconverged closed (2026-07-07, same day).**
 Diagnosed live against a real production run (job 64163, gpu_r3000_n96): even the
