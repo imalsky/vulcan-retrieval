@@ -92,3 +92,28 @@ def test_resume_from_checkpoint_completes_the_ladder(tmp_path):
     assert res["betas"][n_done] == part["betas"][n_done]
     th = res["theta_draws"].reshape(-1, 3)
     assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
+
+
+def test_calibrate_benchmarks_stage0_conditions(tmp_path):
+    """Regression for NAS job 64961: calibrate() must benchmark the mutation at the
+    ladder's own stage-0 conditions (ESS-bisected first beta, stage-0 resample,
+    cloud-width preconditioner, clamped step). The old hard-coded
+    (beta=0.5, step=mala_step_size, scale=1) proposal made drift moves
+    ~step*beta*|G| with prior-cloud gradients -- proposals the production ladder
+    never launches -- and aborted the calibration on a spurious AD-pathology raise."""
+    from retrieval_framework import run_smc
+    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=3,
+                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True,
+                   num_samples=64, num_chains=1, out_dir=tmp_path)
+    pipe = _stub_pipe(cfg)
+    pipe.n_chem_tp = 0
+    pipe.gradient_mode = "stub"
+    pipe.chem_mode = "stub"
+    proj = run_smc.calibrate(cfg, pipe, P, jax)
+
+    assert 0.0 < proj["calibration_beta_stage0"] <= 1.0
+    assert cfg.mcmc_step_size_min <= proj["calibration_step"] <= cfg.mcmc_step_size_max
+    # preconditioner is the resampled cloud's per-dim width, never unit scale
+    assert proj["calibration_scale_min"] >= 1e-3
+    assert proj["calibration_scale_max"] <= cfg.mcmc_scale_clip
+    assert (tmp_path / "timing.json").exists()

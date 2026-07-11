@@ -101,8 +101,9 @@ def test_mutation_kernel_carries_tangents(extrap):
     out = mutate(jax.random.PRNGKey(3), U0, Y, refs, L0, G0, DY,
                  jnp.asarray(0.5, jnp.float64), jnp.asarray(0.01, jnp.float64),
                  jnp.ones((pipe.n_dim,), jnp.float64))
-    U1, Y1, refs1, L1, G1, DY1, acc, n_bad = out
+    U1, Y1, refs1, L1, G1, DY1, acc, n_bad, n_capped = out
     assert int(n_bad) == 0
+    assert int(n_capped) == 0
     assert np.asarray(DY1).shape == np.asarray(DY).shape
     assert np.all(np.isfinite(np.asarray(DY1)))
     assert np.all(np.isfinite(np.asarray(L1)))

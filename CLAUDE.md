@@ -109,6 +109,26 @@ kernel timeline. The always-on `nvidia-smi` monitor (`logs/gpu_monitor_*.log`) a
 gives util/power/clocks without it. Also: `NSYS_DELAY` is in **seconds** (64604 used
 6000 = 100 min, not 6 s).
 
+## Calibration mutation runs at stage-0 conditions (job 64961, fixed 2026-07-11)
+
+`run_smc.calibrate()` used to benchmark the mutation at hard-coded `(beta=0.5,
+step=mala_step_size=0.2, scale=1)`. The MALA drift is `step*scale^2*beta*G`, and a
+prior-like cloud carries |L| (hence |G|) up to ~1e6 — those proposals land so far off
+the converged map that a few per sweep (8/144 in job 64961) returned a finite spectrum
+with a non-finite end-to-end gradient, and `_check_mutation_health` aborted with the
+AD-pathology RuntimeError (48 = 8 x 6 sweeps; accept=0.00 throughout). NOT an AD bug:
+init was healthy (205/288 converged, phase-2 gradient pass clean), and the production
+ladder never makes such moves — its stage 0 uses an ESS-bisected first beta (~1e-5 for
+a real-data cloud), a stage-0 resample, the `_abs_scale_diag` cloud-width
+preconditioner, and a clamped step. **Fix: `calibrate()` now reproduces
+`run_smc_loop`'s stage 0 exactly** (same beta bisection, systematic resample,
+preconditioner, step clamp); the chosen beta/step/scale are logged and land in
+timing.json (`calibration_beta_stage0`, `calibration_step`, `calibration_scale_*`).
+Regression: `tests/test_smc_gaussian.py::test_calibrate_benchmarks_stage0_conditions`.
+Corollary: `warm_extrapolate` was an amplifier, not the cause — an absurd delta-theta
+makes the first-order seed garbage; at stage-0-sized moves the seed-vs-plain parity is
+gated by `tests/test_warm_extrap.py`.
+
 ## Retrieval — critical decisions (2026-07-08)
 
 - **count_max = 5000, always** (lowered from 10000, Isaac 2026-07-08). Set in `vulcan-retrieval/runs/w39b_smc_retrieval/case.py::gpu_config`;

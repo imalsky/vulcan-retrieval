@@ -146,6 +146,11 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     particle -- paid once per run) and one full mutation call (compile and warm
     steady-state separately), then project the SMC cost. Writes timing.json.
 
+    The mutation is benchmarked at the ladder's OWN stage-0 conditions -- ESS-bisected
+    first beta from the carried likelihoods, stage-0 systematic resample, cloud-width
+    preconditioner, clamped step -- exactly what run_smc_loop's first stage will run,
+    so the timing is representative and the health check exercises the real kernel.
+
     Under the staged architecture a stage costs ~one mutation call: the tempering
     reweight uses the CARRIED likelihood, so no extra likelihood batch is paid."""
     import jax.numpy as jnp
@@ -167,9 +172,29 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
              f"| L range [{float(jnp.min(L)):.1f}, {float(jnp.max(L)):.1f}]")
 
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
-    beta = jnp.asarray(0.5, pipe.dtype)
-    step = jnp.asarray(float(cfg.mala_step_size), pipe.dtype)
-    scale = jnp.ones((pipe.n_dim,), pipe.dtype)
+    # Stage-0 conditions, not an arbitrary proposal: the drift term of a MALA move is
+    # step*scale^2*beta*G, and a prior-like cloud carries |L| (hence |G|) up to ~1e6 --
+    # the old hard-coded (beta=0.5, step=mala_step_size, scale=1) benchmark launched
+    # proposals so far off the converged map that their tangents went non-finite, and
+    # _check_mutation_health aborted the calibration on an "AD pathology" the ladder's
+    # tiny adaptive first beta can never produce (NAS job 64961: 8 bad grads/sweep at
+    # accept=0.00). Reproduce run_smc_loop's stage 0 instead.
+    L_np = np.asarray(jax.device_get(L), np.float64)
+    dbeta = P._next_dbeta(L_np, 0.0, float(cfg.smc_target_ess_frac) * N)
+    beta = jnp.asarray(dbeta, pipe.dtype)
+    w = np.exp(dbeta * (L_np - L_np.max()))
+    key, sub = jax.random.split(key)
+    idx = P._systematic_resample_idx(sub, jnp.asarray(w / w.sum(), pipe.dtype), N)
+    U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
+    if DY is not None:
+        DY = DY[idx]
+    scale_np = (P._abs_scale_diag(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
+                if cfg.mcmc_stage_adapt else np.ones(pipe.n_dim))
+    scale = jnp.asarray(scale_np, pipe.dtype)
+    step_f = min(max(float(cfg.mala_step_size), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max)
+    step = jnp.asarray(step_f, pipe.dtype)
+    log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
+             f"step={step_f:.3g} scale=[{float(scale_np.min()):.3g}, {float(scale_np.max()):.3g}]")
     t0 = time.perf_counter()
     out = mutate(key, U, Y, refs, L, G, DY, beta, step, scale)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
@@ -186,6 +211,8 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
         "n_chem_tp": int(pipe.n_chem_tp), "gradient_mode": pipe.gradient_mode,
         "smc_chem_mode": pipe.chem_mode,
         "smc_rt_chunk": int(cfg.smc_rt_chunk), "smc_rt_vjp_chunk": int(cfg.smc_rt_vjp_chunk),
+        "calibration_beta_stage0": float(dbeta), "calibration_step": step_f,
+        "calibration_scale_min": float(scale_np.min()), "calibration_scale_max": float(scale_np.max()),
         "t_state_init_s": t_init,
         "t_mutation_compile_s": t_mut_compile, "t_mutation_sweep_s": t_mut,
         "mutation_accept_frac": float(jax.device_get(out[6])),
