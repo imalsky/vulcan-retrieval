@@ -69,7 +69,6 @@ if "exojax" in sys.modules:
 os.environ["VULCAN_JAX_NETWORK"] = config.VULCAN_NETWORK
 os.environ["VULCAN_JAX_ATOM_LIST"] = config.VULCAN_ATOM_LIST
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.chdir(str(config.JAXROOT))
 
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402

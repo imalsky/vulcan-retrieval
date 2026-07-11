@@ -40,7 +40,6 @@ if not (REPO_DIR / "data" / "cm24_wasp39b").is_dir():    # tracked marker, in ev
         "install cannot infer it). Large caches (data/opacity_cache, data/exojax_linelists) "
         "are seeded separately -- see the repo README data policy.")
 
-JAXROOT = PROJECT_ROOT / "VULCAN-JAX"
 JP = PROJECT_ROOT / "jax_paper"  # for _common.apply_style (house figure style)
 DEMO_DIR = REPO_DIR                                             # deprecated pre-0.6 alias
 OUTPUTS = REPO_DIR / "data"                                     # npz caches + observed spectra live with the repo
