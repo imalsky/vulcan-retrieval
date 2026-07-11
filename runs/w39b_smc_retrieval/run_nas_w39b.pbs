@@ -1,0 +1,348 @@
+#!/bin/bash
+#PBS -N VJAX_W39B_SMC
+#PBS -q gpu_long
+#PBS -W group_list=s2458
+#PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
+# 24 h wall: the gpu preset's SMC governor is 20 h, leaving ~4 h for build/compile,
+# init, PPC and plots (2026-07-09 sweep-cost rework projects the ladder well inside it;
+# an over-budget run still checkpoints every stage -- resume with RESUME=1).
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -m abe
+#
+# =============================================================================
+# WASP-39b differentiable VULCAN-JAX -> ExoJax transmission retrieval on a
+# NASA NAS GH200 node: adaptive-tempered SMC with a forward-mode-jvp MALA kernel
+# against the real Carter & May (2024) NIRISS+G395H spectrum.
+#
+# Same node/env pattern as the working SWAMPE WASP-43b retrieval PBS and the
+# VULCAN-JAX GPU benchmark PBS (shared conda env pyt2_8_gh + editable --user
+# installs of the synced trees, GH200 XLA knobs from the validated benchmark).
+#
+# Expected layout on /nobackup (git pull for code, scp/cp for data -- see CLAUDE.md):
+#   ${PROJECT_ROOT}/VULCAN-JAX/                                  (chemistry repo)
+#   ${PROJECT_ROOT}/vulcan-retrieval/                             (THIS repo; data/ + output/ at its root)
+#   ${PROJECT_ROOT}/vulcan-retrieval/runs/w39b_smc_retrieval/     (THIS case dir)
+#   (CO ExoMol + H2-H2/H2-He CIA cache lives in the repo data/: no other dependency needed)
+#
+# Submit (from this case dir, or export PROJECT_ROOT):
+#   cd /nobackup/$USER/VULCAN_Project/vulcan-retrieval/runs/w39b_smc_retrieval
+#   qsub run_nas_w39b.pbs                        # real-data production run
+#   qsub -v SYNTH=1 run_nas_w39b.pbs             # gpu-fidelity synthetic recovery test
+#   qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs    # timing projection only (~1 h)
+#   qsub -v CALIBRATE_COUNT_MAX=1 run_nas_w39b.pbs   # accept_count distribution only
+#
+# Env knobs (-v):
+#   CONDA_ENV               interpreter env            (default pyt2_8_gh)
+#   SMC_RETRIEVAL_PRESET    smoke | gpu | prod         (default gpu)
+#   SMC_RETRIEVAL_OVERRIDES JSON Config overrides      (optional)
+#   SMC_RETRIEVAL_OVERRIDES_FILE  JSON Config overrides file, relative to this dir (optional)
+#   SYNTH=1                 inject-and-recover instead of fitting real data
+#   CALIBRATE_ONLY=1        time 1 likelihood + 1 mutation sweep, project, exit
+#   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
+#                           CALIBRATE_N_DRAWS (default 48), CALIBRATE_COUNT_MAX_PROBE (default
+#                           20000), CALIBRATE_SEED_OFFSET (default 0), CALIBRATE_RESOLUTION
+#                           (default 100 -- native R for the RT; accept_count is
+#                           resolution-independent so this just cheapens the build/RT/memory)
+#   RESUME=1                continue a killed run from its smc_checkpoint.npz
+#   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
+#                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
+#                           NSYS_DURATION (default 120 s); job runs on past the window.
+#   NSYS_FULL=1             FULL whole-process Nsight Systems trace (for a BOUNDED job:
+#                           the count_max calibration or PROBE_MEMORY). Keep that job
+#                           short or the .nsys-rep gets large.
+#   NSYS_GPU_METRICS=1      add --gpu-metrics-device=all to either mode (SM/DRAM
+#                           utilization timeline; needs a recent nsys)
+#   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
+#
+# On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
+# max|dlogL| < 0.1) run automatically; the verdict lands in the log + validate_warm.npz.
+#
+# XLA A/B experiments (launch-overhead reduction; the GPU sits at ~300-390 W of 700 W,
+# so per-step overhead is the speed lever -- see the repo-root CLAUDE.md "GPU power headroom").
+# Judge purely by t_mutation_sweep_s in timing.json vs a baseline calibration:
+#   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs
+#   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE' run_nas_w39b.pbs
+#
+# Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_SMC_<jobid>.log
+# =============================================================================
+set -euo pipefail
+
+# --- locate the project root (PBS spools the script; rely on PBS_O_WORKDIR) ---
+if [ -n "${PROJECT_ROOT:-}" ]; then :
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ -d "${PBS_O_WORKDIR}/vulcan-retrieval/runs/w39b_smc_retrieval" ]; then
+  PROJECT_ROOT="${PBS_O_WORKDIR}"
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ "$(basename "${PBS_O_WORKDIR}")" = "w39b_smc_retrieval" ]; then
+  # case dir -> runs -> repo -> PROJECT_ROOT: three levels up
+  PROJECT_ROOT="$(cd -- "${PBS_O_WORKDIR}/../../.." && pwd -P)"
+else
+  echo "ERROR: set PROJECT_ROOT or submit from .../vulcan-retrieval/runs/w39b_smc_retrieval"
+  exit 1
+fi
+REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"                            # repo root (data/ + output/ live here)
+SMC_DIR="${REPO_DIR}/runs/w39b_smc_retrieval"         # this case
+if [ ! -f "${SMC_DIR}/case.py" ] || [ ! -f "${REPO_DIR}/src/retrieval_framework/run_smc.py" ]; then
+  echo "ERROR: case.py / retrieval framework not found under PROJECT_ROOT=${PROJECT_ROOT}"
+  exit 1
+fi
+export PROJECT_ROOT
+export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes config.py / zco_lib.py portable
+
+# --- stream everything to a tail-able log (PBS .o appears only at job end) ----
+LOG_DIR="${SMC_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+_jobid="${PBS_JOBID:-manual_$$}"
+LOG_FILE="${LOG_DIR}/W39B_SMC_${_jobid%%.*}.log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+echo "Live log: tail -f ${LOG_FILE}"
+echo "Job ${PBS_JOBID:-?} started $(date) on $(hostname) ($(uname -m))"
+echo "PROJECT_ROOT=${PROJECT_ROOT}"
+
+# --- NAS proxy (only needed if HITRAN line lists must be (re)downloaded) ------
+export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
+export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
+
+# --- caches + user-site off $HOME (the VULCAN-JAX hpc_env.sh pattern) ---------
+: "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase"
+export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
+export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
+export MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
+export TMPDIR="${VULCAN_SCRATCH}/tmp"
+unset PYTHONNOUSERSITE
+mkdir -p "${PYTHONUSERBASE}" "${PIP_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
+         "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
+
+# --- conda env (shared GH200 env; VULCAN-JAX installed via pip --user) --------
+module purge 2>/dev/null || true
+module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
+module load miniconda3/gh2 2>/dev/null || true
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${CONDA_ENV:-pyt2_8_gh}"
+
+# --- GPU runtime env (validated GH200 knobs from the VULCAN-JAX benchmark) ----
+export PYTHONUNBUFFERED=1
+export JAX_ENABLE_X64="${JAX_ENABLE_X64:-1}"
+unset JAX_PLATFORMS
+export JAX_PLATFORM_NAME=gpu
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
+export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
+# --- preflight: GPU visible, JAX on it, packages + data present ---------------
+if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: no visible NVIDIA GPU in this job."; exit 1
+fi
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+# user-site extras the shared env may lack (same pattern as the SWAMPE PBS's h5py)
+python -c "import exojax" 2>/dev/null || python -m pip install --user "exojax==2.2.3"
+python -c "import corner" 2>/dev/null || python -m pip install --user corner || true
+python -c "import tqdm"   2>/dev/null || python -m pip install --user tqdm   || true
+
+# vulcan_jax and retrieval_framework MUST resolve to the git-synced trees. The old
+# sys.path fallback in vulcan_chem is gone, so a stale `pip --user` vulcan-jax would
+# silently win -- install both EDITABLE (idempotent; `git pull --ff-only` stays the
+# code-deploy mechanism, nothing to reinstall on later pulls).
+python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
+python -m pip install --user --no-deps -e "${REPO_DIR}"
+
+python - <<'PY' || { echo "ERROR: runtime preflight failed."; exit 1; }
+import os, sys
+from pathlib import Path
+ok = True
+import jax
+be = jax.default_backend()
+print(f"jax {jax.__version__} backend={be} devices={jax.devices()}")
+if be not in ("gpu", "cuda", "rocm"):
+    print("ERROR: JAX is not on the GPU", file=sys.stderr); ok = False
+root = Path(os.environ["VULCAN_PROJECT_ROOT"])
+import vulcan_jax
+_vj = Path(vulcan_jax.__file__).resolve()
+print("vulcan_jax", vulcan_jax.__version__, "from", _vj.parent)
+if not str(_vj).startswith(str((root / "VULCAN-JAX").resolve())):
+    print(f"ERROR: vulcan_jax resolves to {_vj}, not the synced tree under "
+          f"{root}/VULCAN-JAX. A stale user-site install is shadowing it; fix with:\n"
+          f"  python -m pip install --user --no-deps --force-reinstall -e {root}/VULCAN-JAX",
+          file=sys.stderr); ok = False
+import retrieval_framework
+from retrieval_framework.forward import config as _fwd_config
+print("retrieval_framework", retrieval_framework.__version__,
+      "from", Path(retrieval_framework.__file__).parent)
+import exojax
+print("exojax", exojax.__version__)
+cm24 = root / "vulcan-retrieval" / "data" / "cm24_wasp39b"
+if not any(cm24.glob("*.csv")):
+    print(f"ERROR: missing real spectrum CSVs in {cm24}", file=sys.stderr); ok = False
+lldir = root / "vulcan-retrieval" / "data" / "exojax_linelists"
+missing = [m for m in ("H2O", "CO2", "CH4", "SO2", "HCN", "C2H2", "H2S") if not (lldir / f"{m}.h5").exists()]
+if missing:
+    print(f"WARNING: HITRAN caches missing for {missing} in {lldir}; "
+          "first run will download via the NAS proxy.")
+codir = root / "vulcan-retrieval" / "data" / "opacity_cache"
+if not (codir / "CO" / "12C-16O" / "Li2015").is_dir():
+    print(f"ERROR: missing cached CO ExoMol dir under {codir}", file=sys.stderr); ok = False
+if not (codir / "H2-H2_2011.cia").exists():
+    print(f"ERROR: missing H2-H2 CIA file under {codir}", file=sys.stderr); ok = False
+if not (codir / "H2-He_2011.cia").exists():
+    print(f"ERROR: missing H2-He CIA file under {codir} (exojax_rt would silently "
+          "skip the term -- not acceptable for a production run)", file=sys.stderr); ok = False
+sys.exit(0 if ok else 1)
+PY
+
+# --- FastChem binary (the EQ init runs it once at build time) -----------------
+# The repo checkout's binary is macOS-arm64 and cannot run here; prefer the tree
+# inside the pip-installed vulcan-jax (compiled on NAS by vulcan-emulator's
+# run_install.pbs). Probe by EXECUTING the candidate (an exec-format error means
+# wrong architecture). Must be exported before the first `import vulcan_jax`.
+if [ -z "${VULCAN_JAX_FASTCHEM_DIR:-}" ]; then
+  _fc_line="$(python - <<'PY'
+import os, pathlib, subprocess
+cands = []
+try:
+    import vulcan_jax
+    cands.append(pathlib.Path(vulcan_jax.__file__).parent / "fastchem_vulcan")
+except Exception:
+    pass
+root = pathlib.Path(os.environ["VULCAN_PROJECT_ROOT"])
+cands.append(root / "VULCAN-JAX" / "src" / "vulcan_jax" / "fastchem_vulcan")
+for c in cands:
+    b = c / "fastchem"
+    if b.exists():
+        try:
+            subprocess.run([str(b)], cwd=str(c), timeout=15, capture_output=True)
+        except OSError:
+            continue        # exec-format error -> wrong architecture
+        except Exception:
+            pass            # ran but complained (no args) -> executable is fine
+        print(f"FASTCHEM_DIR={c}")
+        break
+PY
+)"
+  case "${_fc_line}" in
+    FASTCHEM_DIR=*)
+      export VULCAN_JAX_FASTCHEM_DIR="${_fc_line#FASTCHEM_DIR=}"
+      echo "FastChem tree: ${VULCAN_JAX_FASTCHEM_DIR}" ;;
+    *)
+      echo "ERROR: no runnable FastChem binary found for this node's architecture."
+      echo "       Install one with:  cd /nobackup/\$USER/vulcan-emulator && qsub supercomputer_cmds/run_install.pbs"
+      echo "       (or build ${PROJECT_ROOT}/VULCAN-JAX/src/vulcan_jax/fastchem_vulcan with make, then"
+      echo "        export VULCAN_JAX_FASTCHEM_DIR to that directory)."
+      exit 1 ;;
+  esac
+fi
+
+# --- GPU utilization monitor ---------------------------------------------------
+GPU_MON_LOG="${LOG_DIR}/gpu_monitor_${_jobid%%.*}.log"
+( while true; do
+    { echo "=== $(date '+%F %T') ==="
+      # util%, W, MHz, MiB, MiB -- power+clocks distinguish real work from
+      # launch-bound tiny kernels (100% util at ~160W = kernel-launch-bound)
+      nvidia-smi --query-gpu=utilization.gpu,power.draw,clocks.sm,memory.used,memory.total --format=csv,noheader,nounits
+    } >> "${GPU_MON_LOG}" 2>&1
+    sleep 60
+  done ) &
+GPU_MON_PID=$!
+cleanup() { kill "${GPU_MON_PID}" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+echo "GPU monitor: ${GPU_MON_LOG}"
+
+# --- Nsight Systems profiling -------------------------------------------------
+# Two modes -> logs/nsys_<jobid>.nsys-rep :
+#   NSYS=1       WINDOWED: skip build+compile (NSYS_DELAY, default 900 s) then trace
+#                NSYS_DURATION (default 120 s) of the steady-state GPU loop, --kill=none
+#                so the job runs on. Use for the long (multi-hour) SMC run, where a
+#                whole-run kernel trace would be tens of GB and unloadable.
+#   NSYS_FULL=1  FULL whole-process trace, no window (runs start->finish). Use for a
+#                BOUNDED job -- the count_max calibration or PROBE_MEMORY -- where the
+#                whole thing is minutes-to-an-hour. Keep the traced job short (e.g.
+#                calibrate at a modest CALIBRATE_COUNT_MAX_PROBE) or the .nsys-rep gets
+#                large; the chemistry loop launches many tiny kernels.
+# Either mode: NSYS_GPU_METRICS=1 adds --gpu-metrics-device=all, a sampled SM/DRAM
+#   hardware-counter timeline (the compact "how busy is the GPU, really" view that
+#   answers the 100%-util-at-200 W launch-bound question directly). Opt-in because it
+#   needs a recent nsys; if nsys rejects the flag, drop it. The always-on nvidia-smi
+#   monitor above already logs util/power/clocks every 60 s for the whole run.
+# Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
+# or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
+NSYS_WRAP=()
+if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
+  command -v nsys >/dev/null 2>&1 || module load cuda 2>/dev/null || true
+  if ! command -v nsys >/dev/null 2>&1; then
+    echo "ERROR: NSYS/NSYS_FULL set but nsys is not in PATH (and 'module load cuda' did not provide it)."
+    exit 1
+  fi
+  NSYS_OUT="${LOG_DIR}/nsys_${_jobid%%.*}"
+  NSYS_WRAP=(nsys profile -o "${NSYS_OUT}" --force-overwrite=true
+             -t cuda,nvtx -s none --cpuctxsw=none)
+  if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
+    # 1 kHz keeps the metrics stream small enough for a multi-hour full trace (10 kHz
+    # over hours would be GBs); 10 ms resolution is plenty to see busy-vs-idle.
+    NSYS_WRAP+=(--gpu-metrics-device=all --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
+  fi
+  if [ "${NSYS_FULL:-0}" = "1" ]; then
+    echo "nsys: FULL whole-process capture (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
+  else
+    NSYS_WRAP+=(--delay="${NSYS_DELAY:-900}" --duration="${NSYS_DURATION:-120}" --kill=none)
+    echo "nsys: WINDOWED delay=${NSYS_DELAY:-900}s duration=${NSYS_DURATION:-120}s (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
+  fi
+  nsys --version | head -1 || true
+fi
+
+# --- retrieval configuration ---------------------------------------------------
+export SMC_RETRIEVAL_PRESET="${SMC_RETRIEVAL_PRESET:-gpu}"
+if [ "${RESUME:-0}" = "1" ]; then export SMC_RESUME=1; fi
+if [ "${SYNTH:-0}" = "1" ]; then
+  # gpu-fidelity synthetic injection/recovery run (do this once before trusting
+  # the real-data posterior)
+  export SMC_RETRIEVAL_OVERRIDES="${SMC_RETRIEVAL_OVERRIDES:-{\"generate_synthetic_data\": true}}"
+  export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/gpu_synth}"
+fi
+echo "preset=${SMC_RETRIEVAL_PRESET} overrides=${SMC_RETRIEVAL_OVERRIDES:-<none>}"
+
+cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
+
+rc=0
+if [ "${PROBE_MEMORY:-0}" = "1" ]; then
+  # compile-only XLA buffer-size report for every evaluator stage; nothing
+  # executes on the GPU, so this cannot OOM (see retrieval_framework/probe_memory.py)
+  echo "========== MEMORY PROBE (compile-only) =========="
+  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}" || rc=$?
+elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
+  echo "========== CALIBRATION ONLY =========="
+  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
+elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
+  # measures the REAL accept_count distribution over CALIBRATE_N_DRAWS prior draws at
+  # whatever nz/nu_pts/prior SMC_RETRIEVAL_OVERRIDES_FILE resolves to, at a generous
+  # CALIBRATE_COUNT_MAX_PROBE cap so the true tail isn't truncated -- see
+  # retrieval_framework/calibrate_count_max.py's docstring. No SMC run happens.
+  echo "========== CALIBRATE COUNT_MAX (accept_count distribution only) =========="
+  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
+    --n-draws "${CALIBRATE_N_DRAWS:-48}" \
+    --count-max-probe "${CALIBRATE_COUNT_MAX_PROBE:-20000}" \
+    --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
+    --resolution "${CALIBRATE_RESOLUTION:-100}" || rc=$?
+else
+  echo "========== SMC RETRIEVAL =========="
+  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    echo "========== PLOTS =========="
+    python -u -m retrieval_framework.plot_smc "${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}}" \
+      || echo "WARNING: plotting failed (posterior npz files are still on disk)."
+    # Warm-continuation bias measurement on the final cloud (cold re-solve vs the
+    # warm-carried logL; PASS gate max|dlogL| < 0.1 -- quote the result in the paper).
+    # A FAIL verdict is a science finding, not a job failure: the posterior is already
+    # on disk, so surface it loudly but keep rc=0. Rerunnable standalone any time:
+    #   python -m retrieval_framework.validate_warm <case dir>
+    echo "========== WARM-VS-COLD VALIDATION =========="
+    python -u -m retrieval_framework.validate_warm "${SMC_DIR}" \
+      || echo "WARNING: validate_warm verdict FAIL -- warm-continuation bias above the gate; see validate_warm.npz + log above."
+  fi
+fi
+
+echo "job finished rc=${rc} at $(date)"
+exit "${rc}"

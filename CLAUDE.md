@@ -1,6 +1,6 @@
-# CLAUDE.md — vulcan_exojax_run operational notes
+# CLAUDE.md — vulcan-retrieval operational notes
 
-Critical rules and decisions for this bundle. Read before touching the retrieval or
+Critical rules and decisions for this repo. Read before touching the retrieval or
 running anything on the supercomputer.
 
 ## 2026-07-11 scientific-correctness pass — EVERY cache/checkpoint is stale
@@ -15,9 +15,9 @@ measured support fraction (`logZ_box = logZ + ln f` in results/npz; init cull co
 persisted through checkpoints), per-sweep/stage `warmcap=` counters, tempered-draw
 labels on every output path, validate_warm gates on logL + spectrum-ppm + inventories,
 jwst_tool v5 (floor-aware transits, R=100-anchored floors, offset-marginalized detect,
-saturation-consistent Fisher; `_VERSION=5`). The repo is a two-package monorepo since
-2026-07-11: `pip install --no-deps -e ./vulcan-retrieval -e ./vulcan-jwst-tool`
-(console script `jwst-tool`); see "Layout / entry points" below.
+saturation-consistent Fisher; `_VERSION=5` -- the tool now lives in the SIBLING
+vulcan-jwst-tool repo). This repo is the standalone vulcan-retrieval package since
+2026-07-11 (`pip install --no-deps -e .`); see "Layout / entry points" below.
 
 Operational consequences:
 - **The chemistry map changed** (elemental + atm rebuild): synthetic obs, demo npz
@@ -26,7 +26,7 @@ Operational consequences:
   map (likelihoods re-anchor mid-run). `overwrite=True` handles synthetic obs.
 - **Before the next production run**: `PROBE_MEMORY=1` (the evaluator gained small
   per-proposal structure rebuilds), then the smoke chain + suite, then on the GPU node
-  the new validation set: `vulcan-retrieval/validation/elemental_audit.py`,
+  the new validation set: `validation/elemental_audit.py`,
   `resolution_ladder.py`, `top_pressure_ladder.py --extend-chem`,
   `broadening_ab.py`, and post-run `validate_warm` + `mala_reversibility.py`.
 - **`h2he` broadening** downloads separate `<db>_h2he` line-list caches on first use
@@ -34,20 +34,21 @@ Operational consequences:
 
 ## Supercomputer sync — git pull for CODE (preferred, 2026-07-10), scp for DATA
 
-**Code updates: `git pull` on the NAS front end** (both repos are public on GitHub and
-every local change is committed + pushed, so GitHub is always current):
+**Code updates: `git pull` on the NAS front end** (all repos are public on GitHub and
+every local change is committed + pushed, so GitHub is always current). Since the
+2026-07-11 sibling-repo split there are TWO repos to pull for the retrieval (the
+jwst tool is local-only and never deployed to NAS):
 
 ```
-cd /nobackup/imalsky/VULCAN_W39b_HPC/vulcan_exojax_run
+cd /nobackup/imalsky/VULCAN_W39b_HPC/vulcan-retrieval
 git pull --ff-only
 cd ../VULCAN-JAX
 git pull --ff-only
 ```
 
-The first pull of the 2026-07-11 two-package restructure needs no manual install step:
-the PBS preflight now `pip install --user --no-deps -e`'s both VULCAN-JAX and
-vulcan-retrieval from the synced trees (idempotent) and HARD-fails if a stale user-site
-vulcan-jax shadows the clone. Later pulls need nothing (editable installs track the tree).
+No manual install step after a pull: the PBS preflight `pip install --user --no-deps
+-e`'s both VULCAN-JAX and vulcan-retrieval from the synced trees (idempotent) and
+HARD-fails if a stale user-site vulcan-jax shadows the clone.
 
 One-time setup (front end). MEASURED 2026-07-10 on cghfe02: **direct https to
 github.com works and the proxy hostname does NOT resolve** -- make sure
@@ -57,25 +58,30 @@ mode), no proxy exports needed:
 ```
 cd /nobackup/imalsky/VULCAN_W39b_HPC
 unset https_proxy http_proxy
-git clone https://github.com/imalsky/vulcan_exojax_run.git
+git clone https://github.com/imalsky/vulcan-retrieval.git
 git clone https://github.com/imalsky/jax-vulcan.git VULCAN-JAX
 ```
 
-(A tree that was previously scp'd from the Mac already IS a clone -- scp carries
-`.git` -- so instead of recloning, `git remote set-url origin <https url>` (the
-scp'd copy carries the Mac's ssh remote, and outbound ssh to github is blocked)
-and `git pull --ff-only`. This is how the 2026-07-10 cutover actually went.)
+**2026-07-11 sibling-split migration from an existing vulcan_exojax_run tree**: clone
+vulcan-retrieval as above, then MOVE the seeded data across (no re-transfer needed):
+
+```
+mv vulcan_exojax_run/data/opacity_cache vulcan-retrieval/data/
+mv vulcan_exojax_run/data/exojax_linelists vulcan-retrieval/data/
+```
+
+The old vulcan_exojax_run clone can then be parked/removed.
 
 - The **`VULCAN-JAX` clone target name is load-bearing** (the PBS preflight hard-codes
-  it; the GitHub repo is named `jax-vulcan`). Same for `vulcan_exojax_run`.
+  it; the GitHub repo is named `jax-vulcan`). Same for `vulcan-retrieval` (repo and
+  clone name match).
 - The NAS clones are **read-only deploys**: never edit there; `--ff-only` guarantees a
   pull can never merge; run outputs / PBS `.o` files / caches are all gitignored so the
   tree stays clean.
-- **Data is NOT in git** and needs a ONE-TIME seed into the fresh clone —
+- **Data is NOT in git** and needs a ONE-TIME seed into a fresh clone —
   `data/opacity_cache/` (preflight ERRORS without it) and `data/exojax_linelists/`
-  (else re-downloaded via the proxy). Copy from a parked old tree on /nobackup:
-  `cp -r <old tree>/data/opacity_cache vulcan_exojax_run/data/` (same for
-  exojax_linelists), or scp them once from local.
+  (else re-downloaded via the proxy). Move from the old tree as above, or scp once
+  from local.
 
 **scp fallback / data transfers** (also if git https is ever blocked), **exactly** this
 style (one command per dir, no backslashes):
@@ -382,29 +388,32 @@ upstream's default that PRESERVES the longdy-defined steady state (truth bit-ide
   logs the per-draw θ of every censored draw. Expect it to be much smaller now that the
   hottest (out-of-window) draws are rejected before the chemistry and yconv_cri is 0.01.
 
-## Layout / entry points (two-package monorepo since 2026-07-11)
+## Layout / entry points (standalone sibling repo since 2026-07-11)
 
-- `vulcan-retrieval/` (dist vulcan-retrieval, import `retrieval_framework`, src layout):
-  the SMC framework at `src/retrieval_framework/`, the shared forward-model engine at
+- THIS repo (dist vulcan-retrieval, import `retrieval_framework`, src layout) is a
+  sibling of `VULCAN-JAX/` and `vulcan-jwst-tool/` under the project root: the SMC
+  framework at `src/retrieval_framework/`, the shared forward-model engine at
   `src/retrieval_framework/forward/` (config, vulcan_chem, exojax_rt, interp_map,
-  sensitivity -- the old flat bundle modules; import as
-  `from retrieval_framework.forward import config`). Cases: `vulcan-retrieval/runs/<case>/case.py`.
-  Also `tests/`, `examples/` (ex sensitivity_demo), `validation/`, `scripts/zco_information/`.
-- `vulcan-jwst-tool/` (dist vulcan-jwst-tool, import `jwst_tool`, src layout): the
-  Streamlit instrument selector; console script `jwst-tool`.
-- Both MUST be installed editable (`pip install --no-deps -e ./vulcan-retrieval
-  -e ./vulcan-jwst-tool`; --no-deps because vulcan-jax is TestPyPI-only). The old
-  sys.path "bundle import contract" is GONE: vulcan_chem no longer inserts
-  VULCAN-JAX/src, so vulcan_jax resolves via its own (editable) install -- the PBS
-  preflight installs and hard-checks this on NAS.
+  sensitivity -- import as `from retrieval_framework.forward import config`).
+  Cases: `runs/<case>/case.py`. Also `tests/`, `examples/` (ex sensitivity_demo),
+  `validation/`, `scripts/zco_information/`.
+- The jwst tool lives in the SIBLING `vulcan-jwst-tool/` repo (dist vulcan-jwst-tool,
+  import `jwst_tool`, console script `jwst-tool`); it depends on this dist for the
+  forward engine and runs locally only (never deployed to NAS).
+- Install editable (`pip install --no-deps -e .`; --no-deps because vulcan-jax is
+  TestPyPI-only). The old sys.path "bundle import contract" is GONE: vulcan_chem no
+  longer inserts VULCAN-JAX/src, so vulcan_jax resolves via its own (editable)
+  install -- the PBS preflight installs and hard-checks this on NAS.
 - Import order is guard-enforced: `retrieval_framework.forward.vulcan_chem` raises if
   exojax was imported first.
 - Run from the repo root:
-  `python -m retrieval_framework.run_smc vulcan-retrieval/runs/w39b_smc_retrieval`
+  `python -m retrieval_framework.run_smc runs/w39b_smc_retrieval`
   (also `calibrate_count_max`, `probe_memory`, `smoke_retrieval`, `plot_smc`,
-  `validate_warm`). Suite: `python -m pytest vulcan-retrieval/tests -q`.
-- `data/` stays at the REPO ROOT (NAS-seeded caches unchanged); roots are portable via
-  `$VULCAN_PROJECT_ROOT` (forward/config.py raises loudly if the data tree is missing).
+  `validate_warm`). Suite: `python -m pytest tests -q`.
+- `data/` = INPUTS at the repo root (cm24 obs + NAS-seeded opacity caches);
+  `output/` = GENERATED npz caches (config.OUTPUTS, gitignored). Roots are portable
+  via `$VULCAN_PROJECT_ROOT` = the directory CONTAINING this repo (forward/config.py
+  raises loudly if the data tree is missing).
 - Historical/design-log content lives in per-directory `notes.md` files (user
-  convention, 2026-07-11); READMEs carry current usage only, one per package.
+  convention, 2026-07-11); READMEs carry current usage only, one per repo.
 - Figures still go to `../jax_paper/figures/`; never modify `../VULCAN-JAX`.

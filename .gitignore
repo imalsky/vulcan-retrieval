@@ -12,10 +12,10 @@ data/exojax_linelists/
 data/opacity_cache/
 
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
-vulcan-retrieval/runs/*/data/
-vulcan-retrieval/runs/*/logs/
-vulcan-retrieval/runs/*/plots/
-vulcan-retrieval/runs/*/*.o[0-9]*
+runs/*/data/
+runs/*/logs/
+runs/*/plots/
+runs/*/*.o[0-9]*
 *.nsys-rep
 
 # Generated npz caches (sensitivity/zco jacobians/walk) -- scientifically versioned
@@ -35,3 +35,7 @@ dist/
 # jwst_tool runtime caches (model spectra + pandeia results) -- regenerated per run
 data/jwst_tool/model_cache/
 data/jwst_tool/noise_cache/
+
+# Generated outputs (example/validation/zco npz caches) -- config.OUTPUTS
+output/*
+!output/.gitkeep

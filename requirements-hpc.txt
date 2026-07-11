@@ -14,4 +14,4 @@ matplotlib
 corner
 tqdm
 vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@4db8b053d73826a05af19cafe8955dd28662b41c
--e ./vulcan-retrieval
+-e .

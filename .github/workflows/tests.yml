@@ -23,6 +23,6 @@ jobs:
         # try (and fail) to resolve it from PyPI; the stub tests don't need it.
         run: |
           pip install "jax>=0.6" numpy scipy pytest
-          pip install --no-deps -e vulcan-retrieval
+          pip install --no-deps -e .
       - name: Run stub-pipeline unit tests
-        run: python -m pytest vulcan-retrieval/tests -q -ra
+        run: python -m pytest tests -q -ra
