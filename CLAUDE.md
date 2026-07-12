@@ -32,6 +32,38 @@ Operational consequences:
 - **`h2he` broadening** downloads separate `<db>_h2he` line-list caches on first use
   (network / NAS proxy); default stays "air" until broadening_ab.py is run and judged.
 
+## 2026-07-12 maximal cross-repo audit response (obs validation + evidence split)
+
+Two retrieval fixes from the tri-repo "maximally intensive" audit (the jwst-tool
+items are fixed in the sibling repo):
+
+- **`set_observations` validates at the API boundary** (audit item 4). The
+  Gaussian likelihood divides by σ and logs it, so a non-finite depth or a
+  non-positive/non-finite σ used to silently poison every likelihood with
+  NaN/Inf (mass rejection / pathological SMC). The check now lives in the
+  module-level `pipeline.validate_observations(depth, sigma, n_bin, npdtype)`
+  (so it is unit-testable without the forward model — `tests/test_set_observations.py`):
+  RAISES on any non-finite depth, or any σ ≤ 0 / non-finite. Mask invalid bins
+  BEFORE injection. Fail-loud rule, standard.
+
+- **Box-prior evidence separates PHYSICAL support from NUMERICAL attrition**
+  (audit item 5, P0 for model comparison). `run_smc_loop` used to report a
+  single `logZ_box = logZ + ln(f_tp·f_c1·f_c2)`, folding solver-dependent
+  convergence success (`f_c1` cold-converge, `f_c2` warm-recert — they move
+  with count_max/warm_count_max/tolerances/init history) into what was called a
+  box-prior evidence. Now split:
+  - `logZ_box_physical = logZ + ln(f_tp)` — ONLY the T-P-window restriction,
+    which is a genuine, solver-INDEPENDENT model-domain boundary (no premodit
+    opacities outside [300,3000] K). **This is the number for cross-model Bayes
+    factors** (headlined by plot_smc).
+  - `log_conv_attrition = ln(f_c1)+ln(f_c2)` — reported SEPARATELY as a
+    numerical diagnostic, never as prior mass.
+  - `logZ_box` (operational, convergence-inclusive) is kept for continuity but
+    the docstring/log now say plainly: do NOT difference it across models.
+  New npz fields: `smc_logZ_box_physical`, `smc_log_support_physical[_err]`,
+  `smc_log_conv_attrition[_err]` (run_smc.py). Old `smc_logZ_box` +
+  `smc_log_support_fraction` stay. Evidence-semantics docstring updated.
+
 ## Supercomputer sync — git pull for CODE (preferred, 2026-07-10), scp for DATA
 
 **Code updates: `git pull` on the NAS front end** (all repos are public on GitHub and

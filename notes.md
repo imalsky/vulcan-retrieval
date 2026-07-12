@@ -622,6 +622,33 @@ changes (details in each module's docstring):
    cache (demo npz, zco/Fisher caches, jwst_tool model cache, SMC checkpoints)
    predates the physics fixes and is stale.
 
+## Maximal cross-repo audit response (2026-07-12)
+
+The tri-repo "maximally intensive" audit added two retrieval fixes on top of the
+2026-07-11 pass (jwst-tool items handled in the sibling repo):
+
+1. **Observation-injection validation** (item 4). `pipeline.set_observations`
+   only checked vector length, so a non-finite depth or a σ ≤ 0 / non-finite
+   slipped into the Gaussian likelihood (which divides by σ and logs it) and
+   silently produced NaN/Inf likelihoods. The guard is now the module-level
+   `validate_observations()` (unit-testable without the forward model;
+   `tests/test_set_observations.py`) and RAISES on any invalid entry. Mask
+   invalid bins before injection.
+
+2. **Box-prior evidence: physical vs numerical support separated** (item 5,
+   P0 for model comparison). The 2026-07-11 pass reported one
+   `logZ_box = logZ + ln(f_tp·f_c1·f_c2)`, which folded solver-dependent
+   convergence success (cold-converge `f_c1`, warm-recert `f_c2` — they move
+   with count_max/warm_count_max/tolerances/history) into a quantity called a
+   box-prior evidence. Now: `logZ_box_physical = logZ + ln(f_tp)` restores ONLY
+   the physical, solver-INDEPENDENT T-P-window domain (no premodit opacities
+   outside [300,3000] K) — the number to difference across models; the
+   convergence attrition `ln(f_c1)+ln(f_c2)` is reported separately as a
+   numerical diagnostic; the old convergence-inclusive `logZ_box` is retained
+   but flagged not-for-Bayes-factors. New npz fields `smc_logZ_box_physical`,
+   `smc_log_support_physical[_err]`, `smc_log_conv_attrition[_err]`; plot_smc
+   headlines the physical value.
+
 ---
 
 Note: `fisher_forecast/` was removed 2026-07-11 as superseded by

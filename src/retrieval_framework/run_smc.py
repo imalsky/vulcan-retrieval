@@ -362,6 +362,13 @@ def main() -> None:
                    smc_log_support_fraction=np.asarray(res["log_support_fraction"]),
                    smc_log_support_fraction_err=np.asarray(res["log_support_fraction_err"]),
                    smc_logZ_box=np.asarray(res["logZ_box"]),
+                   # physical (T-P-window) box evidence for model comparison, kept
+                   # separate from the solver-dependent convergence attrition
+                   smc_logZ_box_physical=np.asarray(res["logZ_box_physical"]),
+                   smc_log_support_physical=np.asarray(res["log_support_physical"]),
+                   smc_log_support_physical_err=np.asarray(res["log_support_physical_err"]),
+                   smc_log_conv_attrition=np.asarray(res["log_conv_attrition"]),
+                   smc_log_conv_attrition_err=np.asarray(res["log_conv_attrition_err"]),
                    init_stats_keys=np.asarray(list(res["init_stats"].keys()), dtype="<U32"),
                    init_stats_vals=np.asarray(list(res["init_stats"].values()), np.int64),
                    reached_beta1=np.asarray(int(res["reached_beta1"]), np.int32),

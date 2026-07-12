@@ -179,7 +179,13 @@ def main() -> None:
         a2.set_ylabel("cumulative logZ")
         a.set_title("diversity + evidence"); a.legend(fontsize=8, loc="lower left")
         sup = ""
-        if ("smc_log_support_fraction" in x.files
+        if ("smc_log_support_physical" in x.files
+                and np.isfinite(float(x["smc_log_support_physical"]))):
+            # headline the PHYSICAL (T-P-window, solver-independent) box evidence;
+            # the operational logZ_box folds in solver-dependent attrition
+            sup = (f" | T-P support f={np.exp(float(x['smc_log_support_physical'])):.2f} "
+                   f"(logZ conditioned; box_physical {float(x['smc_logZ_box_physical']):.1f})")
+        elif ("smc_log_support_fraction" in x.files
                 and np.isfinite(float(x["smc_log_support_fraction"]))):
             sup = (f" | prior support f={np.exp(float(x['smc_log_support_fraction'])):.2f} "
                    f"(logZ conditioned; box {float(x['smc_logZ_box']):.1f})")
