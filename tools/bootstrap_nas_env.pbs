@@ -96,7 +96,18 @@ fi
 cleanup() { rmdir "${LOCK_DIR}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-# --- installs (constraint-pinned so exojax cannot swap the env's jax build) -----
+# --- jax/jaxlib (GH200 CUDA build) -- must exist BEFORE anything imports jax ----
+# The shared conda env pyt2_8_gh does NOT ship jax, and the per-interpreter
+# userbase starts empty, so install the pinned GPU build here. (Pre-2026-07 this
+# arrived as an accidental dependency of the non---no-deps vulcan-jax install and
+# was left behind in the now-dead shared userbase; the --no-deps installs below
+# no longer pull it, which is why the bare "import jax" version-probe used to
+# crash the bootstrap 7 s in.) Version pin matches requirements-hpc.txt
+# (validated on NAS pyt2_8_gh Python 3.10.18); jax[cuda12] pulls the aarch64
+# CUDA plugin/pjrt wheels from PyPI via the proxy set above.
+python -m pip install --user "jax[cuda12]==0.6.2" "jaxlib==0.6.2"
+
+# --- installs (constraint-pinned so exojax cannot swap the pinned jax build) -----
 CONSTRAINTS="${TMPDIR}/bootstrap_constraints_$$.txt"
 python - > "${CONSTRAINTS}" <<'PY'
 import jax, jaxlib
