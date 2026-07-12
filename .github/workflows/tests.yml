@@ -13,11 +13,16 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      matrix:
+        # 3.10 is the NAS deploy interpreter (pyt2_8_gh = 3.10.18); keep it tested
+        # so the requires-python = ">=3.10" claim stays verified.
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Install minimal deps (no chemistry/RT stack)
         # --no-deps: vulcan-jax lives on TestPyPI, a plain editable install would
         # try (and fail) to resolve it from PyPI; the stub tests don't need it.

@@ -1,12 +1,17 @@
-# HPC-reproducibility pins (the PBS flow; tested Python 3.11, jax/jaxlib 0.6.2,
-# numpy 1.26.4, scipy 1.17.1, 2026-07). The package metadata (vulcan-retrieval's
-# pyproject) declares vulcan-jax>=0.1.17 for TestPyPI; THIS file carries the exact
-# validated chemistry commit -- bump the pin deliberately.
+# HPC-reproducibility pins (the PBS flow; validated on NAS pyt2_8_gh Python 3.10.18
+# and locally on 3.12, jax/jaxlib 0.6.2, numpy 1.26.4, scipy 1.17.1, 2026-07).
+# jax/jaxlib are PINNED here (not floored) so a standalone reproduction env matches
+# the validated combination on any interpreter -- on 3.11+ a bare floor would
+# resolve the latest untested jax instead (jax dropped Python 3.10 at 0.7.0).
+# The package metadata (vulcan-retrieval's pyproject) declares vulcan-jax>=0.1.17
+# for TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
+# pin deliberately.
 # ExoJax is a plain pip dependency; it downloads HITRAN line lists / CIA tables
 # into the repo data/ caches on first use.
 # NOTE the PBS preflight installs the SYNCED trees editable instead (git pull is
 # the code-deploy mechanism); use this file for a standalone reproduction env.
-jax>=0.6.2
+jax==0.6.2
+jaxlib==0.6.2
 exojax==2.2.3
 numpy>=1.26
 scipy>=1.11

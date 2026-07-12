@@ -6,7 +6,7 @@
 # (observations + opacity caches) resolves -- see forward/config.py.
 #
 # NOTE the vulcan-jax dependency below is the TestPyPI release line. The exact
-# validated chemistry commit for HPC runs is pinned in ../requirements-hpc.txt.
+# validated chemistry commit for HPC runs is pinned in requirements-hpc.txt (repo root).
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -16,12 +16,16 @@ name = "vulcan-retrieval"
 dynamic = ["version"]
 description = "Differentiable VULCAN-JAX photochemistry -> ExoJAX transmission forward model and SMC/forward-mode-MALA retrieval framework (WASP-39b)"
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.10 floor is deliberate and load-bearing: the NAS GH200 deploy env (pyt2_8_gh)
+# is Python 3.10.18, the code is 3.10-clean (no 3.11-only stdlib/syntax), and the
+# HPC-validated jax/jaxlib 0.6.2 is the last jax line that supports 3.10.
+requires-python = ">=3.10"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Isaac Malsky" }]
 classifiers = [
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Intended Audience :: Science/Research",
@@ -31,12 +35,16 @@ dependencies = [
     "jax>=0.6.2",
     "exojax==2.2.3",
     "numpy>=1.26",
-    "scipy>=1.11",
+    "scipy>=1.12",
     "matplotlib",
     "corner",
     "tqdm",
     "vulcan-jax>=0.1.17",
 ]
+
+[project.urls]
+Homepage = "https://github.com/imalsky/vulcan-retrieval"
+Repository = "https://github.com/imalsky/vulcan-retrieval"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5"]
