@@ -46,9 +46,17 @@ cd ../VULCAN-JAX
 git pull --ff-only
 ```
 
-No manual install step after a pull: the PBS preflight `pip install --user --no-deps
--e`'s both VULCAN-JAX and vulcan-retrieval from the synced trees (idempotent) and
-HARD-fails if a stale user-site vulcan-jax shadows the clone.
+No manual install step after a pull: both packages are installed EDITABLE (once, by
+`tools/bootstrap_nas_env.pbs`), so pulled code changes are live immediately. Jobs are
+READ-ONLY on the environment (2026-07-11 redesign: the old per-job `pip install
+--user -e` raced across concurrent jobs on the shared userbase and crashed
+mid-uninstall — the job-64961-era "OSError: .../userbase/bin/vulcan-jax" failure);
+every job preflight runs `python -m retrieval_framework.validate_env` instead, which
+HARD-fails with a pointer at the bootstrap when a stale install shadows the clone or
+packaging metadata drifted (version/deps/entry-point changes after a pull DO need a
+bootstrap re-run — validate_env detects exactly that). The user site is
+per-interpreter (`/nobackup/$USER/.vulcan/userbase-py3.10` etc.); the old shared
+`userbase` dir is dead and can be `rm -rf`'d.
 
 One-time setup (front end). MEASURED 2026-07-10 on cghfe02: **direct https to
 github.com works and the proxy hostname does NOT resolve** -- make sure

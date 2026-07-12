@@ -16,8 +16,11 @@
 # against the real Carter & May (2024) NIRISS+G395H spectrum.
 #
 # Same node/env pattern as the working SWAMPE WASP-43b retrieval PBS and the
-# VULCAN-JAX GPU benchmark PBS (shared conda env pyt2_8_gh + editable --user
-# installs of the synced trees, GH200 XLA knobs from the validated benchmark).
+# VULCAN-JAX GPU benchmark PBS (shared conda env pyt2_8_gh, GH200 XLA knobs from
+# the validated benchmark). This job is READ-ONLY on the environment: all pip
+# installs live in the one-time tools/bootstrap_nas_env.pbs; the preflight here
+# only VALIDATES (retrieval_framework.validate_env) and hard-fails with a
+# pointer at the bootstrap if anything is missing or stale.
 #
 # Expected layout on /nobackup (git pull for code, scp/cp for data -- see CLAUDE.md):
 #   ${PROJECT_ROOT}/VULCAN-JAX/                                  (chemistry repo)
@@ -26,7 +29,7 @@
 #   (CO ExoMol + H2-H2/H2-He CIA cache lives in the repo data/: no other dependency needed)
 #
 # Submit (from this case dir, or export PROJECT_ROOT):
-#   cd /nobackup/$USER/VULCAN_Project/vulcan-retrieval/runs/w39b_smc_retrieval
+#   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval/runs/w39b_smc_retrieval
 #   qsub run_nas_w39b.pbs                        # real-data production run
 #   qsub -v SYNTH=1 run_nas_w39b.pbs             # gpu-fidelity synthetic recovery test
 #   qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs    # timing projection only (~1 h)
@@ -102,19 +105,17 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
 export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
 
-# --- caches + user-site off $HOME (the VULCAN-JAX hpc_env.sh pattern) ---------
+# --- caches off $HOME (scratch-rooted, shared with the bootstrap) -------------
 : "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
-export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase"
 export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
 export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
 export MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
 export TMPDIR="${VULCAN_SCRATCH}/tmp"
-unset PYTHONNOUSERSITE
-mkdir -p "${PYTHONUSERBASE}" "${PIP_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
+mkdir -p "${PIP_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
          "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
 
-# --- conda env (shared GH200 env; VULCAN-JAX installed via pip --user) --------
+# --- conda env (shared GH200 env; user site populated by the bootstrap) -------
 module purge 2>/dev/null || true
 module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
 module load miniconda3/gh2 2>/dev/null || true
@@ -122,6 +123,13 @@ CONDA_BASE="$(conda info --base)"
 # shellcheck disable=SC1091
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-pyt2_8_gh}"
+
+# Per-interpreter userbase (matches tools/bootstrap_nas_env.pbs): a shared
+# userbase's bin/ is not python-version-scoped, which is how the pre-2026-07
+# flow got a dangling console script and a crashed in-job uninstall.
+PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
+unset PYTHONNOUSERSITE
 
 # --- GPU runtime env (validated GH200 knobs from the VULCAN-JAX benchmark) ----
 export PYTHONUNBUFFERED=1
@@ -139,66 +147,23 @@ if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
 fi
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-# user-site extras the shared env may lack (same pattern as the SWAMPE PBS's h5py)
-python -c "import exojax" 2>/dev/null || python -m pip install --user "exojax==2.2.3"
-python -c "import corner" 2>/dev/null || python -m pip install --user corner || true
-python -c "import tqdm"   2>/dev/null || python -m pip install --user tqdm   || true
-
-# vulcan_jax and retrieval_framework MUST resolve to the git-synced trees. The old
-# sys.path fallback in vulcan_chem is gone, so a stale `pip --user` vulcan-jax would
-# silently win -- install both EDITABLE (idempotent; `git pull --ff-only` stays the
-# code-deploy mechanism, nothing to reinstall on later pulls).
-python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
-python -m pip install --user --no-deps -e "${REPO_DIR}"
-
-python - <<'PY' || { echo "ERROR: runtime preflight failed."; exit 1; }
-import os, sys
-from pathlib import Path
-ok = True
-import jax
-be = jax.default_backend()
-print(f"jax {jax.__version__} backend={be} devices={jax.devices()}")
-if be not in ("gpu", "cuda", "rocm"):
-    print("ERROR: JAX is not on the GPU", file=sys.stderr); ok = False
-root = Path(os.environ["VULCAN_PROJECT_ROOT"])
-import vulcan_jax
-_vj = Path(vulcan_jax.__file__).resolve()
-print("vulcan_jax", vulcan_jax.__version__, "from", _vj.parent)
-if not str(_vj).startswith(str((root / "VULCAN-JAX").resolve())):
-    print(f"ERROR: vulcan_jax resolves to {_vj}, not the synced tree under "
-          f"{root}/VULCAN-JAX. A stale user-site install is shadowing it; fix with:\n"
-          f"  python -m pip install --user --no-deps --force-reinstall -e {root}/VULCAN-JAX",
-          file=sys.stderr); ok = False
-import retrieval_framework
-from retrieval_framework.forward import config as _fwd_config
-print("retrieval_framework", retrieval_framework.__version__,
-      "from", Path(retrieval_framework.__file__).parent)
-import exojax
-print("exojax", exojax.__version__)
-cm24 = root / "vulcan-retrieval" / "data" / "cm24_wasp39b"
-if not any(cm24.glob("*.csv")):
-    print(f"ERROR: missing real spectrum CSVs in {cm24}", file=sys.stderr); ok = False
-lldir = root / "vulcan-retrieval" / "data" / "exojax_linelists"
-missing = [m for m in ("H2O", "CO2", "CH4", "SO2", "HCN", "C2H2", "H2S") if not (lldir / f"{m}.h5").exists()]
-if missing:
-    print(f"WARNING: HITRAN caches missing for {missing} in {lldir}; "
-          "first run will download via the NAS proxy.")
-codir = root / "vulcan-retrieval" / "data" / "opacity_cache"
-if not (codir / "CO" / "12C-16O" / "Li2015").is_dir():
-    print(f"ERROR: missing cached CO ExoMol dir under {codir}", file=sys.stderr); ok = False
-if not (codir / "H2-H2_2011.cia").exists():
-    print(f"ERROR: missing H2-H2 CIA file under {codir}", file=sys.stderr); ok = False
-if not (codir / "H2-He_2011.cia").exists():
-    print(f"ERROR: missing H2-He CIA file under {codir} (exojax_rt would silently "
-          "skip the term -- not acceptable for a production run)", file=sys.stderr); ok = False
-sys.exit(0 if ok else 1)
-PY
+# NO installs here (the pre-2026-07 per-job pip installs raced across concurrent
+# jobs on the shared userbase and crashed mid-uninstall). Validate-only: every
+# check the old inline preflight ran (packages editable + current, jax on GPU,
+# data seeds, FastChem) now lives in retrieval_framework.validate_env, shared
+# verbatim with the bootstrap and runnable by hand on a front end.
+python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu || {
+  echo "ERROR: environment validation failed (or retrieval_framework is not installed)."
+  echo "       One-time fix, then resubmit:"
+  echo "  cd ${REPO_DIR}"
+  echo "  qsub tools/bootstrap_nas_env.pbs"
+  exit 1
+}
 
 # --- FastChem binary (the EQ init runs it once at build time) -----------------
-# The repo checkout's binary is macOS-arm64 and cannot run here; prefer the tree
-# inside the pip-installed vulcan-jax (compiled on NAS by vulcan-emulator's
-# run_install.pbs). Probe by EXECUTING the candidate (an exec-format error means
-# wrong architecture). Must be exported before the first `import vulcan_jax`.
+# Probe candidates by EXECUTING them (an exec-format error means wrong
+# architecture); tools/bootstrap_nas_env.pbs builds the binary in the checkout
+# tree on a GH200 node. Must be exported before the first `import vulcan_jax`.
 if [ -z "${VULCAN_JAX_FASTCHEM_DIR:-}" ]; then
   _fc_line="$(python - <<'PY'
 import os, pathlib, subprocess
@@ -229,9 +194,9 @@ PY
       echo "FastChem tree: ${VULCAN_JAX_FASTCHEM_DIR}" ;;
     *)
       echo "ERROR: no runnable FastChem binary found for this node's architecture."
-      echo "       Install one with:  cd /nobackup/\$USER/vulcan-emulator && qsub supercomputer_cmds/run_install.pbs"
-      echo "       (or build ${PROJECT_ROOT}/VULCAN-JAX/src/vulcan_jax/fastchem_vulcan with make, then"
-      echo "        export VULCAN_JAX_FASTCHEM_DIR to that directory)."
+      echo "       The bootstrap builds it; run once and resubmit:"
+      echo "  cd ${REPO_DIR}"
+      echo "  qsub tools/bootstrap_nas_env.pbs"
       exit 1 ;;
   esac
 fi

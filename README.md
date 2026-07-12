@@ -432,10 +432,15 @@ clone target names are load-bearing). Data is seeded ONCE per fresh clone
 (`data/opacity_cache/`, `data/exojax_linelists/`) by mv from an old
 vulcan_exojax_run tree or a one-time scp; never rsync. Full transfer + setup
 rules: `CLAUDE.md`.
-The PBS reuses the shared `pyt2_8_gh` env, editable-installs VULCAN-JAX and
-vulcan-retrieval from the synced trees in its preflight (idempotent), and
-exports `VULCAN_PROJECT_ROOT` so the data paths resolve. The staged submit
-order lives in "The WASP-39b case" below.
+Environment setup is a ONE-TIME bootstrap job (`qsub tools/bootstrap_nas_env.pbs`
+from this repo's root): it editable-installs VULCAN-JAX and vulcan-retrieval into a
+per-interpreter user site, installs the pinned exojax under a jax/jaxlib constraint,
+builds FastChem for the node architecture, and validates. The run PBS reuses the
+shared `pyt2_8_gh` env, is read-only on the environment, validates it with
+`python -m retrieval_framework.validate_env` (re-runnable by hand any time), and
+exports `VULCAN_PROJECT_ROOT` so the data paths resolve. Re-run the bootstrap only
+when validate_env says so (packaging metadata changed). The staged submit order
+lives in "The WASP-39b case" below.
 
 ## GPU budget (24 h PBS wall, 20 h SMC governor)
 

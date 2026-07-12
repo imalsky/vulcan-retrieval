@@ -1,0 +1,155 @@
+#!/bin/bash
+#PBS -N VULCAN_BOOTSTRAP
+#PBS -q gpu_long
+#PBS -W group_list=s2458
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:model=gh200
+#PBS -l walltime=00:30:00
+#PBS -j oe
+#PBS -m abe
+#
+# =============================================================================
+# ONE-TIME environment bootstrap for the NAS retrieval stack. Run this once
+# after cloning/seeding (and again only when validate_env says so -- i.e. when
+# packaging metadata changed: versions, dependencies, entry points).
+#
+# This is the ONLY place pip ever writes to the user site. Batch jobs
+# (run_nas_w39b.pbs) are read-only on the environment: they activate, run
+# `python -m retrieval_framework.validate_env`, and hard-fail with a pointer
+# here if anything is missing or stale. That split removes the concurrent
+# per-job pip installs that corrupted the old shared userbase (the
+# "OSError: .../userbase/bin/vulcan-jax" uninstall crash).
+#
+# Runs on a GH200 node (not the x86 front end) because the FastChem build and
+# the jax-GPU check need the target architecture.
+#
+# Submit (from the vulcan-retrieval repo root, tools/, or the project root):
+#   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval
+#   qsub tools/bootstrap_nas_env.pbs
+#
+# Env knobs (-v): CONDA_ENV (default pyt2_8_gh), VULCAN_SCRATCH
+# (default /nobackup/$USER/.vulcan), PROJECT_ROOT (else derived from
+# PBS_O_WORKDIR).
+#
+# The old pre-2026-07 shared userbase at ${VULCAN_SCRATCH}/userbase is no
+# longer read by anything (the stack now uses a per-interpreter
+# userbase-pyX.Y); it only holds pip-regenerable content and can be removed:
+#   rm -rf /nobackup/$USER/.vulcan/userbase
+# =============================================================================
+set -euo pipefail
+
+# --- locate the project root ---------------------------------------------------
+if [ -n "${PROJECT_ROOT:-}" ]; then :
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ -d "${PBS_O_WORKDIR}/vulcan-retrieval" ]; then
+  PROJECT_ROOT="${PBS_O_WORKDIR}"
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ "$(basename "${PBS_O_WORKDIR}")" = "vulcan-retrieval" ]; then
+  PROJECT_ROOT="$(cd -- "${PBS_O_WORKDIR}/.." && pwd -P)"
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ "$(basename "${PBS_O_WORKDIR}")" = "tools" ]; then
+  PROJECT_ROOT="$(cd -- "${PBS_O_WORKDIR}/../.." && pwd -P)"
+else
+  echo "ERROR: set PROJECT_ROOT or submit from the vulcan-retrieval repo root."
+  exit 1
+fi
+REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"
+if [ ! -f "${REPO_DIR}/pyproject.toml" ] || [ ! -d "${PROJECT_ROOT}/VULCAN-JAX" ]; then
+  echo "ERROR: expected vulcan-retrieval and VULCAN-JAX checkouts under PROJECT_ROOT=${PROJECT_ROOT}"
+  exit 1
+fi
+export PROJECT_ROOT
+export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"
+echo "Bootstrap started $(date) on $(hostname) ($(uname -m)); PROJECT_ROOT=${PROJECT_ROOT}"
+
+# --- NAS proxy (pip needs it on compute nodes) ---------------------------------
+export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
+export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
+
+# --- caches off $HOME -----------------------------------------------------------
+: "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
+export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
+export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
+export TMPDIR="${VULCAN_SCRATCH}/tmp"
+mkdir -p "${PIP_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TMPDIR}"
+
+# --- conda env, then the PER-INTERPRETER userbase -------------------------------
+module purge 2>/dev/null || true
+module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
+module load miniconda3/gh2 2>/dev/null || true
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${CONDA_ENV:-pyt2_8_gh}"
+
+# userbase is keyed by python minor version: bin/ in a shared userbase is NOT
+# per-version, so a shared one goes stale/corrupt when the env's python moves.
+PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
+unset PYTHONNOUSERSITE
+mkdir -p "${PYTHONUSERBASE}"
+echo "python ${PYVER}; PYTHONUSERBASE=${PYTHONUSERBASE}"
+
+# --- exclusive lock: only one bootstrap mutates the userbase at a time ----------
+LOCK_DIR="${VULCAN_SCRATCH}/.bootstrap-py${PYVER}.lock"
+if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+  echo "ERROR: ${LOCK_DIR} exists -- another bootstrap is running (or crashed)."
+  echo "       If no bootstrap job is queued/running: rmdir ${LOCK_DIR} and resubmit."
+  exit 1
+fi
+cleanup() { rmdir "${LOCK_DIR}" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+# --- installs (constraint-pinned so exojax cannot swap the env's jax build) -----
+CONSTRAINTS="${TMPDIR}/bootstrap_constraints_$$.txt"
+python - > "${CONSTRAINTS}" <<'PY'
+import jax, jaxlib
+print(f"jax=={jax.__version__}")
+print(f"jaxlib=={jaxlib.__version__}")
+PY
+echo "constraints: $(tr '\n' ' ' < "${CONSTRAINTS}")"
+
+python -m pip install --user --constraint "${CONSTRAINTS}" "exojax==2.2.3" corner tqdm
+python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
+python -m pip install --user --no-deps -e "${REPO_DIR}"
+
+# --- FastChem binary for this architecture (EQ init runs it at build time) ------
+FC_DIR="${PROJECT_ROOT}/VULCAN-JAX/src/vulcan_jax/fastchem_vulcan"
+fc_runnable() {
+  [ -x "${FC_DIR}/fastchem" ] || return 1
+  ( cd "${FC_DIR}" && timeout 15 ./fastchem >/dev/null 2>&1 ) || rc=$?
+  # rc 126 = exec-format error (wrong arch); a plain nonzero exit (no args) is fine
+  [ "${rc:-0}" != "126" ]
+}
+if ! fc_runnable; then
+  echo "Building FastChem in ${FC_DIR} ..."
+  module load gcc 2>/dev/null || true
+  make -C "${FC_DIR}" clean >/dev/null 2>&1 || true
+  make -C "${FC_DIR}"
+  fc_runnable || { echo "ERROR: FastChem built but is not runnable on $(uname -m)."; exit 1; }
+fi
+echo "FastChem runnable at ${FC_DIR}"
+
+# --- stamp + definitive validation ----------------------------------------------
+python - <<PY
+import json, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+import jax, jaxlib
+
+def sha(repo):
+    return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+stamp = {
+    "bootstrapped": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "python": "%d.%d.%d" % sys.version_info[:3],
+    "jax": jax.__version__,
+    "jaxlib": jaxlib.__version__,
+    "vulcan_jax_sha": sha("${PROJECT_ROOT}/VULCAN-JAX"),
+    "vulcan_retrieval_sha": sha("${REPO_DIR}"),
+}
+Path("${PYTHONUSERBASE}/.bootstrap_stamp.json").write_text(json.dumps(stamp, indent=1))
+print("stamp:", json.dumps(stamp))
+PY
+
+echo "========== VALIDATION =========="
+python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu
+
+echo "Bootstrap finished OK at $(date). Jobs can now run without any install step."
