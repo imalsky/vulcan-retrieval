@@ -1156,3 +1156,89 @@ upstream's default that PRESERVES the longdy-defined steady state (truth bit-ide
   convention, 2026-07-11); READMEs carry current usage only, one per repo.
 - Figures still go to `../jax_paper/figures/`; never modify `../VULCAN-JAX`.
 
+---
+
+# 2026-07-13 — Live-T(P) condensation: on-graph rebuild replaces the isothermal escape hatch
+
+Collaborator-requested refactor: condensation must be correct for arbitrary,
+dynamically evaluated non-isothermal T-P profiles (Guillot included), on-graph,
+not via a fixed-profile rebuild workaround.
+
+**What was wrong.** `_prep` rebuilt rates, n_0, hydrostatic structure, Dzz, vm,
+vs on the JAX graph per proposal, but every condensation quantity (the
+ProfileVars `c_*` arrays: per-reaction sat_n and Dg, H2O/NH3 relax inputs, NH3
+cold-trap argmin, fix-species sat-mix rows) was frozen at the baseline
+structural T by the host packer. `build_chem_model` refused `use_condense`
+except through `profile['_condense_validated_isothermal']=True` — and that
+hatch was itself unsafe for WASP-39b, whose structural baseline was the GCM
+file, not the requested isothermal profile (saturation tables at GCM T,
+chemistry at T_iso).
+
+**Fix.** VULCAN-JAX now splits the condensation state:
+`conden.make_conden_spec` (static: species identity, k_arr rows, particle
+m/(rho r^2) coefficients, relax/fix flags) + pure-JAX
+`conden.build_conden_profile(spec, Tco, pco, n_0, Dzz)` (dynamic: every
+T/structure-dependent array; jit/vmap/jvp-compatible; the one discrete output
+is the NH3 cold-trap argmin). `OuterLoop._build_conden_static` delegates to
+the same functions — verified bit-exact against the pre-refactor packer on
+isothermal AND non-isothermal columns. The runner already read the conden
+arrays from the ProfileVars carry each step, so `_prep` now rebuilds them at
+the proposed T and splices them in. The NotImplementedError and the hatch are
+gone; build-time refusals remain for moldiff-off (Dg would be silently zero),
+empty/inert condense_sp, and use_sat_surfaceH2O.
+
+**Convergence of condensing solves (all numbers measured on the nz=32
+isothermal-400K S8 test column, S8 VMR 1e-4, 5→0.01 bar).** Naive conden-on
+solves DO NOT converge:
+- 1 um S8 particles: dt pinned at ~0.4 s (condensation-front timescale
+  ~ 1/(Dg·(m/rho r^2)·(y−sat)) ≈ 0.1 s at 5 bar); t reached 1.1e3 s in 4000
+  steps, longdy 10.4.
+- 50 um (rainout-sized) particles: dt cap ~270 s; t = 1e6 s in 4000 steps,
+  gas/sat down from 6.7 to 1.67 but longdy 1.55 — the steady state is
+  TRANSPORT-LIMITED: the subsaturated upper S8 reservoir drains through the
+  condensation front on the Kzz timescale (~L²/Kzz ≈ 1e9-1e10 s) while dt
+  stays capped, so no step budget reaches it.
+- Upstream's own answer (Earth/Jupiter cfgs) is the conden window +
+  fix_species pin. With `fix_species_from_coldtrap_lev=True` the gas pin is
+  EMPTY on an isothermal column (the cold-trap argmin degenerates to layer 0)
+  and post-pin chemistry re-supersaturated S8 to 2560x against frozen k rows
+  — use the whole-column variant (`=False`, master's op.py "TEST2022" branch).
+- With the pin alone, longdy plateaued at 0.90: N2→NH3 kinetics at 400 K
+  leave NH3 drifting at ~6e-19 VMR forever → `mtol_conv=1e-15`. Next gaters:
+  S3 (2.6e-12) then S2 (7e-8) re-equilibrating against the pinned S8 at the
+  cold top — still 18%/window at t=1.6e15 s, i.e. physically unreachable →
+  `conver_ignore` extended with S/S2/S3/S4 (none is an RT molecule;
+  SO2/H2S/SO stay gated). With the allotropes ignored the gate could fire at
+  t≈2.3e3 s, BEFORE the window — certifying a half-rained column →
+  `trun_min = stop_conden_time` bounds certification below.
+
+The full recipe lives in `tests/test_condensation_live_tp.py` (retrieval) and
+`jwst_tool.forward.CONDEN_CFG` (tool, stop_conden_time=1e6, trun_min=1e6).
+Truncation caveat, documented everywhere: the secular reservoir drainage
+(centuries) is cut off at stop_conden_time, exactly as in upstream conden
+runs; and on planets too hot to condense the pin still freezes S8/S8_l_s at
+their stop-time transient.
+
+**AD.** jvp through the builder is exact vs FD (VULCAN-JAX
+tests/test_conden_profile_builder.py); jvp through a condensing+pinned steady
+state vs warm-started reconverged centered FD is asserted in the retrieval
+test (sign + 15% relative on S8 gas/condensate columns; valid only away from
+active-layer/cold-trap switches, which move discretely with T). Fisher through
+condensation stays disabled in the tool for exactly that discreteness reason.
+
+**Amendment (same day): the anchor-free cold column has NO reachable longdy
+steady state.** After all of the above, the gate was held by well-mixed CO2
+(1.7e-8 VMR, an RT species — cannot be ignored) creeping toward
+thermochemical equilibrium at ~18% per time-doubling even at t = 1.6e15 s:
+the 400 K no-photo synthetic column lacks the hot deep anchor / photolysis
+sources that quench real columns, so its equilibration time (>=1e17 s)
+exceeds any planet age. Resolution: upstream's own `runtime` cap —
+`runtime = 1e14 s` (~3 Myr, far beyond every transport/condensation
+timescale here); the runner terminates there (end_case 2) with the
+condensation observables settled, ~2000 accepted steps, well under
+count_max. The test asserts termination at the runtime cap, NOT by step-cap
+exhaustion. The TOOL does not need this: its production runs have
+photochemistry ON and warmer profiles — the WASP-107b Guillot + condensation
+end-to-end run converged normally (longdy gate) and is cached under
+forward v7. A cold no-photo tool corner would exhaust count_max and raise
+loudly, which is the correct behavior.

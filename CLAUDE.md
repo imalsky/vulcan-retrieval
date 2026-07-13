@@ -104,6 +104,39 @@ notes.md.)
 - gpu preset: N=144, `smc_rt_vjp_chunk=12`, 6 sweeps/stage, 24 h PBS / 20 h
   governor. `CALIBRATE_ONLY=1` (~1 h) gives timing.json before committing a run.
 
+## Condensation with a live T(P) (2026-07-13)
+
+`use_condense=True` is supported for T-varying models: `build_chem_model`
+extracts static conden metadata once (`vulcan_jax.conden.make_conden_spec`)
+and `_prep` rebuilds every T/structure-dependent condensation array on-graph
+per proposal (`conden.build_conden_profile` — saturation number densities,
+Dg growth terms from the live Dzz, relax inputs, NH3 cold-trap argmin,
+fix-species sat-mix rows), splicing them into the ProfileVars carry. The old
+NotImplementedError + `_condense_validated_isothermal` hatch are GONE — never
+reintroduce them. Loud build-time refusals remain for genuinely unsupported
+configs: `use_moldiff=False` (Dg would be silently zero), empty or inert
+`condense_sp`, and `use_sat_surfaceH2O` (bottom BC frozen at structural T at
+ini). The cold-trap index / active-layer set are DISCRETE in T: jvp==FD is
+validated away from those switches (`tests/test_condensation_live_tp.py`);
+production SMC/zco configs keep conden OFF, and Fisher through condensation
+stays disabled in vulcan-jwst-tool. Converged condensing solves use the
+upstream conden-window + fix_species pin methodology — without the pin the
+steady state is transport-limited (reservoir drains on the Kzz timescale
+while dt is capped at the condensation-front timescale) and will exhaust
+count_max. The full certified recipe (measured 2026-07-13, see the test
+file): whole-column pin (`fix_species_from_coldtrap_lev=False` — the
+cold-trap argmin degenerates on isothermal columns), `mtol_conv=1e-15`
+(glacial sub-femto NH3 drift gates forever at the 1e-20 default),
+`conver_ignore` extended with the trace sulfur allotropes S/S2/S3/S4
+(re-equilibrate against pinned S8 on >=1e15 s cold-top timescales), and
+`trun_min = stop_conden_time` so certification can never fire before the
+window + pin complete (else a half-rained S8 column gets certified). A cold
+NO-PHOTO column additionally has no reachable longdy steady state at all
+(well-mixed CO2 creeps toward equilibrium on >=1e17 s — the quench regime);
+the synthetic test therefore integrates to a physical `runtime` cap (1e14 s)
+per upstream practice. Photo-on production runs converge via the normal
+longdy gate (WASP-107b Guillot+conden E2E verified).
+
 ## After any config/physics change — regeneration is mandatory
 
 The elemental + atm-rebuild chemistry map means synthetic obs, `data/*.npz`

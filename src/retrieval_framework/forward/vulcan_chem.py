@@ -37,10 +37,26 @@ first accepted step), so the converged column was already hydrostatically consis
 what was frozen at the baseline was (a) the molecular-diffusion coefficients Dzz(T, M)
 (+ the derived vm / settling vs), (b) the convergence gate's ``pv.Kzz``, and (c) the
 initial carry geometry for step 1. All three are now rebuilt per proposal via the
-committed on-graph builders (vulcan_jax.atm_jax / atm_refresh). Still frozen by design:
-the photolysis cross-section T-interpolation (host-side re-bake upstream; second-order)
-and any condensation saturation tables -- ``use_condense=True`` therefore refuses a
-T-varying build loudly rather than run with baseline-T saturation curves.
+committed on-graph builders (vulcan_jax.atm_jax / atm_refresh).
+
+Condensation follows the live T(P) too (2026-07-13): with ``use_condense=True``,
+``vulcan_jax.conden.make_conden_spec`` extracts the static metadata once at build
+and ``_prep`` rebuilds every T/structure-dependent condensation array on-graph per
+proposal (``conden.build_conden_profile``: saturation number densities, Dg
+growth/diffusion terms from the live Dzz, H2O/NH3 relax inputs, the NH3 cold-trap
+argmin, fix-species saturation mixing ratios), splicing them into the ProfileVars
+carry the runner reads each step. Baseline-frozen condensation tables never reach
+a live-T solve. Genuinely unsupported condensation configs still refuse loudly at
+build time: ``use_moldiff=False`` (the growth term Dg IS the molecular-diffusion
+coefficient -- it would be silently zero), an empty/inert ``condense_sp``, and
+``use_sat_surfaceH2O`` (a bottom BC frozen at the structural T at ini time). The
+cold-trap index and the active-condensation layer set are discrete: a jvp through
+a condensing state is valid only away from those switches (validated in
+tests/test_condensation_live_tp.py; Fisher forecasts through condensation stay
+disabled in vulcan-jwst-tool).
+
+Still frozen by design: the photolysis cross-section T-interpolation (host-side
+re-bake upstream; second-order).
 
 The runner's lax.while_loop supports jvp/jacfwd but NOT vjp, so forward-mode is the
 end-to-end route -- which is also optimal here (few scalar inputs -> high-dim spectrum).
@@ -166,6 +182,7 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     from vulcan_jax.state import RunState, legacy_view
     from vulcan_jax import network as net_mod, composition, rates_jax
     from vulcan_jax import atm_jax, atm_refresh as atm_refresh_mod
+    from vulcan_jax import conden as conden_mod
     from vulcan_jax.atm_setup import _VISCOSITY_TABLE, settling_velocity_jax
     from vulcan_jax.jax_step import make_atm_static
     from vulcan_jax.gibbs import load_nasa9
@@ -175,29 +192,54 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     import vulcan_jax.op_jax as op_jax
     import vulcan_jax.outer_loop as outer_loop
 
-    # Condensation saturation/growth tables (ProfileVars c_*) are baked at the BASELINE
-    # temperature and are NOT rebuilt per proposal. Running a T-VARYING model over them
-    # would silently use wrong saturation curves -- refuse instead (standing rule:
-    # loud errors, no silent fallbacks). Every SMC/zco config here has conden off, so
-    # the retrieval never trips this. The one authorized caller is the jwst-tool
-    # forward runner in the ISOTHERMAL regime (structural T == chemistry T, so the
-    # tables ARE at the model's conditions), which sets the explicit profile flag
-    # below AND guarantees no differentiation through the condensing state
-    # (jwst_tool.forward.canonical_params forbids use_condense with any Fisher param).
-    if bool(getattr(cfg, "use_condense", False)) \
-            and not bool(profile.get("_condense_validated_isothermal", False)):
-        raise NotImplementedError(
-            "use_condense=True is incompatible with the T-varying chemistry model: the "
-            "condensation saturation/diffusion tables are frozen at the baseline T-P. "
-            "Only an isothermal forward run (structural T == chemistry T) may enable it, "
-            "via profile['_condense_validated_isothermal']=True. Rebuild the tables "
-            "on-graph before enabling condensation for a T-varying model.")
+    # Condensation with a live T(P) needs configuration that can actually
+    # condense; refuse the silently-inert combinations upfront (standing rule:
+    # loud errors, no silent fallbacks). The dynamic rebuild itself happens in
+    # _prep below via conden.build_conden_profile.
+    use_condense = bool(getattr(cfg, "use_condense", False))
+    if use_condense:
+        if not bool(getattr(cfg, "use_moldiff", True)):
+            raise ValueError(
+                "use_condense=True requires use_moldiff=True: the condensation "
+                "growth term Dg IS the species' molecular-diffusion coefficient "
+                "(op.conden's continuum-regime rate), so with molecular diffusion "
+                "off every condensation rate would silently be zero.")
+        if bool(getattr(cfg, "use_sat_surfaceH2O", False)):
+            raise NotImplementedError(
+                "use_condense with use_sat_surfaceH2O=True is unsupported in the "
+                "T-varying model: it rewrites the fixed-bottom H2O boundary "
+                "condition from the STRUCTURAL temperature at ini time, which a "
+                "live T(P) does not rebuild. Disable use_sat_surfaceH2O.")
+        if not list(getattr(cfg, "condense_sp", []) or []):
+            raise ValueError(
+                "use_condense=True with an empty condense_sp: nothing would "
+                "condense. List the condensable gas species (network "
+                "condensation reactions and/or use_relax species).")
 
     rs = RunState.with_pre_loop_setup(cfg)
     var, atm, para = legacy_view(rs)
     network = net_mod.parse_network(str(resolve_data_path(cfg.network)))
     nz, ni = atm.Tco.shape[0], network.ni
     sidx = dict(network.species_idx)
+
+    # Static condensation metadata (species identity, particle coefficients,
+    # relax/fix flags) -- extracted once; _prep rebuilds the dynamic arrays
+    # from it at every proposed T. None when condensation is off.
+    conden_spec = None
+    if use_condense:
+        conden_spec = conden_mod.make_conden_spec(cfg, var, atm, sidx)
+        relax_set = set(getattr(cfg, "use_relax", []) or [])
+        inert = [sp for sp in cfg.condense_sp
+                 if sp not in conden_spec.gas_names and sp not in relax_set]
+        if inert:
+            raise ValueError(
+                f"condense_sp entries {inert} have no condensation reaction in "
+                f"network {cfg.network!r} and are not in use_relax -- they would "
+                "silently not condense. Remove them or add the reaction/relax.")
+        print(f"[chem] condensation ON: kinetics rows {list(conden_spec.gas_names)}, "
+              f"relax H2O={conden_spec.h2o_active} NH3={conden_spec.nh3_active}, "
+              f"fix_species={list(conden_spec.fix_names)}; conden arrays rebuilt "
+              "on-graph at each proposed T", flush=True)
 
     pco = jnp.asarray(np.asarray(atm.pco, dtype=np.float64))
     p_bar = np.asarray(atm.pco, dtype=np.float64) / 1.0e6
@@ -467,6 +509,26 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         else:
             vs_new = jnp.zeros((nz - 1, ni), dtype=jnp.float64)
         pv_T = pv_T._replace(r_Dzz_top=Dzz_new[-1])
+
+        # --- condensation at the proposed T ---------------------------------
+        # Rebuild every T/structure-dependent condensation array from the SAME
+        # live temperature and structure the chemistry uses (saturation number
+        # densities, Dg growth terms from the live Dzz, relax inputs, NH3
+        # cold-trap argmin, fix-species sat-mix rows) and splice them into the
+        # ProfileVars carry the runner reads each step. No baseline-frozen
+        # condensation table survives into a live-T solve.
+        if conden_spec is not None:
+            cprof = conden_mod.build_conden_profile(conden_spec, T, pco, M, Dzz_new)
+            pv_T = pv_T._replace(
+                c_Dg_per_re=cprof.Dg_per_re,
+                c_sat_n_per_re=cprof.sat_n_per_re,
+                c_h2o_Dg=cprof.h2o_Dg,
+                c_h2o_sat=cprof.h2o_sat,
+                c_nh3_Dg=cprof.nh3_Dg,
+                c_nh3_sat=cprof.nh3_sat,
+                c_nh3_conden_top=cprof.nh3_conden_top,
+                fix_species_sat_mix=cprof.fix_species_sat_mix,
+            )
         atm_T = atm_static._replace(Tco=T, Ti=Ti, M=M, Kzz=Kzz_eff, Dzz=Dzz_new,
                                     vm=vm_new, vs=vs_new, g=g_i, dzi=dzi_i, Hpi=Hpi_i)
 
@@ -493,6 +555,14 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         init, atm_T = _prep(theta)
         final = integ._runner(init, atm_T)
         return final, init
+
+    def prep_pv(theta):
+        """The initial-carry ProfileVars for ``theta`` -- the per-proposal arrays
+        (n_0, Kzz, atom_ini, and with condensation on the live-rebuilt c_* conden
+        arrays + fix_species_sat_mix) WITHOUT running the solver. Pure function
+        of theta; jit/vmap/jvp-traceable. Diagnostics/tests only."""
+        init, _atm_T = _prep(jnp.asarray(theta, dtype=jnp.float64))
+        return init.pv
 
     def converged_y(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0, return_diag=False,
                     warm_cap=False):
@@ -565,6 +635,9 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         run_diag=run_diag,
         converged_y=converged_y,
         audit_init=audit_init,
+        conden_spec=conden_spec,   # static conden metadata (None when conden off)
+        prep_pv=prep_pv,           # theta -> initial ProfileVars (no solve; tests)
+        _integ=integ,              # the OuterLoop (baked statics access; tests only)
         abundance_mode=abundance_mode,
         co_bz_bound=co_bz_bound,   # fixed-O knob validity: b_z > 0 iff c_o < this (baseline column)
         y0=np.asarray(y0, dtype=np.float64),   # baked baseline column (warm-start fallback)
