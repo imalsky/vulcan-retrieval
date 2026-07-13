@@ -168,6 +168,21 @@ def gpu_config(**overrides: Any) -> Config:
         # ever wanted. More particles also directly answer the small-N SMC criticism
         # (ladder-adaptation noise, evidence variance).
         smc_num_particles=144, smc_num_mcmc_steps=6, smc_max_steps=40,
+        # Init reject-and-cull sizing (raised 2026-07-12 after job on real data died
+        # in init phase 2: 84/288 cold-rejected [29%, expected] then 21/152 warm
+        # re-certification failures [14%] vs the schema default init_phase2_spare=8 ->
+        # 131/144 healthy, spares exhausted). The 8-spare default was sized for the
+        # 3-5% warm-recert rate measured pre-pass (jobs 64854/64897, synthetic);
+        # the 2026-07-12 elemental-map + per-proposal atm rebuild and REAL prior
+        # corners push it to ~14%. count_max stays 5000 (Isaac), so absorb the higher
+        # attrition here: oversample 2.5 -> ceil(144*2.5)=360 cold draws (~256 alive
+        # at 29% reject), spare 48 -> phase-2 pool min(n_alive, 144+48)=192, tolerating
+        # a warm-recert cull up to (192-144)/192 = 25% and still leaving 144. Both are
+        # ~free: phase-1 wall = the slowest lane (lockstep max, batch width irrelevant),
+        # phase-2 memory is width-independent to N~500 (probe 64944). Re-run
+        # PROBE_MEMORY=1 once (the init eval is now 192-wide vs 152; compile-only,
+        # cannot OOM) before the next real submit, per the width-change rule.
+        init_oversample=2.5, init_phase2_spare=48,
         # Tangent-extrapolated warm starts ON (Isaac, 2026-07-10): proposals seed at
         # Y + (dy/dtheta).dtheta -- measured 1.65x fewer warm steps, same certified
         # state (parity unit-tested; validate_warm gates the production result and
