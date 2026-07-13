@@ -176,14 +176,22 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     import vulcan_jax.outer_loop as outer_loop
 
     # Condensation saturation/growth tables (ProfileVars c_*) are baked at the BASELINE
-    # temperature and are NOT rebuilt per proposal. Running a T-varying model over them
+    # temperature and are NOT rebuilt per proposal. Running a T-VARYING model over them
     # would silently use wrong saturation curves -- refuse instead (standing rule:
-    # loud errors, no silent fallbacks). All shipped W39b/zco configs have conden off.
-    if bool(getattr(cfg, "use_condense", False)):
+    # loud errors, no silent fallbacks). Every SMC/zco config here has conden off, so
+    # the retrieval never trips this. The one authorized caller is the jwst-tool
+    # forward runner in the ISOTHERMAL regime (structural T == chemistry T, so the
+    # tables ARE at the model's conditions), which sets the explicit profile flag
+    # below AND guarantees no differentiation through the condensing state
+    # (jwst_tool.forward.canonical_params forbids use_condense with any Fisher param).
+    if bool(getattr(cfg, "use_condense", False)) \
+            and not bool(profile.get("_condense_validated_isothermal", False)):
         raise NotImplementedError(
             "use_condense=True is incompatible with the T-varying chemistry model: the "
             "condensation saturation/diffusion tables are frozen at the baseline T-P. "
-            "Rebuild them on-graph before enabling condensation here.")
+            "Only an isothermal forward run (structural T == chemistry T) may enable it, "
+            "via profile['_condense_validated_isothermal']=True. Rebuild the tables "
+            "on-graph before enabling condensation for a T-varying model.")
 
     rs = RunState.with_pre_loop_setup(cfg)
     var, atm, para = legacy_view(rs)
