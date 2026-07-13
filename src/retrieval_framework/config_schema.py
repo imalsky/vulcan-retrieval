@@ -263,6 +263,14 @@ class Config:
 
     # ---- inference: BlackJAX adaptive-tempered SMC + forward-mode-jvp MALA -----
     run_inference: bool = True
+    # Expert override: allow gradient-MALA inference with condensation ON. OFF by
+    # default because the only SMC mutation kernel is gradient-based MALA and the
+    # forward-mode gradient through a condensing+pinned steady state is NOT
+    # reliably differentiable -- the pinned S8 state's jvp disagrees with FD at
+    # O(1) (0.91 relative measured; tests/test_condensation_live_tp.py), the same
+    # reason Fisher-through-condensation is refused in vulcan-jwst-tool. Condensation
+    # FORWARD solves (run_inference=False, synthetic generation) are always allowed.
+    allow_condense_inference: bool = False
     smc_num_particles: int = 48
     smc_target_ess_frac: float = 0.6
     # MALA sweeps per tempering stage. Each sweep costs one full batched gradient
@@ -473,6 +481,27 @@ def validate_config(cfg: Config) -> None:
                          "deliberately no gradient-free fallback kernel")
     if not (0.0 < cfg.smc_target_ess_frac <= 1.0):
         raise ValueError("smc_target_ess_frac must be in (0, 1]")
+    # Condensation forward solves are supported (on-graph rebuild from the live
+    # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
+    # is NOT validated: the fix_species pin captures the column at the first
+    # accepted step past stop_conden_time, so a T perturbation shifts the accepted
+    # step sequence and the forward-mode tangent for the pinned species disagrees
+    # with finite differences at O(1) (0.91 relative measured;
+    # tests/test_condensation_live_tp.py). The only mutation kernel is gradient
+    # MALA, so an inference run would sample against unreliable gradients. Refuse
+    # by default (loud-errors rule); allow_condense_inference=True is the explicit
+    # expert opt-in for anyone who has independently validated their column.
+    if (bool(cfg.cfg_overrides.get("use_condense", False))
+            and cfg.run_inference and not cfg.allow_condense_inference):
+        raise ValueError(
+            "use_condense=True with run_inference=True is refused: condensation "
+            "forward solves are supported, but gradient-MALA inference through the "
+            "condensing+pinned steady state is not validated (the pinned-species "
+            "forward-mode tangent disagrees with FD at O(1) -- 0.91 relative; the "
+            "same reason Fisher-through-condensation is disabled in vulcan-jwst-tool). "
+            "Run condensation as a FORWARD model (run_inference=False), or set "
+            "allow_condense_inference=True only if you have independently validated "
+            "the gradient on your column.")
     if int(cfg.init_phase2_spare) < 0:
         raise ValueError("init_phase2_spare must be >= 0")
     if not (1.0 <= cfg.init_oversample <= 10.0):

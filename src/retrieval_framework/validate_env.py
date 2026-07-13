@@ -15,6 +15,10 @@ exojax -- forward.vulcan_chem's guard raises if exojax is imported first):
   3. vulcan_jax imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
      the installed dist version matches the checkout's _version.py (a mismatch
      means the editable install predates a metadata change -- re-bootstrap);
+  3b. vulcan_jax.conden exposes the live-T(P) condensation builder
+     (make_conden_spec + build_conden_profile) -- a capability probe the
+     version floor alone cannot guarantee (both pre- and post-conden checkouts
+     once reported >=0.1.17-era versions);
   4. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
   5. cross-repo pin: the installed vulcan-jax satisfies vulcan-retrieval's
      declared requirement (skipped with a warning if `packaging` is absent);
@@ -136,6 +140,32 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
         )
         return
     _ok(f"{dist_name} {dist_version} editable at {mod_path.parent}")
+
+
+def _check_conden_api() -> None:
+    """The installed vulcan-jax must expose the live-T(P) condensation builder.
+
+    The dist version alone is insufficient: the pre-conden 0.1.17 and the
+    conden-capable 0.1.18 both report a version that satisfies the >=0.1.17
+    era floor if an old checkout is shadowing, so probe the actual API. _prep
+    rebuilds condensation on-graph via these two functions
+    (conden.make_conden_spec + build_conden_profile); their absence means an
+    old checkout with no live-T condensation support (re-pull VULCAN-JAX)."""
+    try:
+        from vulcan_jax import conden
+    except Exception as e:  # noqa: BLE001 - aggregate every failure loudly
+        _err(f"vulcan_jax.conden failed to import: {e!r}. Re-run the bootstrap.")
+        return
+    required = ("make_conden_spec", "build_conden_profile")
+    missing = [name for name in required if not hasattr(conden, name)]
+    if missing:
+        _err(
+            "installed vulcan-jax lacks live-T(P) condensation support "
+            f"(vulcan_jax.conden missing {', '.join(missing)}): the checkout "
+            "predates the on-graph conden builder (VULCAN-JAX 0.1.18). "
+            "Pull/update the VULCAN-JAX checkout and re-run the bootstrap.")
+    else:
+        _ok("vulcan_jax.conden exposes make_conden_spec + build_conden_profile")
 
 
 def _check_cross_repo_pin() -> None:
@@ -260,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         # vulcan_jax / retrieval_framework BEFORE exojax: forward.vulcan_chem's
         # import-order guard raises if exojax comes first.
         _check_editable("vulcan_jax", "vulcan-jax", root / "VULCAN-JAX", "vulcan_jax")
+        _check_conden_api()
         _check_editable(
             "retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework"
         )

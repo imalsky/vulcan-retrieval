@@ -55,6 +55,18 @@ a condensing state is valid only away from those switches (validated in
 tests/test_condensation_live_tp.py; Fisher forecasts through condensation stay
 disabled in vulcan-jwst-tool).
 
+KNOWN LIMITATION -- condensation-enabled does NOT reduce to condensation-off when
+nothing condenses. The upstream conden-window + whole-column ``fix_species`` pin
+freezes the condensable reservoirs at their ``stop_conden_time`` state. On a column
+too hot for the species to supersaturate (or one whose chemistry has not settled by
+the window's end), that pin still captures a transient state rather than the
+condensation-off steady state, so ``use_condense=True`` and ``use_condense=False``
+can differ even where no mass actually rained out. Enable condensation only for
+columns where the species genuinely condenses. A criterion-gated pin (activate only
+on measurable condensate/supersaturation) is a possible future refinement but would
+change the certified convergence recipe (the pin is what makes a condensing column
+converge) and needs measured re-validation before adoption -- not done here.
+
 Still frozen by design: the photolysis cross-section T-interpolation (host-side
 re-bake upstream; second-order).
 

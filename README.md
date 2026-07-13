@@ -155,9 +155,13 @@ stay free of jax/vulcan_jax/exojax side effects.
   and the proposal's T every `update_frq` accepted steps (first firing at step 1);
   since 2026-07-11 the molecular-diffusion coefficients D_zz(T, M) (+ vm/vs where
   enabled), the convergence gate's Kzz, and the initial carry geometry are also
-  rebuilt per proposal via the on-graph builders. The one remaining baseline-T bake is
-  the photolysis cross-section T-interpolation (host-side upstream step; second-order)
-  — and condensation, which refuses a T-varying build loudly.
+  rebuilt per proposal via the on-graph builders; since 2026-07-13 condensation
+  (when `use_condense=True`) is rebuilt per proposal too — `_prep` regenerates the
+  saturation number densities, Dg growth terms, NH3 cold-trap index, and fix-species
+  sat-mix rows on-graph from the live T(P) via `vulcan_jax.conden.build_conden_profile`
+  (the old loud refusal of a T-varying condensation build is gone). The one remaining
+  baseline-T bake is the photolysis cross-section T-interpolation (host-side upstream
+  step; second-order).
 - **Opacities**: CO from cached ExoMol Li2015; H₂O/CO₂/CH₄/SO₂/HCN/C₂H₂/H₂S from HITRAN
   **main isotopologue at the 296 K reference** (intensities carry the terrestrial
   isotopic abundance factor — pairing with total molecular VMR is the standard,
@@ -656,10 +660,15 @@ cache policy: `scripts/zco_information/notes.md`.
 - `use_photo=True` is required — the forward-mode tangent is only validated
   photo-on (see `src/retrieval_framework/forward/config.py` FULL notes).
 - **Diagonal likelihood.** The likelihood is a per-bin Gaussian: bin-to-bin
-  covariance is neglected (universal practice for these reduced R≈100 products,
-  which ship only per-bin σ). An optional global multiplicative noise-inflation
-  nuisance is available (`infer_noise_inflation`, off by default); there is no
-  full/correlated covariance term. Correlated-systematics forecasting lives in
+  covariance is neglected. This is common for reduced R≈100 products that provide
+  only per-bin σ, and here wavelength covariance is not included because the data
+  product supplies none — NOT a claim that covariance is universally irrelevant.
+  Published JWST/NIRISS analyses have found significant wavelength-correlated noise
+  and constructed spectral covariance matrices for retrieval; the diagonal treatment
+  is a scope limit of the available product, not a statement about the underlying
+  noise. An optional global multiplicative noise-inflation nuisance is available
+  (`infer_noise_inflation`, off by default); there is no full/correlated covariance
+  term. Correlated-systematics forecasting lives in
   the sibling `vulcan-jwst-tool` planner (its experimental scenario covariances)
   and is not ingested here.
 - **Binning ≠ the planner's.** The native→bin operator (`observations.py`,

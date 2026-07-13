@@ -135,7 +135,16 @@ NO-PHOTO column additionally has no reachable longdy steady state at all
 (well-mixed CO2 creeps toward equilibrium on >=1e17 s — the quench regime);
 the synthetic test therefore integrates to a physical `runtime` cap (1e14 s)
 per upstream practice. Photo-on production runs converge via the normal
-longdy gate (WASP-107b Guillot+conden E2E verified).
+longdy gate (WASP-107b Guillot+conden E2E verified). Two guardrails on the
+conden path: (1) **inference is refused with conden ON** — `validate_config`
+raises on `cfg_overrides["use_condense"]=True` with `run_inference=True` unless
+`allow_condense_inference=True`, because gradient-MALA through the pinned S8
+state is not reliably differentiable (0.91 rel jvp-vs-FD); conden runs as a
+FORWARD model. (2) **conden-on does NOT reduce to conden-off when nothing
+condenses** — the window+pin freezes the reservoirs at `stop_conden_time`, so a
+too-hot / unsettled column is captured mid-transient, not at the conden-off
+steady state; enable conden only where the species genuinely condenses (a
+criterion-gated pin is a future refinement needing re-validation, not done).
 
 ## After any config/physics change — regeneration is mandatory
 

@@ -39,7 +39,7 @@ dependencies = [
     "matplotlib",
     "corner",
     "tqdm",
-    "vulcan-jax>=0.1.17",
+    "vulcan-jax>=0.1.18",  # 0.1.18 first ships conden.make_conden_spec/build_conden_profile (live-T(P) condensation)
 ]
 
 [project.urls]
