@@ -46,23 +46,30 @@ items are fixed in the sibling repo):
   RAISES on any non-finite depth, or any σ ≤ 0 / non-finite. Mask invalid bins
   BEFORE injection. Fail-loud rule, standard.
 
-- **Box-prior evidence separates PHYSICAL support from NUMERICAL attrition**
-  (audit item 5, P0 for model comparison). `run_smc_loop` used to report a
-  single `logZ_box = logZ + ln(f_tp·f_c1·f_c2)`, folding solver-dependent
-  convergence success (`f_c1` cold-converge, `f_c2` warm-recert — they move
-  with count_max/warm_count_max/tolerances/init history) into what was called a
-  box-prior evidence. Now split:
-  - `logZ_box_physical = logZ + ln(f_tp)` — ONLY the T-P-window restriction,
-    which is a genuine, solver-INDEPENDENT model-domain boundary (no premodit
-    opacities outside [300,3000] K). **This is the number for cross-model Bayes
-    factors** (headlined by plot_smc).
-  - `log_conv_attrition = ln(f_c1)+ln(f_c2)` — reported SEPARATELY as a
-    numerical diagnostic, never as prior mass.
-  - `logZ_box` (operational, convergence-inclusive) is kept for continuity but
-    the docstring/log now say plainly: do NOT difference it across models.
-  New npz fields: `smc_logZ_box_physical`, `smc_log_support_physical[_err]`,
-  `smc_log_conv_attrition[_err]` (run_smc.py). Old `smc_logZ_box` +
-  `smc_log_support_fraction` stay. Evidence-semantics docstring updated.
+- **Box-prior evidence — `logZ_box_physical` RETRACTED same day it shipped
+  (2026-07-12 recheck P0-B).** The first fix split the support into
+  `logZ_box_physical = logZ + ln(f_tp)` ("use for Bayes factors") and a
+  separate convergence diagnostic. That construction is INVALID:
+  `P(A)·E[L|A∩C]` restores the T-P prior mass while silently keeping the
+  convergence conditioning renormalized — it is neither the box integral
+  over A (the likelihood on the non-converged set was never evaluated) nor
+  the A-conditioned evidence; a support fraction cannot reconstruct an
+  unevaluated likelihood (toy counterexample pinned in
+  `tests/test_evidence_semantics.py`). Current semantics
+  (`pipeline.evidence_report`, module-level + unit-testable):
+  - `logZ` — evidence under the OPERATIONAL prior (box ∩ T-P window ∩
+    converged, renormalized). Never difference across models with different
+    support fractions.
+  - `logZ_box = logZ + ln(f_tp·f_c1·f_c2)` — the ZERO-FILLED box evidence,
+    the exact integral of π·L·1[valid] over the declared box (the sampler
+    defines non-converged = rejected = zero likelihood). SOLVER-DEPENDENT
+    via the convergence indicator. Cross-model Bayes factors ONLY at matched
+    solver settings AND with attrition shown likelihood-negligible (report
+    f_tp and f_conv alongside any comparison; headlined by plot_smc).
+  - There is NO f_tp-only evidence field anywhere (`smc_logZ_box_physical`
+    removed from run_smc.py npz; support fractions still exported
+    separately: `smc_log_support_physical[_err]`,
+    `smc_log_conv_attrition[_err]`).
 
 ## Supercomputer sync — git pull for CODE (preferred, 2026-07-10), scp for DATA
 

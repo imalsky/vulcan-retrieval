@@ -732,6 +732,69 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 # =============================================================================
 # Observations
 # =============================================================================
+def evidence_report(logZ: float, init_stats: dict | None) -> dict:
+    """Evidence-semantics fields from the SMC ``logZ`` and the init cull
+    counters. Module-level and jax-free so the semantics are unit-testable
+    (tests/test_evidence_semantics.py), like validate_observations.
+
+    ``logZ`` is the evidence under the OPERATIONAL prior (declared box
+    conditioned on the T-P window A and chemistry convergence C,
+    renormalized): Z_oper = E_pi[L | A and C]. Returned fields:
+
+      log_support_physical (+err)   ln f_tp -- the T-P-window prior mass, a
+                                    solver-INDEPENDENT domain restriction;
+      log_conv_attrition (+err)     ln(f_c1 f_c2) -- convergence success,
+                                    solver-DEPENDENT (count_max, tolerances);
+      log_support_fraction (+err)   their sum;
+      logZ_box                      logZ + ln(f_tp f_c1 f_c2): the ZERO-FILLED
+                                    box evidence, i.e. the exact integral of
+                                    pi * L * 1[A and C] over the declared box
+                                    (the sampler defines non-convergent draws
+                                    as rejected / zero likelihood). The ONLY
+                                    integral-valid box quantity here; usable
+                                    for cross-model Bayes factors ONLY at
+                                    matched solver settings and with the
+                                    attrition shown likelihood-negligible.
+
+    There is deliberately NO ``logZ_box_physical`` (= logZ + ln f_tp): that
+    construction restores the T-P prior mass while silently keeping the
+    convergence conditioning renormalized -- P(A) E[L | A and C] is neither
+    the box integral over A nor the A-conditioned evidence, and a support
+    fraction cannot reconstruct the unevaluated likelihood on the
+    non-converged set (2026-07-12 recheck P0-B; retracted same day it
+    shipped)."""
+    def _binom(k, n):
+        if n <= 0:
+            return 1.0, 0.0
+        f = max(k / n, 1.0 / (2.0 * n))          # floor so ln(f) stays finite
+        se = math.sqrt(max(f * (1.0 - f), 0.0) / n) / f   # d ln f
+        return f, se
+    if not init_stats:
+        nan = float("nan")
+        return dict(log_support_fraction=nan, log_support_fraction_err=nan,
+                    log_support_physical=nan, log_support_physical_err=nan,
+                    log_conv_attrition=nan, log_conv_attrition_err=nan,
+                    logZ_box=nan, f_tp=nan, f_conv=nan)
+    f_tp, se_tp = _binom(init_stats.get("tp_n_kept", 0),
+                         init_stats.get("tp_n_drawn", 0))
+    f_c1, se_c1 = _binom(init_stats.get("n_alive_phase1", 0),
+                         init_stats.get("n_drawn", 0))
+    n_p2 = init_stats.get("n_phase2", 0)
+    f_c2, se_c2 = _binom(n_p2 - init_stats.get("n_recert_fail", 0), n_p2)
+    log_tp = math.log(f_tp)
+    log_conv = math.log(f_c1) + math.log(f_c2)
+    log_support = log_tp + log_conv
+    return dict(
+        log_support_fraction=log_support,
+        log_support_fraction_err=math.sqrt(se_tp**2 + se_c1**2 + se_c2**2),
+        log_support_physical=log_tp, log_support_physical_err=se_tp,
+        log_conv_attrition=log_conv,
+        log_conv_attrition_err=math.sqrt(se_c1**2 + se_c2**2),
+        logZ_box=logZ + log_support,
+        f_tp=f_tp, f_conv=math.exp(log_conv),
+    )
+
+
 def validate_observations(depth, sigma, n_bin: int, npdtype):
     """Coerce + VALIDATE an injected (depth, sigma) pair for n_bin spectral bins.
 
@@ -1254,15 +1317,30 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     Pass ``resume_from=<checkpoint.npz>`` to continue a killed run from its tempered
     cloud (the ladder resumes at the checkpointed beta; completed stages are kept).
 
-    EVIDENCE SEMANTICS: the returned ``logZ`` is the evidence under the OPERATIONAL
-    prior -- the declared box restricted to the modelable T-P window and to draws
-    whose chemistry converges (init reject-and-cull), renormalized. TWO separate
-    box-evidence corrections ride along (re-audit item 5): ``logZ_box_physical`` =
-    logZ + ln(f_tp) restores ONLY the physical, solver-independent T-P-window domain
-    (use this for cross-model Bayes factors), while ``logZ_box`` additionally folds
-    in the numerical convergence attrition (``log_conv_attrition``, solver-dependent
-    -- a diagnostic, not prior mass). Never difference ``logZ`` or ``logZ_box``
-    across models with different support fractions; compare ``logZ_box_physical``."""
+    EVIDENCE SEMANTICS (2026-07-12 recheck P0-B -- this REPLACES the retracted
+    ``logZ_box_physical``): the returned ``logZ`` is the evidence under the
+    OPERATIONAL prior -- the declared box restricted to the modelable T-P window
+    (A) and to draws whose chemistry converges (C), renormalized:
+    Z_oper = E_pi[L | A and C]. Because the sampler DEFINES a non-convergent
+    draw as rejected (zero likelihood), the one integral-valid box quantity is
+    the ZERO-FILLED evidence
+
+        logZ_box = logZ + ln(f_tp) + ln(f_c1) + ln(f_c2)
+                 = ln( integral_box pi(theta) L(theta) 1[A and C](theta) dtheta ),
+
+    which is SOLVER-DEPENDENT through the convergence indicator (count_max,
+    warm_count_max, tolerances, init history all move C). Cross-model Bayes
+    factors from logZ_box are defensible ONLY when (a) every model is run at
+    matched solver settings AND (b) the convergence attrition is shown to be
+    likelihood-negligible (f_c near 1, or the rejected region demonstrated to
+    carry negligible posterior mass); report both with any comparison. The old
+    ``logZ_box_physical = logZ + ln(f_tp)`` is GONE: restoring the T-P prior
+    mass while silently keeping the convergence conditioning renormalized is
+    P(A) * E[L | A and C] -- neither the box integral over A (needs L on the
+    non-converged set) nor the A-conditioned evidence (same reason); a support
+    fraction cannot reconstruct an unevaluated likelihood (see
+    tests/test_evidence_semantics.py for the numeric counterexample). Never
+    difference bare ``logZ`` across models with different support fractions."""
     cfg = pipe.cfg
     dtype = pipe.dtype
     N = int(cfg.smc_num_particles)
@@ -1462,55 +1540,23 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     theta_draws = np.asarray(jax.device_get(jax.vmap(pipe.theta_from_u)(U)), np.float64)[draw_idx]
     theta_draws = theta_draws.reshape(int(cfg.num_chains), int(cfg.num_samples), n_dim)
 
-    # ---- evidence conditioning report -------------------------------------
-    # The tempering accumulates logZ over particles drawn from the OPERATIONAL prior:
-    # the declared box restricted to (a) the modelable T-P window and (b) draws whose
-    # chemistry converges (init reject-and-cull). `logZ` is therefore the evidence
-    # under that conditioned, RENORMALIZED prior. Two DISTINCT corrections turn it
-    # back toward a box-prior evidence (2026-07-12 re-audit item 5 -- keep them
-    # separate; conflating them made the "box evidence" depend on solver settings):
-    #   * PHYSICAL model domain: outside the [300,3000] K premodit window the RT has
-    #     no opacities, so the forward model is genuinely UNDEFINED there. f_tp is a
-    #     declared, solver-INDEPENDENT box restriction, and
-    #         logZ_box_physical = logZ + ln(f_tp)
-    #     is the defensible box-prior evidence for cross-model Bayes factors.
-    #   * NUMERICAL attrition: f_c1 (cold converges) and f_c2 (warm re-certifies) are
-    #     ALGORITHM success rates -- they move with count_max, warm_count_max, solver
-    #     tolerances, init history. A non-converged draw is not physically zero-
-    #     likelihood, just hard for this solver, so this factor is a numerical
-    #     DIAGNOSTIC, reported separately and NEVER used as prior mass for model
-    #     comparison. logZ_box (operational, convergence-inclusive) is kept for
-    #     continuity but must not be differenced across models.
-    def _binom(k, n):
-        if n <= 0:
-            return 1.0, 0.0
-        f = max(k / n, 1.0 / (2.0 * n))          # floor so ln(f) stays finite
-        se = math.sqrt(max(f * (1.0 - f), 0.0) / n) / f   # d ln f
-        return f, se
+    # ---- evidence conditioning report (semantics + retraction rationale in
+    # evidence_report's docstring; recheck P0-B) ------------------------------
+    ev = evidence_report(logZ, init_stats)
     if init_stats:
-        f_tp, se_tp = _binom(init_stats.get("tp_n_kept", 0), init_stats.get("tp_n_drawn", 0))
-        f_c1, se_c1 = _binom(init_stats.get("n_alive_phase1", 0), init_stats.get("n_drawn", 0))
-        n_p2 = init_stats.get("n_phase2", 0)
-        f_c2, se_c2 = _binom(n_p2 - init_stats.get("n_recert_fail", 0), n_p2)
-        log_support_physical = math.log(f_tp)                    # solver-independent
-        log_support_physical_err = se_tp
-        log_conv_attrition = math.log(f_c1) + math.log(f_c2)     # solver-DEPENDENT
-        log_conv_attrition_err = math.sqrt(se_c1**2 + se_c2**2)
-        log_support = log_support_physical + log_conv_attrition  # operational (both)
-        log_support_err = math.sqrt(se_tp**2 + se_c1**2 + se_c2**2)
         logger.info(
             f"evidence conditioning: logZ(conditioned/operational) = {logZ:.2f}; "
-            f"PHYSICAL box evidence logZ_box_physical = {logZ + log_support_physical:.2f} "
-            f"+/- {log_support_physical_err:.2f} (T-P window f_tp={f_tp:.3f}, "
-            f"solver-independent -- USE THIS for model comparison); numerical "
-            f"convergence attrition f_c={math.exp(log_conv_attrition):.3f} "
-            f"(cold-converge {f_c1:.3f} x warm-recert {f_c2:.3f}, solver-dependent "
-            f"DIAGNOSTIC -- not prior mass); logZ_box(operational, convergence-"
-            f"inclusive) = {logZ + log_support:.2f} (do NOT difference across models)")
+            f"ZERO-FILLED box evidence logZ_box = {ev['logZ_box']:.2f} +/- "
+            f"{ev['log_support_fraction_err']:.2f} (= logZ + ln(f_tp*f_conv); "
+            f"the exact integral of pi*L*1[T-P valid AND converged] over the "
+            f"declared box -- SOLVER-DEPENDENT via the convergence indicator; "
+            f"Bayes factors only at matched solver settings AND with the "
+            f"attrition shown likelihood-negligible). Supports: T-P window "
+            f"f_tp={ev['f_tp']:.3f} (solver-independent), convergence "
+            f"f_conv={ev['f_conv']:.3f} (solver-dependent). There is NO "
+            f"f_tp-only 'physical' evidence: that arithmetic reconstructs no "
+            f"integral (recheck P0-B, retracted).")
     else:
-        log_support, log_support_err = float("nan"), float("nan")
-        log_support_physical, log_support_physical_err = float("nan"), float("nan")
-        log_conv_attrition, log_conv_attrition_err = float("nan"), float("nan")
         logger.warning("evidence conditioning: no init_stats available (old resume "
                        "checkpoint) -- the operational-prior support fraction is "
                        "unknown; do NOT quote logZ as a box-prior evidence.")
@@ -1520,17 +1566,16 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         step_size_used=math.exp(log_step), betas=np.asarray(betas),
         ess=np.asarray(ess_hist), acceptance_rate=np.asarray(acc_hist),
         logZ_increment=np.asarray(logz_inc_hist), logZ=logZ,
-        log_support_fraction=log_support, log_support_fraction_err=log_support_err,
-        logZ_box=(logZ + log_support) if math.isfinite(log_support) else float("nan"),
-        # physical (T-P-window-only, solver-independent) box evidence for model
-        # comparison, kept separate from the numerical convergence attrition
-        # diagnostic (re-audit item 5)
-        log_support_physical=log_support_physical,
-        log_support_physical_err=log_support_physical_err,
-        logZ_box_physical=((logZ + log_support_physical)
-                           if math.isfinite(log_support_physical) else float("nan")),
-        log_conv_attrition=log_conv_attrition,
-        log_conv_attrition_err=log_conv_attrition_err,
+        # evidence-semantics fields from evidence_report (recheck P0-B):
+        # logZ_box is the ZERO-FILLED box evidence; the retracted
+        # logZ_box_physical is intentionally ABSENT
+        log_support_fraction=ev["log_support_fraction"],
+        log_support_fraction_err=ev["log_support_fraction_err"],
+        logZ_box=ev["logZ_box"],
+        log_support_physical=ev["log_support_physical"],
+        log_support_physical_err=ev["log_support_physical_err"],
+        log_conv_attrition=ev["log_conv_attrition"],
+        log_conv_attrition_err=ev["log_conv_attrition_err"],
         init_stats=(init_stats or {}),
         warm_capped=np.asarray(capped_hist, np.int64),
         step_size_history=np.asarray(step_hist), unique_particles=np.asarray(uniq_hist, np.int64),

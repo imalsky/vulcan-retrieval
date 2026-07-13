@@ -179,16 +179,23 @@ def main() -> None:
         a2.set_ylabel("cumulative logZ")
         a.set_title("diversity + evidence"); a.legend(fontsize=8, loc="lower left")
         sup = ""
-        if ("smc_log_support_physical" in x.files
-                and np.isfinite(float(x["smc_log_support_physical"]))):
-            # headline the PHYSICAL (T-P-window, solver-independent) box evidence;
-            # the operational logZ_box folds in solver-dependent attrition
-            sup = (f" | T-P support f={np.exp(float(x['smc_log_support_physical'])):.2f} "
-                   f"(logZ conditioned; box_physical {float(x['smc_logZ_box_physical']):.1f})")
-        elif ("smc_log_support_fraction" in x.files
+        # headline the ZERO-FILLED box evidence (the only integral-valid box
+        # quantity; solver-dependent -- see pipeline.evidence_report) with both
+        # support fractions. The retracted f_tp-only "box_physical" is gone
+        # (2026-07-12 recheck P0-B).
+        if ("smc_log_support_fraction" in x.files
                 and np.isfinite(float(x["smc_log_support_fraction"]))):
-            sup = (f" | prior support f={np.exp(float(x['smc_log_support_fraction'])):.2f} "
-                   f"(logZ conditioned; box {float(x['smc_logZ_box']):.1f})")
+            f_tp = (np.exp(float(x["smc_log_support_physical"]))
+                    if "smc_log_support_physical" in x.files
+                    and np.isfinite(float(x["smc_log_support_physical"]))
+                    else float("nan"))
+            f_conv = (np.exp(float(x["smc_log_conv_attrition"]))
+                      if "smc_log_conv_attrition" in x.files
+                      and np.isfinite(float(x["smc_log_conv_attrition"]))
+                      else float("nan"))
+            sup = (f" | zero-filled box logZ {float(x['smc_logZ_box']):.1f} "
+                   f"(f_tp={f_tp:.2f}, f_conv={f_conv:.2f}, solver-dep.; "
+                   "logZ conditioned)")
         fig.suptitle(f"SMC diagnostics (reached beta=1: {bool(int(x['reached_beta1']))})"
                      f"{sup}", fontsize=11)
         fig.tight_layout(); fig.savefig(plots / "smc_diagnostics.png", dpi=DPI); plt.close(fig)

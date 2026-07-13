@@ -357,14 +357,14 @@ def main() -> None:
                    smc_warm_capped=res["warm_capped"],
                    # evidence conditioning: smc_logZ is under the OPERATIONAL prior
                    # (T-P window x converged support, renormalized); the measured
-                   # support fraction + the box-prior value ride along -- quote them
-                   # together (see run_smc_loop docstring)
+                   # support fractions + the ZERO-FILLED box evidence ride along --
+                   # quote them together (see run_smc_loop / evidence_report
+                   # docstrings). The retracted f_tp-only smc_logZ_box_physical is
+                   # intentionally NOT exported (2026-07-12 recheck P0-B: it
+                   # reconstructs no integral).
                    smc_log_support_fraction=np.asarray(res["log_support_fraction"]),
                    smc_log_support_fraction_err=np.asarray(res["log_support_fraction_err"]),
                    smc_logZ_box=np.asarray(res["logZ_box"]),
-                   # physical (T-P-window) box evidence for model comparison, kept
-                   # separate from the solver-dependent convergence attrition
-                   smc_logZ_box_physical=np.asarray(res["logZ_box_physical"]),
                    smc_log_support_physical=np.asarray(res["log_support_physical"]),
                    smc_log_support_physical_err=np.asarray(res["log_support_physical_err"]),
                    smc_log_conv_attrition=np.asarray(res["log_conv_attrition"]),
