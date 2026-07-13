@@ -179,9 +179,10 @@ def gpu_config(**overrides: Any) -> Config:
         # at 29% reject), spare 48 -> phase-2 pool min(n_alive, 144+48)=192, tolerating
         # a warm-recert cull up to (192-144)/192 = 25% and still leaving 144. Both are
         # ~free: phase-1 wall = the slowest lane (lockstep max, batch width irrelevant),
-        # phase-2 memory is width-independent to N~500 (probe 64944). Re-run
-        # PROBE_MEMORY=1 once (the init eval is now 192-wide vs 152; compile-only,
-        # cannot OOM) before the next real submit, per the width-change rule.
+        # phase-2 memory is width-independent to N~500 (probe 64944 measured 73.25 GiB
+        # flat at N=96/144/152). No memory probe needed for this bump: the 192-wide
+        # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
+        # neither nu_pts nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
         init_oversample=2.5, init_phase2_spare=48,
         # Tangent-extrapolated warm starts ON (Isaac, 2026-07-10): proposals seed at
         # Y + (dy/dtheta).dtheta -- measured 1.65x fewer warm steps, same certified
