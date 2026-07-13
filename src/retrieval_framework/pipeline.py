@@ -762,7 +762,16 @@ def evidence_report(logZ: float, init_stats: dict | None) -> dict:
     the box integral over A nor the A-conditioned evidence, and a support
     fraction cannot reconstruct the unevaluated likelihood on the
     non-converged set (2026-07-12 recheck P0-B; retracted same day it
-    shipped)."""
+    shipped).
+
+    UNCERTAINTY CAVEAT (2026-07-13 recheck item 4): the ``*_err`` fields are
+    ONLY the binomial uncertainty of the estimated support FRACTIONS. They do
+    NOT include the Monte-Carlo (seed-to-seed) uncertainty of the SMC estimate
+    of ``logZ`` itself, so the reported +/- is NOT the total evidence
+    uncertainty. For a Bayes factor, run several independent SMC seeds, take
+    the empirical std of logZ, add it in quadrature with the support-fraction
+    error, and require agreement across particle-count and tempering settings.
+    A single run's support-fraction error bar underestimates sigma(logZ_box)."""
     def _binom(k, n):
         if n <= 0:
             return 1.0, 0.0

@@ -46,7 +46,8 @@ pip install --no-deps -e .
 
 `--no-deps` because the chemistry dependency `vulcan-jax>=0.1.17` lives on
 TestPyPI, not PyPI (the remaining dependencies are ordinary PyPI packages).
-Consumer install from TestPyPI (current version 0.7.0):
+Consumer install from TestPyPI (latest published release; pin a version with
+`vulcan-retrieval==X.Y.Z` if you need reproducibility):
 
 ```
 pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple vulcan-retrieval
