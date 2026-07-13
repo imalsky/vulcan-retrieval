@@ -655,6 +655,20 @@ cache policy: `scripts/zco_information/notes.md`.
   enforces this ordering).
 - `use_photo=True` is required — the forward-mode tangent is only validated
   photo-on (see `src/retrieval_framework/forward/config.py` FULL notes).
+- **Diagonal likelihood.** The likelihood is a per-bin Gaussian: bin-to-bin
+  covariance is neglected (universal practice for these reduced R≈100 products,
+  which ship only per-bin σ). An optional global multiplicative noise-inflation
+  nuisance is available (`infer_noise_inflation`, off by default); there is no
+  full/correlated covariance term. Correlated-systematics forecasting lives in
+  the sibling `vulcan-jwst-tool` planner (its experimental scenario covariances)
+  and is not ingested here.
+- **Binning ≠ the planner's.** The native→bin operator (`observations.py`,
+  `B @ native`) is the wavelength-space d(λ)-weighted trapezoidal average that
+  reduced R≈100 products are compared against — it is *not* the stellar-count-
+  weighted operator (plus native-R LSF) the `vulcan-jwst-tool` planner uses to
+  forecast instrument noise. The two tools are deliberately not a matched
+  injection→recovery closure pair: this framework fits real reduced spectra
+  (C&M24 W39b), not planner-generated synthetic data.
 
 ## Tests
 
