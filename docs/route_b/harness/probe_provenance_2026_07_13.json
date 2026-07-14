@@ -1,0 +1,115 @@
+{
+ "artifact": "Route B B0-6 chemistry-endpoint probe, run 2026-07-13",
+ "archived_output": "probe_results_2026_07_13.txt",
+ "repository_shas": {
+  "VULCAN-JAX": "1e7ae576016ddbba17fcdd473806fea1e5029b1f",
+  "vulcan-retrieval": "2ffaac653e2f22448904696e8ce47e418b4e6ea0",
+  "note": "the archived run executed against working trees content-identical to these commits, except the probe script has since gained per-FD-endpoint termination logging (committed in vulcan-retrieval HEAD); all physics/solver code identical"
+ },
+ "script_sha256": "ccce4717060b3d6a65388936ce41dbb20a4bc3a87fdc024bde5b3f31cd1b27ce",
+ "reaction_network": {
+  "file": "thermo/SNCHO_photo_network.txt",
+  "sha256": "3514b57e19365c5b3200b99422f6399c5cfabd29620c08b7c64254de67b29073",
+  "atom_list": [
+   "H",
+   "O",
+   "C",
+   "N",
+   "S"
+  ]
+ },
+ "configuration": {
+  "fixture": "isothermal 400 K SNCHO S8 mini-column (LOCAL derivative fixture only)",
+  "nz": 32,
+  "P_b_dyne": 7600000.0,
+  "P_t_dyne": 100.0,
+  "Tiso_K": 400.0,
+  "ini_mix": "const_mix",
+  "const_mix": {
+   "H2": 0.85,
+   "He": 0.148,
+   "H2O": 0.0005,
+   "CO": 0.0002,
+   "CH4": 0.0001,
+   "N2": 0.0001,
+   "H2S": 3e-05,
+   "S8": 0.0001
+  },
+  "Kzz_const": 10000000.0,
+  "use_moldiff": true,
+  "use_photo": false,
+  "conden_mode": "smooth_rainout",
+  "condense_sp": [
+   "S8"
+  ],
+  "conden_smooth_width": 0.1,
+  "rainout_rate_scale": 1.0,
+  "r_p_S8_l_s_cm": 0.005,
+  "rho_p_S8_l_s": 2.07,
+  "use_fix_sp_bot": {
+   "H2S": 3e-05
+  },
+  "count_max": 100000,
+  "runtime_s": 10000000000.0
+ },
+ "theta": [
+  "T_iso [K]",
+  "ln x_pin(H2S)"
+ ],
+ "fd_steps": {
+  "T_iso_K": [
+   2.0,
+   1.0
+  ],
+  "ln_x_pin": [
+   0.02,
+   0.01
+  ]
+ },
+ "body_dt_scan_s": [
+  1000.0,
+  3000.0,
+  10000.0
+ ],
+ "termination": {
+  "primal": "runtime-cap (t = 1.250e10 s, 323 accepted steps; count_max not reached)",
+  "fd_endpoints": "share the fixed runtime cap by construction (identical runtime/count_max); per-endpoint logging added to the script after this run for future verification"
+ },
+ "precision": "float64 (jax_enable_x64 at import; repo standing rule)",
+ "solver_tolerances_from_vulcan_cfg_defaults": {
+  "rtol": 0.2,
+  "atol": 0.1,
+  "mtol": 1e-22,
+  "loss_eps": 0.1,
+  "note": "probe overrides only the fields listed under configuration",
+  "mtol_conv": 1e-20,
+  "yconv_cri": 0.01
+ },
+ "dependencies": {
+  "python": "3.11.15",
+  "numpy": "1.26.4",
+  "scipy": "1.17.1",
+  "jax": "0.6.2",
+  "jaxlib": "0.6.2",
+  "platform": "macOS-26.5.1-arm64-arm-64bit"
+ },
+ "headline_measurements": {
+  "fd_dlnNS8_dT_perK": {
+   "h2.0": 0.07309478,
+   "h1.0": 0.07306604,
+   "saturation_curve_slope_11800_over_T2": 0.07375
+  },
+  "fd_dlnNH2S_dlnxpin": {
+   "h0.02": 0.9975337,
+   "h0.01": 0.96160784
+  },
+  "unrolled_jvp_verdict": "FAILS (6-9 orders vs FD on this cold fixture; diagnostic-only)",
+  "implicit_dense_prototype_verdict": "under-conditioned (usable body_dt window 1e3-1e4; production solver-map LGMRES route required for G6)",
+  "sulfur_subsystem_residual_s^-1": {
+   "S8": 1.699e-11,
+   "H2S": 7.939e-09
+  },
+  "endpoint_rain_flux": "exactly 0 (no S8 source at 400 K; correct steady state for this fixture)"
+ },
+ "status": "B0B prototype implementation and minimal diagnostic harness complete. B0C feasibility gates remain open."
+}
