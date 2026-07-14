@@ -22,6 +22,8 @@ B0A gate remains open pending the D3b sign-off. B0B is blocked until then.
   values AND partial derivatives against FastChem finite differences.
   The B1 JAX port must reproduce the trilinear rule and gate on the
   table checksum.
+- `harness/` — the B0-6 derivative-probe drivers (chemistry endpoint +
+  one binned-spectrum row; env-gated, see `harness/README.md`).
 
 ## Re-running
 

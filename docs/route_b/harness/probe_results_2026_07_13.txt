@@ -1,0 +1,46 @@
+All checks passed!
+[primal] accepted steps = 323, t = 1.250e+10 s, terminated at runtime cap = True
+[budget] Phi_S,bottom = -1.2094e+10, Phi_S,rain = 0.0000e+00, dN_S/dt = -1.2079e+10 [atoms cm^-2 s^-1]
+[budget] rain inactive at endpoint (exact-zero hinge); closure gate deferred to a source-bearing fixture (W107b)
+[B0-5] scaled residual max_R = 3.286e+01 s^-1 at z=0 sp=H
+        max_R[S8] = 1.699e-11 s^-1
+        max_R[H2S] = 7.939e-09 s^-1
+        max_R[S2] = 5.002e-06 s^-1
+
+[route 1] unrolled forward-mode jvp through the runner
+  dL/dtheta[0] = [ 1784185.13751892 -2464067.39777502]
+  dL/dtheta[1] = [-52625.43281902  72658.55163342]
+
+[route 2] implicit (I - G_eta) solve, log coords, measured null space
+  [dt=1e+03] live 1162/2848 (ymix > 1e-25), 0 more excluded at |defect| >= 1.0; retained defect max = 4.303e-03, median = 9.974e-08
+  [dt=1e+03] null quality nq_e = ||A c_e||/||A||: H=1.33e-02, O=5.97e-06, C=6.84e-07, N=8.07e-11, S=5.06e-05
+  [dt=1e+03] open/closed separation = 8.5x (closed O,C,N must be decisively more null than open S,H; gate >= 10x)
+  [dt=1e+03] dL/dtheta[0] = [-0.29251632 -0.00214072]  [ordering FAILED]
+  [dt=1e+03] dL/dtheta[1] = [-0.32391324  0.85854143]  [ordering FAILED]
+  [dt=3e+03] live 1162/2848 (ymix > 1e-25), 0 more excluded at |defect| >= 1.0; retained defect max = 1.277e-02, median = 2.513e-07
+  [dt=3e+03] null quality nq_e = ||A c_e||/||A||: H=4.36e-02, O=1.97e-05, C=1.25e-06, N=6.02e-15, S=8.43e-12
+  [dt=3e+03] open/closed separation = 0.0x (closed O,C,N must be decisively more null than open S,H; gate >= 10x)
+  [dt=3e+03] dL/dtheta[0] = [-1.00046416e-08 -7.57244209e-04]  [ordering FAILED]
+  [dt=3e+03] dL/dtheta[1] = [-1.23485549e-10  3.02897630e-01]  [ordering FAILED]
+  [dt=1e+04] live 1162/2848 (ymix > 1e-25), 0 more excluded at |defect| >= 1.0; retained defect max = 4.094e-02, median = 8.306e-07
+  [dt=1e+04] null quality nq_e = ||A c_e||/||A||: H=8.05e-07, O=7.40e-04, C=1.78e-03, N=4.69e-05, S=6.86e-03
+  [dt=1e+04] open/closed separation = 0.0x (closed O,C,N must be decisively more null than open S,H; gate >= 10x)
+  [dt=1e+04] dL/dtheta[0] = [ 4.81526786e-18 -7.57244076e-04]  [ordering FAILED]
+  [dt=1e+04] dL/dtheta[1] = [-1.92686462e-15  3.02897630e-01]  [ordering FAILED]
+  cross-body_dt spread (max rel to mean): 7.589e-01
+  NO body_dt passed the null-quality ordering on this fixture; the implicit rows below are DIAGNOSTIC ONLY (deflation of O/C rests on an unverified null).
+
+[route 3] centered FD, independently re-run endpoints
+  d=0 h=2.0: [0.07309478 0.00059758]
+  d=0 h=1.0: [0.07306604 0.00035718]
+  d=1 h=0.02: [-0.00484494  0.9975337 ]
+  d=1 h=0.01: [0.05065034 0.96160784]
+
+[compare] per (loss, param): jvp | implicit | FD(h) | FD(h/2)
+  th0 ln N_S8     : +1.784185e+06 | -1.000464e-08 | +7.309478e-02 | +7.306604e-02  (jvp/imp rel vs FD: 2.44e+07, 1.00e+00)
+  th0 ln N_H2S    : -2.464067e+06 | -7.572442e-04 | +5.975785e-04 | +3.571838e-04  (jvp/imp rel vs FD: 6.90e+09, 3.12e+00)
+  th1 ln N_S8     : -5.262543e+04 | -1.234855e-10 | -4.844936e-03 | +5.065034e-02  (jvp/imp rel vs FD: 1.04e+06, 1.00e+00)
+  th1 ln N_H2S    : +7.265855e+04 | +3.028976e-01 | +9.975337e-01 | +9.616078e-01  (jvp/imp rel vs FD: 7.56e+04, 6.85e-01)
+
+worst jvp/implicit deviation from FD(h/2): 6.899e+09
+REMINDER: implicit rows are diagnostic-only on this fixture (null ordering unverified; see route 2 output).

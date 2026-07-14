@@ -1346,3 +1346,73 @@ anchor-scale pin proposal is DEMOTED. What changed, measured:
   domain, lookup BC — checklist at the end of the record). B0B stays
   blocked. The reviewer's point 8 (commits not shown) was a truncated
   transcript: round-2 commits are 2a06bfd (here) and 1cb5bb0 (jwst-tool).
+
+## Route B B0B prototype landed + B0-6 early derivative probe (2026-07-13)
+
+Core smooth-rainout mode implemented in VULCAN-JAX (B0-1..B0-5) with the
+standard suite green (209 passed after the cfg-key parity fix; 4 expected
+skips). Everything opt-in behind `conden_mode="smooth_rainout"`; the default
+master_pin path traces its exact pre-change graph (parity suite green).
+What landed, per plan item:
+
+- **B0-1 kernel**: `conden.smooth_rainout_loss` (division-free density form,
+  `N_SAT_FLOOR` guard, analytic dL/dn). Tests: AD == analytic dL exactly,
+  w->0 == the legacy gas-side branch exactly, FD through n/n_sat/C, guards
+  at n_sat extremes, C1 at both hinge breakpoints, jit/vmap.
+- **B0-2 wiring**: `jax_ros2_step(..., rainout=RainoutTerm)` — sink in BOTH
+  stage RHSs + analytic Jacobian diag, added AFTER the reservoir projection
+  (2g-i); conden branch/window/pin skipped structurally; S8<->S8_l_s k-rows
+  measured 0 throughout; S8 gas column kept under delta error control.
+- **B0-3 boundary**: pin VALUES ride `pv.bot_pin_mix` (2g-ii); smooth mode
+  rejects use_fix_all_bot/use_fix_H2He so the bc ledger is complete.
+- **B0-4 ledger**: per-operator per-element deltas on the carry; telescoping
+  identity measured at 4.6e-16 of inventory; led_bc measured AT the pinned
+  cells (whole-tensor differences bury the ~1e-18-of-inventory pin delta
+  under XLA refusion ulp noise — measured, documented) and reproduces H2S
+  2:1 H:S stoichiometry exactly; accept-gate/adapt-rtol mask open elements
+  {S,H} ONLY in smooth mode, ledger active in the same change.
+- **B0-5 residual**: `steady_residual.direct_residual`/`residual_from_state`
+  (scaled |F|/max(y, floor), enforced cells excluded).
+- **G4 seed**: hot subsaturated smooth run == conden-off run to 1.6e-16
+  after 30 identical accepted steps; sink exactly zero.
+- Guards: `make_body_terms` refuses smooth states (no conden fingerprint
+  exists — k-rows are zero); `audit_adjoint_scope` reports it as an error
+  finding; `runtime_validation` bounds the new knobs; knobs declared in all
+  four cfg_examples (parity audit enforces).
+
+**B0-6 chemistry-endpoint probe** (isothermal 400 K SNCHO mini-column,
+LOCAL fixture; `docs/route_b/harness/`, full output in
+`probe_results_2026_07_13.txt`), theta = (T_iso, ln x_pin[H2S]), losses
+[ln N_S8, ln N_H2S]. MEASURED:
+
+- Sulfur subsystem is stationary at the endpoint (scaled residual S8
+  1.7e-11, H2S 7.9e-9 s^-1) while the full network is not (H at 33 s^-1 —
+  the quench-creep reason this column is banned as a convergence fixture).
+  Endpoint rain is EXACTLY zero: with no S8 source at 400 K the true open-
+  system steady state is a saturation-capped subsaturated profile — the
+  closure gate needs the source-bearing W107b fixture.
+- **FD ground truth is clean and physical**: d ln N_S8/dT_iso = +0.0731 /K,
+  h-stable to 0.04%, vs the S8 saturation-curve slope 11800/T^2 = 0.0738 —
+  the endpoint tracks n_sat(T) exactly as D2 intends; d ln N_H2S/d ln x_pin
+  = 0.96-1.00 (column tracks the pin). The other two entries are true-zero/
+  noise-floor (sign flips between h and h/2).
+- **Unrolled jvp FAILS on this fixture**: 1.8e6 vs FD 0.073 (7 orders);
+  measured map expansion ~1e12 per dt=1e7 application in log space explains
+  the blow-up through 323 frozen steps. Supports D9's demotion of the
+  unrolled route; it must not be presumed usable on cold stiff columns.
+- **Dense implicit prototype hits its limits and says so**: usable body_dt
+  window measured (1e3..1e4 finite; 1e5 non-finite; 1e7 overflows), null
+  quality of the analytic conserved directions is fragile run-to-run on a
+  dense jacfwd at ~16-20 decades of operator range (N separates at 1e-10;
+  O/C polluted by quench creep), and the equilibrated lstsq reaches the
+  right order only on the best-conditioned entry (0.30 vs FD 0.96). The
+  production B1-3 route (solver-map LGMRES + deflation + its diagnostics)
+  is REQUIRED — the naive dense solve cannot certify G6, exactly the
+  reason D9 mandates reusing the validated machinery.
+
+G6 disposition on this evidence: NOT a project-stopping failure (the chain
+differentiates cleanly under FD with physically interpretable values), but
+neither AD route is certified on this fixture; the definitive G6 gate moves
+to the W107b photo-on fixture with the production implicit route, as the
+plan's fixture policy (2f) already dictates. Collaborator eyes requested on
+the probe output before B1-3 work starts.

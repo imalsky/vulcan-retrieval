@@ -2,8 +2,14 @@
 ROUTE B — B0A PHYSICS DECISION RECORD (REVISED, REVIEW ROUND 3)
 ================================================================================
 Date:    2026-07-13 (rev 2, incorporating the collaborator's B0A review)
-Status:  B0A ANALYSIS AND DRAFT DECISION RECORD COMPLETE;
-         THE B0A GATE REMAINS OPEN PENDING SIGN-OFF. B0B stays blocked.
+Status:  SIGNED OFF (Isaac, 2026-07-13, after the collaborator's round-3
+         review whose conditions this revision incorporates): checklist
+         items (i)-(iii) approved as written. B0B prototype implementation
+         and minimal diagnostic harness COMPLETE (VULCAN-JAX 1e7ae57;
+         probe output docs/route_b/harness/probe_results_2026_07_13.txt).
+         B0C FEASIBILITY GATES REMAIN OPEN; Fisher with condensation stays
+         disabled; B1 is not authorized. Round-4 amendments below:
+         equilibrium-scope wording and lookup derivative behavior.
 Plan:    ../../../docs/route_b_smooth_condensation_plan.txt (v3). This file
          is the AUTHORITATIVE record (tracked in vulcan-retrieval); a copy
          sits next to the plan at docs/route_b_b0a_decision_record.txt per
@@ -89,8 +95,16 @@ ROUND-3 REVIEW DISPOSITION (all eight review points):
    400 K isothermal test column the pin is therefore a labeled boundary
    FORCING, never interpreted as that column's local physics.
 
+   EQUILIBRIUM SCOPE (exact wording, review round 4): across the validated
+   boundary grid, no sulfur condensate represented by the adopted
+   SNCHO/VULCAN condensation inventory (S2, S4, S8) is remotely saturated
+   (max ratio 3.5e-9). Therefore, WITHIN the adopted H/C/N/O/S elemental
+   system and condensate set, the gas-phase equilibrium sulfur partition is
+   complete at the boundary. No claim is made about sulfur condensates of a
+   more complete elemental system (e.g. metal sulfides).
+
    MEASURED, gas-phase FastChem (complete for sulfur at the boundary node,
-   disposition point 1), 10x-solar W39b baseline (C/O_base 0.549, He fixed),
+   in the scope above), 10x-solar W39b baseline (C/O_base 0.549, He fixed),
    lnZ in [-2.303, +2.303], c_o in [-1.70, +0.50], P_b = 7.6 bar:
      f_H2S_gas >= 0.992 for T_bottom <= 1600 K; 0.982 at 1800 K;
      0.953 at 2000 K; 0.896 at 2200 K; 0.419 at 3000 K.
@@ -115,6 +129,18 @@ ROUND-3 REVIEW DISPOSITION (all eight review points):
    The B1 JAX port must reproduce the trilinear ln-x rule and gate on the
    table checksum (lnx_table sha256 11e2b3795ad17311...); enablement is by
    config/table checksum identity, NEVER floating-point equality on P_b.
+   DERIVATIVE BEHAVIOR (review round 4): trilinear-in-ln-x is C0 — values
+   continuous, first derivatives piecewise constant with jumps at lookup-
+   cell boundaries. Before Fisher may consume the lookup, either (preferred)
+   replace it with a validated C1 interpolant (values AND derivatives
+   re-validated; no overshoot, no negative abundances), or (acceptable
+   initial alternative) keep trilinear and add a knot-distance guard: measure
+   the fiducial point's and the Fisher uncertainty region's distance to the
+   nearest cell boundary on every axis, warn/refuse on approach or crossing,
+   and validate the full spectral derivative on both sides of representative
+   boundaries. A finer T grid is NOT required unless the full-chain
+   derivative test shows lookup interpolation error materially affecting the
+   observable Jacobian.
    Single-species-pin justification: H2S holds >= 95.3% of sulfur over the
    whole lookup domain; the residual (<= 4.7% at the 2000 K edge, in SH/S2
    etc. left on the zero-flux default) is disclosed as deep-supply
