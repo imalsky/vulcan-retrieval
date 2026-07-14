@@ -1301,3 +1301,48 @@ D3b sign-off below**. Summary of what was FIXED, with the measured numbers:
 **SIGN-OFF REQUIRED (Isaac + collaborator) before B0B**: (i) Stage 1 on the
 measured domain; (ii) the T_bottom <= 2000 K / P_b = 7.6 bar domain
 restriction with a loud raise outside; (iii) the anchor-scale pin formula.
+
+## Route B B0A review round 3 — record revised, artifacts tracked (2026-07-13)
+
+The collaborator's review of the B0A attempt was adopted in full; the
+authoritative revised record now lives at `docs/route_b/b0a_decision_record.txt`
+IN THIS REPO (tracked), with the sweep + boundary-table artifacts beside it
+(`docs/route_b/README.md` has the re-run recipe). The 2026-07-13 entry above
+predates this revision — its "dominance" numbers are GAS-PHASE shares and its
+anchor-scale pin proposal is DEMOTED. What changed, measured:
+
+- **Gas-only FastChem confirmed** (vendored exoclime FastChem, (C) 2019
+  Kitzmann & Stock; no condensation source). All results relabeled
+  `f_H2S_gas`. Resolved beyond relabeling: measured S-condensable saturation
+  ratios (S2/S4/S8) at every boundary node — **max 3.5e-9 anywhere in the
+  swept domain**, so the gas-phase equilibrium is the COMPLETE sulfur
+  equilibrium at the 7.6-bar boundary node and the dominance numbers stand
+  as total-sulfur statements there. Sweep rerun with provenance
+  (checksums, platform, grids, definitions): 0/1260 nonconverged.
+- **Production BC replaced**: differentiable equilibrium lookup
+  `ln x_H2S = f(T_bottom, lnZ, c_o)` at P_b = 7.6 bar (17x9x7, trilinear in
+  ln x), BUILT and VALIDATED against FastChem FD at 16 seeded off-node
+  points: value max |rel err| 0.11%; d lnx/d lnZ within 0.22% of the ~1.0
+  truth slope; T and c_o derivatives near-zero with max abs errs 8.0e-6 /K
+  and 1.8e-3 /c_o (worst RELATIVE 21%/17% on those near-zero slopes,
+  grid-refinable). JAX port must reproduce the trilinear rule and gate on
+  the table checksum; enablement by config/table checksum, never float
+  equality on P_b.
+- **Anchor-scale `x_base*exp(lnZ)` demoted** to B0B bring-up prototype only
+  (never the Fisher boundary), restricted to T_bottom <= 1600 K (measured
+  max err 8.4% there); its T/c_o derivatives are identically zero — the
+  disqualifying defect.
+- **Boundary semantics**: imposed deep reservoir, not local condensing
+  equilibrium; the 400 K synthetic column's pin is labeled boundary forcing.
+- **Accounting hardened (review pt 5)**: per-operator, per-element ledger
+  (Ros2 step / renorm / lower BC / upper BC), measured not assumed; closure
+  requirement per open element; H chemistry+transport row must stay at the
+  closed-element drift floor (replaces, not drops, the H-drift check); the
+  old S/H gates may be disabled ONLY in the same B0B change that activates
+  and tests the replacement. Null rank 3 = {O,C,N} stays a HYPOTHESIS with
+  loud measured-rank verification.
+- Status wording per review: **B0A analysis and draft decision record
+  complete; the B0A gate remains open pending sign-off** (Stage-1 concept,
+  domain, lookup BC — checklist at the end of the record). B0B stays
+  blocked. The reviewer's point 8 (commits not shown) was a truncated
+  transcript: round-2 commits are 2a06bfd (here) and 1cb5bb0 (jwst-tool).

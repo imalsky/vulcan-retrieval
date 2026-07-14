@@ -1,0 +1,249 @@
+================================================================================
+ROUTE B — B0A PHYSICS DECISION RECORD (REVISED, REVIEW ROUND 3)
+================================================================================
+Date:    2026-07-13 (rev 2, incorporating the collaborator's B0A review)
+Status:  B0A ANALYSIS AND DRAFT DECISION RECORD COMPLETE;
+         THE B0A GATE REMAINS OPEN PENDING SIGN-OFF. B0B stays blocked.
+Plan:    ../../../docs/route_b_smooth_condensation_plan.txt (v3). This file
+         is the AUTHORITATIVE record (tracked in vulcan-retrieval); a copy
+         sits next to the plan at docs/route_b_b0a_decision_record.txt per
+         Section 4. Short dated summaries: vulcan-retrieval/notes.md.
+Artifacts (this directory, all tracked):
+         h2s_dominance_sweep.py / h2s_dominance_results.json  (1260 nodes,
+           gas-phase dominance + S-condensable saturation ratios + provenance)
+         h2s_boundary_table.py / h2s_boundary_table.json      (production BC
+           lookup: 17x9x7 ln x_H2S table + off-node value/derivative
+           validation vs FastChem FD + provenance)
+
+ROUND-3 REVIEW DISPOSITION (all eight review points):
+ 1. Gas-only FastChem: CONFIRMED gas-phase (vendored exoclime FastChem,
+    (C) 2019 Kitzmann & Stock; zero condensation source files). All results
+    relabeled "gas-phase". RESOLVED QUANTITATIVELY beyond relabeling: the
+    saturation ratio r_c = x_c*P/p_sat,c(T) of every runtime S condensable
+    (S2, S4, S8) was measured at every boundary node; max over the ENTIRE
+    swept domain = 3.5e-9 (S2). No sulfur condensate is within nine orders
+    of magnitude of saturation at the 7.6-bar boundary node, so the
+    gas-phase equilibrium IS the complete sulfur equilibrium there and the
+    dominance numbers are total-sulfur statements AT THE BOUNDARY NODE
+    (reviewer option "demonstrate hot enough", made measured).
+ 2. Anchor-scale formula NOT approved as final: adopted. It is demoted to a
+    B0B bring-up prototype (never the Fisher boundary). The equilibrium
+    lookup was built and validated this round (item 3 below).
+ 3. Domain: adopted. Simple prototype formula restricted to T_bottom <=
+    1600 K; the broader domain to 2000 K is carried by the lookup. P_b
+    enforcement by config/table checksum, never float equality.
+ 4. Gas-phase renaming: adopted throughout (f_H2S_gas).
+ 5. No bare masking of H/S: adopted; replacement-first ordering pinned
+    (item 5 below).
+ 6. Artifact location: adopted; everything moved into
+    vulcan-retrieval/docs/route_b/ (this directory).
+ 7. Provenance: adopted; both JSONs carry binary/input checksums, platform,
+    grids, definitions, and FastChem convergence counts (sweep: 0
+    nonconverged nodes of 1260; table builder: hard raise on any non-ok
+    monitor flag, none hit).
+ 8. Status wording: adopted (header above). Factual correction: the round-2
+    commits did complete (vulcan-retrieval 2a06bfd, vulcan-jwst-tool
+    1cb5bb0); the reviewed transcript was truncated. The tracked-artifact
+    gap was real and is fixed by this move.
+
+--------------------------------------------------------------------------------
+1. SINK EQUATION (per D2, no amendment)
+--------------------------------------------------------------------------------
+   s(z) = n_S8/n_sat - 1;  L_S8(z) = C(z) * n_S8 * n_sat * h_w(s)  [cm^-3 s^-1]
+   C(z) = rainout_rate_scale * Dg(z) * m_S8 / (rho_p * r_p^2)      [cm^3 s^-1]
+   with m_S8 = 360.152/Navo g (conden.GAS_MASS_G_PER_MOL, master-verbatim),
+   Dg from conden.build_conden_profile, and h_w the one-sided C1 hinge of D2.
+   Verified pointwise limit: w -> 0 gives L -> C*n*(n - n_sat)_+, exactly the
+   legacy gas-side loss branch (update_conden_rates k_pos applied as a
+   first-order rate on n_S8). Signed/odd switches remain prohibited. The
+   discrete rainout flux carries the stoichiometric factor 8:
+   Phi_S,rain = 8 * sum_z L_S8(z)*dz(z)  [S atoms cm^-2 s^-1].
+   In smooth_rainout mode the network's S8 <-> S8_l_s kinetics rows are inert
+   (both rows zero; conden_branch, the window, and _activate_fix_species are
+   skipped entirely); S8_l_s stays frozen at its initial ~0 (no reservoir).
+
+--------------------------------------------------------------------------------
+2. SMOOTHING FUNCTION, WIDTH, SAFE ARITHMETIC
+--------------------------------------------------------------------------------
+   Canonical spec: dimensionless h_w(s), w ~ 0.1 (conden_smooth_width, a G5a
+   ladder axis). Implementation: the algebraically identical division-free
+   density form L = C * n * Phi_eps(x), x = n - n_sat, eps = w * n_sat_f,
+   n_sat_f = max(n_sat, N_SAT_FLOOR) with N_SAT_FLOOR a named module constant
+   (pure numerical floor, provenance-commented). Phi_eps(x) = 0 (x<=0);
+   x^2/(2*eps) (0<x<eps); x - eps/2 (x>=eps). Every jnp.where branch is
+   finite for ALL inputs (no NaN-through-where). dL/dn = C*(Phi + n*Phi')
+   with Phi' in {0, x/eps, 1}: C1, enters the block-diagonal Jacobian
+   analytically (gas row, local per layer; D5).
+   Unit tests: analytic dL vs FD at finite w THROUGH ALL INPUTS (n, n_sat(T),
+   C(T,P,Dg), boundary composition), guards exercised at n_sat extremes,
+   pointwise w->0 kernel limit only (never a full solve near w=0).
+
+--------------------------------------------------------------------------------
+3. DEEP SULFUR BOUNDARY (D3b) — SEMANTICS, MEASUREMENTS, PROPOSED BC
+--------------------------------------------------------------------------------
+   >>> DECISION POINT: gate open; sign-off checklist at the end. <<<
+
+   SEMANTICS. The lower boundary is an IMPOSED DEEP RESERVOIR: it represents
+   sulfur supplied from below the modeled column, not a claim that the
+   bottom node itself is in local condensing equilibrium. For the synthetic
+   400 K isothermal test column the pin is therefore a labeled boundary
+   FORCING, never interpreted as that column's local physics.
+
+   MEASURED, gas-phase FastChem (complete for sulfur at the boundary node,
+   disposition point 1), 10x-solar W39b baseline (C/O_base 0.549, He fixed),
+   lnZ in [-2.303, +2.303], c_o in [-1.70, +0.50], P_b = 7.6 bar:
+     f_H2S_gas >= 0.992 for T_bottom <= 1600 K; 0.982 at 1800 K;
+     0.953 at 2000 K; 0.896 at 2200 K; 0.419 at 3000 K.
+     Margin: min 0.982 at 76 bar; 0.875 at 1 bar (2000 K corners).
+     Worst S-condensable saturation ratio anywhere: 3.5e-9.
+
+   PRODUCTION BC (proposed): differentiable equilibrium lookup
+     ln x_H2S = f(T_bottom, lnZ, c_o)  at the validated pressure grid,
+   trilinear in (T, lnZ, c_o) on ln x, table 17x9x7 over T in [400, 2000] K,
+   lnZ in [-2.303, +2.303], c_o in [-1.70, +0.50] (h2s_boundary_table.json).
+   VALIDATED at 16 seeded off-node points against FastChem itself:
+     value:        max |rel err| = 0.11%
+     d lnx/d lnZ:  truth 0.987..1.008, max err 2.2e-3 (0.22% of slope)
+     d lnx/d T:    truth -1.1e-4..-2.5e-7 K^-1 (near-zero, as dominance
+                   implies); max abs err 8.0e-6 K^-1 (<= 8e-4 in ln x per
+                   100 K), worst 21% RELATIVE on the near-zero slopes —
+                   grid-resolution limited; regenerate with a finer T grid
+                   if the collaborator wants tighter relative bounds.
+     d lnx/d c_o:  truth -1.1e-2..+7.0e-3, max abs err 1.8e-3 (<= 4e-3 in
+                   ln x across the full c_o range), worst 17% relative on
+                   near-zero slopes.
+   The B1 JAX port must reproduce the trilinear ln-x rule and gate on the
+   table checksum (lnx_table sha256 11e2b3795ad17311...); enablement is by
+   config/table checksum identity, NEVER floating-point equality on P_b.
+   Single-species-pin justification: H2S holds >= 95.3% of sulfur over the
+   whole lookup domain; the residual (<= 4.7% at the 2000 K edge, in SH/S2
+   etc. left on the zero-flux default) is disclosed as deep-supply
+   under-specification and folded into the G5b supply bracket.
+
+   PROTOTYPE fallback (B0B bring-up ONLY, never the Fisher boundary):
+   x_H2S,bot = x_H2S,base(bottom) * exp(lnZ), restricted to T_bottom <=
+   1600 K; measured max |err| 8.4% there (closed form R_S/(0.5+R_He): 9.7%).
+   Disqualified as final BC because its T and c_o derivatives are
+   identically zero and its value error is ~8%.
+
+   WIRING (2g-ii, unchanged): pin value computed on-graph from theta in
+   _prep and threaded through ProfileVars (today fix_sp_bot_mix is a
+   closure-baked static, which would silently zero every boundary
+   derivative). Existing side effect kept + documented: use_fix_sp_bot
+   flips zero_bot_row=True, masking the bottom row in aggregate-delta error
+   control.
+   IMPLIED SOURCE (diagnosed, enters item 5): the measured elemental delta
+   of the boundary enforcement operation itself — see item 5; never assumed
+   to touch only H2S.
+   A zero-source closed column remains allowed only as an explicitly
+   labeled depletion experiment.
+
+--------------------------------------------------------------------------------
+4. TOP BOUNDARY
+--------------------------------------------------------------------------------
+   Zero flux, no escape (use_topflux = False in every supported config).
+   Phi_S,top = 0 by construction; diagnosed as the discrete top-interface
+   transport flux of S-bearing species and asserted ~0.
+
+--------------------------------------------------------------------------------
+5. OPEN-SYSTEM ACCOUNTING — REPLACEMENT FIRST, THEN RETIRE THE OLD GATE
+--------------------------------------------------------------------------------
+   Budget (D6): dN_S,atm/dt = Phi_S,bottom - Phi_S,top - Phi_S,rain,
+   Phi_S,rain = 8 * sum_z L_S8*dz.
+   Measured body_fn order (outer_loop._make_runner): Ros2 solve -> clip ->
+   atom_loss -> accept gate -> [conden branch: skipped in this mode] -> atm
+   refresh -> hydrostatic renorm -> bottom pins -> commit.
+   PER-OPERATOR, PER-ELEMENT discrete ledger (ALL elements, not only S/H):
+   the exact inventory delta dN_E of (1) chemistry+transport+rainout+clip
+   (the Ros2 step), (2) hydrostatic/abundance renormalization, (3) lower-
+   boundary enforcement, (4) upper-boundary enforcement (asserted no-op),
+   measured — never assumed (the pin is NOT assumed to change only two H
+   and one S; renorm interactions are measured, not modeled). The terms
+   telescope exactly to N_E(y_next) - N_E(y_prev).
+   CLOSURE REQUIREMENT per open element E in {S, H}:
+     dN_E - dN_E,boundary + dN_E,rain(E) ~ 0   (rain term zero for E != S)
+   within a documented drift floor; the chemistry+transport ledger row for
+   H must stay AT the closed-element drift floor — this REPLACES the old
+   H-drift check with a sharper one rather than dropping it.
+   ORDERING REQUIREMENT (review point 5): the closed-budget accept-gate and
+   adapt-rtol couplings for S and H are disabled ONLY in the same B0B
+   change that activates AND tests the replacement ledger + closure gates.
+   No commit may simply stop checking H and S. C, N, O keep the existing
+   closed-column machinery unchanged.
+   Reservoir projection: stays ON but wraps the CHEMISTRY RHS/Jacobian only
+   (chemistry genuinely conserves S); the rainout term and its Jacobian are
+   added AFTER the projection (alongside the diffusion term), never through
+   it — routing L through the projected RHS would re-inject removed S into
+   H2S (2g-i, confirmed at jax_step.py rhs assembly).
+   Cumulative exported sulfur: diagnostic only; never in the state, the
+   residual, or any convergence criterion.
+   Shipped diagnostics: layer L_S8, Phi_S,rain, Phi_S,bottom, Phi_S,top,
+   per-element per-operator ledger, inventory tendency, closure residuals
+   (.vul surface in B1-2).
+
+--------------------------------------------------------------------------------
+6. OPEN/CLOSED BUDGET INVENTORY AND EXPECTED NULL RANK (feeds D9)
+--------------------------------------------------------------------------------
+   HYPOTHESIS (to be measured, never hard-coded): open = S (rainout +
+   bottom H2S pin) and H (bottom H2S pin); closed = C, N, O (zero-flux
+   boundaries elsewhere, no settling, no ion; He not in the SNCHO
+   atom_list, inert). Expected deflation basis {O, C, N}, expected rank 3
+   (down from 5). Boundary enforcement, renormalization, or other pinned
+   species may open additional directions: every retained vector must pass
+   the numerical null-quality diagnostic, the excluded S/H vectors must
+   measure as non-null, and any expected-vs-measured rank mismatch is a
+   loud refusal (steady_state_grad machinery). Never just drop the S
+   column from the legacy basis.
+
+--------------------------------------------------------------------------------
+7. EFFECTIVE PARAMETERS AND THE KNUDSEN DIAGNOSTIC (D8)
+--------------------------------------------------------------------------------
+   rainout_rate_scale (default 1.0) multiplies C(z); the r_p mapping is kept
+   for master_pin comparison (CONDEN_CFG: r_p[S8_l_s] = 5.0e-3 cm = 50 um,
+   rho_p = 2.07 g/cm^3) but documented everywhere as an effective
+   gas-removal timescale, never a predicted cloud property.
+   Knudsen diagnostic: Kn(z) = lambda(z)/r_p, lambda = kB*T/(sqrt(2)*pi*
+   d_H2^2*P), d_H2 = 2.89e-8 cm (named constant with provenance). Per run,
+   over rainout-active layers (L > 0): L-weighted median and max Kn, and
+   the fraction of Phi_S,rain contributed by Kn < 1 layers; below 0.5 the
+   rate is labeled non-continuum/effective-only in every artifact.
+   Sensitivity split per G5b: w is numerical regularization (G5a kill
+   axis); rainout_rate_scale, effective r_p, deep supply, Kzz are
+   physical/uncertain parameters (characterize, bracket, disclose).
+
+--------------------------------------------------------------------------------
+8. PROVENANCE (review point 7)
+--------------------------------------------------------------------------------
+   Recorded inside both JSON artifacts: FastChem identity (exoclime
+   FastChem, (C) 2019 Kitzmann & Stock, gas-phase — no condensation source
+   files, vendored in VULCAN-JAX fastchem_vulcan, compiled locally by
+   ini_abun._ensure_fastchem_binary), SHA-256 of the executable and of
+   parameters.dat / config.input / chemical_elements.dat / the referenced
+   nasa9 logK species database, SHA-256 of every generated elemental-
+   abundance input, platform + python version, the complete sweep/table
+   grids, the exact f_H2S_gas and saturation-ratio definitions, the
+   condensation-disabled flag with evidence, and FastChem convergence
+   accounting (sweep: 0 nonconverged of 1260 monitor rows; table builder
+   raises on any non-ok flag — none hit). Compiler flags are not
+   recoverable post hoc from the prebuilt binary; the binary hash plus
+   make.global_options in the vendored tree stand in.
+
+--------------------------------------------------------------------------------
+SIGN-OFF CHECKLIST (D3b; B0B remains blocked until confirmed)
+--------------------------------------------------------------------------------
+   Per the review's recommended response, recorded as adopted-pending-
+   confirmation; the two NEW measured artifacts (saturation-ratio analysis,
+   lookup table + derivative validation) postdate the review and need
+   collaborator eyes:
+   (i)   Stage-1 concept: fixed deep H2S reservoir for the S8-only
+         smooth-rainout experiment, with imposed-reservoir semantics —
+         approved as prototype per review; confirm.
+   (ii)  Domain: equilibrium-lookup BC on T_bottom in [400, 2000] K at the
+         checksummed engine grid (P_b = 7.6 bar); anchor-scale prototype
+         allowed only for B0B bring-up at T_bottom <= 1600 K — confirm.
+   (iii) Boundary formula: the validated equilibrium lookup (this record,
+         item 3) as the production BC; anchor-scale never used for Fisher
+         — confirm, including whether the T-derivative relative accuracy
+         (21% worst on near-zero slopes) warrants a finer T grid before
+         the B1 port.
+================================================================================
