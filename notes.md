@@ -1242,3 +1242,62 @@ photochemistry ON and warmer profiles — the WASP-107b Guillot + condensation
 end-to-end run converged normally (longdy gate) and is cached under
 forward v7. A cold no-photo tool corner would exhaust count_max and raise
 loudly, which is the correct behavior.
+
+## Route B B0A physics decision record (2026-07-13) — smooth rainout condensation
+
+Plan: `../docs/route_b_smooth_condensation_plan.txt` (v3). Authoritative copy
+of this record: `../docs/route_b_b0a_decision_record.txt` (identical content,
+full item numbering); FastChem sweep script + 1260-node results JSON under
+`../docs/b0a_h2s_dominance/`. Status: B0A complete; **B0B is blocked on the
+D3b sign-off below**. Summary of what was FIXED, with the measured numbers:
+
+1. **Sink equation** — exactly plan D2: `L_S8 = C * n_S8 * n_sat * h_w(s)`,
+   `s = n_S8/n_sat - 1`, `C = rainout_rate_scale * Dg * m_S8/(rho_p*r_p^2)`.
+   Verified pointwise `w -> 0` limit reproduces the legacy gas-side loss
+   branch (`update_conden_rates` k_pos applied first-order on n_S8). Flux
+   factor 8 (S atoms per S8). S8 <-> S8_l_s kinetics rows inert in this mode;
+   conden window / `_activate_fix_species` skipped entirely.
+2. **Smoothing + safe arithmetic** — implementation is the division-free
+   density form `L = C*n*Phi_eps(n - n_sat)`, `eps = w * max(n_sat,
+   N_SAT_FLOOR)` (named constant); every `jnp.where` branch finite at all
+   inputs; analytic `dL/dn` (C1) into the block Jacobian; kernel FD tests
+   through ALL inputs (n, n_sat(T), C(T,P,Dg), boundary composition).
+3. **Deep sulfur boundary (D3b, DECISION POINT)** — Stage-1 H2S-dominance
+   check RUN offline (FastChem, W39b 10x-solar baseline, C/O_base 0.549,
+   He fixed): over lnZ in [-2.303, +2.303], c_o in [-1.70, +0.50] at
+   P_b = 7.6 bar, f_H2S (H2S share of gas-phase S) >= 0.992 for
+   T_bottom <= 1600 K, 0.953 at 2000 K, **0.896 at 2200 K (fails 0.95),
+   0.419 at 3000 K** (thermal dissociation). Margin: better at 76 bar
+   (0.982), worse at 1 bar (0.875 at 2000 K). DECISION: Stage 1 on the
+   measured domain **T_bottom in [400, 2000] K at P_b = 7.6 bar**, loud
+   build-time raise outside; Stage 2 (eq-interpolation BC) named but not
+   built. Pin formula (proposed): `x_H2S,bot(theta) = x_H2S,base(bottom)
+   * exp(lnZ)` — anchor-and-scale like the exact-elemental map; measured
+   max |err| 8.8% vs FastChem at the 100x edge (closed form
+   `R_S/(0.5+R_He)` worse, 14.3%, recorded as fallback). Pin value computed
+   on-graph in `_prep` and threaded via ProfileVars (today `fix_sp_bot_mix`
+   is a closure-baked static — would silently zero d/d(lnZ), plan 2g-ii).
+   Implied source = per-step post-pin minus pre-pin S column mass / dt,
+   evaluated exactly at the fix_sp_bot overwrite (after hydrostatic renorm).
+4. **Top boundary** — zero flux, no escape; `Phi_S,top = 0` asserted.
+5. **Flux accounting** — per-step telescoping ledger at measured body_fn
+   points (Ros2+clip / renorm / bottom pin), so any S-restoring repair shows
+   as `dN_renorm > 0` (regression-pinned); steady-state closure gate on
+   `Phi_bottom - Phi_top - Phi_rain`. Reservoir projection stays ON for the
+   chemistry RHS only (chemistry conserves S); the rainout term is added
+   AFTER the projection, never through it (else the projection re-injects S
+   via H2S — plan 2g-i, confirmed in `jax_step.py`). Accept-gate atom-loss
+   and adapt-rtol couplings: S and H masked (physical flux, not drift);
+   C/N/O machinery unchanged; ledger + closure are the loud replacement.
+6. **Budget inventory / null rank** — open: S (rainout + pin), H (pin);
+   closed: C, N, O. Expected deflation basis {O, C, N}, rank 3 (down from
+   5), null-quality-verified, loud raise on mismatch (feeds D9).
+7. **Effective knobs + Knudsen** — `rainout_rate_scale` default 1.0; r_p
+   mapping kept for master_pin comparison (50 um, rho 2.07) but documented
+   as an effective timescale. Kn = lambda/r_p with lambda = kB*T/(sqrt(2)*
+   pi*d_H2^2*P); report L-weighted median/max and the Phi_S,rain fraction
+   from Kn < 1 layers; < 0.5 => labeled non-continuum/effective-only.
+
+**SIGN-OFF REQUIRED (Isaac + collaborator) before B0B**: (i) Stage 1 on the
+measured domain; (ii) the T_bottom <= 2000 K / P_b = 7.6 bar domain
+restriction with a loud raise outside; (iii) the anchor-scale pin formula.
