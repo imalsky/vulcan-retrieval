@@ -255,7 +255,11 @@ def chem_guillot(stack):
 
     try:
         return vulcan_chem.build_chem_model(
-            _profile(cfg_overrides=dict(_CFG_OVERRIDES, gs=gs_cgs,
+            _profile(cfg_overrides=dict(_CFG_OVERRIDES,
+                                        # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
+                                        # to reproduce gs_cgs at the W39b radius.
+                                        Rp=1.279 * 7.1492e9,
+                                        Mp=gs_cgs * (1.279 * 7.1492e9) ** 2 / 6.67430e-8,
                                         runtime=GUILLOT_RUNTIME),
                      count_max=GUILLOT_COUNT_MAX),
             tp_eval=tp_eval, n_tp_params=4)

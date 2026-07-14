@@ -24,7 +24,7 @@ from retrieval_framework.forward import config as fwd_config  # pure constants +
 R_SUN_CM = 6.957e10
 _W39B = dict(
     run_label="WASP-39b",
-    vulcan_cfg_module="vulcan_jax.cfg_examples.vulcan_cfg_W39b",
+    vulcan_cfg_name="W39b",
     tp_gravity_cgs=422.0,                       # cm/s^2 (also the RT g_btm)
     rp_cm=1.279 * 7.1492e9,                     # planet radius at P_btm
     rstar_cm=0.932 * R_SUN_CM,

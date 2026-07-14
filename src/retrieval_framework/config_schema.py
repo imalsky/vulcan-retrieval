@@ -15,7 +15,7 @@ spectrum and are cheap.
 
 Planet identity enters through explicit fields a case preset sets: the observed
 spectrum (``obs_dir`` + ``obs_products`` + ``combo``), the VULCAN baseline config
-module (``vulcan_cfg_module``), gravity/radii (``tp_gravity_cgs``, ``rp_cm``,
+module (``vulcan_cfg_name``), gravity/radii (``tp_gravity_cgs``, ``rp_cm``,
 ``rstar_cm``), and the priors. Field defaults document the shapes/scales of the
 original WASP-39b application; every case preset overrides what defines its planet.
 
@@ -177,9 +177,9 @@ class Config:
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
 
     # ---- planet identity (case presets set these; empty -> shared-lib defaults) ---
-    # VULCAN baseline config module for the chemistry pre-loop (e.g.
-    # "vulcan_jax.cfg_examples.vulcan_cfg_W39b"); "" -> config.py's default module.
-    vulcan_cfg_module: str = ""
+    # VULCAN baseline config name for the chemistry pre-loop, loaded via
+    # vulcan_jax.load_config (e.g. "W39b"); "" -> config.py's W39B_CFG_NAME.
+    vulcan_cfg_name: str = ""
     # Planet/stellar radii for the RT depth normalization (cm); None -> config.py's
     # RP_CM / RSTAR_CM. tp_gravity_cgs below doubles as the RT's g_btm.
     rp_cm: Optional[float] = None
@@ -384,8 +384,8 @@ class Config:
         p["warm_count_max"] = int(self.warm_count_max)
         if self.dt_max:
             p["dt_max"] = float(self.dt_max)
-        if self.vulcan_cfg_module:
-            p["vulcan_cfg_module"] = str(self.vulcan_cfg_module)
+        if self.vulcan_cfg_name:
+            p["vulcan_cfg_name"] = str(self.vulcan_cfg_name)
         if self.rp_cm is not None:
             p["rp_cm"] = float(self.rp_cm)
         if self.rstar_cm is not None:
@@ -534,9 +534,9 @@ def validate_config(cfg: Config) -> None:
     # would silently normalize with the shared-lib WASP-39b radius/gravity and the
     # chemistry would run WASP-39b's baseline column -- a silently-wrong retrieval of
     # the wrong planet. Fail loud instead (the case's PRESETS must set them).
-    if not str(cfg.vulcan_cfg_module).strip():
-        raise ValueError("vulcan_cfg_module is unset -- the case must name its VULCAN "
-                         "baseline config module (e.g. 'vulcan_jax.cfg_examples.vulcan_cfg_W39b'); "
+    if not str(cfg.vulcan_cfg_name).strip():
+        raise ValueError("vulcan_cfg_name is unset -- the case must name its VULCAN "
+                         "baseline config (e.g. 'W39b', loaded from vulcan_jax/configs/); "
                          "refusing to silently fall back to the shared-lib WASP-39b default")
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}) -- "

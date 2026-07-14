@@ -8,7 +8,7 @@ decision record) — this file is the current contract, `notes.md` is the "why".
 ## Fail fast and loud (standing rule, all sibling repos)
 
 No behavior-changing fallback paths, ever. Missing H2-He CIA raises; planet
-identity (rp_cm/rstar_cm/vulcan_cfg_module) must be set or `validate_config`
+identity (rp_cm/rstar_cm/vulcan_cfg_name) must be set or `validate_config`
 raises; a real-data run with no overlapping bins raises; RESUME with no
 checkpoint raises; non-finite gradients surface as `n_bad` and the host raises.
 `set_observations` validates at the API boundary

@@ -82,7 +82,7 @@ H2HE_BROADENING_MIX = (0.85, 0.15)   # (f_H2, f_He) by number, ~solar envelope
 # ---------------------------------------------------------------------------
 VULCAN_NETWORK = "thermo/SNCHO_photo_network.txt"
 VULCAN_ATOM_LIST = "H,O,C,N,S"
-W39B_CFG_MODULE = "vulcan_jax.cfg_examples.vulcan_cfg_W39b"
+W39B_CFG_NAME = "W39b"  # vulcan_jax.load_config name (was cfg_examples module)
 
 # atom_list column order inside composition.compo_array (probed from the package).
 # Index of each element column we touch when building the Z / C/O knobs.
@@ -97,7 +97,7 @@ ATOMIC_MASSES = [
 ]
 
 # ---------------------------------------------------------------------------
-# WASP-39b physical constants (from cfg_examples/vulcan_cfg_W39b.py)
+# WASP-39b physical constants (from vulcan_jax/configs/W39b.yaml)
 # ---------------------------------------------------------------------------
 R_SUN_CM = 6.957e10
 # Planet radius ASSIGNED to the bottom pressure of the ART grid (7 bar). The

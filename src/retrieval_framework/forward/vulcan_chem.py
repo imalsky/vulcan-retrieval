@@ -148,11 +148,12 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         nz, ni   : ints
     """
     t0 = time.time()
-    import importlib
+    import vulcan_jax
 
-    # Baseline VULCAN config module: overridable per profile (the retrieval framework's
-    # case presets set this) with the shared W39b default for all legacy consumers.
-    cfg = importlib.import_module(profile.get("vulcan_cfg_module") or config.W39B_CFG_MODULE)
+    # Baseline VULCAN config, loaded by name from vulcan_jax/configs/*.yaml
+    # (overridable per profile; the case presets set this). Env VULCAN_JAX_* was
+    # set above, so this first vulcan_jax import freezes the SNCHO network.
+    cfg = vulcan_jax.load_config(profile.get("vulcan_cfg_name") or config.W39B_CFG_NAME)
     cfg.use_live_plot = cfg.use_live_flux = cfg.use_print_prog = False
     cfg.use_photo = bool(profile["use_photo"])
     cfg.yconv_cri = float(profile["yconv_cri"])
