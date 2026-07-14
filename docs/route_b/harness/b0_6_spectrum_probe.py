@@ -97,6 +97,7 @@ def main() -> int:
     mols = list(rt.molecules)
     mol_idx = {m: SL.index(m) for m in mols}
     i_h2 = SL.index("H2")
+    i_he = SL.index("He")
 
     # One binned row: plain cell average over a fixed wavelength window
     # (scratch operator; the tool's count-space operator is B1-11).
@@ -115,8 +116,9 @@ def main() -> int:
         T_art = jnp.full((p_art.shape[0],), theta[0])
         vmr = {m: to_art(y[:, mol_idx[m]] / n_tot) for m in mols}
         vmr_h2 = to_art(y[:, i_h2] / n_tot)
+        vmr_he = to_art(y[:, i_he] / n_tot)   # He CIA partner, REQUIRED
         mmw = to_art(final.mu)
-        depth = rt.transmission_depth(vmr, vmr_h2, T_art, mmw)
+        depth = rt.transmission_depth(vmr, vmr_h2, T_art, mmw, vmr_he=vmr_he)
         return jnp.sum(band * depth)
 
     theta0 = jnp.asarray([probe.T_ISO0, float(np.log(probe.X_PIN0))])

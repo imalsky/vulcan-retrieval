@@ -59,6 +59,13 @@ CIA_H2H2_FILE = _CACHE / "H2-H2_2011.cia"
 # used to be possible and biased the sensitivity-demo spectra).
 CIA_H2HE_FILE = _CACHE / "H2-He_2011.cia"
 
+# Route B smooth-rainout deep boundary: the checksum-gated FastChem
+# equilibrium lookup ln x_H2S(T_bottom, lnZ, c_o) built by
+# docs/route_b/h2s_boundary_table.py (B0A decision record item 3). The
+# default for profiles that enable conden_mode="smooth_rainout" and do not
+# override h2s_boundary["table_path"].
+H2S_BOUNDARY_TABLE = REPO_DIR / "docs" / "route_b" / "h2s_boundary_table.json"
+
 # Reference wavenumber (cm^-1) for the ExoJax powerlaw_clouds retrieval cloud:
 # kappa(nu) = kappac0 * (nu/CLOUD_NUC0)^alphac, kappac0 in cm^2 per gram of
 # atmosphere (pRT convention; alphac = 0 is a gray cloud). 2857 cm^-1 = 3.5 um,

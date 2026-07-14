@@ -1,0 +1,48 @@
+{
+ "gate": "G3",
+ "verdict": "INCOMPLETE (rain active, worst closure_frac 2.639e-01; no documented tolerance -- set ROUTE_B_G3_TOL after the record review)",
+ "closure_tolerance": null,
+ "per_element": {
+  "S": {
+   "Phi_bc_atoms_cm^-2_s^-1": 416134846073182.2,
+   "Phi_rain_atoms_cm^-2_s^-1": 299186855679205.9,
+   "Phi_top_atoms_cm^-2_s^-1": 0.0,
+   "dN_dt_atoms_cm^-2_s^-1": 109821183231151.34,
+   "closure_frac": 0.26390768345277676
+  },
+  "H": {
+   "Phi_bc_atoms_cm^-2_s^-1": 832269692146364.4,
+   "Phi_rain_atoms_cm^-2_s^-1": 0.0,
+   "Phi_top_atoms_cm^-2_s^-1": 0.0,
+   "dN_dt_atoms_cm^-2_s^-1": 47341550348807.836,
+   "closure_frac": 0.056882463455706696
+  }
+ },
+ "led_bc_H_equals_2x_S_exactly": true,
+ "telescoping_rel": {
+  "H": 3.0785986696506984e-08,
+  "O": 5.036075335963515e-07,
+  "C": 5.036069931982416e-07,
+  "N": 5.035970546716407e-07,
+  "S": 0.00013424567582885885
+ },
+ "g1_artifact": "w107b_g1_20260714_084540.json",
+ "g1_termination": "step-count-exhausted",
+ "provenance": {
+  "timestamp_utc": "2026-07-14T08:45:40Z",
+  "vulcan_retrieval_sha": "4b1b1e18480d679bfbc230101cb669e45e6a2c44+dirty",
+  "vulcan_jax_sha": "1e7ae576016ddbba17fcdd473806fea1e5029b1f+dirty",
+  "network": "thermo/SNCHO_photo_network.txt",
+  "network_sha256": "3514b57e19365c5b3200b99422f6399c5cfabd29620c08b7c64254de67b29073",
+  "h2s_table_sha256": "11e2b3795ad1731108673553450e9dfd7a04076c3630959116120ac662c82ca4",
+  "float64": true,
+  "python": "3.12.8",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "versions": {
+   "jax": "0.9.2",
+   "jaxlib": "0.9.2",
+   "numpy": "2.0.2",
+   "exojax": "2.2.3"
+  }
+ }
+}

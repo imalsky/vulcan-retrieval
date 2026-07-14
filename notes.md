@@ -1416,3 +1416,315 @@ neither AD route is certified on this fixture; the definitive G6 gate moves
 to the W107b photo-on fixture with the production implicit route, as the
 plan's fixture policy (2f) already dictates. Collaborator eyes requested on
 the probe output before B1-3 work starts.
+
+# 2026-07-13 — B0C: smooth_rainout plumbed through the production forward path
+
+Collaborator checkpoint review (round 5) adopted in full: build order is now
+primal-first — (1) _prep plumbing, (2) G1/G2/G3/G4/G5 runners, (3) run the
+source-bearing W107b primal gates, (4) only then extend the solver-map/LGMRES
+machinery for G6 ("there is little value in investing in G6 if the
+source-bearing column cannot first demonstrate a unique, flux-balanced
+stationary solution"). Its factual claims were verified before adopting:
+0.11% lookup holdout error confirmed at record line 119 (per-point derivative
+errors archived in the table JSON validation block); the domain check was
+indeed point-wise-only and the knot guard axis-aligned-only.
+
+Landed (this entry):
+
+- `forward.h2s_boundary` hardened per the review: `H2SBoundaryTable` now
+  carries `baseline_X_H` (the lnZ = 0 metallicity basis from the table
+  provenance; loader refuses a table without it), `validate_domain_box`
+  (build-time whole-domain duty — a per-point check cannot protect a model
+  whose theta varies at run time), and `assert_points_same_cell` /
+  `cell_of` (point-set knot guard for FD endpoints at h and h/2,
+  covariance-eigenvector points, ellipsoid samples — trilinear derivatives
+  are constant inside a cell, so same-cell == no jump between points).
+  Module docstring now separates implementation parity (numpy-reference
+  1e-12) from scientific accuracy (0.11% vs FastChem holdouts) — the
+  full-chain AD-vs-FD gate (G6) certifies neither and remains pending.
+- `vulcan_chem.build_chem_model`: `conden_mode="smooth_rainout"` runs the
+  tool's production build/_prep path. Pre-pre-loop refusals (fail fast,
+  before any heavy work): use_condense required, fix_species/use_relax/
+  use_settling rejected, use_fix_sp_bot must pin exactly H2S,
+  profile["h2s_boundary"]["theta_box"] required and validated against the
+  grid, cfg.P_b must equal the table build pressure (1e-3 rel). Pre-warm-up
+  measured checks: baseline elemental ratios (O, C, N, S to H) vs table
+  provenance baseline_X_H within 2% (the lnZ-axis identity — a shifted
+  basis would silently bias every pin), static warm-up pin within factor 2
+  of the lookup at the structural baseline.
+- `_prep`: the pin is evaluated ON-GRAPH — x_H2S(T[0], lnZ, c_o) from the
+  checksum-gated lookup, spliced into `ProfileVars.bot_pin_mix` (plan
+  2g-ii; the carry, not the closure, so d(pin)/d(theta) is nonzero). The
+  sink's n_sat/Dg inputs were already live via the existing
+  build_conden_profile rebuild.
+- `pin_value(theta)` host helper: per-point domain validation (loud) +
+  pin diagnostic — the evaluation-boundary check for gate/harness scripts
+  (build validates the DECLARED box; this validates each VISITED point).
+- `validate_config`: conden_mode="smooth_rainout" + run_inference=True is
+  refused UNCONDITIONALLY (allow_condense_inference does not apply): the
+  unrolled jvp the mutation kernel would consume is measured invalid on
+  this mode (6-9 orders vs FD, B0-6 probe). Forward model only until B0C
+  passes and the G6 solver-map route exists.
+- `tests/test_smooth_rainout_prep.py` (6 tests, all green, 19 s): pin
+  reaches the carry at live theta (rtol 1e-14 vs the lookup) with the
+  saturation row tracking the proposed T; the fixture bottom node is
+  genuinely supersaturated (s ~ 1.3 measured); jacfwd through _prep is
+  finite with d ln pin/d lnZ in (0.95, 1.05), T/c_o partials equal to the
+  lookup's own (rtol 1e-10), and the lnKzz slot exactly zero; pin_value
+  guards the domain; a solve on the retrieval path commits the pin at the
+  bottom node exactly (rtol 1e-10) and moves the S8 column off its init;
+  six loud build refusals. Fixture: 32-layer isothermal 400 K SNCHO
+  column at P_b = 7.6 bar (the table's build pressure, enforced) with
+  const_mix constructed to the table baseline_X_H (<0.1%) and S split
+  S8-heavy for bottom supersaturation. A module-scoped snapshot/restore
+  fixture keeps the shared vulcan_cfg_W39b module clean across test files.
+- NOT asserted anywhere: any derivative THROUGH the smooth-rainout solve
+  (unrolled jvp is invalid; the G6 solver-map route is pending). _prep
+  differentiability is necessary, not sufficient.
+
+Next per the adopted order: primal gate runners (G1 convergence + direct
+residual, G2 five seeds, G3 flux closure, G4 subsaturated regression, G5
+ladders) as env-gated scripts against the W107b Guillot photo-on
+source-bearing fixture; heavy runs are Isaac's to schedule.
+
+## Addendum (same day): W107b fixture + primal gate runners landed
+
+- `docs/route_b/harness/w107b_fixture.py`: the mandatory scientific fixture
+  through the production path. W107b system from the tool registry
+  (gs 270, Rp 0.94 R_J, R* 0.67 R_sun, a 0.0553 au, eps Eri UV), Guillot
+  fiducial Tirr 1046.5 / Tint 100 / log_kappa -2.3 / log_gamma -1.0
+  (f = 0.25), isothermal 740 K structural baseline (tool pattern),
+  theta = [lnZ, c_o, lnKzz, Tirr, Tint, log_kappa, log_gamma]. G1 honesty
+  baked in: no runtime cap, no mtol override, no conver_ignore additions
+  (S8 is live in smooth mode -- the allotrope-ignore recipe is a
+  master_pin artifact and is deliberately absent).
+- Gate runners (all env-gated ROUTE_B_W107B=1; artifacts to
+  harness/results/ with full provenance): g1_convergence (plan criterion
+  verbatim: longdy gate, no runtime cap, no stall certification,
+  count_max <= 15000, B0-5 residual; saves the state), g3_flux_closure
+  (D6 closure from the G1 ledger, no re-solve; explicit Phi_top = 0
+  statement; FAILS loudly on zero rain), g2_seeds (the plan's five seeds
+  incl. a master_pin twin build), g4_subsaturated (Tirr 1560; measured
+  subsaturation refusal at init AND endpoint; conden-off twin carries the
+  smooth model's live pin at theta so only the sink differs),
+  g5_ladders (w kill-ladder {0.05,0.1,0.2}, scale {0.1,1,10}, lnZ/lnKzz
+  ladders, lookup-cell probe + FD-point knot guard). Verdicts are
+  PASS/FAIL only under documented thresholds (ROUTE_B_G*_ env knobs);
+  otherwise INCOMPLETE with measured numbers for the record review. The
+  binned-spectrum columns of G2/G5a are logged as NOT MEASURED (RT
+  harness pending) -- those gates are not closable without them.
+- `vulcan_chem` gained `prep_state(theta)` (exact runner inputs
+  (init, atm_T); residual_from_state needs the live AtmStatic).
+- Build-path SMOKE (local, one-time, count_max 2000 cap): PASS -- FastChem
+  baseline vs table lnZ basis within gate, P_b identity, static pin
+  sanity, smooth statics validation, sflux resolution all hold on the
+  real fixture; fiducial Guillot T_bottom MEASURED 1099.0 K (inside the
+  declared theta_box [600, 1800]); pin 2.4243e-4 reaches pv. Measured
+  note for the gate review: at the EQ init the S8 column is subsaturated
+  by ~54 orders -- active rainout on this fixture must come from
+  photochemical S8 production during the solve; whether the converged
+  column rains is exactly what G1/G3 measure.
+- Pre-existing suite hygiene finding (NOT from this change; skip count
+  unchanged at 8): test_condensation_live_tp mutates the shared
+  vulcan_cfg_W39b module (P_b 5e6 et al.) without restoring, and
+  test_warm_reject's real-pipeline tests then skip with "ART grid bottom
+  7 bar below chemistry bottom 5 bar". test_smooth_rainout_prep ships a
+  snapshot/restore autouse fixture; the conden test should get the same
+  treatment in a dedicated pass (its 5 skipped tests would then actually
+  run -- results unknown, so not bundled here).
+
+# 2026-07-14 — B0C campaign execution: G1 measured evidence + full harness build
+
+Campaign goal set by Isaac: complete the rest of the condensation campaign.
+Everything below is measured; artifacts under docs/route_b/harness/results/.
+
+## G1 attempts (chronological, all archived)
+
+1. HOT FIDUCIAL (tool defaults Tirr 1046.5, log_gamma -1.0; artifact
+   w107b_g1_20260714_064031): stalled-certification at 3590 steps,
+   longdy 9.9e-2, max_R 1.17e3/s at N2H z=0. Post-mortem measured: the
+   stall species are sub-RT trace radicals (N2H max mix 1.6e-17, CH3CO
+   1.2e-15) AND rainout is structurally impossible on this column — the
+   ~1000-1100 K near-isothermal profile puts sulfur in SO2 (1.1e-4 at
+   z=72, healthy photochemistry) with S8 < 3.8e-17 everywhere. Zero rain.
+2. FIXTURE REDESIGN (measured scan of atmprof_Guillot over Tirr/Tint/
+   kappa/gamma with the whole column required inside the validated T
+   window and an S8-supersaturable band): coolest-valid candidate
+   Tirr 500 / Tint 150 / log_kappa -2.5 / log_gamma 0.0; column
+   [349.0, 469.6] K; min S8 sat-mix 6.4e-6 at 0.46 bar (4.7x headroom at
+   a conservative 3e-5 S8 yield). Structural baseline 500 K after the
+   lnZ-basis gate MEASURED FastChem carbon collapse at 470 K (C/H
+   5.4e-7 vs 2.95e-3, CH4 columns at 1e-98 mixing ratio underflow;
+   exact again at 500 K). mtol_conv 1e-15 adopted (certified floor;
+   evidence above).
+3. COOL FIDUCIAL, Kzz 1e9 (artifact w107b_g1_20260714_070038):
+   step-count-exhausted at 15000, t_end 3.6e7 s, dt_end 94 s, longdy 29.
+   Diagnosis: boundary influx (led_bc,S rate 5.5e14 atoms/cm2/s) must
+   fill the column on ~3e9 s while dt is pinned ~1e2 s by stiff S3/S4
+   allotrope front chemistry (worst residual S4 z=43, 0.32/s). Rain
+   still zero at the snapshot (front mid-flight). longdy_seen_min
+   5.8e-4 early — the run passed NEAR certification before the sulfur
+   front arrived, then moved away. Cold-EQ direct integration cannot
+   cross this transient.
+4. Kzz 1e10 PROBE (physically motivated: W107b's CH4 depletion implies
+   very strong mixing): step-count-exhausted BUT t_end 3.5e11 s
+   (10,000x further), dt_end 4.2e7 s (dt ballooned through the front),
+   and RAIN ACTIVE at the endpoint (Phi_rain,S 4.3e14 atoms/cm2/s).
+   longdy 1.04 — a 4-round warm-continuation probe is measuring whether
+   this is a slow approach (longdy falls) or a limit cycle (plateau/
+   oscillation; would be a Route-B-premise failure on this fixture:
+   fail path = stop + report).
+
+## Build layer completed today (all compile-checked; VULCAN-JAX suite
+   subset 19 green + subprocess runtime test extended and green)
+
+- G6 solver-map machinery (VULCAN-JAX steady_state_grad): BodyTerms.rainout
+  (converged-carry RainoutTerm; same splice as body_fn/residual_from_state),
+  step passes rainout into jax_ros2_step (sink + analytic dL/dn in the body
+  map), layer-0 pin values now read pv.bot_pin_mix (bit-identical legacy;
+  carry authoritative), steady_state_input_sensitivity accepts
+  rebuild(p)->(k, atm, extras) with extras {rainout, bot_val} carrying
+  d(n_sat)/dp, d(C)/dp and the boundary-pin derivative (consistency-checked
+  at p0; loud frozen-surface warnings without extras), audit_adjoint_scope
+  smooth finding now conditional (info with sink packed / error without).
+  New subprocess coverage: make_body_terms packs the sink, bot_val matches
+  the carry, and the sink measurably acts in the body map on supersaturated
+  cells (no zero-delta claim on subsaturated cells — the implicit step
+  couples layers; hinge one-sidedness stays pinned at kernel level).
+  CLAUDE.md + README adjoint sections updated.
+- g6_sensitivity.py: adjoint (4 losses: lnN_S8, lnN_H2S, lnPhi_rain,S, one
+  binned spectrum band + direct RT-theta term) vs independently reconverged
+  FD at h and h/2 on lnZ/c_o/lnKzz/Tirr, closed-element deflation from
+  gate_atom_mask, warm-recert noise floor, per-endpoint termination,
+  refuses non-converged or zero-rain nominal.
+- w107b_spectrum.py: production-RT binned spectra (He CIA wired — also
+  fixed the b0_6 probe which would have raised on the REQUIRED vmr_he);
+  npz mode = measured G2/G5a spectrum-agreement columns from saved gate
+  states; fd mode = directive-K reconverged-FD spectrum derivative.
+- eta_c_linearity.py: plan-section-9 multidimensional Fisher validity
+  guard (coordinate + eigenvector + deterministic ellipsoid probes,
+  noise-whitened metric, twin floor helper); unit-checked (mild curvature
+  PASS 0.01, strong curvature FAIL 0.20 at threshold 0.1).
+- b0c_artifact.py: THE single reproducibility artifact assembler; refuses
+  mixed provenance; directive-N go/no-go; writes
+  docs/route_b/b0c_reproducibility_artifact.{json,txt}.
+- g5_ladders.py now saves endpoint states (spectrum-stability column
+  consumes them); gate_common longdy_seen_min field fixed.
+
+## 2026-07-14 (cont.) — G1 measured verdict: FAIL PATH ENGAGED; campaign
+## consolidated at the collaborator decision point
+
+Warm-path production bug found and FIXED mid-campaign: the elemental-mode
+warm-start projection rescaled S/H back to the closed-basis target,
+destroying warm-started open-budget states (measured dt collapse to the
+2e-14 floor from step one on continuation from an active-rain endpoint).
+Smooth mode now EXCLUDES S from the elemental repair (the boundary + sink
+own the sulfur inventory; lnZ reaches sulfur through the lookup pin).
+Suite re-verified (test_smooth_rainout_prep 6 green).
+
+G1 evidence chain on the cool fixture (all archived in results/ +
+/tmp probes logged here):
+
+- Kzz 1e10 continuation probe (POST-FIX): rounds of 15000 cold steps cross
+  the fill + rain-overshoot transient (rain 4.33e14 -> 2.34e14), then warm
+  re-certification fires REPEATEDLY in ~121-142 steps with rain steady at
+  1.96-1.99e14 atoms/cm2/s. No limit cycle. BUT: those certifications fire
+  via the LOOSE yconv_min=0.1 OR-branch (longdy 0.016-0.061), not the
+  strict 1e-2 gate.
+- Official cold G1, count_max 15000 (artifact w107b_g1_20260714_082012):
+  step-count-exhausted, t 3.7e11 s, longdy 0.69.
+- Official cold G1, count_max 35000 (artifact w107b_g1_20260714_084540):
+  step-count-exhausted, t 8.9e11 s, longdy 0.80, max_R 1.3e3/s,
+  rain 2.99e14 (vs 1.97e14 on the continuation path at similar cumulative
+  time: the sulfur throughput settles on a ~1e12 s arc).
+- Strict-gate probe (trace-N conver_ignore N2H2+N2H4 per the documented
+  per-config policy + loose branch CLOSED, 35000): exhausted; the gating
+  role migrates to atomic N at z=78 (mix 3.4e-14) — quench-frozen nitrogen
+  radicals at 1e-14 hand the gate to each other (whack-a-mole; a species
+  list cannot close it).
+- Final sanctioned tuning (w=0.2 + rainout_rate_scale=0.1, 35000):
+  exhausted, longdy 0.87, same N gating, rain 2.76e14.
+
+MEASURED CONCLUSION: cold-EQ G1 on this fixture FAILS the plan criterion
+(longdy gate within count_max <= 15000, no stall/runtime certification)
+after ALL sanctioned tuning, for two stacked reasons neither knob reaches:
+(1) upper-atmosphere nitrogen radicals (N, N2H2, N2H4 at ~1e-14 mixing
+ratio, z 75-89) drift on quench timescales and pin longdy above 1e-2 at
+any large dt; (2) the sulfur throughput itself settles on a ~1e12 s arc
+(G3 at the best cold state: Phi_bc,S 4.16e14 vs Phi_rain,S 2.99e14 with
+dN_S/dt 1.10e14 — closure_frac 0.264, 26% of throughput still filling
+inventory; H = 2S boundary stoichiometry EXACT), and dt's ceiling ~1e8 s
+puts full settling at >=1e5 steps. Per the plan's FAIL PATH and work rules
+this is a STOP-AND-REPORT: the G1 disposition (revise the step bound,
+certify a documented two-stage/warm recipe, raise the mtol relevance floor
+above the 1e-14 nitrogen band, or Route A) is Isaac + collaborator's
+decision. G2/G5/G6/spectrum-FD heavy runs are BUILT and ready but were NOT
+run on a non-G1-certified state (gate ordering).
+
+Campaign state at consolidation (b0c_reproducibility_artifact.{json,txt}):
+G4 measured STRONG (rain exactly zero on the hot column, converged both
+sides, max |dln n| 5.28e-4 — passes the proposed documented tolerance
+rtol 1e-2 nineteen-fold); G1 measured FAIL-as-written; G3 measured honest
+non-closure on the settling arc; G2/G5/G6/spectrum-FD pending a
+G1-passing configuration; overall directive-N verdict NO-GO, Fisher stays
+disabled, B1 not authorized.
+
+## 2026-07-14 (cont. 2) — collaborator G1 disposition + two-stage reference
+## workflow BUILT, NOT YET RUN (Isaac: "get to an ok state, then pause")
+
+Collaborator chose options 1+2 (NOT mtol-raise, NOT Route A yet): run ONE
+extended checkpointed reference driven to PHYSICAL sulfur-flux balance
+(not a step count), then adopt a deterministic two-stage warm-certification
+workflow IF strict warm re-cert reproduces that endpoint across the G2
+seeds. Formal B0C verdict stays NO-GO until then. Explicit sub-tasks:
+reconcile the 1.97e14 vs 2.99e14 rain-flux numbers; do NOT raise mtol as
+the fix but first MEASURE that the ~1e-14 N radicals are irrelevant
+(production/loss rates, N-inventory share, effect on majors / sulfur
+throughput / spectrum / sensitivity vs the solver-noise floor); keep the
+nitrogen handoff and the 26% sulfur-fill imbalance as SEPARATE issues.
+
+BUILT: docs/route_b/harness/g1_reference.py (compile-clean; NOT run).
+Design (audited against outer_loop internals before writing):
+- STAGE 1 reference drive = a model built with trun_min raised to 1e18 s
+  (>> physical balance ~1e12-1e13 s and << runtime 1e22), so the runner's
+  `ready` gate (t>trun_min & accept_count>count_min) blocks BOTH normal and
+  stall certification -> cond_fn stops each call only on chunk_done, giving
+  exactly `chunk` real integration steps. Drive in chunks resetting the
+  carry's accept_count=0 and setting chunk_target each chunk, so the baked
+  count_max=15000 (which safely bounds the build warm-up AND each chunk)
+  never caps the TOTAL trajectory. VERIFIED against the runner: the physics
+  carry continues bit-for-bit across chunk boundaries (y, ymix, t, dt, the
+  y_time_ring/t_time_ring convergence buffers, longdy_seen_min,
+  count_since_new_min all persist); only the step counter, its ring WRITE
+  index (ring CONTENT persists, so the longdy time-lookback still uses real
+  history via argmin over t_time_ring), the count_min ready-gate, and the
+  accept_count%frq cadences reset — the last re-fire photo/atm_refresh/
+  adapt_rtol at the boundary, which recompute from the UNCHANGED carry and
+  so cannot perturb the state. Balance judged HERE by the ledger closure
+  fraction |dN_S/dt|/max(|Phi_bc|,|Phi_rain|) (= |Phi_bc-Phi_rain|/max,
+  Phi_top=0), NOT by the runner's verdict — the directive's point that a
+  short-window longdy dip is not a steady state.
+- STAGE 2 strict cert = a SEPARATE build with the NORMAL fixture config
+  (default trun_min, exact tolerances, no altered chemistry, no pin): three
+  warm re-certs from the Stage-1 endpoint must return to the same state
+  (RT columns, S inventory, rain flux, binned spectrum, direct residual).
+- Records: chunk history (the sulfur arc, which reconciles the two flux
+  numbers — the continuation probe re-prepped state each round, the single
+  run did not, this reference does neither), endpoint residual, spectrum
+  stability across last checkpoints + strict endpoint, and the full
+  nitrogen battery incl. a zero-and-strict-recertify perturbation measured
+  against the recert noise floor. Env knobs documented in the module head.
+- Two builds (~5 min each) is the literal implementation of the directive's
+  Stage-1/Stage-2 separation; each build's warm-up stays count_max-bounded.
+
+STATE AT PAUSE: all harness + G6 machinery compile-clean; retrieval
+tests green (test_smooth_rainout_prep + test_h2s_boundary 13 passed);
+VULCAN-JAX full suite 209 passed / 4 skipped (with the G6 changes +
+extended subprocess coverage). g1_reference.py is the ONLY thing awaiting
+a run; everything else is measured and archived. Nothing committed.
+Production-path change this turn: smooth mode EXCLUDES S from the elemental
+repair (open budget — boundary+sink own the sulfur inventory; measured:
+the old repair destroyed warm-started open-budget states, dt collapse to
+2e-14). Formal verdict remains NO-GO; Fisher stays disabled; B1 not
+authorized; G2/G5/G6/spectrum-FD ready to fire once a G1 disposition
+passes.

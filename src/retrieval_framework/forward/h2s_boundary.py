@@ -8,18 +8,36 @@ constant with jumps at lookup-cell boundaries — so Fisher use additionally
 requires the knot-distance guard below (or a future validated C1
 replacement).
 
+Parity vs accuracy (keep the two metrics separate in any artifact): the
+tests certify that this packaged interpolant reproduces the validated
+prototype RULE (numpy-reference parity to 1e-12). The table's SCIENTIFIC
+accuracy against FastChem holdouts is a separate measured quantity -- max
+value error 0.11%, per-point derivative errors archived in the table
+JSON's `validation` block -- and the full-chain AD-vs-FD gate (B0C G6)
+remains pending. Neither implies the other.
+
 Contract (fail fast and loud, standing rule):
 - `load_h2s_boundary_table` REFUSES a table whose lnx block does not hash
   to the value pinned in the decision record, whose grids are not strictly
-  ascending, or whose values are non-finite.
-- Domain enforcement is a BUILD-TIME duty: call `validate_domain` (loud
-  raise on any point outside the validated grid) before entering jit; the
-  pure interpolant itself clamps to the boundary cell and must never be
-  fed unvalidated points.
+  ascending, whose values are non-finite, or whose provenance lacks the
+  lnZ metallicity baseline (`baseline_X_H`).
+- Domain enforcement is a BUILD-TIME duty: a model constructor must declare
+  the full permitted (T_bottom, lnZ, c_o) box and prove it sits inside the
+  grid via `validate_domain_box` (a per-point check cannot protect a model
+  whose theta varies at run time); `validate_domain` is the per-point form
+  for host-side evaluation-boundary checks (harness/gate scripts validate
+  every actually-visited point, e.g. FD endpoints). The pure interpolant
+  itself clamps to the boundary cell and must never be fed unvalidated
+  points.
 - `knot_report` / `assert_knot_safe` implement the round-4 Fisher
-  precondition: measure the fiducial point's and the uncertainty region's
-  distance to the nearest interior knot per axis, and refuse/warn when the
-  region approaches or crosses a cell boundary.
+  precondition for axis-aligned uncertainty boxes: measure the fiducial
+  point's and the region's distance to the nearest interior knot per axis,
+  and refuse when the region approaches or crosses a cell boundary.
+  `assert_points_same_cell` is the point-set form for everything a box
+  cannot certify -- FD endpoints at h and h/2, covariance-eigenvector
+  points, 1-sigma ellipsoid samples: trilinear derivatives are constant
+  inside a cell and jump only at knots, so "all points share the
+  fiducial's cell" is exactly "no derivative jump anywhere between them".
 """
 
 from __future__ import annotations
@@ -60,6 +78,11 @@ class H2SBoundaryTable(NamedTuple):
     P_bar: float
     sha256: str
     source: str
+    # lnZ = 0 metallicity basis: element-to-H number ratios of the FastChem
+    # abundance file the table was built from (provenance block). A consumer
+    # whose own lnZ = 0 baseline differs is using a shifted axis -- the model
+    # constructor must verify its baseline ratios against these.
+    baseline_X_H: dict
 
 
 def load_h2s_boundary_table(path: str | Path) -> H2SBoundaryTable:
@@ -93,6 +116,13 @@ def load_h2s_boundary_table(path: str | Path) -> H2SBoundaryTable:
         )
     if not np.all(np.isfinite(lnx)):
         raise RuntimeError("H2S boundary table carries non-finite lnx values.")
+    baseline = (data.get("provenance") or {}).get("baseline_X_H")
+    if not isinstance(baseline, dict) or not baseline:
+        raise RuntimeError(
+            f"H2S boundary table at {path} carries no provenance.baseline_X_H "
+            "block: the lnZ axis is meaningless without its metallicity "
+            "baseline. Refusing."
+        )
     return H2SBoundaryTable(
         T_K=grids["T_K"],
         lnZ=grids["lnZ"],
@@ -101,6 +131,7 @@ def load_h2s_boundary_table(path: str | Path) -> H2SBoundaryTable:
         P_bar=float(data["P_bar"]),
         sha256=digest,
         source=str(path),
+        baseline_X_H={k: float(v) for k, v in baseline.items()},
     )
 
 
@@ -121,6 +152,80 @@ def validate_domain(
                 f"domain [{g[0]}, {g[-1]}]; extrapolation is refused (B0A "
                 "record item 3 / G0)."
             )
+
+
+def validate_domain_box(
+    table: H2SBoundaryTable, T_bounds, lnZ_bounds, c_o_bounds
+) -> None:
+    """Loud raise unless the whole axis-aligned parameter box is inside the
+    validated grid.
+
+    The build-time duty of any model constructor whose theta varies at run
+    time (round-5 review): declare the full permitted (T_bottom, lnZ, c_o)
+    box up front and prove it fits -- a per-point check at construction
+    cannot protect later evaluations. Bounds are (lo, hi) per axis."""
+    for name, g, bounds in (
+        ("T_bottom", table.T_K, T_bounds),
+        ("lnZ", table.lnZ, lnZ_bounds),
+        ("c_o", table.c_o, c_o_bounds),
+    ):
+        lo, hi = float(bounds[0]), float(bounds[1])
+        if not lo <= hi:
+            raise ValueError(
+                f"H2S boundary {name} box ({lo}, {hi}) has lo > hi."
+            )
+        if lo < g[0] or hi > g[-1]:
+            raise ValueError(
+                f"H2S boundary: declared {name} box [{lo}, {hi}] exceeds the "
+                f"validated table domain [{g[0]}, {g[-1]}]; extrapolation is "
+                "refused (B0A record item 3 / G0). Shrink the permitted "
+                "parameter range or extend and re-validate the table."
+            )
+
+
+def cell_of(table: H2SBoundaryTable, T_bottom, lnZ, c_o) -> tuple:
+    """Host-side lookup-cell index of a point, using the interpolant's own
+    clamped indexing rule (so classification matches evaluation exactly)."""
+    idx = []
+    for g, v in (
+        (table.T_K, T_bottom),
+        (table.lnZ, lnZ),
+        (table.c_o, c_o),
+    ):
+        idx.append(int(np.clip(np.searchsorted(g, float(v)) - 1, 0, g.size - 2)))
+    return tuple(idx)
+
+
+def assert_points_same_cell(table: H2SBoundaryTable, points) -> tuple:
+    """Refuse unless every point lies in ONE lookup cell.
+
+    The point-set form of the knot guard, for everything an axis-aligned box
+    cannot certify (round-4 amendment + round-5 review): FD endpoints at h
+    and h/2, covariance-eigenvector points, 1-sigma ellipsoid samples.
+    Trilinear derivatives are constant inside a cell and jump only at knots,
+    so "all points share the fiducial's cell" is exactly "no derivative jump
+    anywhere between them". `points` is (N, 3) array-like of
+    (T_bottom, lnZ, c_o) rows, fiducial first; every point is also
+    domain-validated. Returns the shared cell index for archiving."""
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape[0] < 1:
+        raise ValueError(
+            f"assert_points_same_cell expects (N, 3) rows of "
+            f"(T_bottom, lnZ, c_o); got shape {pts.shape}."
+        )
+    for row in pts:
+        validate_domain(table, row[0], row[1], row[2])
+    cells = [cell_of(table, row[0], row[1], row[2]) for row in pts]
+    bad = {i: c for i, c in enumerate(cells) if c != cells[0]}
+    if bad:
+        raise ValueError(
+            f"H2S boundary lookup: points at rows {sorted(bad)} sit in "
+            f"different lookup cells ({bad}) than the fiducial (row 0, cell "
+            f"{cells[0]}); the trilinear derivative jumps between them. "
+            "Shrink the FD steps / uncertainty region or move to the C1 "
+            "interpolant."
+        )
+    return cells[0]
 
 
 def _axis_cell(grid: jnp.ndarray, v):

@@ -55,6 +55,34 @@ a condensing state is valid only away from those switches (validated in
 tests/test_condensation_live_tp.py; Fisher forecasts through condensation stay
 disabled in vulcan-jwst-tool).
 
+Route B smooth rainout (2026-07-13, B0C prototype -- feasibility gates OPEN):
+``cfg_overrides={"conden_mode": "smooth_rainout"}`` selects VULCAN-JAX's opt-in
+open-system S8 sink instead of the master_pin window+pin machinery. The deep
+boundary is then the checksum-gated FastChem equilibrium lookup
+x_H2S(T_bottom, lnZ, c_o) (``forward.h2s_boundary``), evaluated ON-GRAPH in
+``_prep`` at the live bottom temperature and the proposal's (lnZ, c_o) and
+spliced into ``ProfileVars.bot_pin_mix`` -- so d(pin)/d(theta) rides the graph
+(plan 2g-ii; a closure-baked value would silently zero it). Build-time
+contract (all loud): the profile must declare ``h2s_boundary["theta_box"]``
+(the full permitted (T_bottom, lnZ, c_o) domain, validated against the table
+grid -- no run-time clamping/extrapolation), ``use_fix_sp_bot`` must pin
+exactly H2S, cfg.P_b must equal the table's build pressure, the model's
+baseline elemental ratios must match the table's provenance ``baseline_X_H``
+(else the lnZ axes are shifted), and the master_pin window/pin knobs
+(fix_species / use_relax / use_settling) are rejected. The pin is applied at
+the bottom NODE (cell-center pressure, within half a log-layer of P_b -- the
+table's build pressure). In this mode S is EXCLUDED from the elemental
+repair (open budget: the boundary + sink own the sulfur inventory; lnZ
+reaches sulfur through the lookup pin) -- repairing S/H would fight the
+boundary on cold inits and destroy warm-started converged states (measured:
+dt collapse to the floor on warm continuation). WARNING: an unrolled forward-mode jvp THROUGH the
+smooth-rainout solve is MEASURED invalid (6-9 orders vs FD on the cold
+fixture; docs/route_b harness) -- run this mode as a FORWARD model only;
+inference is refused unconditionally in ``validate_config``; the sanctioned
+derivative is the pending G6 solver-map route. ``pin_value(theta)`` is the
+host-side per-point domain validator + pin diagnostic for gate/harness
+scripts.
+
 KNOWN LIMITATION -- condensation-enabled does NOT reduce to condensation-off when
 nothing condenses. The upstream conden-window + whole-column ``fix_species`` pin
 freezes the condensable reservoirs at their ``stop_conden_time`` state. On a column
@@ -228,6 +256,62 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
                 "condense. List the condensable gas species (network "
                 "condensation reactions and/or use_relax species).")
 
+    # --- Route B smooth rainout: pre-build validation + boundary table -----
+    # VULCAN-JAX's _build_statics re-validates the full smooth-mode constraint
+    # set at runner build; the checks here are the retrieval-side subset that
+    # can (and therefore must, fail-fast) fire BEFORE the expensive pre-loop,
+    # plus the lookup-boundary contract that only this layer knows about.
+    conden_mode = str(getattr(cfg, "conden_mode", "master_pin"))
+    smooth_rainout = conden_mode == "smooth_rainout"
+    h2s_table = None
+    if smooth_rainout:
+        from retrieval_framework.forward import h2s_boundary as hb
+
+        if not use_condense:
+            raise ValueError(
+                "conden_mode='smooth_rainout' requires use_condense=True "
+                "(the sink needs the condensation profile arrays).")
+        for _k in ("fix_species", "use_relax"):
+            if list(getattr(cfg, _k, []) or []):
+                raise ValueError(
+                    f"conden_mode='smooth_rainout' rejects {_k} (master_pin "
+                    f"window/pin machinery); got {getattr(cfg, _k)!r}. "
+                    f"Override {_k}=[] in cfg_overrides.")
+        if bool(getattr(cfg, "use_settling", False)):
+            raise ValueError(
+                "conden_mode='smooth_rainout' rejects use_settling=True "
+                "(no condensate population to settle; B2 scope).")
+        fix_bot = dict(getattr(cfg, "use_fix_sp_bot", {}) or {})
+        if list(fix_bot.keys()) != ["H2S"]:
+            raise ValueError(
+                "conden_mode='smooth_rainout' requires use_fix_sp_bot to pin "
+                "exactly H2S (the equilibrium-lookup deep reservoir, B0A "
+                f"record item 3); got {sorted(fix_bot) or 'nothing'}.")
+        hb_spec = profile.get("h2s_boundary")
+        if not isinstance(hb_spec, dict) or "theta_box" not in hb_spec:
+            raise ValueError(
+                "conden_mode='smooth_rainout' requires "
+                "profile['h2s_boundary'] = {'theta_box': {'T_bottom': (lo, hi), "
+                "'lnZ': (lo, hi), 'c_o': (lo, hi)}, 'table_path': <optional>}: "
+                "the caller must DECLARE the full permitted lookup domain so "
+                "it can be validated at build (no run-time extrapolation).")
+        h2s_table = hb.load_h2s_boundary_table(
+            hb_spec.get("table_path") or config.H2S_BOUNDARY_TABLE)
+        _P_b_bar = float(cfg.P_b) / 1.0e6
+        if abs(_P_b_bar - h2s_table.P_bar) > 1.0e-3 * h2s_table.P_bar:
+            raise ValueError(
+                f"conden_mode='smooth_rainout': cfg.P_b = {_P_b_bar} bar but "
+                f"the H2S boundary table was built at P_b = {h2s_table.P_bar} "
+                "bar; the lookup is only validated at its build pressure.")
+        _box = hb_spec["theta_box"]
+        for _bk in ("T_bottom", "lnZ", "c_o"):
+            if _bk not in _box:
+                raise ValueError(
+                    f"h2s_boundary theta_box is missing axis {_bk!r} "
+                    "(need T_bottom, lnZ, c_o bounds).")
+        hb.validate_domain_box(
+            h2s_table, _box["T_bottom"], _box["lnZ"], _box["c_o"])
+
     rs = RunState.with_pre_loop_setup(cfg)
     var, atm, para = legacy_view(rs)
     network = net_mod.parse_network(str(resolve_data_path(cfg.network)))
@@ -252,6 +336,54 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
               f"relax H2O={conden_spec.h2o_active} NH3={conden_spec.nh3_active}, "
               f"fix_species={list(conden_spec.fix_names)}; conden arrays rebuilt "
               "on-graph at each proposed T", flush=True)
+
+    # --- smooth-rainout measured consistency checks (pre-warm-up, fail fast) --
+    if smooth_rainout:
+        _compo0 = np.asarray(composition.compo_array, dtype=np.float64)
+        _y_ini = np.asarray(var.y, dtype=np.float64)
+        # lnZ-axis identity: the lookup's lnZ is relative to the FastChem
+        # baseline recorded in its provenance; the model's own lnZ = 0 is the
+        # baseline column's elemental ratios. If they disagree, every pin
+        # evaluation is silently shifted along lnZ -- refuse. (A FastChem-
+        # initialized column at the table's fastchem_met_scale matches to
+        # numerical precision; a const_mix fixture must be constructed to.)
+        _H_tot = float((_y_ini @ _compo0[:, config.ATOM_COLS["H"]]).sum())
+        for _e in ("O", "C", "N", "S"):
+            if _e not in h2s_table.baseline_X_H:
+                raise ValueError(
+                    f"smooth_rainout: element {_e} missing from the table "
+                    f"baseline ({sorted(h2s_table.baseline_X_H)}); cannot "
+                    "verify the lnZ basis.")
+            _got = float((_y_ini @ _compo0[:, config.ATOM_COLS[_e]]).sum()) / _H_tot
+            _want = float(h2s_table.baseline_X_H[_e])
+            if abs(_got / _want - 1.0) > 0.02:
+                raise ValueError(
+                    f"smooth_rainout lnZ-basis mismatch: model baseline "
+                    f"{_e}/H = {_got:.6e} vs table provenance {_want:.6e} "
+                    f"({abs(_got / _want - 1.0) * 100:.2f}% off, tolerance "
+                    "2%). The lookup's lnZ axis would be shifted against the "
+                    "chemistry's; rebuild the table or fix the baseline "
+                    "composition.")
+        # Warm-up sanity: the STATIC cfg pin seeds the baseline compile/
+        # converge (before _prep ever runs); a value inconsistent with the
+        # lookup at theta = 0 would converge the warm-up to a nonsense
+        # reservoir. Factor-2 window -- a sanity gate, not a precision claim.
+        _Tb0 = float(np.asarray(atm.Tco, dtype=np.float64)[0])
+        hb.validate_domain(h2s_table, _Tb0, 0.0, 0.0)
+        _pin0 = float(hb.h2s_pin_mix(h2s_table, _Tb0, 0.0, 0.0))
+        _cfg_pin = float(dict(cfg.use_fix_sp_bot)["H2S"])
+        if not (0.5 <= _cfg_pin / _pin0 <= 2.0):
+            raise ValueError(
+                f"smooth_rainout: static warm-up pin use_fix_sp_bot['H2S'] = "
+                f"{_cfg_pin:.6e} is inconsistent with the lookup at the "
+                f"structural baseline (T_bottom = {_Tb0:.1f} K, lnZ = 0, "
+                f"c_o = 0): {_pin0:.6e}. Set the cfg pin to the lookup value.")
+        print(f"[chem] smooth_rainout: H2S boundary lookup "
+              f"{Path(h2s_table.source).name} (sha256 {h2s_table.sha256[:12]}..., "
+              f"P_b {h2s_table.P_bar} bar); baseline pin {_pin0:.4e} at "
+              f"T_bottom {_Tb0:.1f} K; theta_box validated; pin rides "
+              "pv.bot_pin_mix on-graph. FORWARD model only (unrolled jvp "
+              "invalid; G6 solver-map route pending).", flush=True)
 
     pco = jnp.asarray(np.asarray(atm.pco, dtype=np.float64))
     p_bar = np.asarray(atm.pco, dtype=np.float64) / 1.0e6
@@ -351,6 +483,17 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     # RATIOS to elemental H; absolute densities follow from sum_i n_i = M.
     elem_pairs = [(e, sp) for e, sp in _ELEMENTAL_REPAIR
                   if sp in sidx and compo[:, config.ATOM_COLS[e]].sum() > 0]
+    if smooth_rainout:
+        # S is an OPEN budget in smooth-rainout mode: the lookup boundary +
+        # rainout set the converged sulfur inventory, so the elemental
+        # repair must NOT target S/H. Repairing it would (a) fight the
+        # boundary on cold inits and (b) DESTROY a warm-started converged
+        # state -- measured 2026-07-14: warm continuation from an active-
+        # rain endpoint collapsed to dt = 2e-14 from step one because the
+        # projection rescaled the sulfur columns back to the closed-basis
+        # target. lnZ reaches sulfur through the boundary pin instead
+        # (h2s_pin_mix(T_bottom, lnZ, c_o)).
+        elem_pairs = [(e, sp) for e, sp in elem_pairs if e != "S"]
     _y0_np = np.asarray(y0, dtype=np.float64)
     _elem_cols = [config.ATOM_COLS["H"]] + [config.ATOM_COLS[e] for e, _ in elem_pairs]
     # (ni, 1+nrep) atoms-per-molecule for [H, He, O, C, N, S]-as-present
@@ -541,6 +684,17 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
                 c_nh3_conden_top=cprof.nh3_conden_top,
                 fix_species_sat_mix=cprof.fix_species_sat_mix,
             )
+
+        # --- smooth-rainout deep boundary (B0A item 3 / plan 2g-ii) --------
+        # Bottom-node H2S pin from the checksum-gated equilibrium lookup at
+        # the LIVE bottom temperature and the proposal's (lnZ, c_o), spliced
+        # into the carry so d(pin)/d(theta) rides the graph. Domain safety is
+        # the build-time theta_box contract; host-side per-point validation
+        # for harness/gate scripts is pin_value().
+        if smooth_rainout:
+            x_pin = hb.h2s_pin_mix(h2s_table, T[0], lnZ, c_o)
+            pv_T = pv_T._replace(bot_pin_mix=jnp.reshape(x_pin, (1,)))
+
         atm_T = atm_static._replace(Tco=T, Ti=Ti, M=M, Kzz=Kzz_eff, Dzz=Dzz_new,
                                     vm=vm_new, vs=vs_new, g=g_i, dzi=dzi_i, Hpi=Hpi_i)
 
@@ -576,6 +730,15 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         init, _atm_T = _prep(jnp.asarray(theta, dtype=jnp.float64))
         return init.pv
 
+    def prep_state(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0):
+        """The exact runner inputs for ``theta``: (init_state, atm_T), without
+        solving. What ``converged_y`` passes to ``integ._runner``; harness and
+        gate scripts need atm_T explicitly (e.g. VULCAN-JAX's
+        ``steady_residual.residual_from_state`` takes the live AtmStatic).
+        Diagnostics only; not on any AD path."""
+        return _prep(jnp.asarray(theta, dtype=jnp.float64), warm_y=warm_y,
+                     lnZ_ref=lnZ_ref, c_o_ref=c_o_ref)
+
     def converged_y(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0, return_diag=False,
                     warm_cap=False):
         """Converged ABSOLUTE number densities y (nz, ni), with optional continuation
@@ -599,6 +762,25 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         if return_diag:
             return final.y, final.accept_count
         return final.y
+
+    def pin_value(theta):
+        """Host-side H2S boundary-pin diagnostic (smooth_rainout only).
+
+        Validates the actually-visited (T_bottom, lnZ, c_o) point against the
+        lookup domain (loud raise -- the evaluation-boundary check: the build
+        validates the DECLARED theta_box, this validates each point a gate or
+        harness script actually evaluates, e.g. every FD endpoint) and
+        returns the pin with its lookup inputs. Not on any AD path."""
+        if not smooth_rainout:
+            raise RuntimeError(
+                "pin_value is only defined for conden_mode='smooth_rainout'")
+        th = jnp.asarray(theta, dtype=jnp.float64)
+        Tv = (T_base + th[3]) if tp_eval is None else tp_eval(
+            th[3:3 + n_tp_params], p_bar_j)
+        Tb, lnZv, c_ov = float(Tv[0]), float(th[0]), float(th[1])
+        hb.validate_domain(h2s_table, Tb, lnZv, c_ov)
+        return {"x_pin": float(hb.h2s_pin_mix(h2s_table, Tb, lnZv, c_ov)),
+                "T_bottom": Tb, "lnZ": lnZv, "c_o": c_ov}
 
     def audit_init(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0):
         """Host-side audit of the initial column built for ``theta`` (not on any AD path).
@@ -648,7 +830,11 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         converged_y=converged_y,
         audit_init=audit_init,
         conden_spec=conden_spec,   # static conden metadata (None when conden off)
+        conden_mode=conden_mode,   # "master_pin" (default) or "smooth_rainout"
+        h2s_table=h2s_table,       # checksum-gated boundary lookup (smooth only)
+        pin_value=pin_value,       # host-side per-point pin validator/diagnostic
         prep_pv=prep_pv,           # theta -> initial ProfileVars (no solve; tests)
+        prep_state=prep_state,     # theta -> (init, atm_T) runner inputs (harness)
         _integ=integ,              # the OuterLoop (baked statics access; tests only)
         abundance_mode=abundance_mode,
         co_bz_bound=co_bz_bound,   # fixed-O knob validity: b_z > 0 iff c_o < this (baseline column)

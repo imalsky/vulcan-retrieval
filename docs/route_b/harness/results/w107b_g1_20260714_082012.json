@@ -1,0 +1,240 @@
+{
+ "gate": "G1",
+ "verdict": "INCOMPLETE (termination FAIL: step-count-exhausted; no documented max_R threshold -- set ROUTE_B_G1_MAX_R after the record review)",
+ "residual_threshold_s^-1": null,
+ "theta": [
+  0.0,
+  0.0,
+  0.0,
+  500.0,
+  150.0,
+  -2.5,
+  0.0
+ ],
+ "pin": {
+  "x_pin": 0.00024290710644988037,
+  "T_bottom": 469.5936889650837,
+  "lnZ": 0.0,
+  "c_o": 0.0
+ },
+ "solve": {
+  "termination": "step-count-exhausted",
+  "accept_count": 15001,
+  "count_max": 15000,
+  "t_end_s": 367142712226.79376,
+  "runtime_cap_s": 1e+22,
+  "dt_end_s": 72487768.53621241,
+  "longdy": 0.6912593161586431,
+  "longdy_seen_min": 0.0005768125491485807
+ },
+ "solve_wall_s": 380.5204846858978,
+ "build_wall_s": 264.19103717803955,
+ "yconv_cri": 0.01,
+ "residual": {
+  "max_R_s^-1": 3866.9245624733644,
+  "argmax_z": 0,
+  "argmax_species": "H",
+  "n_live_cells": 5514,
+  "n_excluded_cells": 3386,
+  "worst_cells": [
+   {
+    "z": 0,
+    "species": "H",
+    "R_s^-1": 3866.9245624733644
+   },
+   {
+    "z": 96,
+    "species": "O_1",
+    "R_s^-1": 47.12536349775985
+   },
+   {
+    "z": 97,
+    "species": "O_1",
+    "R_s^-1": 45.27401461560173
+   },
+   {
+    "z": 98,
+    "species": "O_1",
+    "R_s^-1": 42.489056778269706
+   },
+   {
+    "z": 99,
+    "species": "O_1",
+    "R_s^-1": 37.89010770312801
+   },
+   {
+    "z": 93,
+    "species": "CH2_1",
+    "R_s^-1": 17.44677956569233
+   },
+   {
+    "z": 92,
+    "species": "CH2_1",
+    "R_s^-1": 17.316274825910014
+   },
+   {
+    "z": 91,
+    "species": "CH2_1",
+    "R_s^-1": 16.940871751244256
+   },
+   {
+    "z": 94,
+    "species": "CH2_1",
+    "R_s^-1": 16.546883538037477
+   },
+   {
+    "z": 97,
+    "species": "CH2_1",
+    "R_s^-1": 16.41239658438353
+   }
+  ]
+ },
+ "ledger": {
+  "atom_order": [
+   "H",
+   "O",
+   "C",
+   "N",
+   "S"
+  ],
+  "led_dt_s": 40204923.94364295,
+  "led_step": {
+   "H": -3.3896670652082164e+19,
+   "O": 1.1338908711597308e+18,
+   "C": 6.228461391115282e+17,
+   "N": 1.49571069820502e+17,
+   "S": -1.777501820891513e+22
+  },
+  "led_renorm": {
+   "H": -1.914050661231347e+22,
+   "O": -9.990556046208272e+19,
+   "C": -5.4876904001540375e+19,
+   "N": -1.3170081356935514e+19,
+   "S": -6.130139789381135e+18
+  },
+  "led_bc": {
+   "H": 2.339670871112461e+22,
+   "O": 0.0,
+   "C": 0.0,
+   "N": 0.0,
+   "S": 1.1698354355562305e+22
+  },
+  "led_rain": {
+   "H": 0.0,
+   "O": 0.0,
+   "C": 0.0,
+   "N": 0.0,
+   "S": 432780477604575.25
+  },
+  "column_inventory": {
+   "H": 1.4718647012022543e+28,
+   "O": 7.682571998112966e+25,
+   "C": 4.219943503816019e+25,
+   "N": 1.0127603070196673e+25,
+   "S": 4.7262723449666607e+24
+  },
+  "telescoping_rel": {
+   "H": 2.868677688044409e-07,
+   "O": 1.2856588863102592e-06,
+   "C": 1.2856583936104327e-06,
+   "N": 1.285645793665782e-06,
+   "S": 0.0012870172408960307
+  }
+ },
+ "fixture": {
+  "fixture": "w107b_guillot_photo_smooth_rainout",
+  "theta_names": [
+   "lnZ",
+   "c_o",
+   "lnKzz",
+   "Tirr",
+   "Tint",
+   "log_kappa",
+   "log_gamma"
+  ],
+  "fiducial_theta": [
+   0.0,
+   0.0,
+   0.0,
+   500.0,
+   150.0,
+   -2.5,
+   0.0
+  ],
+  "theta_box": {
+   "T_bottom": [
+    405.0,
+    1800.0
+   ],
+   "lnZ": [
+    -1.0,
+    1.0
+   ],
+   "c_o": [
+    -0.4,
+    0.4
+   ]
+  },
+  "nz": 100,
+  "count_max": 15000,
+  "use_photo": true,
+  "structural_Tiso_K": 500.0,
+  "static_pin_H2S": 0.0002429070431442678,
+  "table_sha256": "11e2b3795ad1731108673553450e9dfd7a04076c3630959116120ac662c82ca4",
+  "cfg_overrides": {
+   "gs": 270.0,
+   "Rp": 6720248000.0,
+   "r_star": 0.67,
+   "orbit_radius": 0.0553,
+   "sflux_file": "atm/stellar_flux/sflux-epseri.txt",
+   "use_moldiff": true,
+   "sl_angle": 1.4486232791552935,
+   "f_diurnal": 1.0,
+   "atm_type": "isothermal",
+   "Tiso": 500.0,
+   "Kzz_prof": "const",
+   "const_Kzz": 10000000000.0,
+   "use_condense": true,
+   "condense_sp": [
+    "S8"
+   ],
+   "non_gas_sp": [
+    "S8_l_s"
+   ],
+   "r_p": {
+    "S8_l_s": 0.005
+   },
+   "rho_p": {
+    "S8_l_s": 2.07
+   },
+   "conden_mode": "smooth_rainout",
+   "conden_smooth_width": 0.1,
+   "rainout_rate_scale": 1.0,
+   "use_fix_sp_bot": {
+    "H2S": 0.0002429070431442678
+   },
+   "use_relax": [],
+   "use_settling": false,
+   "fix_species": [],
+   "mtol_conv": 1e-15
+  }
+ },
+ "provenance": {
+  "timestamp_utc": "2026-07-14T08:20:12Z",
+  "vulcan_retrieval_sha": "4b1b1e18480d679bfbc230101cb669e45e6a2c44+dirty",
+  "vulcan_jax_sha": "1e7ae576016ddbba17fcdd473806fea1e5029b1f+dirty",
+  "network": "thermo/SNCHO_photo_network.txt",
+  "network_sha256": "3514b57e19365c5b3200b99422f6399c5cfabd29620c08b7c64254de67b29073",
+  "h2s_table_sha256": "11e2b3795ad1731108673553450e9dfd7a04076c3630959116120ac662c82ca4",
+  "float64": true,
+  "python": "3.12.8",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "versions": {
+   "jax": "0.9.2",
+   "jaxlib": "0.9.2",
+   "numpy": "2.0.2",
+   "exojax": "2.2.3"
+  }
+ },
+ "arrays_npz": "w107b_g1_20260714_082012.npz"
+}

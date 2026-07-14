@@ -491,6 +491,21 @@ def validate_config(cfg: Config) -> None:
     # MALA, so an inference run would sample against unreliable gradients. Refuse
     # by default (loud-errors rule); allow_condense_inference=True is the explicit
     # expert opt-in for anyone who has independently validated their column.
+    # Route B smooth rainout is a B0C-gated PROTOTYPE: inference through the
+    # open-system rainout steady state is not authorized until every essential
+    # feasibility gate passes, and the unrolled forward-mode jvp the mutation
+    # kernel would consume is MEASURED invalid on this mode (6-9 orders off FD
+    # on the cold fixture; the G6 solver-map route is the only sanctioned
+    # derivative). Unconditional -- allow_condense_inference does NOT override.
+    if (str(cfg.cfg_overrides.get("conden_mode", "master_pin")) == "smooth_rainout"
+            and cfg.run_inference):
+        raise ValueError(
+            "conden_mode='smooth_rainout' with run_inference=True is refused "
+            "unconditionally: B0C feasibility gates are open and the unrolled "
+            "forward-mode jvp through the rainout steady state is measured "
+            "invalid (6-9 orders vs FD; docs/route_b harness). Run smooth "
+            "rainout as a FORWARD model only. allow_condense_inference does "
+            "not apply to this mode.")
     if (bool(cfg.cfg_overrides.get("use_condense", False))
             and cfg.run_inference and not cfg.allow_condense_inference):
         raise ValueError(

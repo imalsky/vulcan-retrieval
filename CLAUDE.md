@@ -146,6 +146,28 @@ too-hot / unsettled column is captured mid-transient, not at the conden-off
 steady state; enable conden only where the species genuinely condenses (a
 criterion-gated pin is a future refinement needing re-validation, not done).
 
+## Route B smooth rainout (B0C prototype — gates OPEN, forward-only)
+
+`cfg_overrides={"conden_mode": "smooth_rainout"}` selects VULCAN-JAX's opt-in
+open-system S8 sink (no window, no pin). The deep boundary is the
+checksum-gated FastChem equilibrium lookup x_H2S(T_bottom, lnZ, c_o)
+(`forward.h2s_boundary`, table at `docs/route_b/h2s_boundary_table.json`),
+evaluated ON-GRAPH in `_prep` and spliced into `ProfileVars.bot_pin_mix` so
+d(pin)/d(theta) rides the graph. Build-time contract (all loud):
+`profile["h2s_boundary"]["theta_box"]` must declare the full permitted
+(T_bottom, lnZ, c_o) domain (validated against the grid — no run-time
+extrapolation, ever); `use_fix_sp_bot` pins exactly H2S; `cfg.P_b` must equal
+the table's build pressure; the baseline elemental ratios must match the
+table provenance `baseline_X_H` to 2% (else the lnZ axes are shifted);
+master_pin window/pin knobs (fix_species / use_relax / use_settling) are
+rejected. FORWARD model only: the unrolled jvp through the smooth-rainout
+solve is MEASURED invalid (6-9 orders vs FD; docs/route_b harness), inference
+is refused unconditionally in `validate_config` (allow_condense_inference
+does not apply), and Fisher stays disabled until the B0C gates pass. Gate
+scripts validate every visited theta with `model.pin_value(theta)` and FD/
+ellipsoid point sets with `h2s_boundary.assert_points_same_cell`. Tests:
+`tests/test_smooth_rainout_prep.py`, `tests/test_h2s_boundary.py`.
+
 ## After any config/physics change — regeneration is mandatory
 
 The elemental + atm-rebuild chemistry map means synthetic obs, `data/*.npz`

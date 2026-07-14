@@ -1,0 +1,22 @@
+ROUTE B B0C REPRODUCIBILITY ARTIFACT
+============================================================
+assembled: 2026-07-14T09:38:55Z
+vulcan-retrieval: 4b1b1e18480d679bfbc230101cb669e45e6a2c44+dirty
+VULCAN-JAX:       1e7ae576016ddbba17fcdd473806fea1e5029b1f+dirty
+lookup table:     11e2b3795ad17311...
+network:          3514b57e19365c5b...
+
+G1                       [ESSENTIAL] INCOMPLETE (termination FAIL: step-count-exhausted; no documented max_R threshold -- set ROUTE_B_G1_MAX_R after the record review)
+                         artifact: w107b_g1_20260714_084540.json
+G2                       [ESSENTIAL] MISSING
+G3                       [ESSENTIAL] INCOMPLETE (rain active, worst closure_frac 2.639e-01; no documented tolerance -- set ROUTE_B_G3_TOL after the record review)
+                         artifact: w107b_g3_20260714_093836.json
+G4                       [ESSENTIAL] INCOMPLETE (rain exactly zero: True; max |dln n| 5.281e-04; documented rtol/atol pending -- set ROUTE_B_G4_RTOL/ATOL)
+                         artifact: w107b_g4_20260714_080347.json
+G5                       [ESSENTIAL] MISSING
+G6                       [ESSENTIAL] MISSING
+spectrum_fd              [ESSENTIAL] MISSING
+spectrum_agreement_g2    [informational] MISSING
+spectrum_agreement_g5    [informational] MISSING
+
+NO-GO: B1 NOT authorized. Open essential gates: ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'spectrum_fd']. Gates are never weakened; Fisher with condensation stays DISABLED.

@@ -1,0 +1,87 @@
+{
+ "artifact": "Route B B0C reproducibility artifact (directive M)",
+ "campaign_provenance_identity": {
+  "vulcan_retrieval_sha": "4b1b1e18480d679bfbc230101cb669e45e6a2c44+dirty",
+  "vulcan_jax_sha": "1e7ae576016ddbba17fcdd473806fea1e5029b1f+dirty",
+  "network_sha256": "3514b57e19365c5b3200b99422f6399c5cfabd29620c08b7c64254de67b29073",
+  "h2s_table_sha256": "11e2b3795ad1731108673553450e9dfd7a04076c3630959116120ac662c82ca4"
+ },
+ "assembled": {
+  "timestamp_utc": "2026-07-14T09:38:55Z",
+  "vulcan_retrieval_sha": "4b1b1e18480d679bfbc230101cb669e45e6a2c44+dirty",
+  "vulcan_jax_sha": "1e7ae576016ddbba17fcdd473806fea1e5029b1f+dirty",
+  "network": "thermo/SNCHO_photo_network.txt",
+  "network_sha256": "3514b57e19365c5b3200b99422f6399c5cfabd29620c08b7c64254de67b29073",
+  "h2s_table_sha256": "11e2b3795ad1731108673553450e9dfd7a04076c3630959116120ac662c82ca4",
+  "float64": true,
+  "python": "3.12.8",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "versions": {
+   "jax": "0.9.2",
+   "jaxlib": "0.9.2",
+   "numpy": "2.0.2",
+   "exojax": "2.2.3"
+  }
+ },
+ "gates": {
+  "G1": {
+   "artifact": "w107b_g1_20260714_084540.json",
+   "verdict": "INCOMPLETE (termination FAIL: step-count-exhausted; no documented max_R threshold -- set ROUTE_B_G1_MAX_R after the record review)",
+   "essential": true,
+   "timestamp_utc": "2026-07-14T08:45:40Z"
+  },
+  "G2": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": true
+  },
+  "G3": {
+   "artifact": "w107b_g3_20260714_093836.json",
+   "verdict": "INCOMPLETE (rain active, worst closure_frac 2.639e-01; no documented tolerance -- set ROUTE_B_G3_TOL after the record review)",
+   "essential": true,
+   "timestamp_utc": "2026-07-14T08:45:40Z"
+  },
+  "G4": {
+   "artifact": "w107b_g4_20260714_080347.json",
+   "verdict": "INCOMPLETE (rain exactly zero: True; max |dln n| 5.281e-04; documented rtol/atol pending -- set ROUTE_B_G4_RTOL/ATOL)",
+   "essential": true,
+   "timestamp_utc": "2026-07-14T08:03:47Z"
+  },
+  "G5": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": true
+  },
+  "G6": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": true
+  },
+  "spectrum_fd": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": true
+  },
+  "spectrum_agreement_g2": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": false
+  },
+  "spectrum_agreement_g5": {
+   "artifact": null,
+   "verdict": "MISSING",
+   "essential": false
+  }
+ },
+ "go_no_go": "NO-GO: B1 NOT authorized. Open essential gates: ['G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'spectrum_fd']. Gates are never weakened; Fisher with condensation stays DISABLED.",
+ "validated_preset": {
+  "fixture": "docs/route_b/harness/w107b_fixture.py (build(); the EXACT cfg_overrides dict in each gate artifact's fixture block is the validated preset -- no other configuration is claimed)",
+  "forward_only": "inference refused unconditionally (validate_config); unrolled jvp diagnostic-only"
+ },
+ "standing_constraints": [
+  "B1 not authorized until every essential gate passes",
+  "Fisher with condensation stays disabled",
+  "gates are never weakened to accommodate a failure",
+  "any FAIL: stop, report measured numbers, collaborator review"
+ ]
+}
