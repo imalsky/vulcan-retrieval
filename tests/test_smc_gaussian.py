@@ -94,6 +94,106 @@ def test_resume_from_checkpoint_completes_the_ladder(tmp_path):
     assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
 
 
+def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
+    """The init-level checkpoint (written right after _init_state, last_step=-1)
+    must survive a stage-0 death and let RESUME skip the init entirely (NAS job
+    65200: a bad-gradient raise at stage 0 threw away a 2.1 h init because the
+    only checkpoint was per-stage)."""
+    import pytest
+    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
+                   num_samples=64, num_chains=1)
+    ck = tmp_path / "ck.npz"
+
+    # run 1: the mutation kernel dies at stage 0 (simulating the bad-grad raise)
+    real_make_mutation = P._make_mutation
+
+    def dying_make_mutation(pipe_, n_mcmc):
+        def mutate(*a, **k):
+            raise RuntimeError("simulated stage-0 bad-gradient death")
+        return mutate
+
+    monkeypatch.setattr(P, "_make_mutation", dying_make_mutation)
+    with pytest.raises(RuntimeError, match="simulated stage-0"):
+        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(3), progress=False,
+                       checkpoint_path=ck)
+    assert ck.exists()
+    d = np.load(ck)
+    assert int(d["init_checkpoint"]) == 1 and int(d["last_step"]) == -1
+    assert list(d["betas"]) == [0.0]
+    assert "y_state" in d.files and "loglik" in d.files and "grad_u" in d.files
+
+    # run 2: resume from the init checkpoint -- _init_state must NOT run again,
+    # and the ladder completes to beta=1 with the recovered init_stats
+    monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
+
+    def no_init(*a, **k):
+        raise AssertionError("_init_state must not run on an init-checkpoint resume")
+
+    monkeypatch.setattr(P, "_init_state", no_init)
+    res = P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(3), progress=False,
+                         checkpoint_path=ck, resume_from=ck)
+    assert res["reached_beta1"]
+    assert res["init_stats"]                       # survived the round-trip
+    th = res["theta_draws"].reshape(-1, 3)
+    assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
+
+
+def test_bad_gradient_raises_with_forensics_dump(tmp_path, monkeypatch):
+    """A finite-likelihood/non-finite-gradient event must (1) fail FAST at the
+    offending sweep, (2) dump per-particle forensics (indices, theta, attribution)
+    next to the checkpoint, and (3) still raise loudly -- NAS job 65200 died with
+    a bare count and nothing to debug with."""
+    import pytest
+    cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
+                   num_samples=32, num_chains=1)
+    ck = tmp_path / "ck.npz"
+
+    # produce an init-level checkpoint first (mutation dies immediately), so the
+    # poisoned evaluator below is exercised on the MUTATION path only -- the init
+    # has its own separate n_bad raise
+    def dying_make_mutation(pipe_, n_mcmc):
+        def mutate(*a, **k):
+            raise RuntimeError("die before any sweep")
+        return mutate
+
+    real_make_mutation = P._make_mutation
+    monkeypatch.setattr(P, "_make_mutation", dying_make_mutation)
+    with pytest.raises(RuntimeError, match="die before any sweep"):
+        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(5), progress=False,
+                       checkpoint_path=ck)
+    monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
+
+    # poison the stub gradient evaluator: particle 0 gets a finite L but NaN grad
+    pipe = _stub_pipe(cfg)
+    evg, el, _, _ = P._get_batch_evals(pipe)
+
+    def bad_evg(U, Y, refs):
+        L, G, Y_, refs_, n_bad, DY, stats = evg(U, Y, refs)
+        G = G.at[0, 0].set(jnp.nan)
+        bad = jnp.isfinite(L) & ~jnp.all(jnp.isfinite(G), axis=1)
+        stats = stats._replace(bad_grad=bad)
+        return L, G, Y_, refs_, jnp.sum(bad.astype(jnp.int32)), DY, stats
+
+    pipe._stub_evals = (bad_evg, el)
+    with pytest.raises(RuntimeError, match="non-finite-gradient") as ei:
+        P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
+                       checkpoint_path=ck, resume_from=ck)
+    # fails at sweep 1 of stage 0, with the offender identified in the message
+    assert "sweep 1/3" in str(ei.value)
+    assert "indices [0]" in str(ei.value)
+    dumps = sorted(tmp_path.glob("bad_grad_stage000_sweep1.npz"))
+    assert dumps, "forensics npz was not written next to the checkpoint"
+    d = np.load(dumps[0])
+    for k in ("bad_grad", "chem_tan_bad", "acc", "longdy", "conv_ok",
+              "theta_proposal", "loglik_proposal"):
+        assert k in d.files
+    assert np.flatnonzero(d["bad_grad"]).tolist() == [0]
+    # the init-level checkpoint made even this stage-0 death resumable
+    assert ck.exists() and int(np.load(ck)["init_checkpoint"]) == 1
+
+
 def test_calibrate_benchmarks_stage0_conditions(tmp_path):
     """Regression for NAS job 64961: calibrate() must benchmark the mutation at the
     ladder's own stage-0 conditions (ESS-bisected first beta, stage-0 resample,

@@ -122,13 +122,23 @@ def main() -> None:
              "legitimately take a while if the probe cap is high and a corner is hard)...")
     t0 = time.perf_counter()
     fn = jax.jit(pipe.batch_eval_cold_l_diag)
-    L, Y, refs, worst_accept = fn(U, Y0, refs0)
+    L, Y, refs, cd = fn(U, Y0, refs0)
     jax.block_until_ready(L)
     dt = time.perf_counter() - t0
     log.info(f"done in {dt:.1f}s ({dt / max(1, int(args.n_draws)):.3f}s/draw amortized; "
              "NOT per-draw cost -- wall time is set by the single slowest draw)")
 
-    wa = np.asarray(jax.device_get(worst_accept), np.int64)
+    # free per-draw convergence-quality read from the same solve: longdy
+    # percentiles + the stall-certified count (the class the SMC gates reject)
+    longdy = np.asarray(jax.device_get(cd.longdy), np.float64)
+    conv_ok = np.asarray(jax.device_get(cd.conv_normal), bool)
+    pct = np.percentile(longdy[np.isfinite(longdy)], [50, 90, 99]) if np.any(
+        np.isfinite(longdy)) else [float("nan")] * 3
+    log.info(f"exit longdy percentiles p50/p90/p99 = {pct[0]:.3g}/{pct[1]:.3g}/"
+             f"{pct[2]:.3g}; stall-certified (not canonically certified) draws: "
+             f"{int(np.sum(~conv_ok))}/{len(conv_ok)}")
+
+    wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
     censored = wa >= int(args.count_max_probe)
     n_censored = int(censored.sum())
     if n_censored:

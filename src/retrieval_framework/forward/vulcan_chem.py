@@ -80,6 +80,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import numpy as np
 
@@ -114,6 +115,30 @@ _ELEMENTAL_REPAIR = (("He", "He"), ("O", "H2O"), ("C", "CO"), ("N", "N2"), ("S",
 # then the per-layer renorm to M perturbs them by O(alpha x layer heterogeneity); the
 # residual contracts geometrically (~1e-2 -> ~1e-8 by three passes; see audit_init).
 _ELEMENTAL_REPAIR_ITERS = 3
+
+
+class ConvDiag(NamedTuple):
+    """Per-solve convergence diagnostics read off the runner's final carry.
+
+    Every field rides the runner's primal carry, so reading them is free inside a
+    forward-mode jvp chain. ``accept_count`` and ``count_since_new_min`` are
+    integer-valued (no tangent); ``longdy``/``longdydt`` are floats and DO carry a
+    tangent -- callers on an AD path must ``stop_gradient`` them.
+
+    ``accept_count`` alone is NOT a convergence test: the stall fallback (and the
+    hybrid vm_mol phase flip) can terminate the runner with accept_count well under
+    the cap on a state whose tangent has not settled. ``conv_normal`` is the
+    runner's canonical two-branch certification (tight yconv_cri/slope_cri OR
+    loose yconv_min/slope_min, AND the photo-flux gate) recomputed at the exit
+    state: False on an exit that only certified via the stall fallback or that
+    exhausted a budget.
+    """
+
+    accept_count: jnp.ndarray         # () int32   accepted steps taken
+    longdy: jnp.ndarray               # () float64 runner's convergence metric at exit
+    longdydt: jnp.ndarray             # () float64 longdy per lookback time
+    count_since_new_min: jnp.ndarray  # () int32   steps since longdy improved >= 5%
+    conv_normal: jnp.ndarray          # () bool    canonical certification at exit
 
 
 def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> SimpleNamespace:
@@ -289,6 +314,65 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         cfg.count_max = _cold_cap
     else:
         integ_warm = integ
+
+    # --- runner-carry budget/scheme seeding --------------------------------
+    # The runner's termination budget and diffusion-scheme blend live on the
+    # CARRY, not the statics: _pack_state_from_runstate seeds count_min_dyn /
+    # count_max_dyn / runtime_dyn from the packing runner's statics and
+    # hybrid_use_vm = 1.0 iff use_vm_mol (upwind / phase 0), and the runner's
+    # cond_fn/_real_terminate read ONLY those carry fields (the hybrid phase
+    # flip mutates them mid-run). state0 below is packed ONCE under the COLD
+    # statics, so every per-proposal solve must re-seed these for the runner
+    # that consumes it -- otherwise the warm twin runs to the cold count_max
+    # (its warm_count_max cap silently unbound) and, with the hybrid default
+    # on, every warm continuation restarts in upwind phase 0 and exhausts the
+    # warm cap before the phase flip's budget extension (~count+2000) can
+    # certify. Warm continuations start from a column already converged on
+    # the CENTRAL-difference operator (a completed hybrid run always ends in
+    # phase 1), so they continue on that operator: same fixed point, no
+    # phase-0 re-preconditioning. Pure-upwind configs (use_vm_mol on, hybrid
+    # off) keep upwind for warm continuation -- their steady state IS the
+    # upwind fixed point.
+    cold_count_max = int(cfg.count_max)
+    count_min_v = int(cfg.count_min)
+    runtime_v = float(cfg.runtime)
+    use_vm_mol_v = bool(cfg.use_vm_mol)
+    hybrid_v = use_vm_mol_v and bool(getattr(cfg, "use_hybrid_vm_mol", False))
+    yconv_cri_v = float(cfg.yconv_cri)
+    yconv_min_v = float(cfg.yconv_min)
+    slope_cri_v = float(cfg.slope_cri)
+    flux_cri_v = float(cfg.flux_cri)
+    conv_stall_window_v = int(cfg.conv_stall_window)
+    _warm_note = ("; warm continuation pinned to central difference (the "
+                  "converged phase-1 operator)" if hybrid_v else "")
+    print(f"[chem] diffusion scheme: use_vm_mol={use_vm_mol_v} "
+          f"hybrid={hybrid_v}{_warm_note}", flush=True)
+
+    def _runner_carry_seed(init, *, warm_continuation, warm_cap):
+        """Re-seed the carry's live termination budget + diffusion blend for the
+        runner about to consume ``init`` (see the block comment above)."""
+        blend = 1.0 if use_vm_mol_v else 0.0
+        if warm_continuation and hybrid_v:
+            blend = 0.0   # continue on the converged (phase-1, central) operator
+        return init._replace(
+            hybrid_use_vm=jnp.float64(blend),
+            count_min_dyn=jnp.int32(count_min_v),
+            count_max_dyn=jnp.int32(warm_count_max if warm_cap else cold_count_max),
+            runtime_dyn=jnp.float64(runtime_v),
+        )
+
+    def _conv_normal_at_exit(final):
+        """The runner's canonical two-branch certification, recomputed at the exit
+        state. Mirrors vulcan_jax.outer_loop._convergence_ok's ``conv_normal``
+        (keep in sync with that predicate). True only for a tight- or
+        loose-branch certified exit; False when the exit certified via the stall
+        fallback or exhausted a count/runtime budget."""
+        slope_min = jnp.minimum(
+            jnp.min(final.pv.Kzz / (0.1 * final.Hp[:-1]) ** 2), jnp.float64(1e-8))
+        slope_min = jnp.maximum(slope_min, jnp.float64(1e-10))
+        conv = (((final.longdy < yconv_cri_v) & (final.longdydt < slope_cri_v))
+                | ((final.longdy < yconv_min_v) & (final.longdydt < slope_min)))
+        return conv & (final.aflux_change < flux_cri_v)
 
     atm_static = make_atm_static(atm, ni, nz, cfg=integ._cfg)
     state0 = integ._pack_state_from_runstate(rs)
@@ -556,6 +640,7 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         Returns linear VMR (nz, ni). Differentiable end-to-end via forward-mode.
         """
         init, atm_T = _prep(theta)
+        init = _runner_carry_seed(init, warm_continuation=False, warm_cap=False)
         final = integ._runner(init, atm_T)
         return final.y / jnp.sum(final.y, axis=1, keepdims=True)
 
@@ -566,6 +651,7 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         actually moved off the init, and whether the metallicity perturbation changed the
         conserved element totals. Not on any AD path."""
         init, atm_T = _prep(theta)
+        init = _runner_carry_seed(init, warm_continuation=False, warm_cap=False)
         final = integ._runner(init, atm_T)
         return final, init
 
@@ -578,11 +664,17 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         return init.pv
 
     def converged_y(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0, return_diag=False,
-                    warm_cap=False, return_longdy=False):
+                    warm_cap=False, return_longdy=False, return_conv_diag=False):
         """Converged ABSOLUTE number densities y (nz, ni), with optional continuation
         warm-start (warm_y at lnZ_ref / c_o_ref). Differentiable via forward-mode w.r.t. theta.
         The SO2 column number density is then jnp.sum(y[:, so2] * dz); jvp gives both y (for
         chaining the next continuation step) and its lnZ-derivative (the index) in one pass.
+
+        The carry's live termination budget + diffusion blend are re-seeded per solve
+        (``_runner_carry_seed``): the warm-capped path gets count_max_dyn=warm_count_max,
+        and under the hybrid vm_mol default a warm continuation runs on the
+        central-difference operator (the converged phase-1 operator) instead of
+        re-entering upwind phase 0.
 
         ``return_diag=True`` additionally returns ``final.accept_count`` (int32 scalar) so a
         caller can detect a count_max-exhausted (not-actually-converged) solve without
@@ -600,10 +692,27 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         terminate the runner EARLY (accept_count ~ count_min+2000 << count_max) even when the
         column has not settled, so ``accept_count < count_max`` can be True for a non-steady
         state. ``longdy`` is the runner's own convergence metric -- gate it against ``yconv_min``
-        (converged states have ``longdy < yconv_min``) to catch that early-terminate case."""
+        (converged states have ``longdy < yconv_min``) to catch that early-terminate case.
+
+        ``return_conv_diag=True`` returns ``(y, ConvDiag)`` -- the full per-solve
+        convergence diagnostics (accept_count, longdy, longdydt, count_since_new_min,
+        conv_normal), all free reads off the primal carry. This is the SMC hot-path
+        surface: ``conv_normal`` is the runner's canonical certification recomputed at
+        the exit state, so a stall-fallback or budget exit reads False even when
+        ``longdy < yconv_min``. Supersedes return_longdy/return_diag for new callers."""
         init, atm_T = _prep(jnp.asarray(theta, dtype=jnp.float64), warm_y=warm_y,
                             lnZ_ref=lnZ_ref, c_o_ref=c_o_ref)
+        init = _runner_carry_seed(init, warm_continuation=warm_y is not None,
+                                  warm_cap=warm_cap)
         final = (integ_warm if warm_cap else integ)._runner(init, atm_T)
+        if return_conv_diag:
+            return final.y, ConvDiag(
+                accept_count=final.accept_count,
+                longdy=final.longdy,
+                longdydt=final.longdydt,
+                count_since_new_min=final.count_since_new_min,
+                conv_normal=_conv_normal_at_exit(final),
+            )
         if return_longdy:
             return final.y, final.accept_count, final.longdy
         if return_diag:
@@ -673,4 +782,9 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         count_max=int(cfg.count_max),   # the resolved (profile-overridden or module-default) cap
         warm_count_max=warm_count_max,  # mutation-path cap (== count_max when no twin runner)
         yconv_min=float(cfg.yconv_min), # loose convergence gate: a converged solve has longdy<this
+        yconv_cri=yconv_cri_v,          # tight convergence branch threshold
+        slope_cri=slope_cri_v,          # tight-branch longdydt threshold
+        conv_stall_window=conv_stall_window_v,  # stall-fallback lookback (accepted steps)
+        use_vm_mol=use_vm_mol_v,        # resolved COLD diffusion scheme (upwind on/off)
+        use_hybrid_vm_mol=hybrid_v,     # resolved hybrid phase-flip (warm continuation runs central)
     )

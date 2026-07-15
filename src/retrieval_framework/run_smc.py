@@ -195,15 +195,18 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     step = jnp.asarray(step_f, pipe.dtype)
     log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
              f"step={step_f:.3g} scale=[{float(scale_np.min()):.3g}, {float(scale_np.max()):.3g}]")
+    # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
     t0 = time.perf_counter()
-    out = mutate(key, U, Y, refs, L, G, DY, beta, step, scale)
+    out = mutate(key, U, Y, refs, L, G, DY, beta, step, scale,
+                 where="calibration mutation (compile pass)",
+                 dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
-    P._check_mutation_health(out[7], "calibration mutation (compile pass)")
     U2, Y2, refs2, L2, G2, DY2 = out[:6]
     t0 = time.perf_counter()
-    out = mutate(key, U2, Y2, refs2, L2, G2, DY2, beta, step, scale)
+    out = mutate(key, U2, Y2, refs2, L2, G2, DY2, beta, step, scale,
+                 where="calibration mutation (steady-state pass)",
+                 dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut = time.perf_counter() - t0
-    P._check_mutation_health(out[7], "calibration mutation (steady-state pass)")
 
     per_stage = t_mut
     proj = {
@@ -355,6 +358,7 @@ def main() -> None:
                    smc_unique_particles=res["unique_particles"],
                    smc_scale_diag_final=res["scale_diag_final"],
                    smc_warm_capped=res["warm_capped"],
+                   smc_warm_stalled=res["warm_stalled"],
                    # evidence conditioning: smc_logZ is under the OPERATIONAL prior
                    # (T-P window x converged support, renormalized); the measured
                    # support fractions + the ZERO-FILLED box evidence ride along --

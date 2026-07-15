@@ -132,19 +132,24 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                                 lnZ_ref=0.0, c_o_ref=0.0)          # stage 2 (warm)
 
     def chem_solve_cold_diag(chem_theta):
-        """Primal-only twin of chem_solve_cold: also returns the WORSE of the two
-        stages' accept_count (max over stage 1 T-relax / stage 2 warm-reconverge, or
-        just the one stage's when two_stage_z=False), so a caller can detect a
-        count_max-exhausted (not actually converged) cold init without threading a
-        second differentiable return through the jvp/grad chem_solve_cold path. Not
-        on any AD path -- used only by the SMC init's likelihood-only phase."""
+        """Primal-only twin of chem_solve_cold returning ``(y, ConvDiag)``.
+
+        ``ConvDiag.accept_count`` is the WORSE of the two stages' (max over stage 1
+        T-relax / stage 2 warm-reconverge, or just the one stage's when
+        two_stage_z=False) so a count_max-exhausted stage is detectable; the
+        convergence fields (longdy / longdydt / count_since_new_min / conv_normal)
+        describe STAGE 2 -- the state ``y`` actually is. accept_count alone is NOT
+        a convergence test (stall fallback / hybrid phase-flip exits sit well under
+        the cap); gate on ``conv_normal`` too. Not on any AD path -- used only by
+        the SMC init's likelihood-only phase."""
         if not two_stage:
-            return chem.converged_y(chem_theta, return_diag=True)
+            return chem.converged_y(chem_theta, return_conv_diag=True)
         th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)
-        y_relaxed, ac1 = chem.converged_y(th_relax, return_diag=True)
-        y, ac2 = chem.converged_y(chem_theta, warm_y=y_relaxed,
-                                  lnZ_ref=0.0, c_o_ref=0.0, return_diag=True)
-        return y, jnp.maximum(ac1, ac2)
+        y_relaxed, d1 = chem.converged_y(th_relax, return_conv_diag=True)
+        y, d2 = chem.converged_y(chem_theta, warm_y=y_relaxed,
+                                 lnZ_ref=0.0, c_o_ref=0.0, return_conv_diag=True)
+        return y, d2._replace(
+            accept_count=jnp.maximum(d1.accept_count, d2.accept_count))
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a
@@ -162,21 +167,24 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, warm_cap=True)
 
     def chem_solve_warm_diag(chem_theta, y_warm, lnZ_ref, c_o_ref):
-        """chem_solve_warm + the warm re-converge accept_count, so the SMC mutation can
-        detect a warm_count_max-exhausted (not-actually-converged) warm PROPOSAL and
-        reject it before trusting its jvp -- the warm-side analogue of
-        chem_solve_cold_diag. This closes the previously "deferred" residual where a
-        non-convergent warm proposal was fed straight into the tangent/RT-vjp lanes
-        (garbage gradient -> spurious n_bad_grad raise or NaN).
+        """chem_solve_warm + the warm solve's ``ConvDiag``, so the SMC mutation can
+        detect a warm proposal that is NOT actually at a certified steady state --
+        warm_count_max-exhausted OR stall-fallback/budget-terminated (conv_normal
+        False) -- and reject it before trusting its jvp; the warm-side analogue of
+        chem_solve_cold_diag. This closes the residual where a non-steady warm
+        proposal was fed straight into the tangent/RT-vjp lanes (garbage or
+        non-finite gradient -> the NAS job 65200 n_bad_grad raise: 16/864 proposals
+        certified by accept_count alone while their tangents had not settled).
 
         THE warm solve on the SMC gradient path: pipeline._make_batch_eval jvp's
-        straight through this (accept_count rides the runner's primal carry for free --
-        running a second primal-only while_loop just to read it doubled the chemistry
-        wall time per sweep). accept_count itself carries no tangent; the pipeline
-        stop_gradients + casts it inside the jvp chain."""
+        straight through this (every ConvDiag field rides the runner's primal carry
+        for free -- running a second primal-only while_loop just to read it doubled
+        the chemistry wall time per sweep). The pipeline stop_gradients + casts the
+        diag inside the jvp chain (longdy/longdydt are floats and DO carry a
+        tangent; accept_count does not)."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
-                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, return_diag=True,
-                                warm_cap=True)
+                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
+                                return_conv_diag=True, warm_cap=True)
 
     def chem_solve_warm_diag_full(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """chem_solve_warm_diag WITHOUT the mutation cap: runs under the cold
@@ -188,8 +196,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         Capping them mislabels healthy particles as blown forwards (NAS job 64854:
         5/96 survivors gated at 1500 -> spurious 'RT/AD problem' RuntimeError)."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
-                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, return_diag=True,
-                                warm_cap=False)
+                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
+                                return_conv_diag=True, warm_cap=False)
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)

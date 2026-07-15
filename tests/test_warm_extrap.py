@@ -61,7 +61,7 @@ def extrap():
     Y0, refs0 = P._blank_state(pipe, 1)
     L_c, Y_cold, refs_cold = jax.jit(pipe.batch_eval_cold_l)(U0, Y0, refs0)
     assert float(L_c[0]) > -1.0e29, "box-center draw failed to cold-converge"
-    L0, G0, _, _, n_bad, DY, _ncap = jax.jit(pipe.batch_eval_move_vg)(U0, Y_cold, refs_cold)
+    L0, G0, _, _, n_bad, DY, _stats = jax.jit(pipe.batch_eval_move_vg)(U0, Y_cold, refs_cold)
     assert int(n_bad) == 0
     return dict(pipe=pipe, U0=U0, Y=Y_cold, refs=refs_cold, DY=DY,
                 L0=L0, G0=G0)
@@ -101,9 +101,10 @@ def test_mutation_kernel_carries_tangents(extrap):
     out = mutate(jax.random.PRNGKey(3), U0, Y, refs, L0, G0, DY,
                  jnp.asarray(0.5, jnp.float64), jnp.asarray(0.01, jnp.float64),
                  jnp.ones((pipe.n_dim,), jnp.float64))
-    U1, Y1, refs1, L1, G1, DY1, acc, n_bad, n_capped = out
+    U1, Y1, refs1, L1, G1, DY1, acc, n_bad, n_capped, n_stalled = out
     assert int(n_bad) == 0
     assert int(n_capped) == 0
+    assert int(n_stalled) == 0
     assert np.asarray(DY1).shape == np.asarray(DY).shape
     assert np.all(np.isfinite(np.asarray(DY1)))
     assert np.all(np.isfinite(np.asarray(L1)))

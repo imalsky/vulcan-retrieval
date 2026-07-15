@@ -121,8 +121,14 @@ def main() -> None:
     N = int(U.shape[0])
     Y0, refs0 = P._blank_state(pipe, N)             # cold map: no history enters
     t0 = time.perf_counter()
-    L_cold, Y_cold, _, worst = jax.jit(pipe.batch_eval_cold_l_diag)(U, Y0, refs0)
+    L_cold, Y_cold, _, cd_cold = jax.jit(pipe.batch_eval_cold_l_diag)(U, Y0, refs0)
     jax.block_until_ready(L_cold)
+    worst = cd_cold.accept_count
+    n_stall_cold = int(np.sum(~np.asarray(jax.device_get(cd_cold.conv_normal))))
+    if n_stall_cold:
+        logger.info(f"cold re-solve: {n_stall_cold}/{N} column(s) exited without the "
+                    "canonical certification (stall class); their L is floored and "
+                    "they drop out of the comparison mask")
     logger.info(f"cold re-solve of the cloud done in {time.perf_counter() - t0:.1f}s")
 
     count_max = int(pipe.fwd.chem.count_max)

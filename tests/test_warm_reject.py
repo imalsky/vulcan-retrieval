@@ -63,11 +63,11 @@ def smoke():
     C_ = jax.vmap(pipe.theta_from_u)(U)[:, : pipe.n_chem_tp]
 
     def _ac(cc, yw, rf):
-        _y, ac = pipe.fwd.chem_solve_warm_diag(cc, yw, rf[0], rf[1])
-        return jnp.asarray(ac, jnp.int32)
+        _y, cd = pipe.fwd.chem_solve_warm_diag(cc, yw, rf[0], rf[1])
+        return jnp.asarray(cd.accept_count, jnp.int32)
 
     ACC = np.asarray(jax.vmap(_ac)(C_, Y0, refs0))
-    L_g, G, _Yn, _rn, n_bad, _dy, _ncap = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
+    L_g, G, _Yn, _rn, n_bad, _dy, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
     L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]
     return dict(pipe=pipe, cmax=int(pipe.fwd.chem.warm_count_max), ACC=ACC,
                 L_gated=np.asarray(L_g), G=np.asarray(G), n_bad=int(n_bad),
@@ -108,11 +108,11 @@ def test_init_eval_is_uncapped(smoke):
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 1)
     C_ = jax.vmap(pipe.theta_from_u)(U)[:, : pipe.n_chem_tp]
     Y0, refs0 = P._blank_state(pipe, 1)
-    _y, ac_cap = pipe.fwd.chem_solve_warm_diag(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
-    _y, ac_full = pipe.fwd.chem_solve_warm_diag_full(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
-    assert int(ac_cap) <= WARM_CMAX + 1
-    assert int(ac_full) > WARM_CMAX + 1          # kept going past the mutation cap
-    assert int(ac_full) >= COLD_CMAX             # ... all the way to the cold cap
+    _y, cd_cap = pipe.fwd.chem_solve_warm_diag(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
+    _y, cd_full = pipe.fwd.chem_solve_warm_diag_full(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
+    assert int(cd_cap.accept_count) <= WARM_CMAX + 1
+    assert int(cd_full.accept_count) > WARM_CMAX + 1   # kept going past the mutation cap
+    assert int(cd_full.accept_count) >= COLD_CMAX      # ... all the way to the cold cap
 
 
 def test_gate_is_load_bearing(smoke):

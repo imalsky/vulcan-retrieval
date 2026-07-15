@@ -79,29 +79,34 @@ def main() -> int:
 
     @jax.jit
     def solve_dir(chem_theta, y_from, refs_from):
-        y, ac = pipe.fwd.chem_solve_warm_diag(chem_theta, y_from,
-                                              refs_from[0], refs_from[1])
-        return jnp.asarray(ac, jnp.int32)
+        _y, cd = pipe.fwd.chem_solve_warm_diag(chem_theta, y_from,
+                                               refs_from[0], refs_from[1])
+        return jnp.asarray(cd.accept_count, jnp.int32), cd.conv_normal
 
     asym = 0
     for i, j in pairs:
-        ac_ij = int(solve_dir(jnp.asarray(theta[j, :n_ct]), jnp.asarray(Y[i]),
-                              jnp.asarray(refs[i])))
-        ac_ji = int(solve_dir(jnp.asarray(theta[i, :n_ct]), jnp.asarray(Y[j]),
-                              jnp.asarray(refs[j])))
-        cap_ij, cap_ji = ac_ij >= wcmax, ac_ji >= wcmax
+        ac_ij, ok_ij = solve_dir(jnp.asarray(theta[j, :n_ct]), jnp.asarray(Y[i]),
+                                 jnp.asarray(refs[i]))
+        ac_ji, ok_ji = solve_dir(jnp.asarray(theta[i, :n_ct]), jnp.asarray(Y[j]),
+                                 jnp.asarray(refs[j]))
+        ac_ij, ac_ji = int(ac_ij), int(ac_ji)
+        # rejected = warm-capped OR stall-certified (both are MH rejection
+        # classes the correction cannot see; asymmetry in EITHER is the risk)
+        rej_ij = (ac_ij >= wcmax) or (not bool(ok_ij))
+        rej_ji = (ac_ji >= wcmax) or (not bool(ok_ji))
         tag = ""
-        if cap_ij != cap_ji:
+        if rej_ij != rej_ji:
             asym += 1
             tag = "  <-- ASYMMETRIC (detailed-balance risk)"
-        print(f"pair ({i:3d},{j:3d}): i->j accept={ac_ij:5d} capped={cap_ij} | "
-              f"j->i accept={ac_ji:5d} capped={cap_ji}{tag}", flush=True)
+        print(f"pair ({i:3d},{j:3d}): i->j accept={ac_ij:5d} capped={ac_ij >= wcmax} "
+              f"stalled={not bool(ok_ij)} | j->i accept={ac_ji:5d} "
+              f"capped={ac_ji >= wcmax} stalled={not bool(ok_ji)}{tag}", flush=True)
 
     frac = asym / max(1, len(pairs))
     print(f"\n==== reversibility summary ====\nasymmetric pairs: {asym}/{len(pairs)} "
           f"({frac:.0%})")
     ok = asym == 0
-    print(f"VERDICT: {'PASS -- no state-dependent cap events at this cloud' if ok else 'FAIL -- the warm cap binds asymmetrically; raise warm_count_max or finish the ladder with smc_chem_mode=cold'}")
+    print(f"VERDICT: {'PASS -- no state-dependent cap/stall events at this cloud' if ok else 'FAIL -- the warm cap or stall gate binds asymmetrically; raise warm_count_max or finish the ladder with smc_chem_mode=cold'}")
     return 0 if ok else 1
 
 

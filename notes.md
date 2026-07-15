@@ -1242,3 +1242,118 @@ photochemistry ON and warmer profiles — the WASP-107b Guillot + condensation
 end-to-end run converged normally (longdy gate) and is cached under
 forward v7. A cold no-photo tool corner would exhaust count_max and raise
 loudly, which is the correct behavior.
+
+## NAS job 65200 post-mortem + certification-gate rework (2026-07-15)
+
+**Incident.** Job 65200 (N=144 real-data gpu run, 2026-07-13) died at SMC
+stage 0 after 4.2 h: 16 of ~864 warm MALA proposals across the 6 sweeps
+returned a FINITE likelihood but a NON-FINITE gradient, tripping the
+zero-tolerance `_check_mutation_health` raise. The ~2.1 h two-phase init was
+lost (the only checkpoint was per-stage, written after the health check), and
+no per-particle forensics existed (the bads mask was reduced to a scalar).
+
+**Root cause (mechanism).** The warm mutation usable gate trusted the accept
+count alone (`ACC < warm_count_max`). The runner can certify an exit via the
+stall fallback or the loose longdy branch on a marginally-stable column: the
+clip-bounded PRIMAL certifies while the jvp TANGENT -- which relaxes through
+the same while_loop with no stopping criterion of its own -- has not settled
+and can amplify to Inf/NaN. Ruled out for that build: the K_eq exponent clip
+(landed 2026-07-09, present), hybrid vm_mol (defaults flipped 2026-07-14,
+after the run), dt ballooning (dt_max=1e11 first-class since 07-09),
+condensation (off), init sizing (init passed; 27/192 oscillating/
+stall-fallback columns culled with 48 spares -- the same fragile class the
+kept survivors border on).
+
+**Fixes (this pass).**
+1. `ConvDiag` through the hot path: `vulcan_chem.converged_y(...,
+   return_conv_diag=True)` returns (accept_count, longdy, longdydt,
+   count_since_new_min, conv_normal), all free reads off the primal carry;
+   `conv_normal` is the runner's canonical two-branch certification
+   recomputed at the exit state (mirrors outer_loop._convergence_ok).
+   The usable gate is now `valid & (ACC < wcmax) & conv_normal`
+   (`pipeline._proposal_converged` -- ONE swappable predicate). Stalled
+   proposals become an MH rejection class (`n_stalled`), logged per sweep
+   next to warmcap, exported as `warm_stalled`, and covered by
+   `mala_reversibility.py`'s asymmetry check. The init gates got the same
+   treatment: phase 1 rejects stall-certified cold draws
+   (`n_stalled_init` in init_stats -> f_conv accounting stays exact);
+   phase 2's recert_fail includes non-certified exits.
+2. Bad-grad forensics: the mutation runs as a host loop over a single-sweep
+   jit (bit-identical RNG: same pre-split keys), so a bad-gradient event
+   fails FAST at the offending sweep and dumps per-particle forensics
+   (indices, theta, ACC, longdy, chem-tangent-vs-RT-vjp attribution via
+   DAUX finiteness) to `bad_grad_stage###_sweep#.npz` before the loud raise.
+3. Init-level checkpoint (`last_step=-1`, `init_checkpoint=1`), written right
+   after `_init_state`; `RESUME=1` now recovers the init on a stage-0 death.
+   Single `_write_checkpoint` writer keeps the schemas in lockstep.
+4. **Runner-carry seeding regression fix (load-bearing).** The 2026-07-14
+   VULCAN-JAX vm_branch port moved the termination budget to DYNAMIC carry
+   fields (`count_max_dyn` etc., seeded at `_pack_state_from_runstate` from
+   the packing runner's statics) and made the diffusion blend carry-driven
+   (`hybrid_use_vm`). `state0` is packed ONCE under the COLD statics, so at
+   current HEAD the warm twin's 1500-step cap was silently unbound (proposals
+   marched to the cold 5000) and, under the new hybrid defaults, every solve
+   would restart in upwind phase 0. `vulcan_chem._runner_carry_seed` now
+   re-seeds the budget per solve and pins warm CONTINUATIONS to the
+   central-difference operator when hybrid is resolved (the converged phase-1
+   operator: same fixed point, no phase-0 re-preconditioning; pure-upwind
+   configs keep upwind). Cold solves follow the resolved defaults (hybrid
+   preconditioning, per Isaac's decision to track the current Shami
+   defaults). `tests/test_warm_reject.py::test_warm_cap_binds_not_cold_cap`
+   fails without the seed and passes with it. The resolved scheme is printed
+   at build (`[chem] diffusion scheme: ...`).
+5. Evidence semantics: the certification gate is part of the convergence
+   indicator C -- logZ_box comparisons need MATCHED gate predicates; noted in
+   run_smc_loop's docstring.
+
+**Diagnostics.** `validation/diag_warm_stall_tangent.py`: the production
+warm-capped continuation + jvp at gpu-preset prior corners, classifying every
+solve against P0 (longdy<yconv_min), P1 (conv_normal -- the wired gate), P2
+(tight branch); `--fd` cross-checks finite tangents; `--equivalence` compares
+hybrid-vs-central cold fixed points (the re-baseline evidence for following
+the new defaults). `calibrate_count_max` now also reports exit-longdy
+percentiles + the stall-certified count.
+
+**Caveats.** The 16/864 class is stochastic; if the local corner probe does
+not reproduce a non-finite tangent, the in-run forensics dump makes the next
+HPC occurrence self-diagnosing. If bad gradients persist WITH the conv_normal
+gate (true tangent divergence at certified marginally-stable fixed points),
+the follow-up is a tangent-norm-based REJECTION (never a zeroing). Hybrid
+cold-solve cost on the real prior is unmeasured -- read CALIBRATE_ONLY=1
+timing + attrition before the next 24 h submit; all pre-change checkpoints/
+synthetic caches are stale per the standing regeneration rule.
+
+**Measured (2026-07-15, local corner probe, `diag_warm_stall_tangent.py
+--scheme default`, gpu preset).** Under the new hybrid defaults the full
+warm kernel works end-to-end (hybrid cold solves, central warm continuation,
+warm cap binding at 1501). Predicate table over 8 warm probes at 4 prior
+corners: every HEALTHY warm proposal certifies on the LOOSE branch
+(longdy 0.04-0.09 >> yconv_cri=0.01), so P2 (tight-branch-only) would reject
+the ENTIRE warm kernel -- ruled out. P1 (conv_normal at exit, the wired gate)
+kept all clean solves and rejected only the genuinely capped one: zero false
+rejections. No non-finite tangent reproduced locally (expected: the
+production class was ~2% stochastic); the in-run forensics dump owns that
+case. NEW observation: hybrid's phase-flip budget extension let a cold
+stage-1 solve run to 6002 accepted steps (past the static count_max=5000)
+and exit UNcertified while stage 2 then certified at 4062 -- the worst-stage
+`ACC >= count_max` phase-1 gate rejects such draws (conservative, absorbed
+by oversample), so expect the phase-1 reject fraction to RISE somewhat vs
+job 65200's central-diffusion 26%; read it off CALIBRATE_ONLY before the
+24 h submit and resize init_oversample if needed.
+
+**Measured (same day, `--scheme central` + `--equivalence`, RT-masked
+VMR > 1e-12).** Central scheme (job-65200 physics): the hot+lowKzz corner
+warm probe caps at 1501 with longdy = 1.31 -- far from steady state, primal
+finite: the pathology family, correctly labeled non-usable by every
+predicate. Zero P1 false rejections under either scheme; P2 rejects EVERY
+healthy warm proposal in both (loose-branch certification is the norm) --
+ruled out permanently. Hybrid-vs-central cold fixed points on CERTIFIED
+points: worst 0.182 dex on RT-relevant cells (baseline and hiCO corners at
+0.001 dex; RT tracers <= 0.095 dex) -- within the documented ~0.16 dex
+central-scheme convergence floor. The only larger value (0.205 dex) is the
+corner where NEITHER scheme certifies (acc 5001/6002, both
+conv_normal=False; a production phase-1 reject under either scheme).
+Hybrid cold-solve overhead: ~ +110 accepted steps of phase-0 preconditioning
+(~6% at the baseline). Verdict: following the hybrid defaults with the
+central-pinned warm twin is SAFE for the retrieval forward map, subject to
+the CALIBRATE_ONLY attrition read on the real prior before the 24 h submit.

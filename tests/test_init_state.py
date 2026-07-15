@@ -9,6 +9,8 @@ two batched evaluators _init_state calls, with count_max exhaustion made a deter
 function of the draw so the test controls exactly which particles are rejected.
 """
 import types
+from typing import NamedTuple
+
 import numpy as np
 import pytest
 import jax
@@ -21,37 +23,52 @@ from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
 
 
+class _StubConvDiag(NamedTuple):
+    """Pytree stand-in for forward.vulcan_chem.ConvDiag: _init_state phase 1 reads
+    only .accept_count and .conv_normal (importing the real one would pull the
+    heavy VULCAN env into these unit tests)."""
+    accept_count: jnp.ndarray
+    conv_normal: jnp.ndarray
+
+
 def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
     """A minimal has_chem_state pipe. A draw is 'exhausted' (hit count_max, i.e. did not
     converge) iff its first coordinate is >= 0 -- deterministic, so tests know exactly
-    which particles _init_state must reject. Likelihoods/gradients are finite Gaussians."""
+    which particles _init_state must reject. A draw 'stall-certifies' (under the cap
+    but not canonically certified) iff its first coordinate is exactly 0.5.
+    Likelihoods/gradients are finite Gaussians."""
     cfg = C.Config(smc_num_particles=8, init_oversample=oversample)
     y_baseline = jnp.zeros(y_shape, jnp.float64)
 
     def cold_l_diag(U, Y0, refs0):
         n = U.shape[0]
         worst_accept = jnp.where(U[:, 0] >= 0.0, count_max, 1).astype(jnp.int32)
+        stalled = U[:, 0] == 0.5
+        worst_accept = jnp.where(stalled, 1, worst_accept).astype(jnp.int32)
         L = -0.5 * jnp.sum(U ** 2, axis=1)                       # always finite
         Y = jnp.broadcast_to(y_baseline[None], (n,) + y_shape)
         refs = jnp.zeros((n, 2), jnp.float64)
-        return L, Y, refs, worst_accept
+        return L, Y, refs, _StubConvDiag(worst_accept, ~stalled)
 
     def move_vg(U, Y, refs):
         L = -0.5 * jnp.sum(U ** 2, axis=1)
         G = -U
-        return L, G, Y, refs, jnp.int32(0), None                 # survivors: no AD pathology
+        stats = P._zero_eval_stats(U.shape[0], jnp.float64)
+        return L, G, Y, refs, jnp.int32(0), None, stats          # survivors: no AD pathology
 
     def init_vg(U, Y, refs):
-        """Phase-2 stub (7-tuple, like a real pipeline's batch_eval_init_vg).
-        Second coordinate > 0 -> cannot RE-certify warm (dead, ACC=count_max: cull);
-        third coordinate > 0 -> RT/AD death (dead, finite ACC: must raise)."""
+        """Phase-2 stub (7-tuple with an EvalStats tail, like a real pipeline's
+        batch_eval_init_vg). Second coordinate > 0 -> cannot RE-certify warm
+        (dead, ACC=count_max: cull); third coordinate > 0 -> RT/AD death (dead,
+        certified + finite ACC: must raise)."""
         L = -0.5 * jnp.sum(U ** 2, axis=1)
         G = -U
         recert = U[:, 1] > 0.0
         rtdead = U[:, 2] > 0.0
         L = jnp.where(recert | rtdead, -1.0e30, L)
         ACC = jnp.where(recert, count_max, 1).astype(jnp.int32)
-        return L, G, Y, refs, jnp.int32(0), None, ACC
+        stats = P._zero_eval_stats(U.shape[0], jnp.float64)._replace(acc=ACC)
+        return L, G, Y, refs, jnp.int32(0), None, stats
 
     def _unused(*a, **k):                                        # never called on this path
         raise AssertionError("unexpected evaluator call")
@@ -109,6 +126,21 @@ def test_init_state_culls_extra_survivors_to_exactly_target_n():
     U_keep, L, G, Y, refs, DY, stats = P._init_state(pipe, U, target_n=6)
     assert U_keep.shape[0] == 6
     assert np.allclose(np.asarray(U_keep)[:, 0], [-1, -2, -3, -4, -5, -6])
+
+
+def test_init_state_rejects_stall_certified_draws():
+    """A draw whose cold solve exits under the cap WITHOUT the canonical
+    certification (conv_normal False: the stall-fallback class behind NAS job
+    65200's non-finite mutation gradients) is rejected in phase 1 exactly like a
+    count_max exhaustion."""
+    pipe = _chem_like_pipe(count_max=100)
+    # 10 draws: draws 0 and 3 stall-certify (first coord == 0.5), rest healthy
+    U = _U([0.5, -1, -2, 0.5, -3, -4, -5, -6, -7, -8])
+    U_keep, L, G, Y, refs, DY, stats = P._init_state(pipe, U, target_n=8)
+    kept0 = np.asarray(U_keep)[:, 0]
+    assert np.all(kept0 < 0)                       # stall-certified draws rejected
+    assert stats["n_stalled_init"] == 2
+    assert stats["n_exhausted"] == 0
 
 
 def test_init_state_raises_when_too_few_survivors():
