@@ -35,6 +35,37 @@ from retrieval_framework.forward import exojax_rt     # ExoJax ArtTransPure mode
 from retrieval_framework.forward import interp_map    # differentiable log-P bridge
 
 
+def _refuse_condense_inference(chem, cfg) -> None:
+    """Refuse gradient-MALA inference through a condensing steady state.
+
+    The early ``cfg_overrides`` gate in ``config_schema.validate_config`` catches
+    the common case, but a base VULCAN config can default ``use_condense=True``
+    (e.g. ``Earth.yaml``) without the flag ever appearing in ``cfg_overrides``.
+    ``chem.conden_spec`` is the RESOLVED truth (``build_chem_model`` builds it iff
+    condensation is actually active), so gating on it closes that bypass. The
+    pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD
+    on pinned species) and gradient-MALA is the only mutation kernel, so an
+    inference run would sample against unreliable gradients. See
+    ``../docs/condensation_differentiation.md``.
+    """
+    if (getattr(chem, "conden_spec", None) is not None
+            and bool(getattr(cfg, "run_inference", False))
+            and not bool(getattr(cfg, "allow_condense_inference", False))):
+        raise ValueError(
+            "condensation is active in the RESOLVED VULCAN config "
+            f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}) but "
+            "run_inference=True: gradient-MALA inference through the "
+            "condensing+pinned steady state is not validated (the pinned-species "
+            "forward-mode tangent disagrees with finite differences at order "
+            "unity, 0.91 relative). Run condensation as a FORWARD model "
+            "(run_inference=False), or set allow_condense_inference=True only "
+            "with an independently validated gradient. This gate reads the "
+            "resolved conden_spec, so it also catches use_condense=True inherited "
+            "from the base config (cfg_overrides need not restate it). See "
+            "docs/condensation_differentiation.md."
+        )
+
+
 def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     """Build the theta-space forward model for a Config.
 
@@ -53,6 +84,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     n_tp = tpm.n_params
 
     chem = vulcan_chem.build_chem_model(profile, tp_eval=tpm.eval, n_tp_params=n_tp)
+
+    # Condensation is a FORWARD-model capability only; refuse inference on the
+    # RESOLVED config (closes the base-config bypass of the early cfg_overrides
+    # gate). See docs/condensation_differentiation.md.
+    _refuse_condense_inference(chem, cfg)
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns

@@ -148,7 +148,12 @@ conden path: (1) **inference is refused with conden ON** — `validate_config`
 raises on `cfg_overrides["use_condense"]=True` with `run_inference=True` unless
 `allow_condense_inference=True`, because gradient-MALA through the pinned S8
 state is not reliably differentiable (0.91 rel jvp-vs-FD); conden runs as a
-FORWARD model. (2) **conden-on does NOT reduce to conden-off when nothing
+FORWARD model. This is enforced TWICE: the early `cfg_overrides` gate in
+`validate_config`, plus a RESOLVED-config gate in
+`retrieval_forward._refuse_condense_inference` (on `chem.conden_spec` after
+`build_chem_model`) that also catches `use_condense=True` inherited from a base
+config such as `Earth.yaml` (the `cfg_overrides`-only check would miss it). See
+`../docs/condensation_differentiation.md`. (2) **conden-on does NOT reduce to conden-off when nothing
 condenses** — the window+pin freezes the reservoirs at `stop_conden_time`, so a
 too-hot / unsettled column is captured mid-transient, not at the conden-off
 steady state; enable conden only where the species genuinely condenses (a

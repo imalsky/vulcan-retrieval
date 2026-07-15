@@ -159,7 +159,11 @@ stay free of jax/vulcan_jax/exojax side effects.
   (when `use_condense=True`) is rebuilt per proposal too — `_prep` regenerates the
   saturation number densities, Dg growth terms, NH3 cold-trap index, and fix-species
   sat-mix rows on-graph from the live T(P) via `vulcan_jax.conden.build_conden_profile`
-  (the old loud refusal of a T-varying condensation build is gone). The one remaining
+  (the old loud refusal of a T-varying condensation build is gone). Condensation is a
+  FORWARD-model capability only: gradient-MALA **inference** with `use_condense=True` is
+  refused (in `validate_config` and, on the fully resolved config, in `retrieval_forward`),
+  because the pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD;
+  see `../docs/condensation_differentiation.md`). The one remaining
   baseline-T bake is the photolysis cross-section T-interpolation (host-side upstream
   step; second-order).
 - **Opacities**: CO from cached ExoMol Li2015; H₂O/CO₂/CH₄/SO₂/HCN/C₂H₂/H₂S from HITRAN
