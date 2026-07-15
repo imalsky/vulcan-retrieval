@@ -578,7 +578,7 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         return init.pv
 
     def converged_y(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0, return_diag=False,
-                    warm_cap=False):
+                    warm_cap=False, return_longdy=False):
         """Converged ABSOLUTE number densities y (nz, ni), with optional continuation
         warm-start (warm_y at lnZ_ref / c_o_ref). Differentiable via forward-mode w.r.t. theta.
         The SO2 column number density is then jnp.sum(y[:, so2] * dz); jvp gives both y (for
@@ -593,10 +593,19 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
 
         ``warm_cap=True`` runs the warm-capped twin runner (count_max=warm_count_max) --
         the SMC mutation path, where a proposal that hasn't converged in warm_count_max
-        steps is rejected rather than marched to the full cold cap."""
+        steps is rejected rather than marched to the full cold cap.
+
+        ``return_longdy=True`` returns ``(y, accept_count, final.longdy)``. accept_count alone
+        is NOT a convergence test: the hybrid vm_mol phase-flip (and the stall fallback)
+        terminate the runner EARLY (accept_count ~ count_min+2000 << count_max) even when the
+        column has not settled, so ``accept_count < count_max`` can be True for a non-steady
+        state. ``longdy`` is the runner's own convergence metric -- gate it against ``yconv_min``
+        (converged states have ``longdy < yconv_min``) to catch that early-terminate case."""
         init, atm_T = _prep(jnp.asarray(theta, dtype=jnp.float64), warm_y=warm_y,
                             lnZ_ref=lnZ_ref, c_o_ref=c_o_ref)
         final = (integ_warm if warm_cap else integ)._runner(init, atm_T)
+        if return_longdy:
+            return final.y, final.accept_count, final.longdy
         if return_diag:
             return final.y, final.accept_count
         return final.y
@@ -663,4 +672,5 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         nz=nz, ni=ni,
         count_max=int(cfg.count_max),   # the resolved (profile-overridden or module-default) cap
         warm_count_max=warm_count_max,  # mutation-path cap (== count_max when no twin runner)
+        yconv_min=float(cfg.yconv_min), # loose convergence gate: a converged solve has longdy<this
     )
