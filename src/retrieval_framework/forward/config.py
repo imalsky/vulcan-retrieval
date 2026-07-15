@@ -52,8 +52,9 @@ DEMO_DATABASE = DATA_DIR / "exojax_linelists"                   # HITRAN line li
 _CACHE = DATA_DIR / "opacity_cache"
 CO_CACHED_DIR = _CACHE / "CO" / "12C-16O" / "Li2015"
 CIA_H2H2_FILE = _CACHE / "H2-H2_2011.cia"
-# H2-He CIA (He is ~16% by number at 10x solar; real continuum contribution).
-# Download once: https://hitran.org/data/CIA/H2-He_2011.cia -> this path.
+# H2-He CIA (He is ~14% by number; real continuum contribution).
+# Download once: https://hitran.org/data/CIA/main/H2-He_2011.cia -> this path
+# (~147 MB; the /main/ segment is required -- the bare /data/CIA/ URL 404s).
 # exojax_rt REFUSES to build without it, and the He VMR profile is a required
 # argument of every depth/flux function (silently skipping the He continuum
 # used to be possible and biased the sensitivity-demo spectra).

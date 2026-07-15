@@ -79,7 +79,7 @@ def _blend_h2he_broadening(mdb, key: str) -> None:
         raise RuntimeError(
             f"broadening='h2he' requested but HITRAN supplies no H2/He broadening "
             f"columns for {key} in this band (or the cache predates "
-            "nonair_broadening=True -- h2he mode uses a separate '<db>_h2he' cache "
+            "nonair_broadening=True -- h2he mode uses a separate 'h2he/<db>' cache "
             "dir precisely to force a fresh extended download). Either drop the "
             f"molecule, or run it with broadening='air' knowingly.")
     gamma_mix = np.zeros_like(g_air)
@@ -104,7 +104,7 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air"):
 
     ``broadening``: "air" (HITRAN default, terrestrial perturber -- documented
     approximation) or "h2he" (HITRAN planetary H2/He widths where available, blended
-    per ``config.H2HE_BROADENING_MIX``; separate ``<db>_h2he`` download cache).
+    per ``config.H2HE_BROADENING_MIX``; separate ``h2he/<db>`` download cache).
     ExoMol sources already carry their own default broadening and ignore the knob.
     """
     src = spec["source"]
@@ -118,7 +118,12 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air"):
         # so applying the main-isotopologue opacity to the TOTAL molecular VMR is the
         # standard (slightly conservative) approximation documented in config.py.
         if broadening == "h2he":
-            mdb = MdbHitran(str(config.DEMO_DATABASE / (spec["db"] + "_h2he")),
+            # separate h2he/<db> cache dir: forces a fresh nonair_broadening
+            # download, AND keeps the path stem a valid HITRAN molecule token.
+            # (The old "<db>_h2he" naming broke under exojax>=2.x, which derives
+            # the molecule id from the stem -- radis raised NotImplementedError
+            # before anything downloaded, killing every h2he run.)
+            mdb = MdbHitran(str(config.DEMO_DATABASE / "h2he" / spec["db"]),
                             nurange=nu_grid, isotope=1, nonair_broadening=True)
             _blend_h2he_broadening(mdb, key)
         elif broadening == "air":
@@ -266,18 +271,27 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
     print(f"[rt] ArtTransPure {profile['art_nlayer']} layers, "
           f"P=[{p_art_bar.min():.1e},{p_art_bar.max():.1e}] bar", flush=True)
 
+    if not config.CIA_H2H2_FILE.exists():
+        # exojax auto-fetches it (~24 MB from hitran.org), but its downloader
+        # swallows failures -- say up front what is about to happen so an
+        # offline failure is attributable (fail-loud rule).
+        print(f"[rt] H2-H2 CIA absent at {config.CIA_H2H2_FILE}; exojax will "
+              "download ~24 MB from https://hitran.org/data/CIA/main/"
+              "H2-H2_2011.cia now (network required)", flush=True)
     cdb = CdbCIA(str(config.CIA_H2H2_FILE), nurange=nu_grid)
     opacia = OpaCIA(cdb, nu_grid=nu_grid)
-    # H2-He CIA is required physics (He is ~16% by number at 10x solar). Missing it
+    # H2-He CIA is required physics (He is ~14% by number). Missing it
     # would silently drop a real continuum term -> a wrong spectrum with no error.
     # Fail loud instead; the file ships in data/opacity_cache/ and the PBS preflight
     # also checks for it.
     if not config.CIA_H2HE_FILE.exists():
         raise FileNotFoundError(
             f"H2-He CIA table missing ({config.CIA_H2HE_FILE}). It ships in the bundle's "
-            "data/opacity_cache/; download H2-He_2011.cia from HITRAN if absent. Refusing "
-            "to build the RT without it (silently skipping the He continuum would bias the "
-            "spectrum).")
+            "data/opacity_cache/; if absent download "
+            "https://hitran.org/data/CIA/main/H2-He_2011.cia (~147 MB; note the "
+            "/main/ path -- the bare /data/CIA/ URL 404s) to that exact path. "
+            "Refusing to build the RT without it (silently skipping the He "
+            "continuum would bias the spectrum).")
     opacia_he = OpaCIA(CdbCIA(str(config.CIA_H2HE_FILE), nurange=nu_grid), nu_grid=nu_grid)
     print("[rt] H2-He CIA loaded", flush=True)
     print(f"[rt] CIA + RT built; total {time.time()-t0:.1f}s", flush=True)
@@ -300,7 +314,7 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
     depth_norm = (Rp_btm / float(profile.get("rstar_cm", config.RSTAR_CM))) ** 2  # (R_btm/R_star)^2
 
     def _require_he(vmr_he):
-        # He is ~16% by number at 10x solar and its CIA is real continuum physics;
+        # He is ~14% by number and its CIA is real continuum physics;
         # an accidental None here used to SILENTLY drop the term (the sensitivity
         # demo shipped that way). Fail loud instead -- standing repo rule.
         if vmr_he is None:
