@@ -11,6 +11,14 @@ No behavior-changing fallback paths, ever. Missing H2-He CIA raises; planet
 identity (rp_cm/rstar_cm/vulcan_cfg_name) must be set or `validate_config`
 raises; a real-data run with no overlapping bins raises; RESUME with no
 checkpoint raises; non-finite gradients surface as `n_bad` and the host raises.
+The chemistry block `[lnZ, c_o, lnKzz]` is **load-bearing and positional** —
+`pipeline.py`/`retrieval_forward.py`/`forward.vulcan_chem` unpack the parameter
+vector by fixed index (`theta[0:3]`=chem, `theta[3:3+n_tp]`=T-P), so
+`validate_config` **raises** on `infer_lnZ/infer_c_o/infer_lnKzz=False` (dropping
+one shifts every later index and silently mislabels the posterior); `pipeline`
+re-asserts the exact `[lnZ,c_o,lnKzz]+n_tp` prefix as a backstop. Keep all three
+inferred (use a tight prior if you want one effectively fixed); never re-add an
+independent drop path.
 `set_observations` validates at the API boundary
 (`pipeline.validate_observations`): raises on any non-finite depth or σ ≤ 0 /
 non-finite; mask invalid bins before injection. Prefer a loud error over a

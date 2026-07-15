@@ -209,8 +209,21 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     labels = [s.label for s in specs]
     n_dim = len(specs)
     n_chem_tp = 3 + fwd.n_tp
-    if not all(k in ("chem", "tp") for k in kinds[:n_chem_tp]):
-        raise RuntimeError("parameter layout error: first block must be chem+tp")
+    # The chem+T-P prefix is unpacked by fixed position (theta[0:3]=chem,
+    # theta[3:3+n_tp]=T-P). Assert the layout EXACTLY, not just "chem/tp appear in
+    # the prefix": dropping a chem toggle shortens the block, and the old subset
+    # check passed when all nuisances were also off, silently truncating the
+    # vector. config_schema.validate_config refuses that config at the boundary;
+    # this is the backstop for any path that builds specs without it.
+    if (names[:3] != ["lnZ", "c_o", "lnKzz"]
+            or kinds[:3] != ["chem", "chem", "chem"]
+            or kinds[3:n_chem_tp] != ["tp"] * fwd.n_tp
+            or n_dim < n_chem_tp):
+        raise RuntimeError(
+            "parameter layout error: the vector must start with [lnZ, c_o, lnKzz] "
+            f"+ {fwd.n_tp} T-P dims; got names={names[:n_chem_tp]} "
+            f"kinds={kinds[:n_chem_tp]} (n_dim={n_dim}). The chem block is "
+            "positional and load-bearing -- do not drop infer_lnZ/c_o/lnKzz.")
     lnR0_idx = names.index("lnR0") if "lnR0" in names else None
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
     off_idx = [i for i, k in enumerate(kinds) if k == "offset"]

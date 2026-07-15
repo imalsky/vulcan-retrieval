@@ -523,6 +523,25 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("warm_extrapolate=True requires smc_chem_mode='warm' -- the "
                          "extrapolation seeds the warm continuation; there is nothing "
                          "to seed on the cold map")
+    # The chemistry block [lnZ, c_o, lnKzz] is LOAD-BEARING and POSITIONAL:
+    # pipeline.py / retrieval_forward.py / forward.vulcan_chem unpack the
+    # parameter vector by fixed index (theta[0]=lnZ, theta[1]=c_o, theta[2]=lnKzz,
+    # theta[3:3+n_tp]=T-P) and assume a length-(3+n_tp) chem+T-P prefix. Dropping
+    # any one via specs_from_config shortens the vector and shifts every later
+    # index, so the forward path silently reinterprets the parameters (and the
+    # gradient path shape-errors). These three toggles were never meant to be
+    # flipped independently; refuse loudly here rather than sample a mislabeled
+    # posterior. There is deliberately no supported way to drop a chem dimension.
+    if not (cfg.infer_lnZ and cfg.infer_c_o and cfg.infer_lnKzz):
+        off = [n for n, on in (("infer_lnZ", cfg.infer_lnZ),
+                               ("infer_c_o", cfg.infer_c_o),
+                               ("infer_lnKzz", cfg.infer_lnKzz)) if not on]
+        raise ValueError(
+            f"{', '.join(off)}=False is not supported: the chemistry block "
+            "[lnZ, c_o, lnKzz] is unpacked by fixed position downstream, so "
+            "disabling one shifts the T-P and nuisance indices and silently "
+            "reinterprets the parameter vector. Keep all three inferred (use a "
+            "tight prior range if you want one effectively fixed).")
     if cfg.tp_model not in ("guillot", "powerlaw"):
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
