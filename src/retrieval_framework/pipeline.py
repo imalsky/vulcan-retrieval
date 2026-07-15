@@ -151,7 +151,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     IMPORTANT (trace-time baking): the likelihood closes over ``pipe.obs_depth_jax`` /
     ``pipe.obs_sigma_jax``; the first jitted call bakes them in as constants. Call
     ``pipe.set_observations`` exactly ONCE, before any inference/tuning call, and never
-    swap observations afterwards in the same process.
+    swap observations afterwards in the same process (a second call now raises).
     """
     C.validate_config(cfg)
     from retrieval_framework import retrieval_forward as RF   # lazy: pulls in vulcan_chem -> VULCAN-JAX + exojax
@@ -719,6 +719,16 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     ))
 
     def set_observations(depth, sigma):
+        # Observations are baked in as trace-time constants at the first jitted
+        # likelihood call, so a second (post-compile) swap would silently keep the
+        # old data. Enforce the documented call-once contract loudly instead of
+        # letting a stale-likelihood run through (standing fail-fast rule).
+        if pipe.obs_depth is not None:
+            raise RuntimeError(
+                "set_observations was already called on this pipeline. Observations "
+                "are trace-time constants baked into the compiled likelihood, so "
+                "swapping them in-process would silently keep the old data. Build a "
+                "fresh pipeline (build_pipeline) for a different dataset.")
         depth, sigma = validate_observations(depth, sigma, n_bin, npdtype)
         pipe.obs_depth = depth
         pipe.obs_sigma = sigma

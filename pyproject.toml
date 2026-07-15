@@ -39,7 +39,7 @@ dependencies = [
     "matplotlib",
     "corner",
     "tqdm",
-    "vulcan-jax>=0.1.18",  # 0.1.18 first ships conden.make_conden_spec/build_conden_profile (live-T(P) condensation)
+    "vulcan-jax>=0.2.0",  # 0.2.0 is the YAML-only config API (load_config, gravity from Mp/Rp); forward.vulcan_chem calls load_config
 ]
 
 [project.urls]

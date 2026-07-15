@@ -168,6 +168,38 @@ def _check_conden_api() -> None:
         _ok("vulcan_jax.conden exposes make_conden_spec + build_conden_profile")
 
 
+def _check_config_api() -> None:
+    """The installed vulcan-jax must expose the YAML ``load_config`` API.
+
+    ``forward.vulcan_chem`` builds every chemistry model through
+    ``vulcan_jax.load_config(name)`` (YAML-only config, gravity from Mp/Rp).
+    A checkout predating that migration has no ``load_config`` (it still shipped
+    the deleted ``vulcan_cfg`` module), yet reports a version that can satisfy an
+    old floor, so probe the actual API instead of trusting the version alone."""
+    try:
+        import vulcan_jax
+    except Exception as e:  # noqa: BLE001 - aggregate every failure loudly
+        _err(f"vulcan_jax failed to import: {e!r}. Re-run the bootstrap.")
+        return
+    if not hasattr(vulcan_jax, "load_config"):
+        _err(
+            "installed vulcan-jax has no `load_config`: the checkout predates the "
+            "YAML-only config migration (gravity from Mp/Rp). forward.vulcan_chem "
+            "requires it. Pull/update the VULCAN-JAX checkout and re-run the "
+            "bootstrap.")
+        return
+    try:
+        cfg = vulcan_jax.load_config("W39b")
+    except Exception as e:  # noqa: BLE001
+        _err(f"vulcan_jax.load_config('W39b') failed: {e!r}. Re-run the bootstrap.")
+        return
+    # Mp/Rp gravity is the load-bearing schema change the chemistry path assumes.
+    if not (getattr(cfg, "Mp", None) and getattr(cfg, "Rp", None)):
+        _err("vulcan_jax config 'W39b' lacks Mp/Rp (gravity schema); update VULCAN-JAX.")
+    else:
+        _ok("vulcan_jax.load_config exposes the YAML config API (W39b Mp/Rp present)")
+
+
 def _check_cross_repo_pin() -> None:
     from importlib import metadata
 
@@ -290,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         # vulcan_jax / retrieval_framework BEFORE exojax: forward.vulcan_chem's
         # import-order guard raises if exojax comes first.
         _check_editable("vulcan_jax", "vulcan-jax", root / "VULCAN-JAX", "vulcan_jax")
+        _check_config_api()
         _check_conden_api()
         _check_editable(
             "retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework"

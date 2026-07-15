@@ -3,11 +3,12 @@
 # jax/jaxlib are PINNED here (not floored) so a standalone reproduction env matches
 # the validated combination on any interpreter -- on 3.11+ a bare floor would
 # resolve the latest untested jax instead (jax dropped Python 3.10 at 0.7.0).
-# The package metadata (vulcan-retrieval's pyproject) declares vulcan-jax>=0.1.18
+# The package metadata (vulcan-retrieval's pyproject) declares vulcan-jax>=0.2.0
 # for TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
-# pin deliberately. The pinned commit is vulcan-jax 0.1.18 (67dc7d0), the first
-# release carrying the live-T(P) conden.make_conden_spec/build_conden_profile API,
-# so this standalone env reproduces the condensation-enabled retrieval source.
+# pin deliberately. The pinned commit e841d77 is vulcan-jax 0.2.0 (YAML-only
+# config: load_config, gravity from Mp/Rp) that forward.vulcan_chem requires; the
+# pre-migration parent 67dc7d0 predates load_config and would fail to build a
+# chemistry model. Re-pin this SHA whenever the validated chemistry commit moves.
 # ExoJax is a plain pip dependency; it downloads HITRAN line lists / CIA tables
 # into the repo data/ caches on first use.
 # NOTE the PBS preflight installs the SYNCED trees editable instead (git pull is
@@ -20,5 +21,5 @@ scipy>=1.11
 matplotlib
 corner
 tqdm
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@67dc7d0d2898e2098d7a5b5eddc324398b86cc65
+vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@e841d77952243e2906654b08580581ea590f0cb6
 -e .
