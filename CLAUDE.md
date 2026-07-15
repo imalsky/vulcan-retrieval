@@ -75,13 +75,22 @@ notes.md.)
 ## Init / mutation handling (why draws get rejected)
 
 - **Cold init: reject-and-cull + oversample.** `pipeline._init_state` rejects
-  non-converged draws (-inf) and draws `ceil(N·init_oversample)` (default 2.0) so
-  the culled cloud holds exactly N healthy particles; raises only if < N survive.
+  non-converged AND stall-certified draws (exit without the runner's canonical
+  certification; counted as `n_stalled_init`) and draws `ceil(N·init_oversample)`
+  (default 2.0) so the culled cloud holds exactly N healthy particles; raises only
+  if < N survive. An INIT-LEVEL checkpoint is written right after `_init_state`
+  (`last_step=-1`), so `RESUME=1` recovers a stage-0 death without re-paying the init.
 - **Init phase 2 runs UNCAPPED** (`batch_eval_init_vg`) and evaluates
   `N + init_phase2_spare` (default 8) survivors, culling re-certification failures
   and backfilling from spares — survivors are proven-convergent, not disposable.
-- **Warm mutation proposals** are count_max-rejected before their gradient is
-  trusted (`_make_batch_eval` gates `L→-inf` at `accept_count >= warm_count_max`).
+- **Warm mutation proposals** are rejected before their gradient is trusted:
+  `_make_batch_eval` gates `L→-inf` at `accept_count >= warm_count_max` (warmcap)
+  OR when the exit is not the runner's canonical certification
+  (`pipeline._proposal_converged` on ConvDiag.conv_normal; the `stalled` class --
+  NAS job 65200's finite-L/non-finite-gradient proposals). Both classes are
+  logged per sweep and must stay ~0 in the late ladder. A surviving bad gradient
+  fails FAST at the offending sweep and dumps per-particle forensics
+  (`bad_grad_stage###_sweep#.npz`) before the loud raise.
 - **warm_extrapolate** is ON in the gpu preset (schema default off); seeds each
   warm solve at the first-order tangent prediction. Validate with a `SYNTH=1` A/B
   before relying on it.
