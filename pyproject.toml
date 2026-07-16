@@ -39,7 +39,7 @@ dependencies = [
     "matplotlib",
     "corner",
     "tqdm",
-    "vulcan-jax>=0.2.0",  # 0.2.0 is the YAML-only config API (load_config, gravity from Mp/Rp); forward.vulcan_chem calls load_config
+    "vulcan-jax>=0.3.0",  # 0.3.0 enforces the condensation-not-differentiable contract at the AD entry points (F1-F5); 0.2.0 was the YAML-only config API
 ]
 
 [project.urls]
