@@ -113,8 +113,12 @@ notes.md.)
   worst physical sweep 7.6%) aborts -- that is AD breakage, not the corner
   class.
 - **warm_extrapolate** is ON in the gpu preset (schema default off); seeds each
-  warm solve at the first-order tangent prediction. Validate with a `SYNTH=1` A/B
-  before relying on it.
+  warm solve at the first-order tangent prediction, gated PER PARTICLE: a
+  proposal whose predicted column would need clipping (any cell driven <= 0)
+  falls back to its plain carried column + carried refs. The unconditional
+  clipped seed manufactured the badgrad tangent class, and a per-cell repair
+  is measurably insufficient -- never reintroduce either
+  (docs/job65815_badgrad_investigation.md SS10; failed_approaches #68).
 
 ## Running on the supercomputer (NAS)
 

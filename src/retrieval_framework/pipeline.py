@@ -772,14 +772,12 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             refs_new = jnp.where(ok[:, None], C_[:, :2], jnp.zeros_like(refs))
             if want_grad:
                 if want_dy:
-                    # NaN hygiene: a pinned/rejected proposal's tangents may be
-                    # garbage, and a BADGRAD proposal (finite certified primal,
-                    # non-finite tangent) is now ACCEPTABLE under the zero-drift
-                    # MH handling -- its DY rows are exactly the non-finite
-                    # tangents, so they MUST be zeroed here or an accepted
-                    # badgrad particle poisons its next warm_extrapolate seed
-                    # (Y + NaN -> NaN carry). DY=0 degrades that particle's next
-                    # seed to the plain carried column, nothing else.
+                    # NaN hygiene: pinned/rejected proposals' tangents may be
+                    # garbage, and a badgrad proposal is ACCEPTABLE under the
+                    # zero-drift handling while its DY rows ARE the non-finite
+                    # tangents -- zero them or an accepted badgrad particle
+                    # poisons its next warm_extrapolate seed. DY=0 degrades
+                    # that particle's next seed to the plain carried column.
                     ok_dy = ok & ~stats.bad_grad
                     DY = jnp.where(ok_dy[:, None, None, None], DY, jnp.zeros_like(DY))
                 # uniform tail: EvalStats for BOTH the mutation-capped and the init
@@ -1237,16 +1235,14 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         acc2_np = None
     n_bad = int(jax.device_get(n_bad))
     if n_bad > 0:
-        # The tangent-blown class (finite certified primal, non-finite
-        # forward-mode tangent; NAS 65200/65789/65815) also occurs on the init
-        # phase-2 warm re-certifications, and it is theta-DEPENDENT (dense in
-        # the high-Z/low-C-O corner a real-data prior cloud legitimately
-        # samples), so culling or raising on it would bias the initial
-        # importance sample against that corner. Consistent with the mutation
-        # kernel's zero-drift handling: keep the particle, keep its certified
-        # likelihood, keep the eval-zeroed gradient entries (its first MALA
-        # move starts with prior-only drift), zero its DY rows below, and
-        # raise only above the systematic-breakage backstop.
+        # The tangent-blown class also occurs on the init phase-2 warm
+        # re-certifications, and it is theta-dependent, so culling or raising
+        # on it would bias the initial importance sample against that corner
+        # (docs/job65815_badgrad_investigation.md SS6). Consistent with the
+        # mutation kernel's zero-drift handling: keep the particle with its
+        # certified likelihood and eval-zeroed gradient entries (its first
+        # MALA move starts with prior-only drift), zero its DY rows below,
+        # and raise only above the systematic-breakage backstop.
         frac_tol = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
         thr_bad = int(math.ceil(frac_tol * n_phase2))
         bad2 = np.asarray(jax.device_get(stats2.bad_grad), bool)
@@ -1263,9 +1259,10 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             f"init 2/2: {n_bad}/{n_phase2} survivor(s) have a finite certified "
             f"likelihood but a non-finite forward-mode tangent (indices "
             f"{np.flatnonzero(bad2).tolist()}) -- kept with zeroed gradient "
-            "entries (zero-drift first move; the NAS 65815 theta-dependent "
-            "class, expected in the high-Z/low-C-O corner). Their DY rows are "
-            "zeroed for the warm_extrapolate seed.")
+            "entries (zero-drift first move; expected in the high-Z/low-C-O "
+            "corner, see docs/job65815_badgrad_investigation.md)"
+            + (" and zeroed DY rows for the warm_extrapolate seed."
+               if DY is not None else "."))
         if DY is not None:
             DY = jnp.where(jnp.asarray(bad2)[:, None, None, None],
                            jnp.zeros_like(DY), DY)
@@ -1400,29 +1397,18 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         U_new = U + step * (scale * scale) * GT + jnp.sqrt(2.0 * step) * scale * noise
         theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; negligible next to the solves
         if extrap:
-            # first-order warm-start extrapolation: seed the proposal's solve at
-            # the predicted converged column; refs = the PROPOSAL's (lnZ, c_o) so
-            # the solver's refs-rescale is a no-op (no double-scaling).
-            #
-            # PER-PARTICLE GATE (job 65815 replays, 2026-07-16): extrapolate
-            # ONLY when the predicted column needs no clipping. The old
-            # unconditional max(pred, 0) seed was the dominant manufacturer of
-            # the badgrad class: on large early-ladder moves the linear
-            # prediction drives hundreds of trace-species cells negative, and
-            # the warm solve from that clipped, unphysical state certifies a
-            # finite primal whose forward-mode tangents diverge (v2 move
-            # replays: 3/11 extrapolated seeds non-finite vs 0/11 plain; a
-            # per-CELL fallback still blew 1 of 3 reproduced cases -- the
-            # positive-cell extrapolations are toxic too when the prediction
-            # is that far out). A particle whose prediction moves ANY cell to
-            # <= 0 falls back to its plain carried column WITH its carried
-            # refs (seed and refs must switch together). Cells the prediction
-            # leaves exactly at their carried value (incl. the runner's own
-            # clipped zeros, and DY=0 rows from an accepted badgrad proposal)
-            # do not disqualify -- seeding them is identical to the plain
-            # path. Late-ladder small moves keep the measured ~1.65x
-            # extrapolation saving; violent moves run plain, which never
-            # produced a non-finite tangent in any replay.
+            # First-order warm-start extrapolation, gated PER PARTICLE: a
+            # proposal seeds at its predicted converged column only when the
+            # prediction needs no clipping -- every cell strictly positive or
+            # exactly unchanged (the runner's own clipped zeros and DY=0 rows
+            # must not disqualify; seeding them equals the plain path). Any
+            # cell driven to <= 0 sends that particle back to its plain
+            # carried column WITH its carried refs -- seed and refs must
+            # switch together: proposal refs make the solver's refs-rescale a
+            # no-op only for an extrapolated seed. An unconditionally clipped
+            # max(pred, 0) seed manufactures the badgrad tangent class, and a
+            # per-cell fallback is measurably insufficient -- evidence and
+            # replay tallies in docs/job65815_badgrad_investigation.md SS10.
             C_cur = jax.vmap(theta_from_u)(U)[:, :n_ct]
             C_new = theta_new[:, :n_ct]
             pred = Y + jnp.einsum("nkij,nk->nij", DY, C_new - C_cur)
@@ -1434,26 +1420,19 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         else:
             L_new, G_new, Y_new, refs_new, n_bad, DY_new, stats = move_vg(
                 U_new, Y, refs)
-        # Tangent-blown proposals (finite primal, non-finite forward-mode tangent
-        # at a canonically-certified state -- the NAS 65200/65789/65815 class)
-        # are handled as ZERO-DRIFT MALA moves, not rejections. The eval already
-        # zeroed the non-finite gradient entries, and that SAME zeroed drift
-        # enters the reverse proposal density below (GT_new) and -- if accepted
-        # -- the particle's next forward density (the carried G): MALA with any
-        # measurable drift b(x) is a valid MH kernel (b enters the PROPOSAL, not
-        # the target), so the finite certified likelihood decides acceptance
-        # unbiasedly. The pre-65815 design floored L here to force rejection;
-        # job 65815 forensics showed the class is theta-DEPENDENT (11.7% of
-        # certified proposals at Z=67-99x solar vs 1.2% at 1-12x; 11.3% at
-        # C/O 0.10-0.18) and sits exactly in the W39b posterior bulk, so the
-        # forced rejection multiplied the target by a theta-correlated
-        # indicator -- a metallicity-posterior bias -- and its 5% per-sweep
-        # abort was statistically certain to kill any full ladder. The class
-        # stays loud: counted per sweep (badgrad=), forensics dumped, and the
-        # host raises when a sweep exceeds smc_tangent_bad_max_frac * N
-        # (systematic AD breakage, not the physical corner class). The
-        # accepted particle's DY rows were zeroed in eval_batch (NaN hygiene
-        # for the warm_extrapolate seed).
+        # Tangent-blown proposals (finite certified primal, non-finite
+        # forward-mode tangent) are handled as ZERO-DRIFT MALA moves, never
+        # rejections: the eval zeroed the non-finite gradient entries, and
+        # that SAME zeroed drift enters the reverse proposal density below
+        # (GT_new) and -- on acceptance -- the carried G. MALA with any
+        # measurable drift is a valid MH kernel (the drift enters the
+        # PROPOSAL, not the target), so the certified likelihood decides
+        # acceptance unbiasedly; forcing rejection instead biases against the
+        # theta-corner where the class concentrates
+        # (docs/job65815_badgrad_investigation.md SS4-SS6). Kept loud:
+        # badgrad= per sweep, forensics dumps, and the
+        # smc_tangent_bad_max_frac backstop raise in _check_mutation_health.
+        # The accepted particle's DY rows were zeroed in eval_batch.
         GT_new = dlogprior(U_new) + beta * G_new
         # asymmetric MH correction for the preconditioned Langevin proposal
         df = (U_new - U - step * (scale * scale) * GT) / scale
@@ -1531,20 +1510,14 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
     every occurrence, RAISE only above the systematic-breakage backstop.
 
     A finite-likelihood/non-finite-tangent proposal at a canonically-CERTIFIED
-    state is the NAS 65200/65789/65815 class: the forward-mode tangent diverges
-    along the warm continuation while the primal certifies (no primal-side
-    predicate can flag it). Job 65815 forensics measured it theta-DEPENDENT --
-    6.5% of certified proposals overall, 1.2% at Z=1-12x solar vs 11.7% at
-    67-99x, 11.3% at C/O 0.10-0.18, growing as the cloud drifts into the
-    posterior bulk -- so it is NOT a sparse stochastic tail. The sweep handles
-    these proposals as ZERO-DRIFT MALA moves (the eval zeroes the non-finite
-    gradient entries; the same zeroed drift enters both proposal densities;
-    the certified likelihood decides acceptance) -- a valid MH kernel with no
-    theta-correlated suppression of the posterior. ``forensics`` (per-particle
-    device arrays) is dumped to ``dump_path`` and summarized in the log on
-    EVERY occurrence. A single sweep exceeding ceil(max_frac * n_particles)
-    events is far beyond the measured physical class (max 7.6%/sweep, job
-    65815) -- that is systematic AD breakage, and the host raises loudly."""
+    state has no primal-side predicate and is theta-dependent (dense in the
+    high-Z/low-C-O corner the posterior favors), so the sweep handles it as a
+    ZERO-DRIFT MALA move rather than a rejection -- see the sweep comment and
+    docs/job65815_badgrad_investigation.md. ``forensics`` (per-particle device
+    arrays) is dumped to ``dump_path`` and summarized in the log on EVERY
+    occurrence. A single sweep exceeding ceil(max_frac * n_particles) events
+    is far beyond the measured physical class -- that is systematic AD
+    breakage, and the host raises loudly."""
     n_bad = int(jax.device_get(n_bad))
     if n_bad == 0:
         return
@@ -1633,6 +1606,8 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, DY,
              unique_particles=np.asarray(uniq_hist, np.int64),
              warm_capped=np.asarray(capped_hist, np.int64),
              warm_stalled=np.asarray(stalled_hist, np.int64),
+             # key name predates the zero-drift rework (badgrad events are no
+             # longer rejections); kept so pre-rework checkpoints resume
              tangent_rejected=np.asarray(badgrad_hist, np.int64),
              scale_diag=np.asarray(scale),
              last_step=np.asarray(int(last_step), np.int64),
@@ -1950,6 +1925,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         init_stats=(init_stats or {}),
         warm_capped=np.asarray(capped_hist, np.int64),
         warm_stalled=np.asarray(stalled_hist, np.int64),
+        # legacy key name (pre-zero-drift-rework): per-stage badgrad counts
         tangent_rejected=np.asarray(badgrad_hist, np.int64),
         step_size_history=np.asarray(step_hist), unique_particles=np.asarray(uniq_hist, np.int64),
         scale_diag_final=np.asarray(scale), theta_draws=theta_draws,

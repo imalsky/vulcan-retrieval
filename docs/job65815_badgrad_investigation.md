@@ -1,7 +1,8 @@
 # Job 65815: the tangent-blown (badgrad) class -- investigation, fix, and operating guide
 
-Date: 2026-07-16. Status: fix merged and pushed (`941c847`); move-structure
-replay (v2) outcome appended at the bottom.
+Date: 2026-07-16. Status: complete. Sampler fix `941c847` (zero-drift
+handling); root-cause fix `881042e` (per-particle warm_extrapolate gate,
+SS10).
 
 This is the consolidated record of the NAS job 65815 abort: what happened,
 what the forensics measured, why the previous handling was wrong, what the
