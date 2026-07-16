@@ -160,6 +160,21 @@ and the session-memory incident log.
     (0.25). -- 2026-07-16; job 65815; forensics
     runs/w39b_smc_retrieval/forensics_65815/; notes.md 2026-07-16.
 
+68. **Unconditional warm_extrapolate seed max(Y + DY.dC, 0), and the
+    per-cell repair where(pred>0, pred, Y).** The clipped extrapolated seed
+    is the dominant manufacturer of the badgrad tangent class: move-replays
+    of job 65815 states gave 3/11 non-finite tangent sets with the
+    extrapolated seed vs 0/11 with the plain carried column (0 in 24+ plain
+    warm jvps overall), each reproduction preceded by 872-1509 cells driven
+    non-positive by the linear prediction. The per-cell fallback repair
+    still blew 2 of 3 reproduced cases -- a prediction that far out is
+    toxic even in its positive cells -- and the poisoned solves also
+    burned to the warm cap while plain seeds converged in 376-1141 steps.
+    Replaced by the PER-PARTICLE extrapolation gate (extrapolate only when
+    no cell needs clipping; fall back to the plain column + carried refs).
+    -- 2026-07-16; validation/badgrad_65815/replay_badgrad{,_v2,_v3}.py;
+    docs/job65815_badgrad_investigation.md SS10.
+
 
 Reverse-mode steady-state adjoint dead-ends (VULCAN-JAX; the reason the SMC
 uses forward-mode MALA and reverse-mode stays off the hot path):

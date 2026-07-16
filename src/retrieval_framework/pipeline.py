@@ -1402,13 +1402,35 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         if extrap:
             # first-order warm-start extrapolation: seed the proposal's solve at
             # the predicted converged column; refs = the PROPOSAL's (lnZ, c_o) so
-            # the solver's refs-rescale is a no-op (no double-scaling)
+            # the solver's refs-rescale is a no-op (no double-scaling).
+            #
+            # PER-PARTICLE GATE (job 65815 replays, 2026-07-16): extrapolate
+            # ONLY when the predicted column needs no clipping. The old
+            # unconditional max(pred, 0) seed was the dominant manufacturer of
+            # the badgrad class: on large early-ladder moves the linear
+            # prediction drives hundreds of trace-species cells negative, and
+            # the warm solve from that clipped, unphysical state certifies a
+            # finite primal whose forward-mode tangents diverge (v2 move
+            # replays: 3/11 extrapolated seeds non-finite vs 0/11 plain; a
+            # per-CELL fallback still blew 1 of 3 reproduced cases -- the
+            # positive-cell extrapolations are toxic too when the prediction
+            # is that far out). A particle whose prediction moves ANY cell to
+            # <= 0 falls back to its plain carried column WITH its carried
+            # refs (seed and refs must switch together). Cells the prediction
+            # leaves exactly at their carried value (incl. the runner's own
+            # clipped zeros, and DY=0 rows from an accepted badgrad proposal)
+            # do not disqualify -- seeding them is identical to the plain
+            # path. Late-ladder small moves keep the measured ~1.65x
+            # extrapolation saving; violent moves run plain, which never
+            # produced a non-finite tangent in any replay.
             C_cur = jax.vmap(theta_from_u)(U)[:, :n_ct]
             C_new = theta_new[:, :n_ct]
-            Y_seed = jnp.maximum(
-                Y + jnp.einsum("nkij,nk->nij", DY, C_new - C_cur), 0.0)
+            pred = Y + jnp.einsum("nkij,nk->nij", DY, C_new - C_cur)
+            ok_ex = jnp.all((pred > 0.0) | (pred == Y), axis=(1, 2))
+            Y_seed = jnp.where(ok_ex[:, None, None], pred, Y)
+            refs_seed = jnp.where(ok_ex[:, None], C_new[:, :2], refs)
             L_new, G_new, Y_new, refs_new, n_bad, DY_new, stats = move_vg(
-                U_new, Y_seed, C_new[:, :2])
+                U_new, Y_seed, refs_seed)
         else:
             L_new, G_new, Y_new, refs_new, n_bad, DY_new, stats = move_vg(
                 U_new, Y, refs)

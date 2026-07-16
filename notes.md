@@ -1483,12 +1483,14 @@ moves are ~0.5 cloud-std per dim). Consistent with growth of the tangent
 recurrence along the warm continuation transient (the same recurrence whose
 raw-Neumann adjoint form diverges to 1e57 -- failed_approaches #28), which
 no pointwise clip can fix and which K_eq clipping (rates_jax._EXP_ARG_MAX,
-already in place) does not touch. Move-structure replays (v2, offender
-thetas warm-started from a same-stage sibling proposal, with and without the
-first-order extrapolation seed) were still running at commit time; their
-outcome (in particular whether the warm_extrapolate seed aggravates the
-class, which would motivate flipping it off in the gpu preset) gets appended
-here in a follow-up note.
+already in place) does not touch. Move-structure replays (v2) and the
+seed-repair A/B/C (v3) settled it: the warm_extrapolate clipped seed
+max(Y + DY.dC, 0) manufactures the class (3/11 extrapolated moves
+non-finite vs 0/11 plain; per-cell fallback still fails 2/3; plain never
+fails and even converges faster on the poisoned cases). Fixed by the
+PER-PARTICLE extrapolation gate (extrapolate only when no cell needs
+clipping, else plain column + carried refs) -- see
+docs/job65815_badgrad_investigation.md SS10 and failed_approaches #68.
 
 Also measured on 65815 (separate issues, not fixed here): 68% of warm
 proposals burn to the 1500-step warmcap before rejection (the ~2 h/stage
