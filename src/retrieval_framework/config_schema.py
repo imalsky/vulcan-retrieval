@@ -289,6 +289,17 @@ class Config:
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     smc_use_custom_gradients: bool = True   # forward-mode value-and-grad wrapper (memory-stable, no vjp tape)
     smc_custom_grad_max_dim: int = 16
+    # Per-sweep tolerance for the tangent-blown rejection class: a proposal whose
+    # PRIMAL certifies canonically but whose forward-mode tangent goes non-finite
+    # (chemistry jvp diverging at a marginally-stable certified fixed point -- the
+    # NAS 65200/65789 class, stochastic ~1% at prior-like beta). Such proposals are
+    # MH-REJECTED (L floored; never a zeroed gradient), logged per sweep as
+    # badgrad=, and their per-particle forensics dumped -- the run only RAISES when
+    # a single sweep's count exceeds ceil(this * N), which indicates systematic AD
+    # breakage rather than the stochastic tail. 0.0 restores the old zero-tolerance
+    # raise. Detailed-balance status: same as warmcap/stalled (state-dependent
+    # rejection; must stay ~0 in the late ladder -- watch the per-stage log).
+    smc_tangent_reject_max_frac: float = 0.05
     # "block": only chem+T-P dims take tangents through the VULCAN while_loop; lnR0 is
     #          one RT-only jvp; offsets/noise are analytic (exact, ~25-35% cheaper).
     # "naive": every u-dimension through the full chain (the SWAMPE pattern; cross-check).

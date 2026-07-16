@@ -644,16 +644,26 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         final = integ._runner(init, atm_T)
         return final.y / jnp.sum(final.y, axis=1, keepdims=True)
 
-    def run_diag(theta):
+    def run_diag(theta, return_atm=False):
         """Diagnostic twin of converged_ymix: returns (final_runner_state, init_state).
 
         Lets a caller inspect convergence (longdy/accept_count/t), whether the runner
         actually moved off the init, and whether the metallicity perturbation changed the
-        conserved element totals. Not on any AD path."""
+        conserved element totals. Not on any AD path.
+
+        ``return_atm=True`` additionally returns the theta-dependent AtmStatic the
+        runner was actually driven with (``atm_T`` from ``_prep``: live Tco/Ti/M/
+        Kzz/Dzz/vm/vs + refreshed geometry) -- the ``atm`` a reverse-mode adjoint
+        call (vulcan_jax.steady_state_grad) must linearize around. Without it a
+        caller can only reach the setup-time baseline AtmStatic, which is the
+        WRONG operating point whenever theta carries a T-P or Kzz offset (the
+        scope audit flags that as stale_geometry). Added 2026-07-15 for the
+        jwst-tool adjoint diagnostics; the (final, init) two-tuple contract is
+        unchanged for existing callers."""
         init, atm_T = _prep(theta)
         init = _runner_carry_seed(init, warm_continuation=False, warm_cap=False)
         final = integ._runner(init, atm_T)
-        return final, init
+        return (final, init, atm_T) if return_atm else (final, init)
 
     def prep_pv(theta):
         """The initial-carry ProfileVars for ``theta`` -- the per-proposal arrays

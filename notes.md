@@ -1357,3 +1357,53 @@ Hybrid cold-solve overhead: ~ +110 accepted steps of phase-0 preconditioning
 (~6% at the baseline). Verdict: following the hybrid defaults with the
 central-pinned warm twin is SAFE for the retrieval forward map, subject to
 the CALIBRATE_ONLY attrition read on the real prior before the 24 h submit.
+
+## 2026-07-15: run_diag(return_atm=True) export for adjoint callers
+
+`forward.vulcan_chem` `run_diag` gained an optional `return_atm=True` that
+additionally returns the theta-dependent `AtmStatic` (`atm_T` from `_prep`:
+live Tco/Ti/M/Kzz/Dzz/vm/vs + refreshed geometry) the runner was actually
+driven with. Reverse-mode adjoint calls (`vulcan_jax.steady_state_grad`)
+must linearize around exactly that object; before this export a downstream
+caller could only reach the setup-time baseline AtmStatic, which the
+adjoint scope audit correctly flags as `stale_geometry` whenever theta
+carries a T-P or Kzz offset. The two-tuple `(final, init)` contract is
+unchanged for existing callers. First consumer: vulcan-jwst-tool's
+`adjoint_diag.py` diagnostics panel (scope-audited dL/dlnk + dL/dT of the
+target molecule's photosphere abundance). Wording fix in CLAUDE.md's
+condensation guardrail while here: the 0.91 jvp-vs-FD figure is a RELATIVE
+ERROR (~91% wrong tangent), stated so it cannot be misread as a 0.91
+agreement ratio.
+
+## NAS job 65789: the residual class identified -- tangent-blown CERTIFIED proposals (2026-07-15)
+
+The gate-rework rerun died at stage 0 sweep 1 -- and the new instrumentation
+did its job: 21 min to a named offender instead of 4.2 h to a bare count, the
+init preserved by the init-level checkpoint, forensics dumped. The offender:
+particle 12, accept_count 470 (well under the warm cap), longdy 0.087 (a
+GENUINE loose-branch canonical certification; stalled=0 that sweep),
+non-finite on the CHEMISTRY-TANGENT side. Conclusion: the 65200/65789 class
+is NOT stall exits -- it is forward-mode tangent divergence at
+marginally-stable CERTIFIED fixed points. No primal-side predicate can flag
+it (the tight branch rejects every healthy proposal -- measured), and at
+~1%/sweep at prior-like beta a zero-tolerance raise means NO production
+ladder can pass stage 0.
+
+FIX (the plan's pre-authorized contingency): the sweep now MH-REJECTS a
+bad_grad proposal by flooring its L to -1e30 -- never a zeroed gradient: the
+old eval-level zero-for-hygiene meant a zeroed-gradient proposal could be
+ACCEPTED with a corrupted MH ratio, which is exactly the silent random-walk
+degradation the raise guarded against; the floor closes it properly. The
+class is a third state-dependent rejection alongside warmcap/stalled:
+logged per sweep (badgrad=), per-stage history checkpointed + exported
+(tangent_rejected / smc_tangent_rejected), forensics dumped on every
+occurrence. The loud raise is retained for the systematic regime: a sweep
+exceeding ceil(smc_tangent_reject_max_frac x N) events (Config field,
+default 0.05 -> 8 at N=144; 0.0 restores zero-tolerance) aborts.
+Detailed-balance status: same contract as warmcap (visible, ~0 late-ladder,
+mala_reversibility). Evidence for the tolerance: 65200 saw 1-4 events/sweep
+(0.7-2.8%) at beta=3e-5; a systematic AD bug shows as tens of percent.
+Resume semantics: the fix changes only proposal REJECTION handling, not the
+forward map or likelihood anchoring -- the 65789 init-level checkpoint
+remains valid; RESUME=1 after pulling this commit re-enters the ladder at
+beta=0 without re-paying the 2.1 h init.

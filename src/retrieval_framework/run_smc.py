@@ -359,6 +359,7 @@ def main() -> None:
                    smc_scale_diag_final=res["scale_diag_final"],
                    smc_warm_capped=res["warm_capped"],
                    smc_warm_stalled=res["warm_stalled"],
+                   smc_tangent_rejected=res["tangent_rejected"],
                    # evidence conditioning: smc_logZ is under the OPERATIONAL prior
                    # (T-P window x converged support, renormalized); the measured
                    # support fractions + the ZERO-FILLED box evidence ride along --

@@ -86,11 +86,18 @@ notes.md.)
 - **Warm mutation proposals** are rejected before their gradient is trusted:
   `_make_batch_eval` gates `L→-inf` at `accept_count >= warm_count_max` (warmcap)
   OR when the exit is not the runner's canonical certification
-  (`pipeline._proposal_converged` on ConvDiag.conv_normal; the `stalled` class --
-  NAS job 65200's finite-L/non-finite-gradient proposals). Both classes are
-  logged per sweep and must stay ~0 in the late ladder. A surviving bad gradient
-  fails FAST at the offending sweep and dumps per-particle forensics
-  (`bad_grad_stage###_sweep#.npz`) before the loud raise.
+  (`pipeline._proposal_converged` on ConvDiag.conv_normal; the `stalled` class).
+  A THIRD class -- `badgrad`: a certified, finite primal whose forward-mode
+  TANGENT is non-finite (NAS jobs 65200/65789; tangent divergence at
+  marginally-stable certified fixed points, ~1% of proposals at prior-like beta,
+  measurably unflaggable by any primal-side predicate) -- is MH-REJECTED with a
+  floored L (NEVER a zeroed-gradient acceptance, which would corrupt the MH
+  ratio), logged per sweep, and forensics-dumped
+  (`bad_grad_stage###_sweep#.npz`: indices, theta, ACC, longdy, chem-vs-RT
+  attribution). All three classes must stay ~0 in the late ladder. The loud
+  raise remains for the SYSTEMATIC regime: a single sweep exceeding
+  ceil(`smc_tangent_reject_max_frac` x N) badgrad events (default 5%) aborts --
+  that is AD breakage, not the stochastic tail.
 - **warm_extrapolate** is ON in the gpu preset (schema default off); seeds each
   warm solve at the first-order tangent prediction. Validate with a `SYNTH=1` A/B
   before relying on it.
@@ -156,7 +163,9 @@ longdy gate (WASP-107b Guillot+conden E2E verified). Two guardrails on the
 conden path: (1) **inference is refused with conden ON** — `validate_config`
 raises on `cfg_overrides["use_condense"]=True` with `run_inference=True` unless
 `allow_condense_inference=True`, because gradient-MALA through the pinned S8
-state is not reliably differentiable (0.91 rel jvp-vs-FD); conden runs as a
+state is not reliably differentiable (jvp-vs-FD relative error ~0.91, i.e.
+the tangent is about 91% wrong -- an order-unity failure, not a 9%
+mismatch); conden runs as a
 FORWARD model. This is enforced TWICE: the early `cfg_overrides` gate in
 `validate_config`, plus a RESOLVED-config gate in
 `retrieval_forward._refuse_condense_inference` (on `chem.conden_spec` after

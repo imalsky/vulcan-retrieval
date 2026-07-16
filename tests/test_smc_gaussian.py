@@ -139,20 +139,14 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
     assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
 
 
-def test_bad_gradient_raises_with_forensics_dump(tmp_path, monkeypatch):
-    """A finite-likelihood/non-finite-gradient event must (1) fail FAST at the
-    offending sweep, (2) dump per-particle forensics (indices, theta, attribution)
-    next to the checkpoint, and (3) still raise loudly -- NAS job 65200 died with
-    a bare count and nothing to debug with."""
+def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
+    """Produce an init-level checkpoint (mutation dies immediately), then return a
+    fresh pipe whose gradient evaluator poisons particle 0 with a NaN gradient on
+    every eval -- exercised on the MUTATION path only via resume (the init has its
+    own separate n_bad raise)."""
     import pytest
-    cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-                   num_samples=32, num_chains=1)
     ck = tmp_path / "ck.npz"
 
-    # produce an init-level checkpoint first (mutation dies immediately), so the
-    # poisoned evaluator below is exercised on the MUTATION path only -- the init
-    # has its own separate n_bad raise
     def dying_make_mutation(pipe_, n_mcmc):
         def mutate(*a, **k):
             raise RuntimeError("die before any sweep")
@@ -161,11 +155,11 @@ def test_bad_gradient_raises_with_forensics_dump(tmp_path, monkeypatch):
     real_make_mutation = P._make_mutation
     monkeypatch.setattr(P, "_make_mutation", dying_make_mutation)
     with pytest.raises(RuntimeError, match="die before any sweep"):
-        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(5), progress=False,
+        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(seed), progress=False,
                        checkpoint_path=ck)
     monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
+    assert ck.exists() and int(np.load(ck)["init_checkpoint"]) == 1
 
-    # poison the stub gradient evaluator: particle 0 gets a finite L but NaN grad
     pipe = _stub_pipe(cfg)
     evg, el, _, _ = P._get_batch_evals(pipe)
 
@@ -177,21 +171,50 @@ def test_bad_gradient_raises_with_forensics_dump(tmp_path, monkeypatch):
         return L, G, Y_, refs_, jnp.sum(bad.astype(jnp.int32)), DY, stats
 
     pipe._stub_evals = (bad_evg, el)
-    with pytest.raises(RuntimeError, match="non-finite-gradient") as ei:
-        P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
-                       checkpoint_path=ck, resume_from=ck)
-    # fails at sweep 1 of stage 0, with the offender identified in the message
-    assert "sweep 1/3" in str(ei.value)
-    assert "indices [0]" in str(ei.value)
-    dumps = sorted(tmp_path.glob("bad_grad_stage000_sweep1.npz"))
+    return pipe, ck
+
+
+def test_tangent_blown_proposal_rejected_not_fatal(tmp_path, monkeypatch):
+    """A finite-likelihood/non-finite-tangent proposal WITHIN the per-sweep
+    tolerance is MH-REJECTED (never a zeroed-gradient acceptance), its forensics
+    are dumped, and the RUN COMPLETES -- the NAS 65789 lesson: the class is a
+    ~1% stochastic tail at prior-like beta, and a zero-tolerance raise means no
+    production ladder can ever finish stage 0."""
+    cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
+                   num_samples=32, num_chains=1)   # default tolerance 0.05 -> 2/sweep
+    pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
+    res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
+                         checkpoint_path=ck, resume_from=ck)
+    assert res["reached_beta1"]
+    assert int(np.sum(res["tangent_rejected"])) > 0     # class visible per stage
+    dumps = sorted(tmp_path.glob("bad_grad_stage*_sweep*.npz"))
     assert dumps, "forensics npz was not written next to the checkpoint"
     d = np.load(dumps[0])
     for k in ("bad_grad", "chem_tan_bad", "acc", "longdy", "conv_ok",
               "theta_proposal", "loglik_proposal"):
         assert k in d.files
     assert np.flatnonzero(d["bad_grad"]).tolist() == [0]
-    # the init-level checkpoint made even this stage-0 death resumable
-    assert ck.exists() and int(np.load(ck)["init_checkpoint"]) == 1
+    # the poisoned particle's carried state stayed finite (its proposals were
+    # rejected, never accepted with a zeroed gradient)
+    assert np.all(np.isfinite(np.asarray(res["U"])))
+
+
+def test_tangent_blown_over_threshold_raises(tmp_path, monkeypatch):
+    """Above the per-sweep tolerance the loud raise is intact: a systematic AD
+    breakage must never be absorbed as a rejection class."""
+    import pytest
+    cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
+                   num_samples=32, num_chains=1,
+                   smc_tangent_reject_max_frac=0.0)   # zero tolerance
+    pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="non-finite-gradient") as ei:
+        P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
+                       checkpoint_path=ck, resume_from=ck)
+    assert "sweep 1/3" in str(ei.value)
+    assert "indices [0]" in str(ei.value)
+    assert sorted(tmp_path.glob("bad_grad_stage000_sweep1.npz"))
 
 
 def test_calibrate_benchmarks_stage0_conditions(tmp_path):

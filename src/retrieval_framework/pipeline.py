@@ -1376,6 +1376,15 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         else:
             L_new, G_new, Y_new, refs_new, n_bad, DY_new, stats = move_vg(
                 U_new, Y, refs)
+        # Tangent-blown proposals (finite primal, non-finite forward-mode tangent
+        # at a canonically-certified state -- the NAS 65200/65789 class) are
+        # MH-REJECTED here by flooring L: the eval zeroed their gradient for
+        # arithmetic hygiene, and without this floor a zeroed-gradient proposal
+        # could be ACCEPTED with a corrupted MH ratio (the silent random-walk
+        # degradation the old zero-tolerance raise guarded against). The class
+        # stays loud: counted per sweep (badgrad=), forensics dumped, and the
+        # host raises when a sweep exceeds smc_tangent_reject_max_frac * N.
+        L_new = jnp.where(stats.bad_grad, jnp.asarray(-1.0e30, L_new.dtype), L_new)
         GT_new = dlogprior(U_new) + beta * G_new
         # asymmetric MH correction for the preconditioned Langevin proposal
         df = (U_new - U - step * (scale * scale) * GT) / scale
@@ -1401,6 +1410,8 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
 
     sweep_jit = jax.jit(sweep)
 
+    max_frac = float(getattr(pipe.cfg, "smc_tangent_reject_max_frac", 0.05))
+
     def mutate(key, U, Y, refs, L, G, DY, beta, step, scale,
                where: str = "mutation", dump_dir=None, dump_tag: str = ""):
         keys = jax.random.split(key, n_mcmc)   # same stream the lax.scan consumed
@@ -1414,12 +1425,13 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             n_cap_j = int(jax.device_get(stats.n_capped))
             n_stall_j = int(jax.device_get(stats.n_stalled))
             acc_j = float(jax.device_get(acc))
-            # warmcap/stalled = state-dependent rejection classes the MH correction
-            # cannot see -- both must stay near zero in the converged-ladder stages.
+            # warmcap/stalled/badgrad = state-dependent rejection classes the MH
+            # correction cannot see -- all must stay near zero in the
+            # converged-ladder stages.
             logger.info(f"    sweep {j + 1}/{n_mcmc}: accept={acc_j:.2f} "
                         f"rejected={int(jax.device_get(n_rej))}/{n_prop} "
                         f"warmcap={n_cap_j} stalled={n_stall_j} "
-                        f"n_bad_grad={n_bad_j}")
+                        f"badgrad={n_bad_j}")
             if n_bad_j > 0:
                 dump_path = None
                 if dump_dir is not None:
@@ -1431,7 +1443,8 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
                         bad_grad=stats.bad_grad, chem_tan_bad=stats.chem_tan_bad,
                         acc=stats.acc, longdy=stats.longdy, conv_ok=stats.conv_ok,
                         theta_proposal=theta_new, loglik_proposal=L_new),
-                    dump_path=dump_path)
+                    dump_path=dump_path,
+                    n_particles=n_prop, max_frac=max_frac)
             accs.append(acc_j)
             n_bad_tot += n_bad_j
             n_cap_tot += n_cap_j
@@ -1443,16 +1456,22 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
 
 
 def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]] = None,
-                           dump_path: Optional[Path] = None) -> None:
-    """Raise loudly on flagged gradient pathologies from a mutation call.
+                           dump_path: Optional[Path] = None,
+                           n_particles: int = 0, max_frac: float = 0.0) -> None:
+    """Handle flagged tangent pathologies from a mutation sweep: dump + warn on
+    every occurrence, RAISE only above the systematic-breakage threshold.
 
-    ``forensics`` (per-particle device arrays: bad_grad, chem_tan_bad, acc, longdy,
-    conv_ok, theta_proposal, loglik_proposal) is dumped to ``dump_path`` (npz) and
-    summarized in the exception message BEFORE raising. The raise itself is
-    non-negotiable (loud-error rule: zeroing bad gradients would silently degrade
-    MALA to a random walk) -- but a multi-hour GPU run must not die without
-    recording WHICH proposals failed and WHERE (chemistry tangent vs RT vjp);
-    NAS job 65200 left nothing to debug with."""
+    A finite-likelihood/non-finite-tangent proposal at a canonically-CERTIFIED
+    state is a measured stochastic class (~1% of proposals at prior-like beta;
+    NAS jobs 65200/65789 -- the tangent recurrence diverges at marginally-stable
+    fixed points no primal-side predicate can flag: the tight branch rejects
+    every healthy proposal). The sweep MH-REJECTS these proposals (L floored --
+    never a zeroed gradient, which could be silently ACCEPTED with a corrupted
+    MH ratio), so at the tail rate the sampler is sound and the run continues.
+    ``forensics`` (per-particle device arrays) is dumped to ``dump_path`` and
+    summarized in the log on EVERY occurrence. A single sweep exceeding
+    ceil(max_frac * n_particles) events is not the tail -- it is systematic AD
+    breakage, and the host raises loudly (no silent-degradation regime)."""
     n_bad = int(jax.device_get(n_bad))
     if n_bad == 0:
         return
@@ -1469,11 +1488,19 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
         if dump_path is not None:
             save_npz(Path(dump_path), **f)
             detail += f" Per-particle forensics dumped to {dump_path}."
-    raise RuntimeError(
-        f"{n_bad} finite-likelihood/non-finite-gradient event(s) during {where} "
-        "-- AD pathology in the chemistry tangents or RT vjp. Refusing to "
-        "continue: zeroing these would silently degrade MALA to a random walk "
-        "(project rule: loud errors, no silent fallbacks)." + detail)
+    threshold = int(math.ceil(max_frac * max(0, int(n_particles))))
+    if n_bad > threshold:
+        raise RuntimeError(
+            f"{n_bad} finite-likelihood/non-finite-gradient event(s) during {where} "
+            f"exceed the tangent-reject tolerance ({threshold} = "
+            f"ceil({max_frac:g} x {n_particles})) -- this is not the stochastic "
+            "marginal-tangent tail but systematic AD breakage in the chemistry "
+            "tangents or RT vjp; refusing to continue (loud-error rule)." + detail)
+    logger.warning(
+        f"{n_bad} tangent-blown proposal(s) during {where}: finite certified "
+        f"primal, non-finite forward-mode tangent -- MH-REJECTED (never zeroed; "
+        f"within the tolerance {threshold} = ceil({max_frac:g} x {n_particles})). "
+        "Watch this stay ~0 in the late ladder." + detail)
 
 
 def tune_step_size(pipe: Pipeline, key) -> float:
@@ -1508,8 +1535,8 @@ def tune_step_size(pipe: Pipeline, key) -> float:
 
 def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, DY,
                       betas, ess_hist, acc_hist, logz_inc_hist, step_hist,
-                      uniq_hist, capped_hist, stalled_hist, scale, last_step,
-                      logZ, init_stats) -> None:
+                      uniq_hist, capped_hist, stalled_hist, badgrad_hist, scale,
+                      last_step, logZ, init_stats) -> None:
     """Atomically write the SMC checkpoint (single writer for the init-level and
     per-stage checkpoints, so their schemas stay in lockstep by construction).
     ``last_step=-1`` marks the INIT-LEVEL checkpoint (written right after
@@ -1528,6 +1555,7 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, DY,
              unique_particles=np.asarray(uniq_hist, np.int64),
              warm_capped=np.asarray(capped_hist, np.int64),
              warm_stalled=np.asarray(stalled_hist, np.int64),
+             tangent_rejected=np.asarray(badgrad_hist, np.int64),
              scale_diag=np.asarray(scale),
              last_step=np.asarray(int(last_step), np.int64),
              init_checkpoint=np.asarray(1 if int(last_step) < 0 else 0, np.int64),
@@ -1607,6 +1635,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     ess_hist, acc_hist, logz_inc_hist, step_hist, uniq_hist = [], [], [], [], []
     capped_hist: List[int] = []
     stalled_hist: List[int] = []
+    badgrad_hist: List[int] = []
     logZ = 0.0
     init_stats: Optional[Dict[str, int]] = None
 
@@ -1630,6 +1659,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
             capped_hist = [int(x) for x in ck["warm_capped"]]
         if "warm_stalled" in ck.files:
             stalled_hist = [int(x) for x in ck["warm_stalled"]]
+        if "tangent_rejected" in ck.files:
+            badgrad_hist = [int(x) for x in ck["tangent_rejected"]]
         if "init_stats_keys" in ck.files:
             init_stats = {str(k): int(v) for k, v in
                           zip(ck["init_stats_keys"], ck["init_stats_vals"])}
@@ -1683,6 +1714,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,
                               capped_hist=capped_hist, stalled_hist=stalled_hist,
+                              badgrad_hist=badgrad_hist,
                               scale=scale, last_step=-1, logZ=logZ,
                               init_stats=init_stats)
             logger.info(f"init-level checkpoint written to {checkpoint_path} "
@@ -1736,7 +1768,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # mutate at the offending sweep, after dumping per-particle forensics
         # next to the checkpoint
         key, sub = jax.random.split(key)
-        U, Y, refs, L, G, DY, acc, _n_bad, n_capped, n_stalled = mutate(
+        U, Y, refs, L, G, DY, acc, n_bad, n_capped, n_stalled = mutate(
             sub, U, Y, refs, L, G, DY,
             jnp.asarray(beta_new, dtype),
             jnp.asarray(math.exp(log_step), dtype),
@@ -1749,6 +1781,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         acc_f = float(acc)
         n_capped_f = int(n_capped)
         n_stalled_f = int(n_stalled)
+        n_bad_f = int(n_bad)
         U_np = np.asarray(jax.device_get(U), np.float64)
         n_uniq = int(np.unique(np.round(U_np, 9), axis=0).shape[0])
         # (5) Robbins-Monro step-size trim toward the target acceptance (fine-tuning
@@ -1762,12 +1795,14 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         logz_inc_hist.append(logZ_inc); step_hist.append(math.exp(log_step)); uniq_hist.append(n_uniq)
         capped_hist.append(n_capped_f)
         stalled_hist.append(n_stalled_f)
+        badgrad_hist.append(n_bad_f)
         elapsed = time.perf_counter() - t_start
         if hasattr(it, "set_postfix"):
             it.set_postfix(beta=f"{beta:.2e}", ess=f"{ess:.0f}", acc=f"{acc_f:.2f}")
         logger.info(f"SMC {i:03d}: beta={beta:.3e} ESS={ess:.1f}/{N} accept={acc_f:.3f} "
                     f"unique={n_uniq}/{N} step={math.exp(log_step):.3g} logZ={logZ:.2f} "
-                    f"warmcap={n_capped_f} stalled={n_stalled_f} elapsed={elapsed/60:.1f}min")
+                    f"warmcap={n_capped_f} stalled={n_stalled_f} badgrad={n_bad_f} "
+                    f"elapsed={elapsed/60:.1f}min")
 
         if checkpoint_path is not None:
             _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs, L=L, G=G,
@@ -1775,6 +1810,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,
                               capped_hist=capped_hist, stalled_hist=stalled_hist,
+                              badgrad_hist=badgrad_hist,
                               scale=scale, last_step=i, logZ=logZ,
                               init_stats=init_stats)
 
@@ -1835,6 +1871,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         init_stats=(init_stats or {}),
         warm_capped=np.asarray(capped_hist, np.int64),
         warm_stalled=np.asarray(stalled_hist, np.int64),
+        tangent_rejected=np.asarray(badgrad_hist, np.int64),
         step_size_history=np.asarray(step_hist), unique_particles=np.asarray(uniq_hist, np.int64),
         scale_diag_final=np.asarray(scale), theta_draws=theta_draws,
     )
