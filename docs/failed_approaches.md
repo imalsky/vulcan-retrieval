@@ -137,6 +137,29 @@ and the session-memory incident log.
 27. **Differentiating Tirr through Heng+14 `expn` in forward mode.**
     Pathologically slow over a deep column (huge argument range);
     differentiate the Tco leaf directly. -- 2026-06-17; VULCAN-JAX CLAUDE.md.
+67. **MH-rejecting the tangent-blown (badgrad) proposal class
+    (`smc_tangent_reject_max_frac`, commit 273b6d5).** Designed for a ~1%
+    theta-INDEPENDENT stochastic tail; job 65815 forensics (13 sweeps, 64
+    events) measured the class theta-DEPENDENT and posterior-concentrated:
+    6.5% of certified proposals (5.1/5.9/11.0% by stage), 1.2% at Z=1-12x
+    solar vs 11.7% at 67-99x, 11.3% at C/O 0.10-0.18 vs 4.4% above 0.32,
+    all 64 chemistry-side, 44% at longdy<0.01 (not only marginal certs),
+    with the cloud median drifting lnZ +0.77->+1.71 INTO the dense region.
+    Forced rejection = theta-correlated suppression of the posterior bulk
+    (metallicity bias), and the 5% per-sweep abort trips with P~6%/sweep at
+    the measured base rate -- certain over a 240-sweep ladder (65815 died at
+    stage 2 sweep 2, 11/144 > 8). Local replays could NOT reproduce the
+    blowup at zero-increment warm re-certification from each theta's own
+    cold column (offenders and controls all tangent-finite, prep tangents
+    finite) -- the divergence needs the actual mutation-move warm trajectory,
+    so no pointwise clip or certification tightening can remove it (38% of
+    offenders are loose-branch certs, but 44% are well-converged). Replaced
+    by ZERO-DRIFT MALA handling (valid MH: eval-zeroed drift used
+    consistently in both proposal densities; certified likelihood decides
+    acceptance) + `smc_tangent_bad_max_frac` systematic-breakage backstop
+    (0.25). -- 2026-07-16; job 65815; forensics
+    runs/w39b_smc_retrieval/forensics_65815/; notes.md 2026-07-16.
+
 
 Reverse-mode steady-state adjoint dead-ends (VULCAN-JAX; the reason the SMC
 uses forward-mode MALA and reverse-mode stays off the hot path):
@@ -342,6 +365,12 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
 - **65789** (07-15): one bad grad at stage-0 sweep 1 on a CERTIFIED proposal
   (chem-tangent side) -> zero-tolerance raise replaced by reject-with-
   tolerance (`smc_tangent_reject_max_frac`).
+- **65815** (07-15/16): real-data resume died at stage 2 sweep 2 on the 5%
+  badgrad gate (11/144 > 8); forensics: class is theta-dependent
+  (high-Z/low-C-O), 6.5% of certified proposals, rising along the ladder ->
+  zero-drift MALA handling + 0.25 backstop (see #67). Also measured: 68% of
+  warm proposals burn to the 1500 warmcap; ~2 h/stage x 40 stages exceeds the
+  24 h walltime (checkpoint+resume across submissions is the operating mode).
 - **NAS proxy**: the proxy hostname does not resolve from the front end;
   `unset https_proxy http_proxy` for git. rsync / tarballs / wrapped remote
   commands prohibited (scp -r only).

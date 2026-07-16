@@ -143,7 +143,10 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
     """Produce an init-level checkpoint (mutation dies immediately), then return a
     fresh pipe whose gradient evaluator poisons particle 0 with a NaN gradient on
     every eval -- exercised on the MUTATION path only via resume (the init has its
-    own separate n_bad raise)."""
+    own badgrad handling). The stub mirrors the real evaluators' contract: the
+    non-finite gradient entries are ZEROED and the particle is flagged in
+    stats.bad_grad (pipeline._rt_val_grad zeroes; the flag drives the zero-drift
+    handling + forensics)."""
     import pytest
     ck = tmp_path / "ck.npz"
 
@@ -167,6 +170,9 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
         L, G, Y_, refs_, n_bad, DY, stats = evg(U, Y, refs)
         G = G.at[0, 0].set(jnp.nan)
         bad = jnp.isfinite(L) & ~jnp.all(jnp.isfinite(G), axis=1)
+        # mirror the real evaluators: flag, then zero the non-finite entries
+        # (the zeroed drift is what the MH correction sees on both sides)
+        G = jnp.where(jnp.isfinite(G), G, 0.0)
         stats = stats._replace(bad_grad=bad)
         return L, G, Y_, refs_, jnp.sum(bad.astype(jnp.int32)), DY, stats
 
@@ -174,15 +180,18 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
     return pipe, ck
 
 
-def test_tangent_blown_proposal_rejected_not_fatal(tmp_path, monkeypatch):
-    """A finite-likelihood/non-finite-tangent proposal WITHIN the per-sweep
-    tolerance is MH-REJECTED (never a zeroed-gradient acceptance), its forensics
-    are dumped, and the RUN COMPLETES -- the NAS 65789 lesson: the class is a
-    ~1% stochastic tail at prior-like beta, and a zero-tolerance raise means no
-    production ladder can ever finish stage 0."""
+def test_tangent_blown_proposal_zero_drift_not_fatal(tmp_path, monkeypatch):
+    """A finite-likelihood/non-finite-tangent proposal WITHIN the backstop is
+    handled as a ZERO-DRIFT MALA move (zeroed gradient entries used consistently
+    in both proposal densities; the certified likelihood decides acceptance),
+    its forensics are dumped, and the RUN COMPLETES. The NAS 65815 lesson: the
+    class is theta-DEPENDENT (dense in the high-Z/low-C-O corner the posterior
+    favors), so the pre-65815 MH-reject-with-floored-L handling was a
+    theta-correlated suppression of the posterior bulk AND its 5% per-sweep
+    abort tripped with near-certainty over a full ladder."""
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
                    smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-                   num_samples=32, num_chains=1)   # default tolerance 0.05 -> 2/sweep
+                   num_samples=32, num_chains=1)   # default backstop 0.25 -> 8/sweep
     pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
                          checkpoint_path=ck, resume_from=ck)
@@ -195,19 +204,21 @@ def test_tangent_blown_proposal_rejected_not_fatal(tmp_path, monkeypatch):
               "theta_proposal", "loglik_proposal"):
         assert k in d.files
     assert np.flatnonzero(d["bad_grad"]).tolist() == [0]
-    # the poisoned particle's carried state stayed finite (its proposals were
-    # rejected, never accepted with a zeroed gradient)
+    # the carried state stays finite whether or not badgrad proposals were
+    # accepted: the eval zeroes the non-finite gradient entries, so nothing
+    # non-finite can enter U/G/L through the zero-drift acceptance path
     assert np.all(np.isfinite(np.asarray(res["U"])))
+    assert np.all(np.isfinite(np.asarray(res["theta_draws"])))
 
 
 def test_tangent_blown_over_threshold_raises(tmp_path, monkeypatch):
-    """Above the per-sweep tolerance the loud raise is intact: a systematic AD
-    breakage must never be absorbed as a rejection class."""
+    """Above the per-sweep backstop the loud raise is intact: a systematic AD
+    breakage must never be absorbed as a zero-drift class."""
     import pytest
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
                    smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
                    num_samples=32, num_chains=1,
-                   smc_tangent_reject_max_frac=0.0)   # zero tolerance
+                   smc_tangent_bad_max_frac=0.0)   # zero tolerance
     pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="non-finite-gradient") as ei:
         P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,

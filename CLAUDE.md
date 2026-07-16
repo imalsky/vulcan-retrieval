@@ -88,16 +88,30 @@ notes.md.)
   OR when the exit is not the runner's canonical certification
   (`pipeline._proposal_converged` on ConvDiag.conv_normal; the `stalled` class).
   A THIRD class -- `badgrad`: a certified, finite primal whose forward-mode
-  TANGENT is non-finite (NAS jobs 65200/65789; tangent divergence at
-  marginally-stable certified fixed points, ~1% of proposals at prior-like beta,
-  measurably unflaggable by any primal-side predicate) -- is MH-REJECTED with a
-  floored L (NEVER a zeroed-gradient acceptance, which would corrupt the MH
-  ratio), logged per sweep, and forensics-dumped
+  TANGENT is non-finite (NAS jobs 65200/65789/65815; tangent divergence along
+  the warm continuation, unflaggable by any primal-side predicate). Job 65815
+  forensics measured it theta-DEPENDENT and posterior-concentrated (6.5% of
+  certified proposals; 1.2% at Z=1-12x solar vs 11.7% at 67-99x; 11.3% at
+  C/O 0.10-0.18; RISING along the ladder as the cloud drifts high-Z), so it
+  is handled as a ZERO-DRIFT MALA move, NOT a rejection: the eval zeroes the
+  non-finite gradient entries and the same zeroed drift enters both proposal
+  densities (a valid MH kernel -- the drift enters the proposal, not the
+  target; the certified likelihood decides acceptance); its DY rows are
+  zeroed (that particle's next warm_extrapolate seed degrades to the plain
+  carried column). The pre-65815 MH-reject-with-floored-L design suppressed
+  the posterior bulk (metallicity bias) and its 5% per-sweep abort was
+  statistically certain to kill a full ladder -- notes.md 2026-07-16 +
+  docs/failed_approaches.md. Same handling at init phase 2 (keep survivors
+  with zeroed drift; culling would bias the initial importance sample).
+  Logged per sweep (badgrad=), forensics-dumped
   (`bad_grad_stage###_sweep#.npz`: indices, theta, ACC, longdy, chem-vs-RT
-  attribution). All three classes must stay ~0 in the late ladder. The loud
-  raise remains for the SYSTEMATIC regime: a single sweep exceeding
-  ceil(`smc_tangent_reject_max_frac` x N) badgrad events (default 5%) aborts --
-  that is AD breakage, not the stochastic tail.
+  attribution); expect it to TRACK the high-Z/low-C-O corner -- a broad
+  theta-INDEPENDENT rate is the anomaly to investigate. warmcap/stalled must
+  still stay ~0 in the late ladder. The loud raise remains as a
+  SYSTEMATIC-BREAKAGE backstop: a single sweep exceeding
+  ceil(`smc_tangent_bad_max_frac` x N) badgrad events (default 25%; measured
+  worst physical sweep 7.6%) aborts -- that is AD breakage, not the corner
+  class.
 - **warm_extrapolate** is ON in the gpu preset (schema default off); seeds each
   warm solve at the first-order tangent prediction. Validate with a `SYNTH=1` A/B
   before relying on it.

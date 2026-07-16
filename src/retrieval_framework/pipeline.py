@@ -772,10 +772,16 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             refs_new = jnp.where(ok[:, None], C_[:, :2], jnp.zeros_like(refs))
             if want_grad:
                 if want_dy:
-                    # NaN hygiene only: a pinned/rejected proposal's tangents may be
-                    # garbage, and though MH can never accept it into the carried
-                    # state (-1e30 L), zeroed is strictly safer than untouched
-                    DY = jnp.where(ok[:, None, None, None], DY, jnp.zeros_like(DY))
+                    # NaN hygiene: a pinned/rejected proposal's tangents may be
+                    # garbage, and a BADGRAD proposal (finite certified primal,
+                    # non-finite tangent) is now ACCEPTABLE under the zero-drift
+                    # MH handling -- its DY rows are exactly the non-finite
+                    # tangents, so they MUST be zeroed here or an accepted
+                    # badgrad particle poisons its next warm_extrapolate seed
+                    # (Y + NaN -> NaN carry). DY=0 degrades that particle's next
+                    # seed to the plain carried column, nothing else.
+                    ok_dy = ok & ~stats.bad_grad
+                    DY = jnp.where(ok_dy[:, None, None, None], DY, jnp.zeros_like(DY))
                 # uniform tail: EvalStats for BOTH the mutation-capped and the init
                 # (uncapped) variants -- _init_state reads .acc/.conv_ok to tell a
                 # re-certification failure (cull) from a true RT/AD blow-up (raise);
@@ -1049,9 +1055,12 @@ def _get_batch_evals(pipe: Pipeline):
         def eval_vg(U, Y, refs):
             L, G = jax.vmap(vg1)(U)
             bad = jnp.isfinite(L) & ~jnp.all(jnp.isfinite(G), axis=1)
+            # mirror the real evaluators' full AD-pathology contract: flag the
+            # particle AND zero the non-finite gradient entries (the zeroed
+            # drift is what the zero-drift MH handling uses on both sides)
+            G = jnp.where(jnp.isfinite(G), G, jnp.zeros_like(G))
             # all-healthy EvalStats (stubs have no warm cap or stall class) except
-            # bad_grad, which mirrors the real evaluators' AD-pathology flag --
-            # keeps the 7-tuple contract uniform
+            # bad_grad -- keeps the 7-tuple contract uniform
             stats = _zero_eval_stats(U.shape[0], U.dtype)._replace(bad_grad=bad)
             return (L, G, Y, refs, jnp.sum(bad.astype(jnp.int32)), None, stats)
 
@@ -1228,11 +1237,38 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         acc2_np = None
     n_bad = int(jax.device_get(n_bad))
     if n_bad > 0:
-        raise RuntimeError(
-            f"{n_bad} SURVIVING particle(s) produced a finite likelihood but a "
-            "NON-FINITE gradient at initialization -- AD pathology in the chemistry "
-            "tangents or RT vjp (these already converged in phase 1, so it is not a "
-            "hard corner); refusing to continue (no silent gradient-free fallback).")
+        # The tangent-blown class (finite certified primal, non-finite
+        # forward-mode tangent; NAS 65200/65789/65815) also occurs on the init
+        # phase-2 warm re-certifications, and it is theta-DEPENDENT (dense in
+        # the high-Z/low-C-O corner a real-data prior cloud legitimately
+        # samples), so culling or raising on it would bias the initial
+        # importance sample against that corner. Consistent with the mutation
+        # kernel's zero-drift handling: keep the particle, keep its certified
+        # likelihood, keep the eval-zeroed gradient entries (its first MALA
+        # move starts with prior-only drift), zero its DY rows below, and
+        # raise only above the systematic-breakage backstop.
+        frac_tol = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
+        thr_bad = int(math.ceil(frac_tol * n_phase2))
+        bad2 = np.asarray(jax.device_get(stats2.bad_grad), bool)
+        if n_bad > thr_bad:
+            raise RuntimeError(
+                f"{n_bad}/{n_phase2} SURVIVING particle(s) produced a finite "
+                f"likelihood but a NON-FINITE gradient at initialization, above "
+                f"the systematic-breakage backstop ({thr_bad} = "
+                f"ceil({frac_tol:g} x {n_phase2})) -- this is not the "
+                "theta-dependent tangent corner class but systematic AD "
+                "breakage; refusing to continue (loud-error rule). Indices "
+                f"{np.flatnonzero(bad2).tolist()}.")
+        logger.warning(
+            f"init 2/2: {n_bad}/{n_phase2} survivor(s) have a finite certified "
+            f"likelihood but a non-finite forward-mode tangent (indices "
+            f"{np.flatnonzero(bad2).tolist()}) -- kept with zeroed gradient "
+            "entries (zero-drift first move; the NAS 65815 theta-dependent "
+            "class, expected in the high-Z/low-C-O corner). Their DY rows are "
+            "zeroed for the warm_extrapolate seed.")
+        if DY is not None:
+            DY = jnp.where(jnp.asarray(bad2)[:, None, None, None],
+                           jnp.zeros_like(DY), DY)
 
     # cull re-certification failures; raise on true RT/AD deaths
     L_np = np.asarray(jax.device_get(L), np.float64)
@@ -1314,12 +1350,12 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     LOOP over a single-sweep jitted kernel (RNG identical to the former
     lax.scan: the same pre-split keys, consumed in the same order). The host
     loop is what makes the run debuggable: each sweep's health is checked as it
-    completes -- a bad-gradient event fails FAST at the offending sweep (not
-    after the whole stage; NAS job 65200 burned 2 h of a doomed stage 0) and the
-    per-particle forensics (indices, theta, accept counts, longdy, chemistry-vs-RT
-    attribution) are dumped to ``dump_dir/bad_grad_<dump_tag>_sweep<j>.npz``
-    before the loud raise. The per-sweep device sync costs microseconds against
-    ~20-minute GPU sweeps.
+    completes -- every badgrad event dumps its per-particle forensics (indices,
+    theta, accept counts, longdy, chemistry-vs-RT attribution) to
+    ``dump_dir/bad_grad_<dump_tag>_sweep<j>.npz`` as it happens, and a sweep
+    beyond the systematic-breakage backstop fails FAST at that sweep (not
+    after the whole stage; NAS job 65200 burned 2 h of a doomed stage 0). The
+    per-sweep device sync costs microseconds against ~20-minute GPU sweeps.
 
     Every proposal's chemistry warm-starts from the particle's carried converged
     column Y (continuation refs = the (lnZ, c_o) that column was converged at), so
@@ -1377,14 +1413,25 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             L_new, G_new, Y_new, refs_new, n_bad, DY_new, stats = move_vg(
                 U_new, Y, refs)
         # Tangent-blown proposals (finite primal, non-finite forward-mode tangent
-        # at a canonically-certified state -- the NAS 65200/65789 class) are
-        # MH-REJECTED here by flooring L: the eval zeroed their gradient for
-        # arithmetic hygiene, and without this floor a zeroed-gradient proposal
-        # could be ACCEPTED with a corrupted MH ratio (the silent random-walk
-        # degradation the old zero-tolerance raise guarded against). The class
+        # at a canonically-certified state -- the NAS 65200/65789/65815 class)
+        # are handled as ZERO-DRIFT MALA moves, not rejections. The eval already
+        # zeroed the non-finite gradient entries, and that SAME zeroed drift
+        # enters the reverse proposal density below (GT_new) and -- if accepted
+        # -- the particle's next forward density (the carried G): MALA with any
+        # measurable drift b(x) is a valid MH kernel (b enters the PROPOSAL, not
+        # the target), so the finite certified likelihood decides acceptance
+        # unbiasedly. The pre-65815 design floored L here to force rejection;
+        # job 65815 forensics showed the class is theta-DEPENDENT (11.7% of
+        # certified proposals at Z=67-99x solar vs 1.2% at 1-12x; 11.3% at
+        # C/O 0.10-0.18) and sits exactly in the W39b posterior bulk, so the
+        # forced rejection multiplied the target by a theta-correlated
+        # indicator -- a metallicity-posterior bias -- and its 5% per-sweep
+        # abort was statistically certain to kill any full ladder. The class
         # stays loud: counted per sweep (badgrad=), forensics dumped, and the
-        # host raises when a sweep exceeds smc_tangent_reject_max_frac * N.
-        L_new = jnp.where(stats.bad_grad, jnp.asarray(-1.0e30, L_new.dtype), L_new)
+        # host raises when a sweep exceeds smc_tangent_bad_max_frac * N
+        # (systematic AD breakage, not the physical corner class). The
+        # accepted particle's DY rows were zeroed in eval_batch (NaN hygiene
+        # for the warm_extrapolate seed).
         GT_new = dlogprior(U_new) + beta * G_new
         # asymmetric MH correction for the preconditioned Langevin proposal
         df = (U_new - U - step * (scale * scale) * GT) / scale
@@ -1410,7 +1457,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
 
     sweep_jit = jax.jit(sweep)
 
-    max_frac = float(getattr(pipe.cfg, "smc_tangent_reject_max_frac", 0.05))
+    max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
 
     def mutate(key, U, Y, refs, L, G, DY, beta, step, scale,
                where: str = "mutation", dump_dir=None, dump_tag: str = ""):
@@ -1459,19 +1506,23 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
                            dump_path: Optional[Path] = None,
                            n_particles: int = 0, max_frac: float = 0.0) -> None:
     """Handle flagged tangent pathologies from a mutation sweep: dump + warn on
-    every occurrence, RAISE only above the systematic-breakage threshold.
+    every occurrence, RAISE only above the systematic-breakage backstop.
 
     A finite-likelihood/non-finite-tangent proposal at a canonically-CERTIFIED
-    state is a measured stochastic class (~1% of proposals at prior-like beta;
-    NAS jobs 65200/65789 -- the tangent recurrence diverges at marginally-stable
-    fixed points no primal-side predicate can flag: the tight branch rejects
-    every healthy proposal). The sweep MH-REJECTS these proposals (L floored --
-    never a zeroed gradient, which could be silently ACCEPTED with a corrupted
-    MH ratio), so at the tail rate the sampler is sound and the run continues.
-    ``forensics`` (per-particle device arrays) is dumped to ``dump_path`` and
-    summarized in the log on EVERY occurrence. A single sweep exceeding
-    ceil(max_frac * n_particles) events is not the tail -- it is systematic AD
-    breakage, and the host raises loudly (no silent-degradation regime)."""
+    state is the NAS 65200/65789/65815 class: the forward-mode tangent diverges
+    along the warm continuation while the primal certifies (no primal-side
+    predicate can flag it). Job 65815 forensics measured it theta-DEPENDENT --
+    6.5% of certified proposals overall, 1.2% at Z=1-12x solar vs 11.7% at
+    67-99x, 11.3% at C/O 0.10-0.18, growing as the cloud drifts into the
+    posterior bulk -- so it is NOT a sparse stochastic tail. The sweep handles
+    these proposals as ZERO-DRIFT MALA moves (the eval zeroes the non-finite
+    gradient entries; the same zeroed drift enters both proposal densities;
+    the certified likelihood decides acceptance) -- a valid MH kernel with no
+    theta-correlated suppression of the posterior. ``forensics`` (per-particle
+    device arrays) is dumped to ``dump_path`` and summarized in the log on
+    EVERY occurrence. A single sweep exceeding ceil(max_frac * n_particles)
+    events is far beyond the measured physical class (max 7.6%/sweep, job
+    65815) -- that is systematic AD breakage, and the host raises loudly."""
     n_bad = int(jax.device_get(n_bad))
     if n_bad == 0:
         return
@@ -1492,15 +1543,19 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
     if n_bad > threshold:
         raise RuntimeError(
             f"{n_bad} finite-likelihood/non-finite-gradient event(s) during {where} "
-            f"exceed the tangent-reject tolerance ({threshold} = "
-            f"ceil({max_frac:g} x {n_particles})) -- this is not the stochastic "
-            "marginal-tangent tail but systematic AD breakage in the chemistry "
-            "tangents or RT vjp; refusing to continue (loud-error rule)." + detail)
+            f"exceed the systematic-breakage backstop ({threshold} = "
+            f"ceil({max_frac:g} x {n_particles})) -- far beyond the measured "
+            "theta-dependent tangent class (job 65815: max 7.6% in one sweep); "
+            "this looks like systematic AD breakage in the chemistry tangents "
+            "or RT vjp; refusing to continue (loud-error rule)." + detail)
     logger.warning(
         f"{n_bad} tangent-blown proposal(s) during {where}: finite certified "
-        f"primal, non-finite forward-mode tangent -- MH-REJECTED (never zeroed; "
-        f"within the tolerance {threshold} = ceil({max_frac:g} x {n_particles})). "
-        "Watch this stay ~0 in the late ladder." + detail)
+        f"primal, non-finite forward-mode tangent -- handled as ZERO-DRIFT MALA "
+        f"moves (gradient entries zeroed consistently in both proposal "
+        f"densities; certified likelihood decides acceptance; within the "
+        f"backstop {threshold} = ceil({max_frac:g} x {n_particles})). Expected "
+        "to track the high-Z/low-C-O corner (job 65815 forensics); a broad "
+        "theta-INDEPENDENT rate is the anomaly to investigate." + detail)
 
 
 def tune_step_size(pipe: Pipeline, key) -> float:
@@ -1520,7 +1575,8 @@ def tune_step_size(pipe: Pipeline, key) -> float:
     target = float(cfg.mcmc_target_accept_mala)
     for it in range(int(cfg.mcmc_tune_iters)):
         key, sub = jax.random.split(key)
-        # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
+        # badgrad events warn+dump INSIDE mutate; only a sweep beyond the
+        # systematic-breakage backstop raises
         U, Y, refs, L, G, DY, acc, _nbad, _ncap, _nstall = mutate(
             sub, U, Y, refs, L, G, DY, beta,
             jnp.asarray(math.exp(log_step), dtype), scale,
@@ -1764,9 +1820,10 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # width: the proposal tracks the tempered posterior as it narrows)
         if cfg.mcmc_stage_adapt:
             scale = _abs_scale_diag(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
-        # (4) mutate at the new temperature -- a bad-gradient event raises INSIDE
-        # mutate at the offending sweep, after dumping per-particle forensics
-        # next to the checkpoint
+        # (4) mutate at the new temperature -- badgrad events are handled as
+        # zero-drift moves and warn+dump per-particle forensics next to the
+        # checkpoint; a sweep beyond the systematic-breakage backstop raises
+        # INSIDE mutate at the offending sweep
         key, sub = jax.random.split(key)
         U, Y, refs, L, G, DY, acc, n_bad, n_capped, n_stalled = mutate(
             sub, U, Y, refs, L, G, DY,

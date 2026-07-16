@@ -1411,3 +1411,93 @@ Resume semantics: the fix changes only proposal REJECTION handling, not the
 forward map or likelihood anchoring -- the 65789 init-level checkpoint
 remains valid; RESUME=1 after pulling this commit re-enters the ladder at
 beta=0 without re-paying the 2.1 h init.
+
+## NAS job 65815: badgrad is theta-DEPENDENT; zero-drift handling replaces MH-reject (2026-07-16)
+
+Job 65815 (real C&M24 data, N=144, resumed from the 65789 init-level
+checkpoint) ran stages 0-1 and died at stage 2 sweep 2 on the 5% badgrad
+gate: 11/144 > 8 = ceil(0.05 x 144). The forensics dumps (13 sweeps, 64
+events; local analysis of every bad_grad_stage*.npz) FALSIFY the design
+premise of the 273b6d5 MH-reject fix -- the class is not a sparse
+theta-independent stochastic tail:
+
+- 64/64 events on the chemistry-tangent side; every offender canonically
+  certified (conv_ok=True); no repeat-particle structure (57 distinct
+  slots / 64 events).
+- Rate among CERTIFIED proposals: 5.1% -> 5.9% -> 11.0% by stage (pooled
+  6.5%) -- not ~1%.
+- Theta-dependent and physical: among certified proposals, 1.2% at
+  Z=1-12x solar vs 11.7% at Z=67-99x; 11.3% at C/O 0.10-0.18 vs 4.4%
+  above 0.32; joint high-Z/low-C-O cell 11.6% vs 2.6% opposite. Kzz and
+  Tirr have NO effect (the apparent Kzz signal was composition: the
+  low-C-O/high-Kzz corner certifies at 78% vs 47% elsewhere).
+- Not only marginal certs: 38% of offenders sit at longdy 0.05-0.1
+  (loose-branch, ~3x enriched vs 13% of certified non-offenders) but 44%
+  are WELL-converged (longdy < 0.01). Tightening certification cannot
+  remove the class.
+- The certified cloud's median drifted lnZ +0.77 -> +1.32 -> +1.71 (22x ->
+  55x solar) over stages 0-2: the W39b posterior pulls the cloud INTO the
+  dense-badgrad region, so "watch this stay ~0 in the late ladder" can
+  never hold -- the rate RISES along the ladder.
+- Gate statistics: at the pooled 3.4% per-proposal rate, P(one sweep > 8)
+  ~ 6%; the abort was near-certain over a full 240-sweep ladder (P~58%
+  within the 14 sweeps it ran). At the stage-2 rate, ~55% PER SWEEP.
+
+Why MH-reject is WRONG for a theta-dependent class: flooring L multiplies
+the target by the indicator of "tangent computable", a path/theta-correlated
+set holding 6-12% of the certified proposals exactly where the posterior
+lives -- a systematic suppression of the retrieved high-metallicity region.
+(At the 65200-era ~1% premise the bias was negligible; at 65815 rates it is
+a science-level metallicity bias, and the abort makes the run impossible
+anyway.)
+
+FIX (this commit): tangent-blown proposals are handled as ZERO-DRIFT MALA
+moves. The eval already zeroes the non-finite gradient entries; the sweep no
+longer floors L, so the SAME zeroed drift enters the reverse proposal
+density (GT_new) and -- on acceptance -- the particle's carried G (its next
+forward density). MALA with drift b(x) = "AD gradient with non-finite
+entries zeroed" is a valid MH kernel for ANY measurable b: the drift enters
+the PROPOSAL, not the target; the certified finite likelihood decides
+acceptance. Validity caveat: b is warm-history-dependent, exactly like the
+warm likelihood itself -- the same approximation class already accepted and
+gated by validate_warm (max|dlogL| < 0.1) + mala_reversibility; re-run both
+on the next production run. Mechanics: DY rows of badgrad proposals are
+zeroed in eval_batch (an accepted badgrad particle's warm_extrapolate seed
+degrades to its plain carried column -- NaN hygiene), and the init phase-2
+n_bad raise becomes the same keep-with-zero-drift handling (culling would
+bias the initial importance sample against the corner). The class stays
+loud: per-sweep badgrad= logging, forensics dumps, per-stage history, and
+the raise is now a SYSTEMATIC-BREAKAGE backstop
+`smc_tangent_bad_max_frac` (renamed from smc_tangent_reject_max_frac;
+default 0.25 -- far above the measured 7.6% worst sweep, still instant on a
+code regression that NaNs every tangent; 0.0 restores zero-tolerance).
+
+Replay evidence (local, CPU, production path via chem.converged_y): 13
+zero-increment warm re-certifications from each theta's own cold-certified
+column -- offenders (well-converged AND marginal) and corner/center controls
+-- ALL tangent-finite, max|dy| ~ 1e15-1e19 (healthy scale), prep-stage
+pointwise tangents all finite. So the divergence is NOT a pointwise op and
+NOT a property of the fixed point alone: it needs the actual mutation-move
+warm trajectory (large early-ladder increments; step~0.1 preconditioned
+moves are ~0.5 cloud-std per dim). Consistent with growth of the tangent
+recurrence along the warm continuation transient (the same recurrence whose
+raw-Neumann adjoint form diverges to 1e57 -- failed_approaches #28), which
+no pointwise clip can fix and which K_eq clipping (rates_jax._EXP_ARG_MAX,
+already in place) does not touch. Move-structure replays (v2, offender
+thetas warm-started from a same-stage sibling proposal, with and without the
+first-order extrapolation seed) were still running at commit time; their
+outcome (in particular whether the warm_extrapolate seed aggravates the
+class, which would motivate flipping it off in the gpu preset) gets appended
+here in a follow-up note.
+
+Also measured on 65815 (separate issues, not fixed here): 68% of warm
+proposals burn to the 1500-step warmcap before rejection (the ~2 h/stage
+cost driver), and the ladder pace (~2 h/stage x 40 stages) exceeds the 24 h
+PBS walltime -- the run relies on checkpoint+resume across submissions by
+design; revisit warmcap burn separately.
+
+Resume semantics for the NEXT run: the forward map and likelihood anchoring
+are UNCHANGED (sampler proposal handling only), so the 65815 smc_checkpoint
+remains valid; SMC_RESUME=1 re-enters the ladder without re-paying init.
+Stages 0-2 sampled under the old (biased-rejection) kernel at beta <=
+3.4e-4 -- prior-dominated, negligible imprint.

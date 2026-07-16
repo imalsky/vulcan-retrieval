@@ -289,17 +289,27 @@ class Config:
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     smc_use_custom_gradients: bool = True   # forward-mode value-and-grad wrapper (memory-stable, no vjp tape)
     smc_custom_grad_max_dim: int = 16
-    # Per-sweep tolerance for the tangent-blown rejection class: a proposal whose
-    # PRIMAL certifies canonically but whose forward-mode tangent goes non-finite
-    # (chemistry jvp diverging at a marginally-stable certified fixed point -- the
-    # NAS 65200/65789 class, stochastic ~1% at prior-like beta). Such proposals are
-    # MH-REJECTED (L floored; never a zeroed gradient), logged per sweep as
-    # badgrad=, and their per-particle forensics dumped -- the run only RAISES when
-    # a single sweep's count exceeds ceil(this * N), which indicates systematic AD
-    # breakage rather than the stochastic tail. 0.0 restores the old zero-tolerance
-    # raise. Detailed-balance status: same as warmcap/stalled (state-dependent
-    # rejection; must stay ~0 in the late ladder -- watch the per-stage log).
-    smc_tangent_reject_max_frac: float = 0.05
+    # Per-sweep BACKSTOP for the tangent-blown class: a proposal whose PRIMAL
+    # certifies canonically but whose forward-mode tangent goes non-finite
+    # (chemistry jvp diverging along the warm continuation -- the NAS
+    # 65200/65789/65815 class). Job 65815 forensics: the class is
+    # theta-DEPENDENT (1.2% of certified proposals at Z=1-12x solar vs 11.7%
+    # at 67-99x; 11.3% at C/O 0.10-0.18), concentrated exactly where the W39b
+    # posterior lives, so the old MH-reject-with-floored-L handling multiplied
+    # the target by a theta-correlated indicator -- a metallicity-posterior
+    # bias -- and its 5% per-sweep abort tripped with near-certainty over a
+    # full ladder. Such proposals are now handled as ZERO-DRIFT MALA moves:
+    # the eval zeroes the non-finite gradient entries and the SAME zeroed
+    # drift enters the forward and reverse proposal densities (MALA with any
+    # measurable drift b(x) is a valid MH kernel; b need not be the exact
+    # gradient), so the finite certified likelihood decides acceptance
+    # unbiasedly and the class costs only mixing speed. Still loud: logged
+    # per sweep as badgrad=, per-particle forensics dumped, and the run
+    # RAISES when a single sweep's count exceeds ceil(this * N) -- that is
+    # systematic AD breakage (e.g. a code regression NaN-ing every tangent),
+    # not the physical corner class (max measured 7.6%/sweep, job 65815).
+    # 0.0 restores a zero-tolerance raise.
+    smc_tangent_bad_max_frac: float = 0.25
     # "block": only chem+T-P dims take tangents through the VULCAN while_loop; lnR0 is
     #          one RT-only jvp; offsets/noise are analytic (exact, ~25-35% cheaper).
     # "naive": every u-dimension through the full chain (the SWAMPE pattern; cross-check).
