@@ -214,4 +214,9 @@ fraction) in the paper.
   `output/` = generated npz caches (gitignored). Figures go to
   `../jax_paper/figures/`; never modify `../VULCAN-JAX`.
 - **Historical/design-log content lives in `notes.md`** (this repo's dev diary);
-  READMEs carry current usage only.
+  READMEs carry current usage only. **`docs/failed_approaches.md` is the
+  append-only negative-results register** -- every failed / retracted /
+  measured-worse approach (samplers, gradients, condensation/Route B, numerics,
+  HPC incidents by NAS job number) with dates, measured numbers, and evidence
+  pointers. When something is tried and rejected, add the entry there in the
+  same pass; never delete entries.

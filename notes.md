@@ -7,7 +7,11 @@ the rule was moved VERBATIM from the pre-0.6 READMEs (the old
 `README.md` audit summary), so path references (`retrieval_framework/...`,
 `runs/...`, relative `CLAUDE.md` paths, bare `config.py` imports) are
 historical. Current usage and the authoritative configuration live in
-`README.md`; operational rules live in the repo-root `CLAUDE.md`.
+`README.md`; operational rules live in the repo-root `CLAUDE.md`. The
+scannable NEGATIVE-RESULTS REGISTER -- every failed / retracted /
+measured-worse approach with dates, numbers, and evidence pointers -- is
+`docs/failed_approaches.md` (append-only; this diary holds the full prose
+"why" behind each entry).
 
 ---
 
