@@ -54,8 +54,8 @@
 #   NSYS_FULL=1             FULL whole-process Nsight Systems trace (for a BOUNDED job:
 #                           the count_max calibration or PROBE_MEMORY). Keep that job
 #                           short or the .nsys-rep gets large.
-#   NSYS_GPU_METRICS=1      add --gpu-metrics-device=all to either mode (SM/DRAM
-#                           utilization timeline; needs a recent nsys)
+#   NSYS_GPU_METRICS=1      add the GPU-metrics timeline to either mode (SM/DRAM
+#                           utilization; flag spelling auto-detected per nsys version)
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
 #
 # On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
@@ -227,10 +227,10 @@ echo "GPU monitor: ${GPU_MON_LOG}"
 #                whole thing is minutes-to-an-hour. Keep the traced job short (e.g.
 #                calibrate at a modest CALIBRATE_COUNT_MAX_PROBE) or the .nsys-rep gets
 #                large; the chemistry loop launches many tiny kernels.
-# Either mode: NSYS_GPU_METRICS=1 adds --gpu-metrics-device=all, a sampled SM/DRAM
+# Either mode: NSYS_GPU_METRICS=1 adds the GPU-metrics timeline, a sampled SM/DRAM
 #   hardware-counter timeline (the compact "how busy is the GPU, really" view that
-#   answers the 100%-util-at-200 W launch-bound question directly). Opt-in because it
-#   needs a recent nsys; if nsys rejects the flag, drop it. The always-on nvidia-smi
+#   answers the 100%-util-at-200 W launch-bound question directly). The flag spelling
+#   changed across nsys versions and is auto-detected below. The always-on nvidia-smi
 #   monitor above already logs util/power/clocks every 60 s for the whole run.
 # Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
 # or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
@@ -247,7 +247,17 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
     # 1 kHz keeps the metrics stream small enough for a multi-hour full trace (10 kHz
     # over hours would be GBs); 10 ms resolution is plenty to see busy-vs-idle.
-    NSYS_WRAP+=(--gpu-metrics-device=all --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
+    # nsys >= 2024.5 renamed --gpu-metrics-device to --gpu-metrics-devices; the old
+    # spelling is ignored with a deprecation warning, which then makes
+    # --gpu-metrics-frequency a fatal "must be specified" error before Python ever
+    # launches (NAS jobs 66201/66202 died in 16 s on nsys 2025.6.3). Probe the help
+    # text and use whichever spelling this nsys understands.
+    if nsys profile --help 2>&1 | grep -q -- '--gpu-metrics-devices'; then
+      NSYS_WRAP+=(--gpu-metrics-devices=cuda-visible)
+    else
+      NSYS_WRAP+=(--gpu-metrics-device=all)
+    fi
+    NSYS_WRAP+=(--gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
   fi
   if [ "${NSYS_FULL:-0}" = "1" ]; then
     echo "nsys: FULL whole-process capture (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
