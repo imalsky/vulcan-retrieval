@@ -18,8 +18,10 @@ final cloud), with the SAME preset/overrides the run used:
     SMC_RETRIEVAL_PRESET=gpu python -m retrieval_framework.validate_warm runs/w39b_smc_retrieval
 
 Reads the run's own observations.npz (never regenerates) and smc_checkpoint.npz;
-writes validate_warm.npz next to them, logs a verdict, and exits nonzero on FAIL
-so a PBS wrapper notices. A particle that does not cold-converge within count_max
+writes validate_warm.npz next to them, logs a verdict, and exits 3 on a reached
+FAIL verdict (a crash before any verdict -- e.g. an OOM at the cold re-solve --
+exits 1 and writes no npz; the PBS wrapper distinguishes the two so a crash is
+never mislabeled as a gate FAIL). A particle that does not cold-converge within count_max
 (possible at posterior edges) is reported separately, never folded into the bias
 statistics. Cost: one cold init-phase-1-equivalent pass (~minutes on the GH200).
 """
@@ -28,6 +30,7 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -120,16 +123,38 @@ def main() -> None:
     U = jnp.asarray(ck["u_particles"], pipe.dtype)
     N = int(U.shape[0])
     Y0, refs0 = P._blank_state(pipe, N)             # cold map: no history enters
+    # Re-solve the cloud COLD in host-side sub-batches. The cold chemistry solve is
+    # a full-width vmap over all N particles (batch_eval_cold_l_diag; only its RT
+    # sub-step is chunked internally) -- the single largest allocation in this tool.
+    # A full-N call OOMed on a partially-occupied GPU (NAS job 66291) even though
+    # init phase 1 batches MORE draws on a fresh, fully-free pool. Chunking bounds
+    # the peak with identical results (sub-batches are concatenated -- no vmap
+    # padding). VALIDATE_WARM_CHUNK overrides the size; <=0 restores a full-N solve.
+    chunk = int(os.environ.get("VALIDATE_WARM_CHUNK", "0") or 0)
+    if chunk <= 0 or chunk > N:
+        chunk = min(N, 48)
+    cold_fn = jax.jit(pipe.batch_eval_cold_l_diag)
     t0 = time.perf_counter()
-    L_cold, Y_cold, _, cd_cold = jax.jit(pipe.batch_eval_cold_l_diag)(U, Y0, refs0)
-    jax.block_until_ready(L_cold)
-    worst = cd_cold.accept_count
-    n_stall_cold = int(np.sum(~np.asarray(jax.device_get(cd_cold.conv_normal))))
+    L_parts, Y_parts, acc_parts, cn_parts = [], [], [], []
+    for i0 in range(0, N, chunk):
+        i1 = min(i0 + chunk, N)
+        Lc, Yc, _refs_c, cdc = cold_fn(U[i0:i1], Y0[i0:i1], refs0[i0:i1])
+        jax.block_until_ready(Lc)
+        L_parts.append(np.asarray(jax.device_get(Lc)))
+        Y_parts.append(np.asarray(jax.device_get(Yc)))
+        acc_parts.append(np.asarray(jax.device_get(cdc.accept_count)))
+        cn_parts.append(np.asarray(jax.device_get(cdc.conv_normal)))
+    L_cold = jnp.asarray(np.concatenate(L_parts), pipe.dtype)
+    Y_cold = jnp.asarray(np.concatenate(Y_parts, axis=0), pipe.dtype)
+    worst = jnp.asarray(np.concatenate(acc_parts))
+    n_stall_cold = int(np.sum(~np.concatenate(cn_parts)))
+    n_chunks = (N + chunk - 1) // chunk
     if n_stall_cold:
         logger.info(f"cold re-solve: {n_stall_cold}/{N} column(s) exited without the "
                     "canonical certification (stall class); their L is floored and "
                     "they drop out of the comparison mask")
-    logger.info(f"cold re-solve of the cloud done in {time.perf_counter() - t0:.1f}s")
+    logger.info(f"cold re-solve of the cloud in {n_chunks} chunk(s) of <= {chunk} "
+                f"done in {time.perf_counter() - t0:.1f}s")
 
     count_max = int(pipe.fwd.chem.count_max)
     s = compare(ck["loglik"], np.asarray(jax.device_get(L_cold)),
@@ -218,7 +243,11 @@ def main() -> None:
                    "-- warm state is history-dependent beyond the gate; tighten "
                    "yconv_cri or rerun with smc_chem_mode='cold' before publishing"))
     if not ok:
-        sys.exit(1)
+        # Distinct exit code (3) so the PBS wrapper can tell a REACHED verdict that
+        # failed the gate (validate_warm.npz written; a science finding, job rc=0)
+        # from a crash before any verdict (uncaught exception / OOM -> exit 1, no
+        # npz -- the bias is UNMEASURED). See run_nas_w39b.pbs.
+        sys.exit(3)
 
 
 if __name__ == "__main__":

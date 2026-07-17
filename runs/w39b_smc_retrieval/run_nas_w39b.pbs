@@ -315,8 +315,22 @@ else
     # on disk, so surface it loudly but keep rc=0. Rerunnable standalone any time:
     #   python -m retrieval_framework.validate_warm <case dir>
     echo "========== WARM-VS-COLD VALIDATION =========="
-    python -u -m retrieval_framework.validate_warm "${SMC_DIR}" \
-      || echo "WARNING: validate_warm verdict FAIL -- warm-continuation bias above the gate; see validate_warm.npz + log above."
+    # validate_warm exits 0 (PASS), 3 (a REACHED verdict that failed the gate --
+    # a science finding; validate_warm.npz is on disk), or any other nonzero
+    # (CRASHED before a verdict, e.g. an OOM at the batched cold re-solve -- no
+    # npz, the bias is UNMEASURED). Keep the job rc=0 in every case (the posterior
+    # is already on disk), but do NOT mislabel a crash as a gate FAIL.
+    vw_rc=0
+    python -u -m retrieval_framework.validate_warm "${SMC_DIR}" || vw_rc=$?
+    if [ "${vw_rc}" -eq 0 ]; then
+      echo "validate_warm: PASS -- warm-continuation bias within the gate (see validate_warm.npz)."
+    elif [ "${vw_rc}" -eq 3 ]; then
+      echo "WARNING: validate_warm verdict FAIL -- warm-continuation bias above the gate; see validate_warm.npz + log above."
+    else
+      echo "ERROR: validate_warm CRASHED (rc=${vw_rc}) before any verdict -- NO validate_warm.npz, the warm-vs-cold bias is UNMEASURED (this is NOT a gate FAIL). Common cause is a GPU OOM at the cold re-solve on a busy node; rerun standalone on a clean GPU:"
+      echo "  SMC_RETRIEVAL_PRESET=${SMC_RETRIEVAL_PRESET} python -m retrieval_framework.validate_warm ${SMC_DIR}"
+      echo "  (VALIDATE_WARM_CHUNK=24 lowers the peak further if it recurs.)"
+    fi
   fi
 fi
 
