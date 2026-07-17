@@ -99,13 +99,18 @@ def _blend_h2he_broadening(mdb, key: str) -> None:
     mdb.n_air = n_mix
 
 
-def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air"):
+def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air",
+               dit_grid_resolution: float = 1.0):
     """Build one premodit opacity for ``key`` (CO cached; others downloaded).
 
     ``broadening``: "air" (HITRAN default, terrestrial perturber -- documented
     approximation) or "h2he" (HITRAN planetary H2/He widths where available, blended
     per ``config.H2HE_BROADENING_MIX``; separate ``h2he/<db>`` download cache).
     ExoMol sources already carry their own default broadening and ignore the knob.
+    ``dit_grid_resolution``: the PreMODIT broadening-parameter grid spacing;
+    1.0 is this pipeline's long-standing value, smaller resolves the
+    pressure-broadening grid finer (exojax's own default is 0.2) at a slower
+    opacity build. Profile-overridable via ``profile["dit_grid_resolution"]``.
     """
     src = spec["source"]
     if src in ("exomol", "exomol_cached"):
@@ -138,12 +143,12 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air"):
         opa = OpaPremodit.from_snapshot(
             mdb.to_snapshot(), nu_grid,
             auto_trange=(config.T_OPA_MIN_K, config.T_OPA_MAX_K),
-            dit_grid_resolution=1.0)
+            dit_grid_resolution=dit_grid_resolution)
     except AttributeError:
         opa = OpaPremodit(
             mdb, nu_grid,
             auto_trange=(config.T_OPA_MIN_K, config.T_OPA_MAX_K),
-            dit_grid_resolution=1.0)
+            dit_grid_resolution=dit_grid_resolution)
     n_lines = int(np.asarray(getattr(mdb, "nu_lines", np.zeros(0)).shape[0])) if hasattr(mdb, "nu_lines") else -1
     return opa, n_lines
 
@@ -253,23 +258,47 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
           + (" (terrestrial-air widths -- documented approximation; set "
              "broadening='h2he' for HITRAN planetary H2/He widths)"
              if broadening == "air" else ""), flush=True)
+    # Profile-overridable RT knobs (defaults = the historical hard-coded
+    # values, so every existing consumer is byte-unchanged). Validated
+    # loudly here -- an out-of-range value must never build a wrong model.
+    dit_res = float(profile.get("dit_grid_resolution", 1.0))
+    if not 0.05 <= dit_res <= 2.0:
+        raise ValueError(
+            f"dit_grid_resolution={dit_res:g} outside [0.05, 2.0] (PreMODIT "
+            "broadening-grid spacing; 1.0 = this pipeline's default, 0.2 = "
+            "exojax's own default)")
+    ptop = float(profile.get("art_ptop_bar", config.ART_PTOP_BAR))
+    pbtm = float(profile.get("art_pbtm_bar", config.ART_PBTM_BAR))
+    if not (0.0 < ptop < pbtm):
+        raise ValueError(
+            f"art_ptop_bar={ptop:g} / art_pbtm_bar={pbtm:g}: need "
+            "0 < top < bottom (bar)")
+    integration = str(profile.get("rt_integration", "simpson"))
+    if integration not in ("simpson", "trapezoid"):
+        raise ValueError(
+            f"rt_integration={integration!r}: exojax ArtTransPure supports "
+            "'simpson' (default) or 'trapezoid'")
     opas, molmass = {}, {}
     for key in mols:
         spec = config.MOLECULES[key]
         tb = time.time()
-        opa, n_lines = _build_opa(key, spec, nu_grid, broadening=broadening)
+        opa, n_lines = _build_opa(key, spec, nu_grid, broadening=broadening,
+                                  dit_grid_resolution=dit_res)
         opas[key] = opa
         molmass[key] = float(spec["molmass"])
         print(f"[rt]   {key}: {n_lines} lines, opa built in {time.time()-tb:.1f}s", flush=True)
 
     art = ArtTransPure(
-        pressure_top=config.ART_PTOP_BAR,
-        pressure_btm=config.ART_PBTM_BAR,
-        nlayer=int(profile["art_nlayer"]))
+        pressure_top=ptop,
+        pressure_btm=pbtm,
+        nlayer=int(profile["art_nlayer"]),
+        integration=integration)
     art.change_temperature_range(config.T_OPA_MIN_K, config.T_OPA_MAX_K)
     p_art_bar = np.asarray(art.pressure)
     print(f"[rt] ArtTransPure {profile['art_nlayer']} layers, "
-          f"P=[{p_art_bar.min():.1e},{p_art_bar.max():.1e}] bar", flush=True)
+          f"P=[{p_art_bar.min():.1e},{p_art_bar.max():.1e}] bar, "
+          f"chord integration {integration}, dit_grid_resolution {dit_res:g}",
+          flush=True)
 
     if not config.CIA_H2H2_FILE.exists():
         # exojax auto-fetches it (~24 MB from hitran.org), but its downloader
@@ -363,6 +392,14 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         p_art_bar=p_art_bar,
         molecules=mols,
         broadening=broadening,
+        # echo of the profile-overridable RT knobs, so downstream consumers
+        # (vulcan-jwst-tool) can VERIFY the engine honored them -- an older
+        # engine that ignores an unknown profile key must fail loudly there,
+        # never silently compute a different model than the cache key claims
+        art_ptop_bar=ptop,
+        art_pbtm_bar=pbtm,
+        rt_integration=integration,
+        dit_grid_resolution=dit_res,
         has_cia_h2he=opacia_he is not None,
         # internals reused by build_emis_model (so opacities aren't rebuilt)
         _nu_grid=nu_grid, _opas=opas, _molmass=molmass, _opacia=opacia,
@@ -388,8 +425,10 @@ def build_emis_model(trt, profile: dict) -> SimpleNamespace:
     opacia_he = trt._opacia_he
     g_btm = float(profile.get("gs_cgs", config.GS_CGS))
 
-    art = ArtEmisPure(nu_grid=nu_grid, pressure_top=config.ART_PTOP_BAR,
-                      pressure_btm=config.ART_PBTM_BAR, nlayer=int(profile["art_nlayer"]),
+    # pressure bounds follow the transmission model's (possibly profile-
+    # overridden) grid -- the two share opacities and must share the column
+    art = ArtEmisPure(nu_grid=nu_grid, pressure_top=trt.art_ptop_bar,
+                      pressure_btm=trt.art_pbtm_bar, nlayer=int(profile["art_nlayer"]),
                       rtsolver="ibased", nstream=8)
     art.change_temperature_range(config.T_OPA_MIN_K, config.T_OPA_MAX_K)
     print(f"[rt] ArtEmisPure {profile['art_nlayer']} layers (shares opacities)", flush=True)

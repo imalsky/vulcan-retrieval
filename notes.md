@@ -1503,3 +1503,29 @@ are UNCHANGED (sampler proposal handling only), so the 65815 smc_checkpoint
 remains valid; SMC_RESUME=1 re-enters the ladder without re-paying init.
 Stages 0-2 sampled under the old (biased-rejection) kernel at beta <=
 3.4e-4 -- prior-dominated, negligible imprint.
+
+## 2026-07-16: exojax_rt profile-overridable RT knobs (0.10.1, for jwst_tool forward v15)
+
+`build_rt_model` now honors three optional profile keys, each defaulting to
+the historical hard-coded value so every existing consumer (SMC, zco,
+validation scripts) is byte-unchanged:
+
+- `art_ptop_bar` / `art_pbtm_bar` -- ART pressure bounds (defaults
+  config.ART_PTOP_BAR/PBTM = 1e-8 / 7 bar); validated 0 < top < bottom.
+  `build_emis_model` follows the transmission model's (possibly
+  overridden) bounds -- the two share opacities and must share the column.
+- `rt_integration` -- ArtTransPure chord-integration scheme ("simpson"
+  default / "trapezoid"); anything else raises.
+- `dit_grid_resolution` -- PreMODIT broadening-grid spacing (default 1.0,
+  this pipeline's long-standing value; exojax's own default is 0.2);
+  validated [0.05, 2.0], threaded through _build_opa.
+
+The rt namespace ECHOES all four resolved values so downstream consumers
+can verify the engine honored them: vulcan-jwst-tool forward v15 sets the
+knobs from its canonical params and REFUSES on a missing/mismatched echo
+(an older engine ignores unknown profile keys silently, and a spectrum
+must never be cached under a key describing physics the engine did not
+apply). Measured on the offline SMOKE CO band: ptop 1e-7 + trapezoid +
+dit 0.5 moves the depth by 6.8e-3 max relative vs defaults. Version
+0.10.1; no production config changes, no cache invalidation (defaults
+unchanged).
