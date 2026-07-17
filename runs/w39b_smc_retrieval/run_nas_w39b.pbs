@@ -55,7 +55,8 @@
 #                           the count_max calibration or PROBE_MEMORY). Keep that job
 #                           short or the .nsys-rep gets large.
 #   NSYS_GPU_METRICS=1      add the GPU-metrics timeline to either mode (SM/DRAM
-#                           utilization; flag spelling auto-detected per nsys version)
+#                           utilization). NSYS_GPU_METRICS_DEV overrides the device
+#                           list (default all); NSYS_GPU_METRICS_HZ the rate (1000)
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
 #
 # On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
@@ -230,8 +231,8 @@ echo "GPU monitor: ${GPU_MON_LOG}"
 # Either mode: NSYS_GPU_METRICS=1 adds the GPU-metrics timeline, a sampled SM/DRAM
 #   hardware-counter timeline (the compact "how busy is the GPU, really" view that
 #   answers the 100%-util-at-200 W launch-bound question directly). The flag spelling
-#   changed across nsys versions and is auto-detected below. The always-on nvidia-smi
-#   monitor above already logs util/power/clocks every 60 s for the whole run.
+#   changed across nsys versions (hardcoded below for the NAS nsys). The always-on
+#   nvidia-smi monitor above already logs util/power/clocks every 60 s for the whole run.
 # Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
 # or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
 NSYS_WRAP=()
@@ -247,17 +248,17 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
     # 1 kHz keeps the metrics stream small enough for a multi-hour full trace (10 kHz
     # over hours would be GBs); 10 ms resolution is plenty to see busy-vs-idle.
-    # nsys >= 2024.5 renamed --gpu-metrics-device to --gpu-metrics-devices; the old
-    # spelling is ignored with a deprecation warning, which then makes
-    # --gpu-metrics-frequency a fatal "must be specified" error before Python ever
-    # launches (NAS jobs 66201/66202 died in 16 s on nsys 2025.6.3). Probe the help
-    # text and use whichever spelling this nsys understands.
-    if nsys profile --help 2>&1 | grep -q -- '--gpu-metrics-devices'; then
-      NSYS_WRAP+=(--gpu-metrics-devices=cuda-visible)
-    else
-      NSYS_WRAP+=(--gpu-metrics-device=all)
-    fi
-    NSYS_WRAP+=(--gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
+    # nsys >= 2024.5 spells this --gpu-metrics-devices (plural); the deprecated
+    # singular is ignored with a warning and --gpu-metrics-frequency then aborts
+    # nsys before Python launches (jobs 66201/66202). A help-text probe for the
+    # plural spelling ALSO chose wrong on the compute nodes (66284-66289: the
+    # node's `nsys profile --help` does not print the switch), so the spelling is
+    # hardcoded for the NAS nsys (2025.6.3; documented values: GPU ID, all, none).
+    # NSYS_GPU_METRICS_DEV overrides the device list at qsub time if a future nsys
+    # changes syntax again -- no git round-trip needed.
+    NSYS_WRAP+=(--gpu-metrics-devices="${NSYS_GPU_METRICS_DEV:-all}"
+                --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
+    echo "nsys gpu-metrics: devices=${NSYS_GPU_METRICS_DEV:-all} frequency=${NSYS_GPU_METRICS_HZ:-1000} Hz"
   fi
   if [ "${NSYS_FULL:-0}" = "1" ]; then
     echo "nsys: FULL whole-process capture (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"

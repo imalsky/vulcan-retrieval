@@ -386,6 +386,20 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
   zero-drift MALA handling + 0.25 backstop (see #67). Also measured: 68% of
   warm proposals burn to the 1500 warmcap; ~2 h/stage x 40 stages exceeds the
   24 h walltime (checkpoint+resume across submissions is the operating mode).
+- **66201/66202 + 66278-66289** (07-16/17): nsys 2025.6.3 on the GPU nodes
+  renamed --gpu-metrics-device to --gpu-metrics-devices; the deprecated
+  singular is ignored with a warning and --gpu-metrics-frequency then aborts
+  nsys pre-Python (six NSYS_GPU_METRICS=1 jobs dead in ~16 s each; 66278/66279
+  additionally caught the 0.10.0->0.10.1 stale editable metadata, bootstrap
+  re-run required). REJECTED fix (9cd9f8d): probing `nsys profile --help` for
+  the plural spelling -- the node's help output does not print the switch, so
+  the probe silently fell back to the broken singular (66284/66285,
+  66288/66289 after the checkout was PROVEN current). Kept fix: hardcode
+  --gpu-metrics-devices=all (documented values on this nsys: GPU ID, all,
+  none -- NOT cuda-visible) with a qsub-time NSYS_GPU_METRICS_DEV override so
+  a future syntax change needs no git round-trip. Lesson: feature-probing a
+  vendor CLI's help text is unreliable; pin to the deployed version and keep
+  a runtime override.
 - **NAS proxy**: the proxy hostname does not resolve from the front end;
   `unset https_proxy http_proxy` for git. rsync / tarballs / wrapped remote
   commands prohibited (scp -r only).
