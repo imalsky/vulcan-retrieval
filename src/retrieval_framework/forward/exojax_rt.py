@@ -155,7 +155,8 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air",
 
 def _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                      vmr, vmr_h2, T_art, mmw_art,
-                     opacia_he=None, vmr_he=None, cloud=None, rayleigh_xs=None):
+                     opacia_he=None, vmr_he=None, cloud=None, rayleigh_xs=None,
+                     mie_pack=None, mie=None):
     """Per-layer optical-depth matrix ``dtau`` (nlayer, n_nu) on the ART pressure grid.
 
     The sum of each molecule's line opacity plus the H2-H2 CIA continuum -- and,
@@ -217,6 +218,30 @@ def _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                                   nuc0=config.CLOUD_NUC0, alphac=cloud[1])  # (n_nu,)
         dP = jnp.asarray(art.dParr)                                # (nlayer,) bar
         dtau = dtau + kappa_c[None, :] * (dP[:, None] * _BAR_CGS / g_btm)
+    if mie is not None:
+        # Mie cloud deck (v16, exojax PdbCloud/OpaMie): column-uniform
+        # condensate MMR with a single lognormal size distribution.
+        # mie = [log10 rg (cm), sigmag, log10 MMR]; mie_pack = (OpaMie,
+        # substance density) baked at build time. sigma_extinction
+        # (absorption + scattering) is the correct chord attenuation in
+        # transmission AND the pure-absorption emission approximation for
+        # the extinction term (scattering as removal; the tool documents
+        # the forward-scattering caveat). Differentiable: the miegrid
+        # interpolation is piecewise-linear in (log rg, sigmag), clamped at
+        # the grid edges (callers keep parameters strictly inside).
+        if mie_pack is None:
+            raise ValueError(
+                "mie parameters passed but the RT was built without "
+                "mie_condensate: rebuild with profile['mie_condensate'] set "
+                "(never silently ignore a requested cloud).")
+        opa_mie_, rho_c = mie_pack
+        rg = 10.0 ** mie[0]
+        sigmag = mie[1]
+        mmr = 10.0 ** mie[2]
+        sig_ext, _sig_sca, _g_asym = opa_mie_.mieparams_vector(rg, sigmag)
+        mmr_prof = jnp.full((art.pressure.shape[0],), 1.0) * mmr
+        dtau = dtau + art.opacity_profile_cloud_lognormal(
+            sig_ext, rho_c, mmr_prof, rg, sigmag, g_btm)
     if rayleigh_xs is not None:
         # H2 (+He) Rayleigh scattering -- zero-free-parameter known physics that
         # matters short of ~1.5 um; omitting it would bias the retrieved haze slope.
@@ -336,6 +361,44 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
     else:
         rayleigh_xs = None
 
+    # Mie cloud deck (v16 tool work): opt-in via profile["mie_condensate"]
+    # + profile["mie_data_dir"] (a pinned ABSOLUTE cache dir -- exojax's own
+    # default is CWD-relative, which is banned here). The forward model only
+    # LOADS a pre-generated miegrid (pure numpy/jnp, differentiable); a
+    # missing grid raises with the generation command. The 4 MB virga
+    # refractive-index archive auto-downloads from Zenodo on first use --
+    # announced up front so an offline failure is attributable.
+    mie_pack = None
+    mie_cond = profile.get("mie_condensate") or None
+    if mie_cond:
+        from pathlib import Path as _Path
+        from exojax.database.pardb import PdbCloud
+        from exojax.opacity import OpaMie
+        mie_dir = profile.get("mie_data_dir")
+        if not mie_dir:
+            raise ValueError(
+                "mie_condensate set but mie_data_dir missing: pass the "
+                "absolute Mie cache directory (a CWD-relative default would "
+                "scatter caches per launch dir).")
+        if not (_Path(mie_dir) / "virga.zip").exists():
+            print(f"[rt] virga refractive-index archive absent under "
+                  f"{mie_dir}; exojax will download ~4 MB from Zenodo now "
+                  "(network required)", flush=True)
+        pdb = PdbCloud(str(mie_cond), nurange=nu_grid, path=str(mie_dir))
+        if not pdb.miegrid_path.exists():
+            raise FileNotFoundError(
+                f"Mie grid for {mie_cond} not found at {pdb.miegrid_path}. "
+                "Generate it once (vulcan-jwst-tool: python "
+                f"tools/generate_miegrid.py {mie_cond}, ~1 h/condensate); "
+                "the forward model only loads grids, never a silent "
+                "fallback.")
+        pdb.load_miegrid()
+        opa_mie = OpaMie(pdb, nu_grid)
+        mie_pack = (opa_mie, float(pdb.condensate_substance_density))
+        print(f"[rt] Mie cloud deck: {mie_cond} (rho = "
+              f"{pdb.condensate_substance_density:g} g/cm3, miegrid loaded)",
+              flush=True)
+
     # Planet identity: overridable per profile (retrieval case presets set these);
     # defaults are the shared-lib W39b constants for all legacy consumers.
     Rp_btm = float(profile.get("rp_cm", config.RP_CM))
@@ -351,23 +414,27 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
                 "vmr_he is required: pass the He VMR profile (chem.sidx['He']) so the "
                 "H2-He CIA term is included. There is no supported He-less mode.")
 
-    def transmission_depth(vmr, vmr_h2, T_art, mmw_art, vmr_he=None, cloud=None):
+    def transmission_depth(vmr, vmr_h2, T_art, mmw_art, vmr_he=None, cloud=None,
+                           mie=None):
         """Transit depth (R_p(lambda)/R_star)^2 from ART-grid profiles.
 
         vmr : dict molecule -> (nlayer,) VMR; vmr_h2 : (nlayer,) H2 VMR (for CIA);
         vmr_he : (nlayer,) He VMR (H2-He CIA partner; REQUIRED -- the None default
         exists only so an omission raises the explanatory ValueError, not TypeError).
-        Optional: cloud=[log10 kappac0, alphac] (ExoJax powerlaw_clouds).
+        Optional: cloud=[log10 kappac0, alphac] (ExoJax powerlaw_clouds);
+        mie=[log10 rg (cm), sigmag, log10 MMR] (needs mie_condensate at build).
         """
         _require_he(vmr_he)
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
-                                rayleigh_xs=rayleigh_xs)
+                                rayleigh_xs=rayleigh_xs,
+                                mie_pack=mie_pack, mie=mie)
         Rp2 = art.run(dtau, T_art, mmw_art, Rp_btm, g_btm)          # (radius/Rp_btm)^2
         return Rp2 * depth_norm                                     # (radius/R_star)^2
 
-    def transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=None, cloud=None):
+    def transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=None,
+                             cloud=None, mie=None):
         """transmission_depth with a reference-radius scaling: the radius at the bottom
         pressure P_btm is Rp_btm * e^lnR0 (gravity held fixed -- the standard xR_p
         normalization nuisance, cf. Batalha & Line 2017). lnR0 = 0 reproduces
@@ -380,7 +447,8 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
-                                rayleigh_xs=rayleigh_xs)
+                                rayleigh_xs=rayleigh_xs,
+                                mie_pack=mie_pack, mie=mie)
         Rp2 = art.run(dtau, T_art, mmw_art, Rp_r, g_btm)            # (radius/Rp_r)^2
         return Rp2 * depth_norm * jnp.exp(2.0 * lnR0)               # (radius/R_star)^2
 
@@ -401,9 +469,13 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         rt_integration=integration,
         dit_grid_resolution=dit_res,
         has_cia_h2he=opacia_he is not None,
+        # Mie deck echo (v16): "" when no Mie cloud was built -- consumers
+        # verify this against what they requested (an engine too old to know
+        # mie_condensate would ignore it silently; the echo makes that loud)
+        mie_condensate=str(mie_cond or ""),
         # internals reused by build_emis_model (so opacities aren't rebuilt)
         _nu_grid=nu_grid, _opas=opas, _molmass=molmass, _opacia=opacia,
-        _opacia_he=opacia_he,
+        _opacia_he=opacia_he, _mie_pack=mie_pack,
     )
 
 
@@ -423,6 +495,7 @@ def build_emis_model(trt, profile: dict) -> SimpleNamespace:
     nu_grid = trt._nu_grid
     opas, molmass, opacia, mols = trt._opas, trt._molmass, trt._opacia, trt.molecules
     opacia_he = trt._opacia_he
+    mie_pack = getattr(trt, "_mie_pack", None)   # shared Mie deck (v16)
     g_btm = float(profile.get("gs_cgs", config.GS_CGS))
 
     # pressure bounds follow the transmission model's (possibly profile-
@@ -433,7 +506,8 @@ def build_emis_model(trt, profile: dict) -> SimpleNamespace:
     art.change_temperature_range(config.T_OPA_MIN_K, config.T_OPA_MAX_K)
     print(f"[rt] ArtEmisPure {profile['art_nlayer']} layers (shares opacities)", flush=True)
 
-    def emission_flux(vmr, vmr_h2, T_art, mmw_art, vmr_he=None, cloud=None):
+    def emission_flux(vmr, vmr_h2, T_art, mmw_art, vmr_he=None, cloud=None,
+                      mie=None):
         """Emergent thermal flux (n_nu,) from ART-grid VMR/T/mmw profiles.
 
         vmr_he is REQUIRED (H2-He CIA -- same continuum physics as transmission;
@@ -444,13 +518,29 @@ def build_emis_model(trt, profile: dict) -> SimpleNamespace:
                 "is included in the emission opacity (parity with transmission).")
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                                 vmr, vmr_h2, T_art, mmw_art,
-                                opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud)
+                                opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
+                                mie_pack=mie_pack, mie=mie)
         return art.run(dtau, T_art)
+
+    def tau_bottom(vmr, vmr_h2, T_art, mmw_art, vmr_he, cloud=None, mie=None):
+        """Total vertical optical depth at the BOTTOM of the RT column,
+        per wavenumber (n_nu,). ArtEmisPure has NO surface/interior source
+        term, so its flux is only trustworthy where the column is optically
+        thick at the bottom -- a caller must check min(tau_bottom) and
+        refuse/flag windows that see through the grid (the flux there is
+        silently underestimated). Not on the hot AD path (diagnostic)."""
+        dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
+                                vmr, vmr_h2, T_art, mmw_art,
+                                opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
+                                mie_pack=mie_pack, mie=mie)
+        return jnp.sum(dtau, axis=0)
 
     return SimpleNamespace(
         emission_flux=emission_flux,
+        tau_bottom=tau_bottom,
         nu_grid=np.asarray(nu_grid),
         wl_um=trt.wl_um,
         p_art_bar=np.asarray(art.pressure),
+        art_pbtm_bar=float(trt.art_pbtm_bar),
         molecules=mols,
     )

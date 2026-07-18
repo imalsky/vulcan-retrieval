@@ -1529,3 +1529,35 @@ apply). Measured on the offline SMOKE CO band: ptop 1e-7 + trapezoid +
 dit 0.5 moves the depth by 6.8e-3 max relative vs defaults. Version
 0.10.1; no production config changes, no cache invalidation (defaults
 unchanged).
+
+## 0.11.0 (2026-07-17): emission tau_bottom diagnostic + Mie condensate deck
+
+Two additive RT features for the vulcan-jwst-tool v16 work. No production
+config changes, defaults unchanged, no cache invalidation for SMC/zco.
+
+- **`build_emis_model` gains `tau_bottom(...)`** (and echoes `art_pbtm_bar`):
+  the total vertical optical depth at the ART column bottom, per wavenumber
+  (`sum(dtau, axis=0)`). ArtEmisPure has no surface/interior source term, so
+  the emergent flux is only trustworthy where the column is optically thick
+  at the bottom; the tool checks `min(tau_bottom)` and refuses/flags
+  see-through windows. Not on the hot AD path (diagnostic).
+- **Mie cloud deck** (opt-in via `profile["mie_condensate"]` +
+  `profile["mie_data_dir"]`, an absolute pinned cache dir): the engine builds
+  an exojax OpaMie deck from a pre-generated miegrid (PdbCloud/OpaMie) and adds
+  its extinction to `dtau` for a column-uniform lognormal size distribution,
+  `mie = [log10 rg (cm), sigmag, log10 MMR]`. Threaded through
+  `transmission_depth` / `transmission_depth_r` / `emission_flux` /
+  `tau_bottom` as an optional `mie=` argument (the power-law `cloud=` deck and
+  the Mie deck are independent and summed if both are set). Differentiable: the
+  miegrid interpolation is piecewise-linear in (log rg, sigmag) via jnp.interp,
+  clamped at the grid edges (callers keep parameters strictly inside). The
+  forward model only LOADS a grid; a missing miegrid raises with the generation
+  command (never a silent fallback), and `mie` passed without a built deck
+  raises. The rt namespace echoes `mie_condensate` ("" when no deck) so the
+  tool can verify the engine honored the key. Extinction only (absorption +
+  scattering as removal); no forward-scattering source term in the
+  pure-absorption solvers -- documented on the tool side.
+- API validated against exojax 2.2.3 live: `opacity_profile_cloud_lognormal`
+  signature, `mieparams_vector` returning (sig_ext, sig_sca, g_asym), the N0
+  cancellation, and jnp.interp differentiability. Dependency: exojax >= 2.2.3
+  with a generated miegrid (vulcan-jwst-tool tools/generate_miegrid.py).
