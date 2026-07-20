@@ -22,9 +22,18 @@ snap-back only bites at FINITE Z/CO steps; an infinitesimal AD perturbation stay
 the threshold -- see vulcan_chem._prep). The finite-step validity walk (fig 3) is built
 separately by build_zco_walk.py, which DOES turn reanchor on.
 
+Chemistry runs the PINNED validated baseline (use_vm_mol=False) plus the certified
+photo-off convergence recipe (dt_max cap, tight mtol_conv, sulfur-allotrope
+conver_ignore) -- see BASELINE_CFG_OVERRIDES below. The 2026-07-14 upstream default
+flip to hybrid upwind vm_mol makes the photo-off tiers (E, Q) non-convergent on this
+band (30000-step blow-up, order-unity atom loss; reproduced 2026-07-20), exactly the
+failure documented in VULCAN-JAX docs/photo_off_convergence_investigation.md. Every
+tier is now gated on the runner's canonical certification and the build REFUSES to
+cache a Jacobian from a non-steady state.
+
 Run (base env, from the repo root):
     python scripts/zco_information/build_zco_jacobians.py --smoke        # nz=40, CO-only, fast full-pipeline check
-    python scripts/zco_information/build_zco_jacobians.py                # full nz=150 build (slow; ~1-2 h background)
+    python scripts/zco_information/build_zco_jacobians.py                # full nz=150 build (~15-45 min)
     python scripts/zco_information/build_zco_jacobians.py --tier P       # (re)build one tier only, merge into cache
 """
 from __future__ import annotations
@@ -63,6 +72,32 @@ TIER_CFG = {
 TIER_ORDER = ["E", "Q", "P"]
 TIER_NAME = {"E": "no-transport (~equilibrium)", "Q": "quench(+transport)", "P": "photochem(+photo)"}
 
+# Pinned validated-baseline chemistry + the certified photo-off convergence recipe
+# (VULCAN-JAX docs/photo_off_convergence_investigation.md, 2026-07-15). Applied to
+# EVERY tier so the tier-to-tier comparison runs one consistent scheme:
+#   * use_vm_mol pinned False -- the 2026-07-14 upstream hybrid-vm default flip is
+#     un-re-baselined for these forecasts (the sibling jwst-tool pins the same) and
+#     makes the photo-off tiers non-convergent on this band.
+#   * dt_max cap prevents the adaptive-Ros2 dt balloon on the photo-off column.
+#   * mtol_conv tightened; stiff trace sulfur allotropes (not RT species) sit
+#     outside the convergence gate and re-equilibrate against the certified state.
+BASELINE_RECIPE = dict(dt_max=1.0e11)
+BASELINE_CFG_OVERRIDES = {
+    "use_vm_mol": False,
+    "use_hybrid_vm_mol": False,
+    "mtol_conv": 1.0e-15,
+    "conver_ignore": ["S", "S2", "S3", "S4"],
+}
+
+
+def tier_profile_overrides(tier: str) -> dict:
+    """TIER_CFG[tier] merged over the pinned-baseline recipe (cfg_overrides deep-merged;
+    a tier's own cfg_overrides win). Shared with build_zco_walk.py."""
+    t = dict(TIER_CFG[tier])
+    over = dict(BASELINE_CFG_OVERRIDES)
+    over.update(t.pop("cfg_overrides", {}))
+    return dict(BASELINE_RECIPE, **t, cfg_overrides=over)
+
 
 def _profile(smoke: bool, tier: str) -> dict:
     if smoke:
@@ -72,7 +107,7 @@ def _profile(smoke: bool, tier: str) -> dict:
     else:
         base = dict(config.FULL, co_mode="fixed_O", nz=150, yconv_cri=1.0e-3,
                     molecules=["H2O", "CO2", "CO", "CH4", "SO2"], **_ZCO_BAND)
-    return dict(base, **TIER_CFG[tier])
+    return dict(base, **tier_profile_overrides(tier))
 
 
 def build_tier(tier: str, trt, smoke: bool):
@@ -101,6 +136,20 @@ def build_tier(tier: str, trt, smoke: bool):
         return trt.transmission_depth(*gg)
 
     theta0 = jnp.asarray(config.THETA0, dtype=jnp.float64)
+
+    # Loud gate: never cache a Jacobian from a non-steady state. run_diag re-runs the
+    # solve off the AD path; conv_normal is the runner's canonical certification.
+    final, _ = chem.run_diag(theta0)
+    conv = bool(chem.conv_normal_at_exit(final))
+    print(f"  certification: conv_normal={conv} longdy={float(final.longdy):.3e} "
+          f"accept_count={int(final.accept_count)}", flush=True)
+    if not conv:
+        raise RuntimeError(
+            f"tier {tier}: chemistry exited WITHOUT the runner's canonical certification "
+            f"(longdy={float(final.longdy):.3e}, accept_count={int(final.accept_count)}); "
+            "refusing to cache a Jacobian from a non-steady state. Recipe: "
+            "VULCAN-JAX docs/photo_off_convergence_investigation.md.")
+
     g0 = g(theta0)
     depth0 = np.asarray(trans_of(g0))
     print(f"  primal depth {depth0.min()*1e6:.0f}-{depth0.max()*1e6:.0f} ppm  "

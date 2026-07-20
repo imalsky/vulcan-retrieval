@@ -132,8 +132,11 @@ def main():
 
 
 def zco_lib_tier_cfg(tier):
-    from build_zco_jacobians import TIER_CFG
-    return TIER_CFG[tier]
+    # Shared with the Jacobian builder: tier config merged over the pinned
+    # validated-baseline recipe (vm_mol off, dt_max cap, photo-off convergence
+    # recipe) so the walk runs the SAME chemistry scheme as the cached Jacobians.
+    from build_zco_jacobians import tier_profile_overrides
+    return tier_profile_overrides(tier)
 
 
 if __name__ == "__main__":
