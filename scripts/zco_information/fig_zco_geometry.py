@@ -33,11 +33,8 @@ def main(out=Z.FIGS / "zco_geometry.png", combo=Z.DEFAULT_COMBO, tier="P"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    try:
-        from _common import apply_style
-        apply_style()
-    except Exception:
-        pass
+    from _common import apply_style
+    apply_style()
 
     wl_model, tiers, meta = Z.load_jacobians()
     obs = Z.load_combined(combo)
@@ -114,7 +111,7 @@ def main(out=Z.FIGS / "zco_geometry.png", combo=Z.DEFAULT_COMBO, tier="P"):
                  transform=axB.transAxes, ha="center", va="center", fontsize=11, color="0.5")
         axB.set_xticks([]); axB.set_yticks([])
 
-    fig.suptitle("How well the spectrum separates Z and C/O — and where the Gaussian error "
+    fig.suptitle("How well the spectrum separates Z and C/O, and where the Gaussian error "
                  "bar holds", fontsize=12.8, y=1.0)
     fig.subplots_adjust(left=0.085, right=0.975, top=0.9, bottom=0.17)
     fig.savefig(out, dpi=200, bbox_inches="tight")

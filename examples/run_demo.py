@@ -69,11 +69,8 @@ def make_figure(wl_um, depth, J, molecules, out_png):
     if not (config.JP / "scripts" / "_common.py").is_file():
         raise RuntimeError(f"jax_paper sibling not found at {config.JP} -- manuscript figure scripts require it (set VULCAN_PROJECT_ROOT)")
     sys.path.insert(0, str(config.JP / "scripts"))
-    try:
-        from _common import apply_style
-        apply_style()
-    except Exception:
-        pass
+    from _common import apply_style
+    apply_style()
 
     wl, d_ppm, Jb = _bin_constant_R(wl_um, depth * 1e6, J, R=2000)
     pts = np.array([wl, d_ppm]).T.reshape(-1, 1, 2)

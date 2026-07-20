@@ -19,8 +19,7 @@ the HPC is fragile. The algorithm is the standard Del Moral (2006) resample-move
 
 The MALA gradient is the crux: the VULCAN-JAX runner's `lax.while_loop` supports jvp but
 not vjp, so the likelihood gradient is built from forward-mode jvps (one per u-dimension,
-vmapped) and exposed to `jax.value_and_grad` through a `custom_vjp` -- exactly the SWAMPE
-trick -- so no reverse-mode tape is ever taped through the chemistry solve.
+vmapped) -- no reverse-mode tape is ever taped through the chemistry solve.
 
 GH200 batched architecture (2026-07-06 rework -- see README section C):
 the per-particle gradient functions above are kept for validation, but the SMC hot path
@@ -489,29 +488,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     grad_mode = str(cfg.gradient_mode).strip().lower()
     if grad_mode not in ("block", "naive"):
         raise ValueError(f"gradient_mode must be 'block' or 'naive', got {grad_mode!r}")
-    _vg_impl = _value_and_grad_block if grad_mode == "block" else _value_and_grad_naive
-
-    use_custom = bool(cfg.smc_use_custom_gradients) and (n_dim <= int(cfg.smc_custom_grad_max_dim))
-    if use_custom:
-        @jax.custom_vjp
-        def loglik_fwd(u):
-            return log_likelihood_u(u)
-
-        def _fwd(u):
-            # Return the gradient RAW. A rejected proposal (non-finite forward) is
-            # already handled inside _vg_impl (val -> -1e30, grad -> 0: principled MH
-            # rejection). A finite forward with a non-finite gradient is an AD
-            # pathology and MUST reach the caller's bad-grad detector so the run
-            # raises loudly -- zeroing it here would silently degrade MALA to a random
-            # walk (project rule: loud errors, no silent fallbacks).
-            return _vg_impl(u)
-
-        def _bwd(grad, g):
-            return (g * grad,)
-
-        loglik_fwd.defvjp(_fwd, _bwd)
-    else:
-        loglik_fwd = log_likelihood_u
 
     # =========================================================================
     # Staged BATCHED likelihood / gradient (the SMC hot path; see module docstring).
@@ -803,14 +779,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         param_prior_lo=np.asarray([s.lo for s in specs], npdtype),
         param_prior_hi=np.asarray([s.hi for s in specs], npdtype),
         param_truth=param_truth, prior_types=prior_types,
-        # sample_prior_u is the T-P-window-restricted (redraw) sampler; the raw box
-        # sampler + the validity predicate are exposed for diagnostics/calibration.
+        # sample_prior_u is the T-P-window-restricted (redraw) sampler; the validity
+        # predicate is exposed for diagnostics/calibration.
         theta_from_u=theta_from_u, log_prior_u=log_prior_u, sample_prior_u=sample_prior_u_valid,
-        sample_prior_u_box=sample_prior_u, tp_valid=tp_valid, n_tp=n_tp,
+        tp_valid=tp_valid, n_tp=n_tp,
         tp_prior_stats=tp_prior_stats,
         theta_truth=theta_truth,
         observed_depth_model=observed_depth_model, observed_depth_model_jit=observed_depth_model_jit,
-        log_likelihood_u=log_likelihood_u, loglik_fwd=loglik_fwd, use_custom_grads=use_custom,
+        log_likelihood_u=log_likelihood_u,
         gradient_mode=grad_mode,
         value_and_grad_naive=_value_and_grad_naive, value_and_grad_block=_value_and_grad_block,
         # staged batched evaluators (the SMC hot path)

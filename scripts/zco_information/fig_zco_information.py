@@ -42,11 +42,8 @@ def main(out=Z.FIGS / "zco_information.png", combo=Z.DEFAULT_COMBO, tier="P"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    try:
-        from _common import apply_style
-        apply_style()
-    except Exception:
-        pass
+    from _common import apply_style
+    apply_style()
 
     wl_model, tiers, meta = Z.load_jacobians()
     obs = Z.load_combined(combo)
@@ -93,7 +90,7 @@ def main(out=Z.FIGS / "zco_information.png", combo=Z.DEFAULT_COMBO, tier="P"):
     axi.set_ylabel("unique information\n(relative, marginalized)")
     axi.legend(loc="upper right", fontsize=9, frameon=True)
 
-    fig.suptitle("Metallicity and C/O are read from different molecules — so a broad spectrum "
+    fig.suptitle("Metallicity and C/O are read from different molecules, so a broad spectrum "
                  "measures both", fontsize=12.8, y=0.975)
     fig.text(0.5, 0.005, "'Unique information' = each parameter's whitened sensitivity after the "
              "other and all nuisances (lnKzz, $T_{\\rm int}$, ln$R_0$, offsets) are projected out. "

@@ -116,6 +116,55 @@ _ELEMENTAL_REPAIR = (("He", "He"), ("O", "H2O"), ("C", "CO"), ("N", "N2"), ("S",
 # residual contracts geometrically (~1e-2 -> ~1e-8 by three passes; see audit_init).
 _ELEMENTAL_REPAIR_ITERS = 3
 
+# Tolerance (g/mol) for checking config.ATOMIC_MASSES against the package's
+# composition-table mass column, which carries mild rounding (O listed as 16.0 vs
+# 15.999; the electron as 1e-3 vs 5.4858e-4). Real drift -- a swapped or wrong
+# element column -- differs by >= 1 g/mol and is caught cleanly.
+_ATOMIC_MASS_TOL_G_MOL = 0.01
+
+
+def _assert_composition_tables(composition) -> None:
+    """Verify config.ATOM_COLS / config.ATOMIC_MASSES against the composition
+    metadata vulcan_jax actually loaded.
+
+    Both config tables are positional hardcoded mirrors of the package's
+    composition table (whose atom-column order comes from the com_file header at
+    import). A package change that reorders or extends the atom columns would
+    silently corrupt the Z / C-O masks, the exact-elemental repair matrix, and
+    the mean-molecular-weight masses, so any mismatch raises here at build time.
+    """
+    atom_list = tuple(composition.atom_list)
+    if len(config.ATOMIC_MASSES) != len(atom_list):
+        raise RuntimeError(
+            f"config.ATOMIC_MASSES has {len(config.ATOMIC_MASSES)} entries but "
+            f"vulcan_jax.composition.atom_list has {len(atom_list)} columns "
+            f"{atom_list}: the hardcoded mass table no longer mirrors the "
+            "package's composition table.")
+    for elem, col in config.ATOM_COLS.items():
+        if atom_list[col] != elem:
+            raise RuntimeError(
+                f"config.ATOM_COLS[{elem!r}] = {col} but "
+                f"vulcan_jax.composition.atom_list[{col}] is {atom_list[col]!r} "
+                f"(full order {atom_list}): the hardcoded element-column map no "
+                "longer matches the package's atom order.")
+    compo, compo_row = composition.compo, composition.compo_row
+    compo_arr = np.asarray(composition.compo_array, dtype=np.float64)
+    for col, atom in enumerate(atom_list):
+        if atom in compo_row:
+            table_mass = float(compo[compo_row.index(atom)]["mass"])
+            if abs(table_mass - float(config.ATOMIC_MASSES[col])) > _ATOMIC_MASS_TOL_G_MOL:
+                raise RuntimeError(
+                    f"config.ATOMIC_MASSES[{col}] = {config.ATOMIC_MASSES[col]} "
+                    f"for {atom!r} but the package composition table's {atom!r} "
+                    f"row has mass {table_mass}: the hardcoded mass no longer "
+                    "matches the package's mass data.")
+        elif compo_arr[:, col].sum() != 0.0:
+            raise RuntimeError(
+                f"composition atom column {col} ({atom!r}) is carried by network "
+                "species but has no monatomic table row to verify "
+                "config.ATOMIC_MASSES against; extend the check before trusting "
+                "the hardcoded mass.")
+
 
 class ConvDiag(NamedTuple):
     """Per-solve convergence diagnostics read off the runner's final carry.
@@ -229,6 +278,8 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     import vulcan_jax.legacy_io as op
     import vulcan_jax.op_jax as op_jax
     import vulcan_jax.outer_loop as outer_loop
+
+    _assert_composition_tables(composition)
 
     # Condensation with a live T(P) needs configuration that can actually
     # condense; refuse the silently-inert combinations upfront (standing rule:
@@ -681,7 +732,7 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         return init.pv
 
     def converged_y(theta, warm_y=None, lnZ_ref=0.0, c_o_ref=0.0, return_diag=False,
-                    warm_cap=False, return_longdy=False, return_conv_diag=False):
+                    warm_cap=False, return_conv_diag=False):
         """Converged ABSOLUTE number densities y (nz, ni), with optional continuation
         warm-start (warm_y at lnZ_ref / c_o_ref). Differentiable via forward-mode w.r.t. theta.
         The SO2 column number density is then jnp.sum(y[:, so2] * dz); jvp gives both y (for
@@ -704,19 +755,12 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         the SMC mutation path, where a proposal that hasn't converged in warm_count_max
         steps is rejected rather than marched to the full cold cap.
 
-        ``return_longdy=True`` returns ``(y, accept_count, final.longdy)``. accept_count alone
-        is NOT a convergence test: the hybrid vm_mol phase-flip (and the stall fallback)
-        terminate the runner EARLY (accept_count ~ count_min+2000 << count_max) even when the
-        column has not settled, so ``accept_count < count_max`` can be True for a non-steady
-        state. ``longdy`` is the runner's own convergence metric -- gate it against ``yconv_min``
-        (converged states have ``longdy < yconv_min``) to catch that early-terminate case.
-
         ``return_conv_diag=True`` returns ``(y, ConvDiag)`` -- the full per-solve
         convergence diagnostics (accept_count, longdy, longdydt, count_since_new_min,
         conv_normal), all free reads off the primal carry. This is the SMC hot-path
         surface: ``conv_normal`` is the runner's canonical certification recomputed at
         the exit state, so a stall-fallback or budget exit reads False even when
-        ``longdy < yconv_min``. Supersedes return_longdy/return_diag for new callers."""
+        ``longdy < yconv_min``. Supersedes return_diag for new callers."""
         init, atm_T = _prep(jnp.asarray(theta, dtype=jnp.float64), warm_y=warm_y,
                             lnZ_ref=lnZ_ref, c_o_ref=c_o_ref)
         init = _runner_carry_seed(init, warm_continuation=warm_y is not None,
@@ -730,8 +774,6 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
                 count_since_new_min=final.count_since_new_min,
                 conv_normal=_conv_normal_at_exit(final),
             )
-        if return_longdy:
-            return final.y, final.accept_count, final.longdy
         if return_diag:
             return final.y, final.accept_count
         return final.y

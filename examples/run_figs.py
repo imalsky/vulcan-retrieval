@@ -50,11 +50,8 @@ def make_fig(wl_um, spec, J, kind, out_png, display_R):
     if not (config.JP / "scripts" / "_common.py").is_file():
         raise RuntimeError(f"jax_paper sibling not found at {config.JP} -- manuscript figure scripts require it (set VULCAN_PROJECT_ROOT)")
     sys.path.insert(0, str(config.JP / "scripts"))
-    try:
-        from _common import apply_style
-        apply_style()
-    except Exception:
-        pass
+    from _common import apply_style
+    apply_style()
 
     if kind == "transmission":
         yv = spec * 1e6; ylab = r"Transit depth $(R_p/R_\star)^2$  [ppm]"; sym = "d"

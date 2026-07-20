@@ -287,8 +287,6 @@ class Config:
     smc_mcmc_kernel: str = "mala"
     mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
-    smc_use_custom_gradients: bool = True   # forward-mode value-and-grad wrapper (memory-stable, no vjp tape)
-    smc_custom_grad_max_dim: int = 16
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
     # (finite certified primal, non-finite forward-mode tangent). Such
     # proposals are handled as ZERO-DRIFT MALA moves -- eval-zeroed gradient

@@ -42,11 +42,8 @@ def main(out=Z.FIGS / "zco_disequilibrium.png", combo=Z.DEFAULT_COMBO):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    try:
-        from _common import apply_style
-        apply_style()
-    except Exception:
-        pass
+    from _common import apply_style
+    apply_style()
 
     wl_model, tiers, meta = Z.load_jacobians()
     obs = Z.load_combined(combo)
@@ -122,7 +119,7 @@ def main(out=Z.FIGS / "zco_disequilibrium.png", combo=Z.DEFAULT_COMBO):
                  fontsize=9, color="#8a1a0d", ha="left",
                  arrowprops=dict(arrowstyle="->", color="#8a1a0d", lw=1.0))
 
-    fig.suptitle("Photochemistry doesn't just add a feature — it adds measurable "
+    fig.suptitle("Photochemistry doesn't just add a feature: it adds measurable "
                  "metallicity information", fontsize=12.8, y=1.0)
     fig.text(0.5, -0.02, "Same radiative transfer + real errors for all three; only the "
              "VULCAN-JAX chemistry physics differs. Kzz, $T_{\\rm int}$, ln$R_0$, offsets "

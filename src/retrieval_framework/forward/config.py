@@ -85,7 +85,10 @@ VULCAN_NETWORK = "thermo/SNCHO_photo_network.txt"
 VULCAN_ATOM_LIST = "H,O,C,N,S"
 W39B_CFG_NAME = "W39b"  # vulcan_jax.load_config name (was cfg_examples module)
 
-# atom_list column order inside composition.compo_array (probed from the package).
+# atom_list column order inside composition.compo_array. This module stays
+# import-light (no vulcan_jax), so both positional tables below are hardcoded
+# mirrors of the package's composition metadata; vulcan_chem verifies them
+# against vulcan_jax.composition at build time and raises on any drift.
 # Index of each element column we touch when building the Z / C/O knobs.
 ATOM_COLS = {"H": 0, "O": 1, "C": 2, "He": 3, "N": 4, "S": 5}
 

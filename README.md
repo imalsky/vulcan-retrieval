@@ -330,9 +330,8 @@ gradients go dead again.
 ## Why forward-mode MALA (and how it stays affordable)
 
 The VULCAN runner is a `lax.while_loop`: **jvp works, vjp does not**. The
-likelihood gradient is therefore assembled from forward-mode jvps and exposed to
-the MALA kernel through a `custom_vjp` (the SWAMPE trick). Two cost structures are
-implemented (`gradient_mode`):
+likelihood gradient is therefore assembled from forward-mode jvps. Two cost
+structures are implemented (`gradient_mode`):
 
 - **`block` (default, exact):** only the 6 chemistry+T-P directions push tangents
   through the VULCAN loop; `lnR0` is one RT-only jvp at the frozen converged

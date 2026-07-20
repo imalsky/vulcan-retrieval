@@ -72,7 +72,7 @@ _W39B = dict(
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
     #         gives a limb T ~770-1540 K -- physical for W39b, no unmodelably cold/hot
     #         corners. gamma up to ~2 lets the data prefer a WEAK thermal inversion
-    #         (Isaac, 2026-07-08); a mild inversion actually cools the deep atmosphere, so
+    #         (prior widened 2026-07-08); a mild inversion actually cools the deep atmosphere, so
     #         it slightly LOWERS the reject rate. Any residual out-of-window profile is
     #         REJECTED, not clipped (pipeline.tp_valid).
     prior_Tirr=(1100.0, 2200.0),        # K
@@ -120,7 +120,7 @@ def gpu_config(**overrides: Any) -> Config:
     (cheap) RT grows. The short edge stays >=1 um (H2-H2 CIA table edge at 10000
     cm^-1; PRISM's <2 um saturation is a PRISM issue -- NIRISS is unaffected).
 
-    count_max=5000 (Isaac, 2026-07-08). The old >10k-step tail was diagnosed as a
+    count_max=5000, fixed 2026-07-08. The old >10k-step tail was diagnosed as a
     dt_max-ballooning numerical artifact (see _W39B dt_max + ../../CLAUDE.md): with
     dt_max=1e11 the ballooning draws converge in ~1000 steps, well under 5000, and the
     truth needs 4275. So 5000 gives ~700 steps over the truth -- draws harder than the
@@ -151,8 +151,8 @@ def gpu_config(**overrides: Any) -> Config:
         # nu_pts=1652 -> native R~1000. The data is 152 binned points, so R~1000 native
         # (~11 model pts per bin) is ample; the old nu_pts=16500 (R~10000) was overkill
         # AND blew the RT-VJP gradient to 343 GiB (OOM on the 96 GB GH200 -- job 64601).
-        # RT-vjp memory scales with nu_pts. (Isaac, 2026-07-08: "don't do that high
-        # resolution.")
+        # RT-vjp memory scales with nu_pts; the 2026-07-08 decision keeps the native
+        # resolution at R~1000.
         nu_min=1900.0, nu_max=9900.0, nu_pts=1652, art_nlayer=60,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
@@ -174,7 +174,7 @@ def gpu_config(**overrides: Any) -> Config:
         # 131/144 healthy, spares exhausted). The 8-spare default was sized for the
         # 3-5% warm-recert rate measured pre-pass (jobs 64854/64897, synthetic);
         # the 2026-07-12 elemental-map + per-proposal atm rebuild and REAL prior
-        # corners push it to ~14%. count_max stays 5000 (Isaac), so absorb the higher
+        # corners push it to ~14%. count_max stays 5000 (2026-07-08 decision), so absorb the higher
         # attrition here: oversample 2.5 -> ceil(144*2.5)=360 cold draws (~256 alive
         # at 29% reject), spare 48 -> phase-2 pool min(n_alive, 144+48)=192, tolerating
         # a warm-recert cull up to (192-144)/192 = 25% and still leaving 144. Both are
@@ -184,7 +184,7 @@ def gpu_config(**overrides: Any) -> Config:
         # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
         # neither nu_pts nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
         init_oversample=2.5, init_phase2_spare=48,
-        # Tangent-extrapolated warm starts ON (Isaac, 2026-07-10): proposals seed at
+        # Tangent-extrapolated warm starts ON (enabled 2026-07-10): proposals seed at
         # Y + (dy/dtheta).dtheta -- measured 1.65x fewer warm steps, same certified
         # state (parity unit-tested; validate_warm gates the production result and
         # the staged CALIBRATE->SYNTH->production sequence exercises it end-to-end
