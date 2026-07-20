@@ -139,16 +139,22 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air",
                              "(expected 'air' or 'h2he')")
     else:
         raise ValueError(f"unknown opacity source {src!r} for {key}")
+    # exojax >= 2.x deprecated the dit_grid_resolution= constructor argument
+    # (it still maps to broadening_resolution internally but emits a
+    # UserWarning per molecule per build and can disappear in a future
+    # release): pass the SAME value through the supported knob. The public
+    # profile key stays "dit_grid_resolution" -- identical semantics.
+    _broad_res = {"mode": "manual", "value": float(dit_grid_resolution)}
     try:
         opa = OpaPremodit.from_snapshot(
             mdb.to_snapshot(), nu_grid,
             auto_trange=(config.T_OPA_MIN_K, config.T_OPA_MAX_K),
-            dit_grid_resolution=dit_grid_resolution)
+            broadening_resolution=_broad_res)
     except AttributeError:
         opa = OpaPremodit(
             mdb, nu_grid,
             auto_trange=(config.T_OPA_MIN_K, config.T_OPA_MAX_K),
-            dit_grid_resolution=dit_grid_resolution)
+            broadening_resolution=_broad_res)
     n_lines = int(np.asarray(getattr(mdb, "nu_lines", np.zeros(0)).shape[0])) if hasattr(mdb, "nu_lines") else -1
     return opa, n_lines
 

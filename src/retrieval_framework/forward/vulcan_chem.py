@@ -556,7 +556,14 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         else:
             T = tp_eval(theta[3:3 + n_tp_params], p_bar_j)
         M = pco / (kb * T)
-        k_arr = rates_jax.build_rate_array(network, T, M, nasa9, remove_list)
+        # Honor cfg.use_lowT_limit_rates (2026-07-19): build_rate_array
+        # defaults use_lowT_caps=False, so a config with the flag ON was
+        # silently solved with uncapped low-T rates (no shipped config sets
+        # it, but a silent config-ignore violates the loud-errors rule; the
+        # adjoint caller in vulcan-jwst-tool already passed it explicitly).
+        k_arr = rates_jax.build_rate_array(
+            network, T, M, nasa9, remove_list,
+            use_lowT_caps=bool(cfg.use_lowT_limit_rates))
         Ti = 0.5 * (T[:-1] + T[1:])
         Kzz_eff = Kzz0 * 0.0 if zero_kzz else Kzz0 * jnp.exp(lnKzz)
 
@@ -775,6 +782,11 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         converged_ymix=converged_ymix,
         run_diag=run_diag,
         converged_y=converged_y,
+        conv_normal_at_exit=_conv_normal_at_exit,  # canonical certification of a
+        #                                            raw run_diag final carry --
+        #                                            exported 2026-07-19 so
+        #                                            adjoint callers can gate on
+        #                                            conv_normal, not longdy alone
         audit_init=audit_init,
         conden_spec=conden_spec,   # static conden metadata (None when conden off)
         prep_pv=prep_pv,           # theta -> initial ProfileVars (no solve; tests)

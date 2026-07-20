@@ -1561,3 +1561,21 @@ config changes, defaults unchanged, no cache invalidation for SMC/zco.
   signature, `mieparams_vector` returning (sig_ext, sig_sca, g_asym), the N0
   cancellation, and jnp.interp differentiability. Dependency: exojax >= 2.2.3
   with a generated miegrid (vulcan-jwst-tool tools/generate_miegrid.py).
+
+## 2026-07-19 -- three engine-side fixes from the jwst-tool adversarial audit
+
+1. `forward.vulcan_chem` namespace exports `conv_normal_at_exit` (the
+   canonical-certification predicate applied to a raw `run_diag` final carry).
+   Additive; lets adjoint/diagnostic callers gate on `conv_normal` instead of
+   longdy alone (the SMC hot path already used it via `return_conv_diag`).
+2. `_prep` passes `use_lowT_caps=bool(cfg.use_lowT_limit_rates)` to
+   `build_rate_array` -- the flag was silently ignored on the on-graph rate
+   table (defaulted False). No shipped config sets it (W39b.yaml: false), so
+   no result changes; this closes a silent config-ignore (loud-errors rule).
+   The jwst-tool adjoint caller always passed it explicitly.
+3. `forward.exojax_rt._build_opa` passes the PreMODIT broadening-grid spacing
+   through `broadening_resolution={"mode": "manual", "value": x}` instead of
+   the deprecated `dit_grid_resolution=` constructor argument (exojax >= 2.x
+   maps the old kwarg to the same config but warns per molecule per build and
+   may drop it). Same value, same physics; the public profile key
+   `dit_grid_resolution` is unchanged.
