@@ -184,7 +184,7 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
     on real closed columns: gradient +876 (wrong sign, ~1500x off). DELETED.
     Same-fate variants: matrix-free LSQR pseudoinverse (istop=7, gradient ~0)
     and raw-Neumann fixed-point adjoint (diverged to 1e57). -- 2026-06-16;
-    ../docs/vulcan_jax_notes.md.
+    ../VULCAN-JAX/docs/vulcan_jax_notes.md.
 29. **Left-preconditioning the adjoint solve.** Minimizes the wrong metric
     (small preconditioned resid, garbage gradient). Right-precondition.
     -- vulcan_jax_notes.md.
@@ -244,7 +244,7 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
     effect / actively worse (the blow-up is N-driven, not S; mtol alone blows
     up the majors, longdy 46). Only the full recipe works (central diffusion +
     dt_max cap + allotrope ignore + mtol). -- 2026-07-15;
-    ../docs/photo_off_convergence_investigation.md.
+    ../VULCAN-JAX/docs/photo_off_convergence_investigation.md.
 46. **Any total derivative through the pinned condensation state (Fisher /
     gradient-MALA / input sensitivity).** The pinned S8 tangent is ~91% WRONG
     (jvp-vs-FD rel err 0.91; path-sensitive transient + discrete switches).
@@ -281,7 +281,7 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
     the gate's original "warm-jvp under-relaxed" reason was a mislabel. Even
     on the recipe-converged state the through-loop tangent is quantitatively
     unreliable (magnitudes off 25% to ~2x; warm lnKzz correlation 0.69).
-    -- 2026-07-15; ../docs/photo_off_convergence_investigation.md.
+    -- 2026-07-15; ../VULCAN-JAX/docs/photo_off_convergence_investigation.md.
 
 ## D. Solver numerics / convergence
 
@@ -339,7 +339,7 @@ uses forward-mode MALA and reverse-mode stays off the hot path):
 65. **Naive two-stream particular-solution pole fix (denominator floor /
     clip).** Changes near-pole physics and breaks master parity; deferred to a
     proper analytic resonant-limit solve (W39b's 83 deg config is safe).
-    -- ../docs/corrections_to_original_code.md.
+    -- ../VULCAN-JAX/docs/corrections_to_original_code.md.
 66. **"Fixing" inherited master defects unilaterally.** Rejected for parity:
     unweighted atom-conservation diagnostic, condensate mass in gas mu,
     atm_type='table' stale-pico. Documented, not patched. --

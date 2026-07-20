@@ -1,0 +1,6 @@
+{
+  "_comment": "Collaborator GPU-usage demo (2026-07-18): small-N CALIBRATE_ONLY under a full nsys trace. NOT a science run. N reduced to 48 for a fast, safe init and a clean GPU-metrics timeline; width is nearly free in the lockstep chemistry so per-sweep cost + kernel/utilization profile match the N=144 production preset. init_oversample/spare trimmed to cut init draws (worst-corner solve time) while keeping a safe survival margin. All forward-model fidelity (nu_pts=1652, nz=50, art_nlayer=60) inherited from the gpu preset unchanged. Submit: qsub -l walltime=06:00:00 -v CALIBRATE_ONLY=1,NSYS_FULL=1,NSYS_GPU_METRICS=1,SMC_RETRIEVAL_OUT_DIR=data/gpu_demo,SMC_RETRIEVAL_OVERRIDES_FILE=overrides/demo.json run_nas_w39b.pbs",
+  "smc_num_particles": 48,
+  "init_oversample": 2.0,
+  "init_phase2_spare": 24
+}
