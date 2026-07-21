@@ -162,6 +162,11 @@ MOLECULES = {
     "H2S":  {"vulcan": "H2S",  "molmass": 34.081, "source": "hitran", "db": "H2S"},
     # Cool-planet nitrogen carrier (e.g. WASP-107b-class): jwst_tool opt-in molecule.
     "NH3":  {"vulcan": "NH3",  "molmass": 17.031, "source": "hitran", "db": "NH3"},
+    # Second equilibrium sulfur carrier (nu3 band ~4.85 um, inside G395H and
+    # PRISM): jwst_tool opt-in molecule under both chemistry engines. SNCHO
+    # names the species COS; the PICASO Visscher tables call it OCS (the
+    # jwst_tool picaso adapter aliases the token).
+    "OCS":  {"vulcan": "COS",  "molmass": 60.075, "source": "hitran", "db": "OCS"},
 }
 
 # Bulk gas used for CIA + the dominant background (H2).
