@@ -431,7 +431,18 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         mie=[log10 rg (cm), sigmag, log10 MMR] (needs mie_condensate at build).
         """
         _require_he(vmr_he)
-        dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
+        # g(r) SELF-CONSISTENCY: use the SAME height-dependent gravity ExoJax
+        # already uses for the chord heights (art.run -> normalized_layer_height,
+        # g(r) = g_btm*(R_btm/r)^2) in the pressure->column-mass conversion,
+        # instead of the constant scalar g_btm. Constant g_btm makes upper-layer
+        # column mass dP/g (hence tau) too SMALL because g(r) < g_btm aloft -- an
+        # internal inconsistency (heights g(r) vs opacity constant-g) that biases
+        # transmission amplitude toward the model top, largest for low-gravity
+        # super-puffs. gravity_profile returns (nlayer,1) and broadcasts through
+        # opacity_profile_xs/cia/cloud/mie/rayleigh. (Emission is plane-parallel
+        # and correctly keeps the constant g_btm below.)
+        g_prof = art.gravity_profile(T_art, mmw_art, Rp_btm, g_btm)  # (nlayer,1)
+        dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_prof,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
                                 rayleigh_xs=rayleigh_xs,
@@ -450,7 +461,11 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         planet-radius change at fixed mass."""
         _require_he(vmr_he)
         Rp_r = Rp_btm * jnp.exp(lnR0)
-        dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
+        # g(r) at the lnR0-scaled reference radius (gravity g_btm held fixed, per
+        # the xR_p normalization; the height grid and thus g(r) shift with Rp_r) --
+        # matches the g(r) art.run uses for the heights (see transmission_depth).
+        g_prof = art.gravity_profile(T_art, mmw_art, Rp_r, g_btm)   # (nlayer,1)
+        dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_prof,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
                                 rayleigh_xs=rayleigh_xs,
@@ -522,10 +537,28 @@ def build_emis_model(trt, profile: dict) -> SimpleNamespace:
             raise ValueError(
                 "vmr_he is required: pass the He VMR profile so the H2-He CIA term "
                 "is included in the emission opacity (parity with transmission).")
+        if mie is not None:
+            # ArtEmisPure is a PURE-ABSORPTION thermal solver. The Mie deck
+            # returns sigma_extinction (absorption + scattering); feeding that
+            # to the emission dtau counts scattering as thermal absorption, so a
+            # conservative (pure-scattering) cloud radiates as a blackbody
+            # instead of zero -- it VIOLATES the conservative-scattering
+            # zero-emission limit and can fake a thermal source in a cloudy
+            # eclipse. Refuse loudly rather than return a wrong flux (a
+            # scattering-aware emission solver is the correct fix). The
+            # power-law cloud is a deliberately absorbing opacity, so it stays
+            # allowed; only the scattering Mie deck is refused here.
+            raise ValueError(
+                "Mie cloud is not supported in EMISSION: ArtEmisPure is a "
+                "pure-absorption solver, so Mie scattering would be counted as "
+                "thermal absorption and violate the conservative-scattering "
+                "zero-emission limit. Use transmission, or the (absorbing) "
+                "power-law cloud, until a scattering-aware emission solver "
+                "lands.")
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
-                                mie_pack=mie_pack, mie=mie)
+                                mie_pack=mie_pack, mie=None)
         return art.run(dtau, T_art)
 
     def tau_bottom(vmr, vmr_h2, T_art, mmw_art, vmr_he, cloud=None, mie=None):
