@@ -38,6 +38,16 @@ degraded result.
 - **`dt_max = 1e11 s`** (`Config.dt_max`, first-class, in `case.py::_W39B`).
   A step-size control that catches adaptive-Ros2 dt ballooning; it PRESERVES the
   longdy-defined steady state (truth bit-identical). Not a convergence criterion.
+  **Conditioning note (measured 2026-07-27):** the matrix Ros2 factorizes is
+  `I/(gamma*dt) - J`, so its condition number grows with dt. On a converged HD189
+  state the blocks reach cond ~1.4e18 at dt=3.8e4 (a typical converged dt) and
+  ~6.7e23 at dt=1e11, where the block-Thomas solve's own max relative residual is
+  already ~5.5e+03 against float64's ~16 digits. This does not invalidate the cap
+  — it is an upper bound the adaptive controller rarely reaches, and lowering it
+  would change the steady state it is designed to preserve — but any claim that a
+  solver change is "accuracy-neutral" MUST be measured at dt near this cap, not at
+  small dt. See `VULCAN-JAX/docs/vulcan_jax_notes.md` (rejected inverse-carry
+  optimization) for the failure this caught.
 - **Convergence = VULCAN-master canonical.** `yconv_cri = 0.01` (schema default);
   `slope_cri`/`yconv_min`/`flux_cri` inherit `vulcan_cfg_W39b` — do not override.
   conv_step stays 500 (300 was probed and rejected — it certifies a less-converged
