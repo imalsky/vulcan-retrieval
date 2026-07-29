@@ -1,6 +1,7 @@
-# vulcan-retrieval: the differentiable VULCAN-JAX -> ExoJAX forward model
-# (retrieval_framework.forward) plus the SMC / forward-mode-MALA retrieval
-# framework. EDITABLE install is the supported dev mode (pip install -e . --no-deps
+# vulcan-retrieval: the SMC / forward-mode-MALA atmospheric-retrieval
+# framework. The differentiable VULCAN-JAX -> ExoJAX forward model it runs on
+# is the shared `vulcan-forward` distribution (extracted 2026-07-29), not part
+# of this package. EDITABLE install is the supported dev mode (pip install -e . --no-deps
 # in a checkout of this repo); a site-packages/TestPyPI install
 # works for the code but must set VULCAN_PROJECT_ROOT so the repo data/ tree
 # (observations + opacity caches) resolves -- see forward/config.py.

@@ -1,25 +1,37 @@
 # The shared forward engine
 
-`retrieval_framework.forward` chains live VULCAN-JAX photochemical kinetics into
-ExoJax radiative transfer and propagates gradients through the whole chain. It is
-also the engine behind the sibling vulcan-jwst-tool. It imports VULCAN-JAX and
-ExoJax and never modifies them.
+The engine chains live VULCAN-JAX photochemical kinetics into ExoJax radiative
+transfer and propagates gradients through the whole chain. It imports VULCAN-JAX
+and ExoJax and never modifies them.
+
+**Since 2026-07-29 the engine is its own distribution,
+[`vulcan-forward`](https://github.com/imalsky/vulcan-forward)**, shared with
+vulcan-jwst-tool: the two applications sit on one engine instead of the planner
+depending on this framework. The physics described in this document did not
+change in that move (a fresh solve reproduced the pre-split spectrum
+bit-identically); only the import paths and the data contract did. What remains
+in this repo is `forward/config.py` (this repo's paths, the WASP-39 b case
+constants, the run profiles, the parameter-vector labels; it re-exports the
+shared physics constants) and `forward/sensitivity.py`.
 
 Moved out of the README in 2026-07.
 
 ## Modules
 
-Import as
-`from retrieval_framework.forward import config, sensitivity
-from vulcan_forward import vulcan_chem, interp_map, exojax_rt`.
+Import as:
+
+```python
+from retrieval_framework.forward import config, sensitivity      # this repo
+from vulcan_forward import vulcan_chem, interp_map, exojax_rt    # the engine
+```
 
 | Module | Physics it owns |
 |---|---|
-| `config` | Pure constants: molecule and isotope set with masses, wavenumber band, radiative-transfer pressure grid, planet defaults, cache paths. No heavy imports, so it is safe to load before the environment-sensitive VULCAN-JAX setup |
-| `vulcan_chem` | The VULCAN-JAX side. One warm-up convergence, then `converged_ymix(theta)` and `converged_y(...)` re-converge the closed column as a function of metallicity, C/O, `Kzz`, and the temperature-pressure profile. Sets the network environment variables and float64 at import |
-| `interp_map` | The differentiable log-pressure bridge from the chemistry grid to the radiative-transfer grid, using `jnp.interp` so tangents pass across it |
-| `exojax_rt` | ExoJax `ArtTransPure` for transmission and `ArtEmisPure` for emission, sharing one opacity set. Provides `transmission_depth_r(...)` and `emission_flux(...)` |
-| `sensitivity` | Composes the chain from parameters through the converged mixing ratios to the transit spectrum, for forward-mode gradients |
+| `config` (this repo) | This repo's paths, WASP-39 b case constants, run profiles and parameter-vector labels, plus re-exports of the engine's shared physics constants (molecule set with masses, wavenumber band, radiative-transfer pressure grid). No heavy imports, so it is safe to load before the environment-sensitive VULCAN-JAX setup. It also hands the engine this repo's `data/` tree, so the opacity caches and line lists stay where they are |
+| `vulcan_chem` (engine) | The VULCAN-JAX side. One warm-up convergence, then `converged_ymix(theta)` and `converged_y(...)` re-converge the closed column as a function of metallicity, C/O, `Kzz`, and the temperature-pressure profile. Sets the network environment variables and float64 at import |
+| `interp_map` (engine) | The differentiable log-pressure bridge from the chemistry grid to the radiative-transfer grid, using `jnp.interp` so tangents pass across it |
+| `exojax_rt` (engine) | ExoJax `ArtTransPure` for transmission and `ArtEmisPure` for emission, sharing one opacity set. Provides `transmission_depth_r(...)` and `emission_flux(...)` |
+| `sensitivity` (this repo) | Composes the chain from parameters through the converged mixing ratios to the transit spectrum, for forward-mode gradients |
 
 ## The import-order contract
 
