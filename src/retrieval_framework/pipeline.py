@@ -1214,7 +1214,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         # The tangent-blown class also occurs on the init phase-2 warm
         # re-certifications, and it is theta-dependent, so culling or raising
         # on it would bias the initial importance sample against that corner
-        # (docs/job65815_badgrad_investigation.md SS6). Consistent with the
+        # (docs/limitations.md, blown-tangent class). Consistent with the
         # mutation kernel's zero-drift handling: keep the particle with its
         # certified likelihood and eval-zeroed gradient entries (its first
         # MALA move starts with prior-only drift), zero its DY rows below,
@@ -1236,7 +1236,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             f"likelihood but a non-finite forward-mode tangent (indices "
             f"{np.flatnonzero(bad2).tolist()}) -- kept with zeroed gradient "
             "entries (zero-drift first move; expected in the high-Z/low-C-O "
-            "corner, see docs/job65815_badgrad_investigation.md)"
+            "corner, see docs/limitations.md)"
             + (" and zeroed DY rows for the warm_extrapolate seed."
                if DY is not None else "."))
         if DY is not None:
@@ -1384,7 +1384,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             # no-op only for an extrapolated seed. An unconditionally clipped
             # max(pred, 0) seed manufactures the badgrad tangent class, and a
             # per-cell fallback is measurably insufficient -- evidence and
-            # replay tallies in docs/job65815_badgrad_investigation.md SS10.
+            # replay tallies in the development log (untracked notes.md).
             C_cur = jax.vmap(theta_from_u)(U)[:, :n_ct]
             C_new = theta_new[:, :n_ct]
             pred = Y + jnp.einsum("nkij,nk->nij", DY, C_new - C_cur)
@@ -1405,7 +1405,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         # PROPOSAL, not the target), so the certified likelihood decides
         # acceptance unbiasedly; forcing rejection instead biases against the
         # theta-corner where the class concentrates
-        # (docs/job65815_badgrad_investigation.md SS4-SS6). Kept loud:
+        # (docs/limitations.md, blown-tangent class). Kept loud:
         # badgrad= per sweep, forensics dumps, and the
         # smc_tangent_bad_max_frac backstop raise in _check_mutation_health.
         # The accepted particle's DY rows were zeroed in eval_batch.
@@ -1489,7 +1489,7 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
     state has no primal-side predicate and is theta-dependent (dense in the
     high-Z/low-C-O corner the posterior favors), so the sweep handles it as a
     ZERO-DRIFT MALA move rather than a rejection -- see the sweep comment and
-    docs/job65815_badgrad_investigation.md. ``forensics`` (per-particle device
+    docs/limitations.md. ``forensics`` (per-particle device
     arrays) is dumped to ``dump_path`` and summarized in the log on EVERY
     occurrence. A single sweep exceeding ceil(max_frac * n_particles) events
     is far beyond the measured physical class -- that is systematic AD

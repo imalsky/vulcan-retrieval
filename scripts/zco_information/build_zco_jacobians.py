@@ -26,8 +26,7 @@ Chemistry runs the PINNED validated baseline (use_vm_mol=False) plus the certifi
 photo-off convergence recipe (dt_max cap, tight mtol_conv, sulfur-allotrope
 conver_ignore) -- see BASELINE_CFG_OVERRIDES below. The 2026-07-14 upstream default
 flip to hybrid upwind vm_mol makes the photo-off tiers (E, Q) non-convergent on this
-band (30000-step blow-up, order-unity atom loss; reproduced 2026-07-20), exactly the
-failure documented in VULCAN-JAX docs/photo_off_convergence_investigation.md. Every
+band (30000-step blow-up, order-unity atom loss; reproduced 2026-07-20). Every
 tier is now gated on the runner's canonical certification and the build REFUSES to
 cache a Jacobian from a non-steady state.
 
@@ -73,8 +72,9 @@ TIER_ORDER = ["E", "Q", "P"]
 TIER_NAME = {"E": "no-transport (~equilibrium)", "Q": "quench(+transport)", "P": "photochem(+photo)"}
 
 # Pinned validated-baseline chemistry + the certified photo-off convergence recipe
-# (VULCAN-JAX docs/photo_off_convergence_investigation.md, 2026-07-15). Applied to
-# EVERY tier so the tier-to-tier comparison runs one consistent scheme:
+# (measured 2026-07-15). This IS the recipe -- the four settings below are the whole
+# of it. Applied to EVERY tier so the tier-to-tier comparison runs one consistent
+# scheme:
 #   * use_vm_mol pinned False -- the 2026-07-14 upstream hybrid-vm default flip is
 #     un-re-baselined for these forecasts (the sibling jwst-tool pins the same) and
 #     makes the photo-off tiers non-convergent on this band.
@@ -147,8 +147,8 @@ def build_tier(tier: str, trt, smoke: bool):
         raise RuntimeError(
             f"tier {tier}: chemistry exited WITHOUT the runner's canonical certification "
             f"(longdy={float(final.longdy):.3e}, accept_count={int(final.accept_count)}); "
-            "refusing to cache a Jacobian from a non-steady state. Recipe: "
-            "VULCAN-JAX docs/photo_off_convergence_investigation.md.")
+            "refusing to cache a Jacobian from a non-steady state. The photo-off "
+            "convergence recipe is BASELINE_CFG_OVERRIDES in this file.")
 
     g0 = g(theta0)
     depth0 = np.asarray(trans_of(g0))
