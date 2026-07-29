@@ -10,9 +10,12 @@ __pycache__/
 # Everything below is a narrative development log or an incident post-mortem:
 # kept locally, not shipped to consumers. data/notes.md is deliberately NOT here
 # -- it is observation provenance and regeneration policy, which consumers need.
-CLAUDE.md
+# CLAUDE.md and docs/failed_approaches.md are deliberately NOT here either: the
+# former is the standing contract this repo is worked under, the latter is the
+# append-only negative-results register that contract points at as authoritative.
+# Both are edited in the same pass as the code they govern, so they have to be
+# versioned with it -- an entry that lives only on one machine is a lost result.
 /notes.md
-docs/failed_approaches.md
 docs/job65815_badgrad_investigation.md
 examples/notes.md
 runs/*/notes.md
