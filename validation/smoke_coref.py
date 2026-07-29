@@ -8,7 +8,7 @@ drift multiplicatively. nz=40, ~a few min.
 from __future__ import annotations
 import numpy as np
 from retrieval_framework.forward import config
-from retrieval_framework.forward import vulcan_chem
+from vulcan_forward import vulcan_chem
 import jax.numpy as jnp
 
 PROF = dict(config.SMOKE, co_mode="fixed_O", nz=40, yconv_cri=1.0e-4, yconv_min=1.0e-4,

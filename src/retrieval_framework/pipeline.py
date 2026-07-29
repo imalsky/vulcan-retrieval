@@ -121,7 +121,7 @@ def _zero_eval_stats(n: int, dtype) -> EvalStats:
 def _proposal_converged(cd_vec):
     """Convergence predicate for a warm MALA proposal's solve, from the packed
     per-particle ConvDiag vector ``[accept_count, longdy, longdydt,
-    count_since_new_min, conv_normal]`` (see forward.vulcan_chem.ConvDiag).
+    count_since_new_min, conv_normal]`` (see vulcan_forward.vulcan_chem.ConvDiag).
     THE gate that decides whether a proposal's state -- and therefore its jvp
     tangents -- is trusted; kept in one place so the predicate is swappable.
 

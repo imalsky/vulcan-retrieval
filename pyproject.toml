@@ -33,12 +33,13 @@ classifiers = [
 ]
 dependencies = [
     "jax>=0.6.2",
-    "exojax==2.2.3",
     "numpy>=1.26",
     "scipy>=1.12",
-    "matplotlib",
-    "corner",
-    "tqdm",
+    # The forward-model engine (chemistry + ExoJAX RT) is a shared distribution
+    # since 2026-07-29, so it -- not this package -- owns the exojax==2.2.3 pin.
+    # 0.1.0 is the extraction release: same physics, engine-owned data-root
+    # contract, required planet geometry, injectable molecule table.
+    "vulcan-forward>=0.1.0",
     "vulcan-jax>=0.3.0",  # 0.3.0 enforces the condensation-not-differentiable contract at the AD entry points (F1-F5); 0.2.0 was the YAML-only config API
 ]
 
@@ -47,6 +48,12 @@ Homepage = "https://github.com/imalsky/vulcan-retrieval"
 Repository = "https://github.com/imalsky/vulcan-retrieval"
 
 [project.optional-dependencies]
+# Posterior plotting + progress bars: needed by plot_smc.py and the figure
+# scripts, never by a forward solve or an SMC run, so they stay out of the
+# core install (a downstream consumer of the engine should not inherit a
+# corner-plot library).
+plot = ["matplotlib", "corner", "tqdm"]
+
 # blackjax is dev-only: the external oracle for the SMC core
 # (tests/test_smc_blackjax_oracle.py, RUN_BLACKJAX_ORACLE=1), never a runtime dep.
 dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5", "blackjax>=1.3"]
@@ -71,10 +78,10 @@ addopts = "-ra --tb=short"
 line-length = 100
 
 [tool.ruff.lint.per-file-ignores]
-# env-before-import contract: vulcan_chem sets the VULCAN_JAX_* import-frozen env
-# vars (and jax x64) BEFORE importing jax/vulcan_jax; manuscript figure scripts
+# env-before-import contract: vulcan_forward.vulcan_chem sets the VULCAN_JAX_*
+# import-frozen env vars (and jax x64) BEFORE importing jax/vulcan_jax, so
+# callers import it ahead of other modules; manuscript figure scripts
 # sys.path-insert jax_paper/scripts for the shared _common house style.
-"src/retrieval_framework/forward/vulcan_chem.py" = ["E402"]
 "examples/run_demo.py" = ["E402"]
 "examples/run_figs.py" = ["E402"]
 "examples/fig_exojax_sensitivity.py" = ["E402"]

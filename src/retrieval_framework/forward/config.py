@@ -1,7 +1,17 @@
-"""Central configuration for the VULCAN-JAX -> ExoJax transmission-sensitivity demo.
+"""Retrieval-side configuration for the shared vulcan-forward engine.
 
-Pure constants only: NO heavy imports here (no jax, no vulcan_jax, no exojax), so
-this module is safe to import before the env-order-sensitive VULCAN-JAX setup runs.
+Pure constants + paths: NO heavy imports here (no jax, no vulcan_jax, no exojax),
+so this module is safe to import before the env-order-sensitive VULCAN-JAX setup
+runs.
+
+The forward-model ENGINE moved to the ``vulcan-forward`` distribution
+(2026-07-29), so the physics constants and the molecule/opacity table below are
+re-exported from ``vulcan_forward.constants`` rather than defined twice -- every
+existing ``config.MOLECULES`` / ``config.ATOM_COLS`` call site keeps working.
+What stays genuinely local: this repo's filesystem layout, the WASP-39 b case
+constants, the run profiles, and the parameter-vector labels. This module also
+hands the engine its data root (see the paths section), so the opacity caches and
+line lists keep living in this repo's data/ tree exactly as before.
 
 The demo chains the *live* VULCAN-JAX chemistry forward model into an ExoJax
 ``ArtTransPure`` transmission model and propagates forward-mode tangents from four
@@ -15,6 +25,31 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Shared physics constants -- single source of truth is the engine package
+# ---------------------------------------------------------------------------
+# Re-exported (not redefined) so this repo and vulcan-jwst-tool cannot drift
+# apart on molecule masses, opacity sources, the ART grid bounds, or the
+# composition tables. vulcan_forward.constants is stdlib-only, so importing it
+# here keeps this module import-light.
+from vulcan_forward import constants as _fwd
+from vulcan_forward import paths as _fwd_paths
+
+MOLECULES = _fwd.MOLECULES
+ATOM_COLS = _fwd.ATOM_COLS
+ATOMIC_MASSES = _fwd.ATOMIC_MASSES
+BULK_H2_VULCAN = _fwd.BULK_H2_VULCAN
+CLOUD_NUC0 = _fwd.CLOUD_NUC0
+BROADENING = _fwd.BROADENING
+H2HE_BROADENING_MIX = _fwd.H2HE_BROADENING_MIX
+ART_PTOP_BAR = _fwd.ART_PTOP_BAR
+ART_PBTM_BAR = _fwd.ART_PBTM_BAR
+T_OPA_MIN_K = _fwd.T_OPA_MIN_K
+T_OPA_MAX_K = _fwd.T_OPA_MAX_K
+VULCAN_NETWORK = _fwd.DEFAULT_NETWORK
+VULCAN_ATOM_LIST = _fwd.DEFAULT_ATOM_LIST
+W39B_CFG_NAME = _fwd.DEFAULT_CFG_NAME
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -46,6 +81,13 @@ OUTPUTS = REPO_DIR / "output"                                   # GENERATED: npz
 FIGS = JP / "figures"                                           # manuscript figures stay in jax_paper/figures
 DEMO_DATABASE = DATA_DIR / "exojax_linelists"                   # HITRAN line lists
 
+# Hand the shared engine this repo's data tree. The layout it expects
+# (exojax_linelists/ + opacity_cache/) is exactly what data/ already holds, so
+# nothing moves on disk; the engine simply stops inferring the location from its
+# own __file__ (it used to resolve a repo root by parent-directory indexing and
+# refuse to import without this tree present).
+_fwd_paths.set_data_root(DATA_DIR)
+
 # Offline opacity cache (CO ExoMol Li2015 + H2-H2/H2-He CIA), lives IN the repo
 # (data/opacity_cache/) so it has no dependency on any sibling project --
 # copied in 2026-07-07 from what was previously a reused emulator-demo/ cache.
@@ -60,46 +102,6 @@ CIA_H2H2_FILE = _CACHE / "H2-H2_2011.cia"
 # used to be possible and biased the sensitivity-demo spectra).
 CIA_H2HE_FILE = _CACHE / "H2-He_2011.cia"
 
-# Reference wavenumber (cm^-1) for the ExoJax powerlaw_clouds retrieval cloud:
-# kappa(nu) = kappac0 * (nu/CLOUD_NUC0)^alphac, kappac0 in cm^2 per gram of
-# atmosphere (pRT convention; alphac = 0 is a gray cloud). 2857 cm^-1 = 3.5 um,
-# mid-band for the 2.0-5.3 um retrieval window. NOTE this is a uniformly mixed
-# power-law opacity ("haze slope + gray deck" nuisance), NOT a physical cloud:
-# no cloud-top pressure, condensation, sedimentation, or patchiness.
-CLOUD_NUC0 = 2857.0
-
-# Pressure-broadening perturber for the HITRAN opacities. "air" = HITRAN's
-# terrestrial gamma_air/n_air (a documented approximation for an H2/He envelope);
-# "h2he" = HITRAN's planetary-broadener H2/He widths where the database provides
-# them, blended with the number-fraction mix below (uncovered lines keep air widths
-# for that partner, reported loudly per molecule at build; see
-# exojax_rt._blend_h2he_broadening and validation/broadening_ab.py for the A/B).
-# Profiles may override per run via profile["broadening"].
-BROADENING = "air"
-H2HE_BROADENING_MIX = (0.85, 0.15)   # (f_H2, f_He) by number, ~solar envelope
-
-# ---------------------------------------------------------------------------
-# VULCAN-JAX network selection (must be set as env vars BEFORE importing vulcan_jax)
-# ---------------------------------------------------------------------------
-VULCAN_NETWORK = "thermo/SNCHO_photo_network.txt"
-VULCAN_ATOM_LIST = "H,O,C,N,S"
-W39B_CFG_NAME = "W39b"  # vulcan_jax.load_config name (was cfg_examples module)
-
-# atom_list column order inside composition.compo_array. This module stays
-# import-light (no vulcan_jax), so both positional tables below are hardcoded
-# mirrors of the package's composition metadata; vulcan_chem verifies them
-# against vulcan_jax.composition at build time and raises on any drift.
-# Index of each element column we touch when building the Z / C/O knobs.
-ATOM_COLS = {"H": 0, "O": 1, "C": 2, "He": 3, "N": 4, "S": 5}
-
-# Molar masses (g/mol) for every compo_array column, in column order. Used to turn
-# a VMR profile into a mean-molecular-weight profile (compo_array @ this vector).
-# atom_list = (H,O,C,He,N,S,P,Na,K,Si,Fe,Ar,Ti,V,Mg,Ca,e)
-ATOMIC_MASSES = [
-    1.008, 15.999, 12.011, 4.0026, 14.007, 32.06, 30.974, 22.990,
-    39.098, 28.085, 55.845, 39.948, 47.867, 50.942, 24.305, 40.078, 5.4858e-4,
-]
-
 # ---------------------------------------------------------------------------
 # WASP-39b physical constants (from vulcan_jax/configs/W39b.yaml)
 # ---------------------------------------------------------------------------
@@ -112,65 +114,6 @@ R_SUN_CM = 6.957e10
 RP_CM = 1.279 * 7.1492e9   # planet radius (cm) at the bottom pressure P_b
 GS_CGS = 422.0             # surface gravity (cm/s^2), held fixed (incl. under lnR0)
 RSTAR_CM = 0.932 * R_SUN_CM
-
-# ---------------------------------------------------------------------------
-# Opacity / radiative-transfer grid
-# ---------------------------------------------------------------------------
-# ART pressure bounds (bar). The bottom stays inside VULCAN's envelope; the TOP is
-# set ABOVE VULCAN's 1e-7 bar chemistry top on purpose -- the log-P interpolation
-# CLAMPS the topmost VULCAN VMR/T over the extra decade, i.e. a constant-abundance +
-# isothermal upper-atmosphere extension (a common transmission-modeling convention,
-# NOT chemistry: photochemical species can genuinely vary at sub-microbar pressures).
-# Without it, strong bands (CO2 4.3, CO 4.7 um) go optically thick to the model top
-# and the transit radius saturates into a flat "wall" at 4.2-5.2 um (saturated
-# fraction 4.8% at 1e-6 bar); extending to 1e-8 bar removes it (0.1%), letting the
-# bands rise to real peaks. This is an EXPLICIT modeling choice; quantify its effect
-# with validation/top_pressure_ladder.py (clamped 1e-7/1e-8/1e-9 tops, and chemistry
-# actually extended via cfg P_t) before quoting fine-grained band-peak numbers.
-ART_PTOP_BAR = 1.0e-8
-ART_PBTM_BAR = 7.0
-T_OPA_MIN_K = 300.0
-T_OPA_MAX_K = 3000.0
-
-# Each molecule: VULCAN species name, molar mass (g/mol), and opacity source.
-# CO is fully offline (cached ExoMol Li2015). H2O/CO2/CH4/SO2 use HITRAN, downloaded
-# on first run into .database/<db>/ (small, public, no login -- only the main
-# isotopologue, isotope=1; HITRAN intensities already carry the terrestrial isotopic
-# abundance factor, so pairing them with the TOTAL molecular VMR is the standard
-# slightly-conservative treatment). KNOWN LIMITS for real-data inference, not just
-# the methodology demo: (1) HITRAN's 296 K room-T lists under-represent hot bands at
-# the ~770-1540 K retrieved limb relative to HITEMP/ExoMol -- absolute abundances
-# lean optimistic/biased where hot bands matter; swap sources here (one line per
-# molecule) when the multi-GB ExoMol/HITEMP fetch is acceptable. (2) Default
-# broadening is terrestrial air; set BROADENING="h2he" (above) for HITRAN's
-# planetary H2/He widths where available and run validation/broadening_ab.py for
-# the measured difference.
-# "source" is one of {"exomol_cached", "exomol", "hitran"}; "db" is the ExoMol
-# "<iso>/<list>" path suffix or the per-molecule download dir name under .database.
-# molmass is set explicitly (exojax isotope_molmass returns None for CH4).
-MOLECULES = {
-    "CO":  {"vulcan": "CO",  "molmass": 28.010, "source": "exomol_cached", "db": str(CO_CACHED_DIR)},
-    "H2O": {"vulcan": "H2O", "molmass": 18.015, "source": "hitran", "db": "H2O"},
-    "CO2": {"vulcan": "CO2", "molmass": 43.990, "source": "hitran", "db": "CO2"},
-    "CH4": {"vulcan": "CH4", "molmass": 16.043, "source": "hitran", "db": "CH4"},
-    "SO2": {"vulcan": "SO2", "molmass": 64.066, "source": "hitran", "db": "SO2"},
-    # High-C/O + sulfur discriminators for the SMC retrieval prior box
-    # (runs/w39b_smc_retrieval): the retrieval explores C/O up to ~1 where C2H2/HCN
-    # carry the signal; H2S is the reduced-S reservoir. Same HITRAN path as above.
-    "HCN":  {"vulcan": "HCN",  "molmass": 27.025, "source": "hitran", "db": "HCN"},
-    "C2H2": {"vulcan": "C2H2", "molmass": 26.037, "source": "hitran", "db": "C2H2"},
-    "H2S":  {"vulcan": "H2S",  "molmass": 34.081, "source": "hitran", "db": "H2S"},
-    # Cool-planet nitrogen carrier (e.g. WASP-107b-class): jwst_tool opt-in molecule.
-    "NH3":  {"vulcan": "NH3",  "molmass": 17.031, "source": "hitran", "db": "NH3"},
-    # Second equilibrium sulfur carrier (nu3 band ~4.85 um, inside G395H and
-    # PRISM): jwst_tool opt-in molecule under both chemistry engines. SNCHO
-    # names the species COS; the PICASO Visscher tables call it OCS (the
-    # jwst_tool picaso adapter aliases the token).
-    "OCS":  {"vulcan": "COS",  "molmass": 60.075, "source": "hitran", "db": "OCS"},
-}
-
-# Bulk gas used for CIA + the dominant background (H2).
-BULK_H2_VULCAN = "H2"
 
 # ---------------------------------------------------------------------------
 # Run profiles
@@ -193,6 +136,10 @@ SMOKE = {
     "nu_max": 4360.0,
     "nu_pts": 600,
     "art_nlayer": 20,
+    # planet identity, explicit: the engine requires it rather than
+    # defaulting to WASP-39 b (a caller who forgot used to get W39b
+    # silently). Same values as the old implicit fallback.
+    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 FULL = {
     "use_photo": True,         # photo ON -> SO2 chemistry (WASP-39b story)
@@ -203,6 +150,10 @@ FULL = {
     "nu_max": 3450.0,          # ~2.9 um  (NIRSpec G395H/PRISM red: CH4 3.3, SO2 4.0, CO2 4.3, CO 4.7)
     "nu_pts": 6000,
     "art_nlayer": 60,
+    # planet identity, explicit: the engine requires it rather than
+    # defaulting to WASP-39 b (a caller who forgot used to get W39b
+    # silently). Same values as the old implicit fallback.
+    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 # Wide-band overview: 1-15 um (the supported window -- H2-H2 CIA stops at 1 um / 10000
 # cm-1 on the short side, line lists reach ~20 um). Computed on a finer native grid and
@@ -217,6 +168,10 @@ WIDE = {
     "nu_pts": 8000,            # native R ~ 2950; binned to display_R for the figure
     "art_nlayer": 60,
     "display_R": 100,
+    # planet identity, explicit: the engine requires it rather than
+    # defaulting to WASP-39 b (a caller who forgot used to get W39b
+    # silently). Same values as the old implicit fallback.
+    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 
 # Parameter vector order: theta = [lnZ, c_o_pert, lnKzz, dT_K]. theta[3] is a

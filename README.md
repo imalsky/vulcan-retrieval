@@ -189,7 +189,7 @@ samples. If it is false, the run stopped before the SMC temperature reached 1.
 | Path | Purpose |
 | --- | --- |
 | `src/retrieval_framework/` | Retrieval, configuration, input, output, and plotting code |
-| `src/retrieval_framework/forward/` | VULCAN-JAX to ExoJAX forward model |
+| `src/retrieval_framework/forward/` | retrieval-side config + the sensitivity composer (the engine itself is the [vulcan-forward](https://github.com/imalsky/vulcan-forward) distribution) |
 | `runs/` | Planet-specific cases and batch scripts |
 | `examples/` | Spectral-sensitivity examples |
 | `validation/` | Physics and gradient validation scripts |
@@ -200,7 +200,7 @@ samples. If it is false, the run stopped before the SMC temperature reached 1.
 | `docs/` | Model, sampler, case, limitation, and validation documents |
 
 The forward model has one ordering rule. Import
-`retrieval_framework.forward.vulcan_chem` before anything from ExoJAX, because
+`vulcan_forward.vulcan_chem` before anything from ExoJAX, because
 it sets the VULCAN-JAX environment variables and enables float64 at import time.
 It raises an error if ExoJAX is already imported.
 

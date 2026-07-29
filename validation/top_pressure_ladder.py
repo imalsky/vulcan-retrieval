@@ -75,10 +75,10 @@ def main() -> int:
     args = ap.parse_args()
 
     from retrieval_framework.forward import config
-    from retrieval_framework.forward import interp_map
+    from vulcan_forward import interp_map
     # import order is load-bearing: vulcan_chem before exojax
-    from retrieval_framework.forward import vulcan_chem
-    from retrieval_framework.forward import exojax_rt
+    from vulcan_forward import vulcan_chem
+    from vulcan_forward import exojax_rt
 
     base_profile = dict(config.FULL)
     base_profile.update(nz=50, count_max=5000, dt_max=1.0e11,

@@ -47,7 +47,7 @@ def main() -> int:
     args = ap.parse_args()
 
     from retrieval_framework.forward import config
-    from retrieval_framework.forward import vulcan_chem
+    from vulcan_forward import vulcan_chem
 
     profile = dict(config.FULL)
     profile.update(nz=50, count_max=5000, dt_max=1.0e11,

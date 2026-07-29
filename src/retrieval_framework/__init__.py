@@ -27,7 +27,7 @@ Module map (the import chain is heavy-import-safe top to bottom):
     plot_smc           post-run figures from the .npz bundles (numpy+matplotlib only)
     forward/           the shared forward-model engine (config, vulcan_chem, exojax_rt,
                        interp_map, sensitivity) -- import order is load-bearing there:
-                       forward.vulcan_chem before anything exojax (guard-enforced)
+                       vulcan_forward.vulcan_chem before anything exojax (guard-enforced)
 
 This ``__init__`` stays import-light (no jax): run_smc and config_schema must be
 importable without pulling the chemistry/RT stack.

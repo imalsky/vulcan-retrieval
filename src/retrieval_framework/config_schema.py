@@ -538,7 +538,7 @@ def validate_config(cfg: Config) -> None:
                          "extrapolation seeds the warm continuation; there is nothing "
                          "to seed on the cold map")
     # The chemistry block [lnZ, c_o, lnKzz] is LOAD-BEARING and POSITIONAL:
-    # pipeline.py / retrieval_forward.py / forward.vulcan_chem unpack the
+    # pipeline.py / retrieval_forward.py / vulcan_forward.vulcan_chem unpack the
     # parameter vector by fixed index (theta[0]=lnZ, theta[1]=c_o, theta[2]=lnKzz,
     # theta[3:3+n_tp]=T-P) and assume a length-(3+n_tp) chem+T-P prefix. Dropping
     # any one via specs_from_config shortens the vector and shifts every later

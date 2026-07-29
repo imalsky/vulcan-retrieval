@@ -15,11 +15,11 @@ from types import SimpleNamespace
 
 # import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config        # pure constants, no heavy imports
-from retrieval_framework.forward import vulcan_chem   # sets env + jax x64; must import before exojax
+from vulcan_forward import vulcan_chem   # sets env + jax x64; must import before exojax
 import jax.numpy as jnp
 
-from retrieval_framework.forward import exojax_rt
-from retrieval_framework.forward import interp_map
+from vulcan_forward import exojax_rt
+from vulcan_forward import interp_map
 
 
 def build_forward(profile: dict) -> SimpleNamespace:

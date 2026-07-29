@@ -30,7 +30,7 @@ import numpy as np
 
 from retrieval_framework.forward import config
 # import order is load-bearing: vulcan_chem before exojax/jax (sets env + jax x64)
-from retrieval_framework.forward import vulcan_chem
+from vulcan_forward import vulcan_chem
 import jax
 import jax.numpy as jnp
 

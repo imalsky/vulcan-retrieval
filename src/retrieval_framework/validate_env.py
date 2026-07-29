@@ -8,7 +8,7 @@ loud report (exit 1) that names the remedy, honoring the no-silent-fallbacks
 rule.
 
 Checks, in import-order-safe sequence (vulcan_jax / retrieval_framework BEFORE
-exojax -- forward.vulcan_chem's guard raises if exojax is imported first):
+exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first):
 
   1. python interpreter version within the supported range (>=3.10);
   2. jax imports; backend + devices reported; GPU asserted with --require-gpu;
@@ -171,7 +171,7 @@ def _check_conden_api() -> None:
 def _check_config_api() -> None:
     """The installed vulcan-jax must expose the YAML ``load_config`` API.
 
-    ``forward.vulcan_chem`` builds every chemistry model through
+    ``vulcan_forward.vulcan_chem`` builds every chemistry model through
     ``vulcan_jax.load_config(name)`` (YAML-only config, gravity from Mp/Rp).
     A checkout predating that migration has no ``load_config`` (it still shipped
     the deleted ``vulcan_cfg`` module), yet reports a version that can satisfy an
@@ -184,7 +184,7 @@ def _check_config_api() -> None:
     if not hasattr(vulcan_jax, "load_config"):
         _err(
             "installed vulcan-jax has no `load_config`: the checkout predates the "
-            "YAML-only config migration (gravity from Mp/Rp). forward.vulcan_chem "
+            "YAML-only config migration (gravity from Mp/Rp). vulcan_forward.vulcan_chem "
             "requires it. Pull/update the VULCAN-JAX checkout and re-run the "
             "bootstrap.")
         return
@@ -319,9 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _check_python()
         _check_jax(args.require_gpu)
-        # vulcan_jax / retrieval_framework BEFORE exojax: forward.vulcan_chem's
+        # vulcan_jax / retrieval_framework BEFORE exojax: vulcan_forward.vulcan_chem's
         # import-order guard raises if exojax comes first.
         _check_editable("vulcan_jax", "vulcan-jax", root / "VULCAN-JAX", "vulcan_jax")
+        # the shared forward engine (chemistry + RT) is its own distribution
+        _check_editable("vulcan_forward", "vulcan-forward",
+                        root / "vulcan-forward", "vulcan_forward")
         _check_config_api()
         _check_conden_api()
         _check_editable(

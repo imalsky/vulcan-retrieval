@@ -19,7 +19,7 @@ import time
 import numpy as np
 
 from retrieval_framework.forward import config
-from retrieval_framework.forward import vulcan_chem
+from vulcan_forward import vulcan_chem
 import jax
 import jax.numpy as jnp
 

@@ -121,7 +121,7 @@ def _profile(**extra):
 def stack():
     """Import the chem stack (vulcan_chem BEFORE jax/exojax) or skip."""
     try:
-        from retrieval_framework.forward import vulcan_chem  # noqa: F401
+        from vulcan_forward import vulcan_chem  # noqa: F401
         import jax
         import jax.numpy as jnp
     except Exception as e:  # pragma: no cover - env-dependent

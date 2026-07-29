@@ -25,10 +25,10 @@ import numpy as np
 
 from retrieval_framework.forward import config
 # import order is load-bearing: vulcan_chem before exojax (sets env + jax x64)
-from retrieval_framework.forward import vulcan_chem
+from vulcan_forward import vulcan_chem
 import jax.numpy as jnp
-from retrieval_framework.forward import exojax_rt
-from retrieval_framework.forward import interp_map
+from vulcan_forward import exojax_rt
+from vulcan_forward import interp_map
 
 import zco_lib  # sibling in zco_information/ (script dir is on sys.path)
 

@@ -249,13 +249,15 @@ Sampler-core edits additionally get the opt-in BlackJAX oracle:
 
 - Dist `vulcan-retrieval`, import `retrieval_framework`, src layout. Sibling of
   `VULCAN-JAX/` and `vulcan-jwst-tool/` under the project root. SMC framework at
-  `src/retrieval_framework/`; shared forward engine at
-  `src/retrieval_framework/forward/` (`config`, `vulcan_chem`, `exojax_rt`,
-  `interp_map`, `sensitivity`). Cases: `runs/<case>/case.py`.
-- Install editable: `pip install --no-deps -e .` (--no-deps because vulcan-jax is
-  TestPyPI-only). No sys.path bundle contract — `vulcan_jax` resolves via its own
-  editable install. Import order is guard-enforced: `vulcan_chem` raises if exojax
-  imported first.
+  `src/retrieval_framework/`; retrieval-side config + composer at
+  `src/retrieval_framework/forward/` (`config`, `sensitivity`); the shared
+  ENGINE is the `vulcan-forward` distribution (`vulcan_forward.vulcan_chem`,
+  `.exojax_rt`, `.interp_map`, `.constants`, `.paths`), a sibling checkout. Cases: `runs/<case>/case.py`.
+- Install editable: `pip install --no-deps -e .` (--no-deps because vulcan-jax +
+  vulcan-forward are TestPyPI-only); plotting deps are the `[plot]` extra now,
+  so `pip install -e '.[plot]'` for plot_smc / figure scripts. No sys.path bundle contract — `vulcan_jax` resolves via its own
+  editable install. Import order is guard-enforced: `vulcan_forward.vulcan_chem` raises if exojax
+  (or a conflicting vulcan_jax) was imported first.
 - Run from repo root: `python -m retrieval_framework.run_smc runs/w39b_smc_retrieval`
   (also `calibrate_count_max`, `probe_memory`, `smoke_retrieval`, `plot_smc`,
   `validate_warm`). Suite: `python -m pytest tests -q`.

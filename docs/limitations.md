@@ -80,7 +80,7 @@ enforces this ordering.
 ## Photochemistry must be on
 
 `use_photo=True` is required. The forward-mode tangent is validated only in the
-photochemistry-on regime. See the full notes in `forward/config.py`.
+photochemistry-on regime. See the full notes in `vulcan_forward/constants.py`.
 
 ## The likelihood is diagonal
 

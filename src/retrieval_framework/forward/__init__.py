@@ -1,16 +1,24 @@
-"""The shared VULCAN-JAX -> ExoJax forward-model engine.
+"""Retrieval-side configuration and composition for the shared forward engine.
 
-Modules (import order is load-bearing where noted):
+The forward-model ENGINE moved to the ``vulcan-forward`` distribution
+(2026-07-29): ``vulcan_chem``, ``exojax_rt`` and ``interp_map`` now live at
+``vulcan_forward.*`` and are shared with vulcan-jwst-tool, so neither
+application depends on the other. What remains here is this repo's own:
 
-- ``config``      -- pure constants + path resolution (no heavy imports; always safe first)
-- ``vulcan_chem`` -- VULCAN-JAX chemistry wrapper. Sets the VULCAN_JAX_* import-frozen
-                     env vars and jax x64 at import; MUST be imported before exojax
-                     (enforced with a loud RuntimeError guard).
-- ``exojax_rt``   -- ExoJax ArtTransPure/ArtEmisPure radiative transfer
-- ``interp_map``  -- differentiable log-P bridge (VULCAN grid -> ART grid)
-- ``sensitivity`` -- theta -> converged VMR -> transit spectrum chain composer for jvps
+- ``config``      -- this repo's paths + WASP-39 b case constants + run
+                     profiles + parameter-vector labels; re-exports the shared
+                     physics constants from ``vulcan_forward.constants`` so the
+                     two distributions cannot drift, and hands the engine its
+                     data root. No heavy imports; always safe to import first.
+- ``sensitivity`` -- the 4-parameter theta -> spectrum chain composer used by
+                     ``examples/run_demo.py`` and ``validation/smoke_test.py``.
+                     Production uses ``retrieval_forward.py`` instead, which
+                     carries lnR0, clouds and the two-stage solve.
 
-This ``__init__`` deliberately imports NOTHING: importing the subpackage must stay
-free of jax/vulcan_jax/exojax side effects so light consumers (config readers, the
-jwst-tool GUI's cache face) stay fast.
+IMPORT ORDER IS STILL LOAD-BEARING: ``vulcan_forward.vulcan_chem`` sets the
+VULCAN_JAX_* import-frozen env vars and jax x64 at import and must come before
+anything from exojax (it raises if it arrives late).
+
+This ``__init__`` deliberately imports NOTHING, so importing the subpackage stays
+free of jax/vulcan_jax/exojax side effects.
 """

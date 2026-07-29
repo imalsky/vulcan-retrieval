@@ -10,7 +10,8 @@ Moved out of the README in 2026-07.
 ## Modules
 
 Import as
-`from retrieval_framework.forward import config, vulcan_chem, interp_map, exojax_rt, sensitivity`.
+`from retrieval_framework.forward import config, sensitivity
+from vulcan_forward import vulcan_chem, interp_map, exojax_rt`.
 
 | Module | Physics it owns |
 |---|---|
@@ -27,7 +28,7 @@ Import as
 enforces the ordering with a `RuntimeError` if exojax is already in
 `sys.modules`.
 
-`config` is always safe to import first, and the `forward` package `__init__`
+`config` is always safe to import first, and the shared engine's package `__init__`
 deliberately imports nothing. That keeps light consumers, such as config readers
 and the jwst-tool GUI's cache interface, free of jax, vulcan_jax, and exojax side
 effects.
@@ -63,7 +64,7 @@ so cold and warm continuation share identical conserved inventories by
 construction.
 
 The legacy `"masks"` mode is kept for the published demo caches. Its elemental
-leakage is documented in `forward/vulcan_chem.py`: about 0.6% of H per e-fold of
+leakage is documented in `vulcan_forward/vulcan_chem.py`: about 0.6% of H per e-fold of
 metallicity, plus N and S leakage through the fixed-oxygen compensation.
 
 Verify the construction per draw with `chem.audit_init(theta)` or

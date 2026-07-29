@@ -30,12 +30,12 @@ logger = logging.getLogger("retrieval")
 
 # import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config        # constants (MOLECULES, ...)
-from retrieval_framework.forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
+from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
 import jax.numpy as jnp
 
 from retrieval_framework import tp_profile   # ExoJax Guillot / power-law T-P
-from retrieval_framework.forward import exojax_rt     # ExoJax ArtTransPure model
-from retrieval_framework.forward import interp_map    # differentiable log-P bridge
+from vulcan_forward import exojax_rt     # ExoJax ArtTransPure model
+from vulcan_forward import interp_map    # differentiable log-P bridge
 
 
 def _refuse_condense_inference(chem, cfg) -> None:
