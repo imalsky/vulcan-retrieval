@@ -33,7 +33,13 @@ OFFSET_UNIT = 1.0e-6   # offset parameter is in ppm -> fractional depth
 
 
 def read_rprs_csv(path: Path) -> Tuple[np.ndarray, ...]:
-    """Read one (Rp/Rs)-format product CSV -> (wl, wl_lo, wl_hi, depth_frac, sigma_frac)."""
+    """Read one (Rp/Rs)-format product CSV -> (wl, wl_lo, wl_hi, depth_frac, sigma_frac).
+
+    Deliberate exceptions to the fail-loud rule, scoped to raw upstream products:
+    rows with non-finite wl/sigma or sigma<=0 are DROPPED (published products carry
+    padding/NaN rows), and swapped wl_lo/wl_hi edges are repaired by min/max.
+    Everything downstream of this reader validates loudly (validate_observations).
+    """
     a = np.genfromtxt(path, delimiter=",", skip_header=1)
     wl, wlo, whi, rprs, el, eh = a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5], a[:, 6]
     sig_rprs = 0.5 * (np.abs(el) + np.abs(eh))

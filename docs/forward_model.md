@@ -96,8 +96,12 @@ temperature interpolation, which is a host-side upstream step and second order.
 **Condensation is a forward-model capability only.** Gradient-MALA inference with
 `use_condense=True` is refused, in `validate_config` and again on the fully
 resolved config in `retrieval_forward`, because the pinned condensation state is
-not reliably differentiable: the tangent disagrees with finite differences at 0.91
-relative. See the project-level `condensation_differentiation.md` contract.
+not reliably differentiable: the tangent disagrees with finite differences at
+order unity, and the gas/condensate split has no derivative at all -- its centred
+difference scales like `1/dT` (a fixed-size pin-capture jump, measured
+2026-07-29), so any single relative-error figure is step-size dependent. Only the
+conserved reservoir total is step-stable. See `limitations.md` and the
+project-level `condensation_differentiation.md` contract.
 
 ### Opacities
 
@@ -187,3 +191,20 @@ cheap gradient block and cost almost nothing against the GPU budget.
 H2 and He Rayleigh scattering is on by default and has no free parameters. It is
 required once the band reaches 1 um, otherwise its slope leaks into the haze
 posterior.
+
+### Height-dependent gravity
+
+The transmission optical depth converts pressure to column mass with an
+inverse-square gravity profile, `g(r) = g_btm (R_btm/r)^2`, evaluated at layer
+midpoints — the same gravity law ExoJax's own height integrator uses, so heights
+and opacity columns share one geometry. This is a local helper
+(`exojax_rt._gravity_profile_invsq`), **not** ExoJax's `gravity_profile`: that
+method (through 2.2.3) returns a profile linear in `1/r`, which leaves heights
+and columns on different gravities and removes only about half of the constant-g
+bias. Measured on an isothermal gray WASP-39b-like test against an independent
+chord quadrature at 60 layers: constant g errs by -102 ppm, ExoJax's
+`gravity_profile` by -51 ppm, the inverse-square profile by +1.5 ppm. The
+wavelength-differential part (-32 ppm across a 100x opacity span for the
+1/r-linear profile) is what would bias retrieved amplitude and slope parameters;
+the constant part is absorbed by `lnR0`. Emission is plane-parallel and keeps the
+constant bottom gravity.

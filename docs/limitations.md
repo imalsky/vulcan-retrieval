@@ -49,8 +49,15 @@ temperature interpolation, which is a host-side upstream step and second order.
 Condensation is a forward-model capability. Gradient-MALA inference with
 `use_condense=True` is refused, in `validate_config` and again on the fully
 resolved config, because the pinned condensation state is not reliably
-differentiable: the tangent disagrees with re-converged finite differences at 0.91
-relative. See the project-level `condensation_differentiation.md`.
+differentiable: the tangent disagrees with re-converged finite differences at
+order unity. The disagreement is worse than any single relative-error figure
+suggests. Re-measured 2026-07-29 by sweeping the finite-difference step, the
+gas/condensate split has no derivative at all: its centred difference scales
+like `1/dT` (the signature of a fixed-size jump, since the `fix_species` pin
+captures the column at a discrete accepted step), so a quoted relative error is
+really a statement about the step size chosen. Only the conserved reservoir
+total (gas + condensate) is step-stable, and the tangent reproduces that to
+18-22%. See the project-level `condensation_differentiation.md`.
 
 ## Tempered output when a run stops early
 
@@ -122,7 +129,9 @@ With warm continuation the likelihood is defined by the continuation map from ea
 particle's own history, so it is path-dependent at the convergence-tolerance
 level. The smoke test finite-difference-checks the warm gradient against the
 identical warm map, and `validate_warm` measures the effect directly by re-solving
-a finished run's cloud cold.
+a finished run's cloud cold — comparing likelihoods, binned spectra, elemental
+inventories, and (since 2026-07-29) the u-space gradients that drive the MALA
+proposals.
 
 ## Some prior-corner draws have a finite likelihood but no usable tangent
 

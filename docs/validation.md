@@ -64,13 +64,35 @@ This re-solves a finished run's checkpointed cloud **cold** and compares against
 the warm-carried results. It is the direct measurement of warm-continuation
 history dependence.
 
-It gates on three axes:
+It gates on three axes and reports a fourth:
 
 - maximum log-likelihood difference below 0.1,
 - binned-spectrum agreement within 5 ppm,
-- elemental-inventory agreement.
+- elemental-inventory agreement,
+- warm-versus-cold **gradient** agreement (the MALA drift): the cold re-solve
+  recomputes each particle's u-space gradient and reports the relative
+  discrepancy and drift-direction cosine against the checkpoint's carried
+  gradient. Warn-only at 0.1 relative until a production baseline is recorded;
+  set `VALIDATE_WARM_GRAD=0` to skip it and restore the cheaper
+  likelihood-only re-solve. A likelihood gate alone does not validate a
+  gradient-driven kernel; this axis closes that hole.
 
 Run it once per production run. A published retrieval should quote its verdict,
 along with the prior convergence-acceptance fraction, which the initialization log
 reports as the reject fraction. On the production case it runs automatically after
 a successful job.
+
+## External sampler oracle
+
+```bash
+pip install blackjax   # dev-only dependency
+RUN_BLACKJAX_ORACLE=1 python -m pytest tests/test_smc_blackjax_oracle.py
+```
+
+Opt-in regression test (~30 s): the repo's tempered-SMC core and BlackJAX's
+adaptive tempered SMC integrate the identical analytic Gaussian-box target, and
+both log-evidences must agree with the exact value and with each other within
+seed scatter. Run it after any change to the sampler core
+(`pipeline.run_smc_loop`, `_make_mutation`, `_next_dbeta`,
+`_systematic_resample_idx`, `make_uspace`). A 5% error injected into the
+evidence increment fails it (verified at creation).

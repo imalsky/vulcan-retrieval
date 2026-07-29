@@ -159,6 +159,27 @@ def _build_opa(key: str, spec: dict, nu_grid, broadening: str = "air",
     return opa, n_lines
 
 
+def _gravity_profile_invsq(art, T_art, mmw_art, radius_btm, gravity_btm):
+    """Mid-layer inverse-square gravity profile, g(r) = g_btm * (R_btm/r)^2.
+
+    ExoJax's own ``ArtCommon.gravity_profile`` (<=2.2.3) returns
+    ``g_btm / rn`` -- LINEAR in 1/r -- while its height integrator
+    (``normalized_layer_height``) uses the physical inverse-square
+    ``g_btm / rn**2``. Using ``gravity_profile`` for the opacity columns
+    therefore leaves heights and columns on DIFFERENT gravities and removes
+    only about half of the constant-g transmission bias (measured on an
+    isothermal gray W39b-like test vs an independent chord quadrature at
+    nlayer=60: -101.8 ppm constant-g, -50.8 ppm gravity_profile, +1.5 ppm
+    this profile; audit 2026-07-28, verify_gravity_profile.py /
+    verify_rt_transmission.py). Same (nlayer, 1) shape contract as
+    ``gravity_profile`` so it broadcasts through the dtau kernels.
+    """
+    normalized_height, normalized_radius_lower = art.atmosphere_height(
+        T_art, mmw_art, radius_btm, gravity_btm)
+    rn_mid = normalized_radius_lower + 0.5 * normalized_height
+    return jnp.array([gravity_btm / rn_mid**2]).T
+
+
 def _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_btm,
                      vmr, vmr_h2, T_art, mmw_art,
                      opacia_he=None, vmr_he=None, cloud=None, rayleigh_xs=None,
@@ -432,16 +453,19 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         """
         _require_he(vmr_he)
         # g(r) SELF-CONSISTENCY: use the SAME height-dependent gravity ExoJax
-        # already uses for the chord heights (art.run -> normalized_layer_height,
+        # uses for the chord heights (art.run -> normalized_layer_height,
         # g(r) = g_btm*(R_btm/r)^2) in the pressure->column-mass conversion,
         # instead of the constant scalar g_btm. Constant g_btm makes upper-layer
         # column mass dP/g (hence tau) too SMALL because g(r) < g_btm aloft -- an
         # internal inconsistency (heights g(r) vs opacity constant-g) that biases
         # transmission amplitude toward the model top, largest for low-gravity
-        # super-puffs. gravity_profile returns (nlayer,1) and broadcasts through
-        # opacity_profile_xs/cia/cloud/mie/rayleigh. (Emission is plane-parallel
-        # and correctly keeps the constant g_btm below.)
-        g_prof = art.gravity_profile(T_art, mmw_art, Rp_btm, g_btm)  # (nlayer,1)
+        # super-puffs. NOTE: art.gravity_profile is NOT this profile -- it is
+        # linear in 1/r (see _gravity_profile_invsq docstring + audit numbers);
+        # the local inverse-square helper is what matches the height integrator.
+        # Returns (nlayer,1), broadcasting through opacity_profile_xs/cia/cloud/
+        # mie/rayleigh. (Emission is plane-parallel and correctly keeps the
+        # constant g_btm below.)
+        g_prof = _gravity_profile_invsq(art, T_art, mmw_art, Rp_btm, g_btm)  # (nlayer,1)
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_prof,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,
@@ -463,8 +487,9 @@ def build_rt_model(profile: dict) -> SimpleNamespace:
         Rp_r = Rp_btm * jnp.exp(lnR0)
         # g(r) at the lnR0-scaled reference radius (gravity g_btm held fixed, per
         # the xR_p normalization; the height grid and thus g(r) shift with Rp_r) --
-        # matches the g(r) art.run uses for the heights (see transmission_depth).
-        g_prof = art.gravity_profile(T_art, mmw_art, Rp_r, g_btm)   # (nlayer,1)
+        # inverse-square, matching the g(r) art.run uses for the heights (see
+        # transmission_depth; art.gravity_profile is 1/r-linear and is NOT used).
+        g_prof = _gravity_profile_invsq(art, T_art, mmw_art, Rp_r, g_btm)  # (nlayer,1)
         dtau = _accumulate_dtau(art, nu_grid, mols, opas, molmass, opacia, g_prof,
                                 vmr, vmr_h2, T_art, mmw_art,
                                 opacia_he=opacia_he, vmr_he=vmr_he, cloud=cloud,

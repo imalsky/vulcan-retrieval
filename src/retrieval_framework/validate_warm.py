@@ -12,6 +12,13 @@ difference, i.e. exactly the quantity that enters MH acceptance and tempering
 weights -- if it is small relative to ~0.1 log-units, the warm kernel is
 posterior-exact for all practical purposes.
 
+Since 2026-07-29 the cold re-solve also recomputes the u-space GRADIENT (the
+MALA drift) and compares it against the checkpoint's carried grad_u -- a
+likelihood/spectrum gate alone does not validate a gradient-driven kernel
+(2026-07-28 audit). Warn-only threshold GRAD_REL_WARN until a production
+baseline is recorded; disable with VALIDATE_WARM_GRAD=0 to restore the cheaper
+likelihood-only re-solve.
+
 Run it on the GPU node against a finished run (the per-stage checkpoint IS the
 final cloud), with the SAME preset/overrides the run used:
 
@@ -56,6 +63,16 @@ ATOM_REL_PASS = 1.0e-5
 # WARN if more than this fraction of the cloud fails to cold-converge: the
 # posterior would be sitting against the count_max convergence cliff.
 COLD_NONCONV_WARN_FRAC = 0.10
+# PROVISIONAL gate on the warm-vs-cold u-space GRADIENT agreement (max over the
+# cloud of ||G_cold - G_warm|| / max(||G_cold||, ||G_warm||)). The gradient is
+# what steers every MALA proposal (drift = step*scale^2*beta*G), so likelihood/
+# spectrum agreement alone does not validate the kernel -- the 2026-07-28 audit
+# flagged exactly this hole. WARN-only until the first production measurement
+# records a baseline (promote to a FAIL gate then; same convention as the
+# masks-mode inventory gate). 0.1 relative: a 10% drift error rescales the
+# proposal mean by ~10% of the step, well inside MALA's robustness, while a
+# sign-flipped or wildly wrong tangent (the badgrad class) lands >> 1.
+GRAD_REL_WARN = 0.1
 
 logger = logging.getLogger("retrieval")
 
@@ -82,6 +99,38 @@ def compare(L_warm, L_cold, worst_accept, count_max: int) -> dict:
         logl_spread=float(L_warm[ok].max() - L_warm[ok].min()) if dd.size else float("nan"),
     )
     return stats
+
+
+def compare_grad(G_warm, G_cold, ok_mask) -> dict:
+    """Pure-numpy warm-vs-cold u-space gradient comparison (unit-tested).
+
+    Per healthy particle: relative discrepancy ||Gc - Gw|| / max(||Gc||, ||Gw||)
+    (symmetric, scale-free, in [0, 2]) and the cosine of the angle between the
+    two gradients (the MALA drift DIRECTION; 1 = identical, <0 = drift points
+    the wrong way). Particles outside ok_mask are excluded. A zeroed warm
+    gradient row (the badgrad zero-drift handling) against a finite cold one
+    reads rel=1, cos=0 -- deliberately loud, since that particle's proposal
+    drift ignored a real gradient.
+    """
+    Gw = np.asarray(G_warm, np.float64)
+    Gc = np.asarray(G_cold, np.float64)
+    ok = np.asarray(ok_mask, bool)
+    nw = np.linalg.norm(Gw, axis=1)
+    nc = np.linalg.norm(Gc, axis=1)
+    denom = np.maximum(np.maximum(nw, nc), 1e-300)
+    rel = np.where(ok, np.linalg.norm(Gc - Gw, axis=1) / denom, np.nan)
+    cos = np.where(ok & (nw > 0) & (nc > 0),
+                   np.einsum("nd,nd->n", Gw, Gc) / np.maximum(nw * nc, 1e-300),
+                   np.nan)
+    r = rel[ok]
+    c = cos[ok & np.isfinite(cos)]
+    return dict(
+        rel=rel, cos=cos, n_ok=int(ok.sum()),
+        rel_max=float(np.max(r)) if r.size else float("nan"),
+        rel_median=float(np.median(r)) if r.size else float("nan"),
+        rel_p95=float(np.percentile(r, 95.0)) if r.size else float("nan"),
+        cos_min=float(np.min(c)) if c.size else float("nan"),
+    )
 
 
 def main() -> None:
@@ -133,17 +182,41 @@ def main() -> None:
     chunk = int(os.environ.get("VALIDATE_WARM_CHUNK", "0") or 0)
     if chunk <= 0 or chunk > N:
         chunk = min(N, 48)
-    cold_fn = jax.jit(pipe.batch_eval_cold_l_diag)
+    # Gradient comparison (audit 2026-07-28: likelihood/spectrum gates alone do
+    # not validate a MALA kernel -- the drift is the gradient). Default ON: the
+    # cold VALUE-AND-GRAD evaluator returns L, G, and Y in one pass, so the
+    # marginal cost over the old likelihood-only pass is the chem jvp lanes
+    # (~the cost of one mutation sweep, minutes). VALIDATE_WARM_GRAD=0 restores
+    # the likelihood-only re-solve. Requires the checkpoint's carried grad_u
+    # (present in every state-carrying checkpoint).
+    want_grad = (os.environ.get("VALIDATE_WARM_GRAD", "1").strip() != "0"
+                 and "grad_u" in ck.files)
+    if "grad_u" not in ck.files:
+        logger.warning("checkpoint carries no grad_u -- gradient comparison skipped")
     t0 = time.perf_counter()
-    L_parts, Y_parts, acc_parts, cn_parts = [], [], [], []
-    for i0 in range(0, N, chunk):
-        i1 = min(i0 + chunk, N)
-        Lc, Yc, _refs_c, cdc = cold_fn(U[i0:i1], Y0[i0:i1], refs0[i0:i1])
-        jax.block_until_ready(Lc)
-        L_parts.append(np.asarray(jax.device_get(Lc)))
-        Y_parts.append(np.asarray(jax.device_get(Yc)))
-        acc_parts.append(np.asarray(jax.device_get(cdc.accept_count)))
-        cn_parts.append(np.asarray(jax.device_get(cdc.conv_normal)))
+    L_parts, Y_parts, acc_parts, cn_parts, G_parts = [], [], [], [], []
+    if want_grad:
+        cold_fn = jax.jit(pipe.batch_eval_cold_vg)
+        for i0 in range(0, N, chunk):
+            i1 = min(i0 + chunk, N)
+            Lc, Gc, Yc, _refs_c, _nbad, _DYc, st = cold_fn(
+                U[i0:i1], Y0[i0:i1], refs0[i0:i1])
+            jax.block_until_ready(Lc)
+            L_parts.append(np.asarray(jax.device_get(Lc)))
+            G_parts.append(np.asarray(jax.device_get(Gc)))
+            Y_parts.append(np.asarray(jax.device_get(Yc)))
+            acc_parts.append(np.asarray(jax.device_get(st.acc)))
+            cn_parts.append(np.asarray(jax.device_get(st.conv_ok)))
+    else:
+        cold_fn = jax.jit(pipe.batch_eval_cold_l_diag)
+        for i0 in range(0, N, chunk):
+            i1 = min(i0 + chunk, N)
+            Lc, Yc, _refs_c, cdc = cold_fn(U[i0:i1], Y0[i0:i1], refs0[i0:i1])
+            jax.block_until_ready(Lc)
+            L_parts.append(np.asarray(jax.device_get(Lc)))
+            Y_parts.append(np.asarray(jax.device_get(Yc)))
+            acc_parts.append(np.asarray(jax.device_get(cdc.accept_count)))
+            cn_parts.append(np.asarray(jax.device_get(cdc.conv_normal)))
     L_cold = jnp.asarray(np.concatenate(L_parts), pipe.dtype)
     Y_cold = jnp.asarray(np.concatenate(Y_parts, axis=0), pipe.dtype)
     worst = jnp.asarray(np.concatenate(acc_parts))
@@ -206,6 +279,23 @@ def main() -> None:
     logger.info(f"elemental inventories (He,O,C,N,S per H) warm-vs-cold: max rel diff "
                 f"{atom_rel_max:.3e} (abundance_mode={abundance_mode})")
 
+    # ---- u-space GRADIENT comparison (the MALA drift; audit 2026-07-28) ----
+    gs = None
+    if want_grad:
+        G_cold_np = np.concatenate(G_parts, axis=0)
+        gs = compare_grad(np.asarray(ck["grad_u"], np.float64), G_cold_np, ok_mask)
+        logger.info(f"u-space gradient warm-vs-cold on {gs['n_ok']} particles: "
+                    f"rel median={gs['rel_median']:.3e} p95={gs['rel_p95']:.3e} "
+                    f"max={gs['rel_max']:.3e} | drift-direction cos min={gs['cos_min']:.4f}")
+        if math.isfinite(gs["rel_max"]) and gs["rel_max"] >= GRAD_REL_WARN:
+            logger.warning(
+                f"warm-vs-cold gradient discrepancy {gs['rel_max']:.3e} exceeds the "
+                f"provisional {GRAD_REL_WARN} threshold: the warm kernel's MALA drift "
+                "differs from the deterministic cold map's beyond likelihood-level "
+                "agreement (zeroed badgrad rows read rel=1 by design -- check the "
+                "per-particle rel/cos in validate_warm.npz before interpreting). "
+                "WARN-only until a production baseline is recorded.")
+
     P.save_npz(out / "validate_warm.npz",
                loglik_warm=np.asarray(ck["loglik"], np.float64),
                loglik_cold=np.asarray(jax.device_get(L_cold), np.float64),
@@ -214,7 +304,13 @@ def main() -> None:
                binned_warm=D_warm, binned_cold=D_cold,
                spectrum_dppm_max=np.asarray(dppm_max),
                atom_ratio_rel_max=np.asarray(atom_rel_max),
-               count_max=np.asarray(count_max, np.int64))
+               count_max=np.asarray(count_max, np.int64),
+               **({} if gs is None else dict(
+                   grad_rel=gs["rel"], grad_cos=gs["cos"],
+                   grad_rel_max=np.asarray(gs["rel_max"]),
+                   grad_cos_min=np.asarray(gs["cos_min"]),
+                   grad_cold=G_cold_np,
+                   grad_warm=np.asarray(ck["grad_u"], np.float64))))
 
     logger.info(f"warm-vs-cold on {s['n_ok']}/{s['n']} particles "
                 f"(cold-nonconverged: {s['n_cold_nonconverged']}, dead warm: {s['n_dead_warm']}) | "

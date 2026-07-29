@@ -149,6 +149,11 @@ loud errors over silent degradation.
 
 The SMC core is about 200 lines of pure JAX with no BlackJAX dependency, and it is
 validated against an analytic Gaussian posterior including its evidence estimate.
+An opt-in external-oracle test (`RUN_BLACKJAX_ORACLE=1 python -m pytest
+tests/test_smc_blackjax_oracle.py`, dev-only `blackjax` install) additionally pins
+the core's log-evidence against BlackJAX's adaptive tempered SMC on the identical
+target; run it after any change to the sampler core. The 2026-07-28 audit measured
+the two indistinguishable over 24 seeds (two-sample t, p = 0.275).
 
 ## Particle count and what actually scales
 

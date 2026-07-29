@@ -34,3 +34,41 @@ def test_compare_excludes_failures():
 def test_compare_all_excluded_is_nan_not_crash():
     s = compare(np.array([-1.0e30]), np.array([-5.0]), np.array([0]), count_max=5000)
     assert s["n_ok"] == 0 and np.isnan(s["abs_max"])
+
+
+def test_compare_grad_identical_and_scaled():
+    from retrieval_framework.validate_warm import compare_grad
+    rng = np.random.default_rng(7)
+    G = rng.normal(size=(16, 5))
+    ok = np.ones(16, bool)
+    s = compare_grad(G, G, ok)
+    assert s["n_ok"] == 16
+    assert s["rel_max"] < 1e-15 and np.isclose(s["cos_min"], 1.0)
+    # a uniformly 10%-longer cold gradient: rel = 0.1/1.1 (symmetric denominator),
+    # direction identical
+    s2 = compare_grad(G, 1.1 * G, ok)
+    assert np.isclose(s2["rel_max"], 0.1 / 1.1) and np.isclose(s2["cos_min"], 1.0)
+
+
+def test_compare_grad_flags_zeroed_and_flipped_rows():
+    from retrieval_framework.validate_warm import compare_grad
+    rng = np.random.default_rng(11)
+    Gc = rng.normal(size=(4, 3))
+    Gw = Gc.copy()
+    Gw[1] = 0.0          # badgrad zero-drift row: rel=1, cos undefined (nan)
+    Gw[2] = -Gc[2]       # sign-flipped drift: rel = ||2 Gc||/||Gc|| = 2, cos=-1
+    s = compare_grad(Gw, Gc, np.ones(4, bool))
+    assert np.isclose(s["rel"][0], 0.0)
+    assert np.isclose(s["rel"][1], 1.0) and np.isnan(s["cos"][1])
+    assert np.isclose(s["rel"][2], 2.0) and np.isclose(s["cos"][2], -1.0)
+    assert np.isclose(s["cos_min"], -1.0) and np.isclose(s["rel_max"], 2.0)
+
+
+def test_compare_grad_respects_ok_mask():
+    from retrieval_framework.validate_warm import compare_grad
+    G = np.ones((3, 2))
+    Gw = G.copy()
+    Gw[2] = 100.0        # a wild row that MUST be excluded by the mask
+    s = compare_grad(Gw, G, np.array([True, True, False]))
+    assert s["n_ok"] == 2 and s["rel_max"] < 1e-15
+    assert np.isnan(s["rel"][2]) and np.isnan(s["cos"][2])

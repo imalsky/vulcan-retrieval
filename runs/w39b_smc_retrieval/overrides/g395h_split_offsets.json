@@ -1,0 +1,11 @@
+{
+  "_comment": "NRS1/NRS2 per-detector offset A/B variant (2026-07-29 audit follow-up). The production preset shares ONE offset across the G395H detectors; much of the JWST transit literature fits the two NRS detectors separately (independent systematics), and the bridge measurement on the CM24 CSVs gives NRS1-NRS2 = -69 +/- 33 ppm via PRISM (2.1 sigma) / +7 +/- 60 ppm via NIRCam -- marginal, so this is a robustness A/B, not a fix. Splitting is pure case-file regrouping: the offset design is built per group (observations.build_offset_design), so two groups here means two offset parameters (reference stays NIRISS, the wavelength-first group). theta grows by 1 (11-D); everything else inherits the gpu preset. Compare posteriors + logZ at matched solver settings against the production run. Submit like any override: SMC_RETRIEVAL_OVERRIDES_FILE=overrides/g395h_split_offsets.json (+ its own SMC_RETRIEVAL_OUT_DIR so the production checkpoint is untouched).",
+  "obs_products": {
+    "PRISM":       ["PRISM_native.csv"],
+    "NIRISS":      ["NIRISS_O1_R100.csv", "NIRISS_O2_R100.csv"],
+    "G395H_NRS1":  ["G395H_NRS1_R100.csv"],
+    "G395H_NRS2":  ["G395H_NRS2_R100.csv"],
+    "NIRCam":      ["NIRCam_R100.csv"]
+  },
+  "combo": ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
+}

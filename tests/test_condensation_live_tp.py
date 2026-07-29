@@ -336,16 +336,17 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     * SMOOTH observables -- column totals of unpinned gas species (H2O, CO,
       H2S) whose T response flows through the on-graph rates/structure/
       saturation -- must match FD to 15%.
-    * The PINNED species (S8, S8_l_s): the fix pin captures the column at the
-      first accepted step past stop_conden_time, and a T perturbation shifts
-      the accepted-step sequence, so the FD endpoints capture at slightly
-      different drainage states. Measured here: jvp and FD agree in SIGN but
-      differ by O(1) in magnitude (0.91 relative on first measurement).
-      This measured instability -- discrete active-layer/cold-trap switches
+    * The PINNED pair (S8, S8_l_s): finiteness, plus FD agreement on the
+      CONSERVED SUM only. The fix pin captures the column at the first accepted
+      step past stop_conden_time, and a T perturbation shifts that accepted-step
+      sequence, so the gas/condensate SPLIT moves by a fixed jump rather than
+      smoothly -- its centred FD scales like 1/dT (sweep recorded below) and
+      changes sign at particular step sizes, so a per-species sign assertion
+      measures the step size, not the tangent. Only the total sulfur reservoir
+      has a derivative. This discreteness -- active-layer/cold-trap switches
       plus pin-capture jitter -- is exactly why Fisher forecasts with
       condensation stay loudly unsupported in vulcan-jwst-tool
-      (forward.canonical_params raises). Only finiteness and sign are
-      asserted for the pinned pair.
+      (forward.canonical_params raises).
     """
     _, jax, jnp = stack
     s8, s8_ls = _s8_cols(chem_iso)
@@ -376,6 +377,19 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
         assert rel < 0.15, (f"{name} column: jvp {jv_smooth[i]:.6e} vs FD "
                             f"{fd_smooth[i]:.6e} (rel {rel:.3f}) -- exceeds 15%")
 
-    for i, name in enumerate(("S8 gas", "S8_l_s")):
-        assert np.sign(jv_pin[i]) == np.sign(fd_pin[i]), \
-            f"{name}: sign(jvp) != sign(FD)"
+    # The gas/condensate SPLIT is jump-dominated -- do NOT assert on it per
+    # species. Centred FD on the S8 gas column, measured 2026-07-29:
+    #   dT   4.0 -> +8.99e14   2.0  -> +1.47e15   1.0   -> +2.35e15
+    #        0.5 -> -4.87e13   0.25 -> +6.32e15   0.125 -> +1.71e16
+    # i.e. FD ~ 1/dT: a fixed-size discontinuity (the pin captures at a discrete
+    # accepted step) divided by 2*dT, not a converging difference quotient. The
+    # dT=0.5 used here lands on a near-cancellation and even flips sign, so the
+    # old per-species sign assertion was testing the step size.
+    # The conserved RESERVOIR does have a derivative -- gas + condensate over
+    # that same sweep: -1.264e14 -1.276e14 -1.263e14 -1.339e14 -1.338e14
+    # -1.211e14, stable to ~5% across a 32x dT range, jvp -1.04e14 (18-22%).
+    jv_tot, fd_tot = float(jv_pin.sum()), float(fd_pin.sum())
+    rel_tot = abs(jv_tot - fd_tot) / max(abs(fd_tot), 1e-300)
+    assert rel_tot < 0.35, (
+        f"S8 reservoir (gas + condensate): jvp {jv_tot:.6e} vs FD "
+        f"{fd_tot:.6e} (rel {rel_tot:.3f}) -- exceeds 35%")

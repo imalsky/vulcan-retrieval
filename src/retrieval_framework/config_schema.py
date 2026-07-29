@@ -188,11 +188,14 @@ class Config:
     # ---- observed spectrum source ---------------------------------------------
     # obs_dir holds per-instrument product CSVs in the (Rp/Rs)-format observations.py
     # documents; obs_products maps group label -> csv filenames within obs_dir; combo
-    # selects the groups to fit (order sets the offset reference = combo[0]).
+    # selects WHICH groups to fit. The offset REFERENCE group is NOT combo[0]: it is
+    # the group of the shortest-wavelength kept bin (observations.load_real_observations
+    # orders groups by first appearance after the wavelength sort). With G groups the
+    # likelihood gets G-1 offset parameters, one per non-reference group.
     # obs_dir=None (or empty products) -> purely synthetic bin grid (offline smokes).
     obs_dir: Optional[Path] = None
     obs_products: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
-    combo: Tuple[str, ...] = ("NIRISS", "G395H")   # instrument groups -> two offsets
+    combo: Tuple[str, ...] = ("NIRISS", "G395H")   # 2 groups -> ONE offset (on the non-reference group)
     obs_wl_lo: float = 1.00            # um (H2-H2 CIA short edge)
     obs_wl_hi: float = 5.28            # um (model band red edge)
 
@@ -601,8 +604,22 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     this so the exact numbers a run uses (nu_pts/resolution, count_max, priors, ...)
     are visible up front rather than buried in the code. Pure string formatting."""
     if specs is None:
+        # Offset parameters are named per non-REFERENCE group, and the reference is
+        # the wavelength-first group (see the combo field comment), NOT combo[0] --
+        # naming the banner's offsets from cfg.combo printed the WRONG parameter for
+        # any combo not already in wavelength order (audit 2026-07-28, OFF-3). Derive
+        # the order the pipeline will actually use by reading the product CSVs (cheap,
+        # numpy-only); band-edge bin drops can still differ slightly from the built
+        # pipeline, which logs its resolved groups after build.
+        groups = list(cfg.combo)
+        if cfg.obs_dir and cfg.obs_products:
+            try:
+                from retrieval_framework import observations as OBS
+                groups = list(OBS.load_real_observations(cfg)["groups"])
+            except Exception:
+                pass   # banner stays provisional; the pipeline logs resolved groups
         try:
-            specs = specs_from_config(cfg, groups=list(cfg.combo))
+            specs = specs_from_config(cfg, groups=groups)
         except Exception:
             specs = []
     W = 84

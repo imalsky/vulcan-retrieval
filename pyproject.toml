@@ -47,7 +47,9 @@ Homepage = "https://github.com/imalsky/vulcan-retrieval"
 Repository = "https://github.com/imalsky/vulcan-retrieval"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5"]
+# blackjax is dev-only: the external oracle for the SMC core
+# (tests/test_smc_blackjax_oracle.py, RUN_BLACKJAX_ORACLE=1), never a runtime dep.
+dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5", "blackjax>=1.3"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

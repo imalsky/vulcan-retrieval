@@ -20,10 +20,13 @@ Import order matters: ``vulcan_chem`` (env + jax x64) is imported before ``exoja
 """
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger("retrieval")
 
 # import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config        # constants (MOLECULES, ...)
@@ -89,6 +92,24 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # RESOLVED config (closes the base-config bypass of the early cfg_overrides
     # gate). See docs/condensation_differentiation.md.
     _refuse_condense_inference(chem, cfg)
+
+    # Surface an uncertified warm-up baseline LOUDLY (audit 2026-07-28, FWD-09:
+    # the build used to claim "confirms the primal converges" without checking).
+    # NOT a refusal: an uncertified baseline is a warm-start seed / elemental-map
+    # anchor whose descendants are all individually certified downstream (init
+    # rejects non-certified draws; warm proposals re-certify at exit), and the
+    # offline smoke preset deliberately builds on a cap-exit baseline
+    # (longdy~0.11 at nz=30) yet passes its FD gradient checks. The exported
+    # ``chem.baseline_conv_normal`` flag lets any stricter consumer gate on it.
+    if bool(getattr(cfg, "run_inference", False)) and not bool(
+            getattr(chem, "baseline_conv_normal", True)):
+        logger.warning(
+            "chemistry warm-up (baseline) solve exited WITHOUT canonical "
+            "certification (see the [chem] WARNING above for the exit "
+            "longdy/longdydt/aflux_change). Warm starts will seed from a "
+            "non-steady baseline; every draw is still individually certified "
+            "downstream, but init may pay extra steps. If this is a production "
+            "case, check the T-P window / Kzz / dt_max / count_max settings.")
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns

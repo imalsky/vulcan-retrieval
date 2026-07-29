@@ -349,8 +349,34 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
     print(f"[chem] setup {time.time() - t0:.1f}s; nz={nz} ni={ni} photo={cfg.use_photo}; "
           f"warming up runner ...", flush=True)
     tw = time.time()
-    _ = integ(rs)
-    print(f"[chem] warm-up converge {time.time() - tw:.1f}s", flush=True)
+    rs_warmup = integ(rs)
+    # Certify the warm-up exit (the comment above used to CLAIM this and not
+    # check it -- audit 2026-07-28, FWD-09). Recomputes the runner's canonical
+    # two-branch certification host-side on the returned RunState (same
+    # predicate as _conv_normal_at_exit below; kept in sync). The result is
+    # exported as ``baseline_conv_normal`` and the INFERENCE path refuses an
+    # uncertified baseline in retrieval_forward (mirrors the conden gate);
+    # forward-only consumers (e.g. the cold no-photo conden test, which
+    # deliberately integrates to a runtime cap) get the loud print only.
+    _w_ld = float(rs_warmup.step.longdy)
+    _w_lddt = float(rs_warmup.step.longdydt)
+    _w_af = (float(rs_warmup.photo_runtime.aflux_change)
+             if rs_warmup.photo_runtime is not None else 0.0)
+    _w_slope_min = max(min(float(np.min(
+        np.asarray(rs_warmup.atm.Kzz)
+        / (0.1 * np.asarray(rs_warmup.atm.Hp)[:-1]) ** 2)), 1e-8), 1e-10)
+    baseline_conv_normal = bool(
+        (((_w_ld < float(cfg.yconv_cri)) and (_w_lddt < float(cfg.slope_cri)))
+         or ((_w_ld < float(cfg.yconv_min)) and (_w_lddt < _w_slope_min)))
+        and (_w_af < float(cfg.flux_cri)))
+    if not baseline_conv_normal:
+        print(f"[chem] WARNING: warm-up baseline solve is NOT certified "
+              f"(longdy={_w_ld:.3e}, longdydt={_w_lddt:.3e}, "
+              f"aflux_change={_w_af:.3e}); every warm start seeds from a "
+              f"non-steady baseline. Inference builds refuse this state.",
+              flush=True)
+    print(f"[chem] warm-up converge {time.time() - tw:.1f}s "
+          f"(certified={baseline_conv_normal})", flush=True)
 
     # Warm-capped twin runner for the mutation path. OuterLoop._Statics snapshots
     # int(cfg.count_max) at _ensure_runner time, so the temporary mutation is safe: the
@@ -830,6 +856,9 @@ def build_chem_model(profile: dict, tp_eval=None, n_tp_params: int = 0) -> Simpl
         #                                            adjoint callers can gate on
         #                                            conv_normal, not longdy alone
         audit_init=audit_init,
+        baseline_conv_normal=baseline_conv_normal,  # warm-up exit certified?
+        #                                             (inference refuses False --
+        #                                             retrieval_forward gate)
         conden_spec=conden_spec,   # static conden metadata (None when conden off)
         prep_pv=prep_pv,           # theta -> initial ProfileVars (no solve; tests)
         _integ=integ,              # the OuterLoop (baked statics access; tests only)

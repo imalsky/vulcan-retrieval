@@ -1,208 +1,248 @@
 # vulcan-retrieval
 
-vulcan-retrieval is a Bayesian atmospheric retrieval framework that uses
-gradients through a full photochemical kinetics forward model.
+`vulcan-retrieval` is a research framework for exoplanet atmospheric retrievals.
+It connects [VULCAN-JAX](https://github.com/imalsky/jax-vulcan) photochemistry to
+[ExoJAX](https://github.com/HajimeKawahara/exojax) radiative transfer. It uses
+gradients from the full model to sample atmospheric parameters with sequential
+Monte Carlo (SMC).
 
-The forward model chains live VULCAN-JAX photochemistry into ExoJax radiative
-transfer. The sampler is adaptive-tempered Sequential Monte Carlo, and its
-mutation kernel is MALA driven by forward-mode gradients through the whole
-chemistry-to-spectrum chain. A 10-parameter retrieval on real JWST data runs on
-one GPU inside 24 hours.
+The repository includes:
 
-The distribution is named `vulcan-retrieval` and imports as
-`retrieval_framework`. The package carries the retrieval framework, the shared
-differentiable forward-model engine underneath it
-(`retrieval_framework.forward`, also used by the sibling vulcan-jwst-tool), the
-WASP-39b case, and the validation and information-analysis scripts.
+- A reusable retrieval framework
+- A WASP-39 b example that uses JWST transmission data
+- A small synthetic case for local checks
+- Validation scripts for the model and its gradients
 
-```
-physical params ─► VULCAN-JAX ─► VMR(nz, species), T(nz), P(nz)
-  (lnZ, C/O, lnKzz,     (converged column, photochemistry ON)
-   T-P params)                    │  log-pressure bridge (differentiable interp)
-                                  ▼
-                        ExoJax ArtTransPure ─► transit depth (Rp/Rs)²(λ)
-                        (premodit lines + H2-H2/H2-He CIA + Rayleigh)
-                                  │  jax.jvp
-                                  ▼
-                        d(spectrum)/d(param) ─► SMC + MALA
-```
+This is research software. Review the model assumptions and run the validation
+checks before you use results in a publication.
+
+## How the model works
+
+1. VULCAN-JAX solves the one-dimensional photochemical atmosphere.
+2. The code maps the chemical abundances to the ExoJAX pressure grid.
+3. ExoJAX calculates the transmission spectrum.
+4. JAX calculates forward-mode gradients through the full model.
+5. Adaptive-tempered SMC uses the Metropolis-adjusted Langevin algorithm
+   (MALA) to sample the posterior distribution.
+
+The retrieval code does not modify VULCAN-JAX or ExoJAX.
+
+## Requirements
+
+- Python 3.10 to 3.12
+- VULCAN-JAX 0.3.0 or later
+- ExoJAX 2.2.3
+- JAX with a CPU or GPU backend
+- A C++ compiler for FastChem, which VULCAN-JAX builds on first use
+
+A CPU is enough for the unit tests and the small smoke checks. Use a GPU for a
+production retrieval.
 
 ## Install
 
-In a checkout, for development:
+Clone the repository so that the code can find the tracked observation files:
 
 ```bash
-pip install --no-deps -e .
+git clone https://github.com/imalsky/vulcan-retrieval.git
+cd vulcan-retrieval
+
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "vulcan-jax>=0.3.0"
+python -m pip install -e ".[dev]"
 ```
 
-`--no-deps` is needed because the chemistry dependency `vulcan-jax` lives on
-TestPyPI rather than PyPI. To install as a consumer:
+VULCAN-JAX is on TestPyPI. The other Python packages are on PyPI. Install
+VULCAN-JAX first, as shown above, so that the editable install does not look for
+it on PyPI. In an environment that already has VULCAN-JAX, `pip install --no-deps
+-e .` does the same job.
+
+The code finds the `data/` and `output/` trees from an editable checkout. For a
+non-editable install, set `VULCAN_PROJECT_ROOT` to the directory that contains
+this repository.
+
+### Add the opacity data
+
+The Git repository does not contain the large opacity files. Add these files
+under `data/opacity_cache/` before you build the forward model:
+
+- `CO/12C-16O/Li2015/`
+- `H2-H2_2011.cia`
+- `H2-He_2011.cia`
+
+ExoJAX can download the H2-H2 file when it is first needed. Download the H2-He
+file from [HITRAN](https://hitran.org/data/CIA/main/H2-He_2011.cia).
+
+ExoJAX also caches HITRAN line lists under `data/exojax_linelists/`. It
+downloads these on first use, so you do not need to seed them by hand, but
+copying an existing cache saves a long first run. See
+[`data/notes.md`](data/notes.md) for the data layout and provenance.
+
+## Quick start
+
+Run the fast unit tests:
 
 ```bash
-pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple vulcan-retrieval
+python -m pytest tests -q
 ```
 
-Inputs (observations and opacity caches) live in this repo's `data/` tree, and
-generated caches go to `output/`. Both roots resolve from
-`VULCAN_PROJECT_ROOT`, which is the directory containing this repo, or are
-inferred from an editable checkout. `forward/config.py` raises a clear error when
-neither resolves.
-
-HPC runs pin the exact validated chemistry commit instead; see
-`requirements-hpc.txt`.
-
-## Quickstart
+Check the complete gradient path with the small WASP-39 b case:
 
 ```bash
-python -m pytest tests -q                                              # ~2 s
-python -m retrieval_framework.smoke_retrieval runs/w39b_smc_retrieval  # 10-30 min
+python -m retrieval_framework.smoke_retrieval runs/w39b_smc_retrieval
+```
+
+This check uses a CPU and usually takes 10 to 30 minutes.
+
+Run the small synthetic retrieval:
+
+```bash
 SMC_RETRIEVAL_PRESET=smoke python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
+```
+
+Create the result plots:
+
+```bash
 python -m retrieval_framework.plot_smc runs/w39b_smc_retrieval/data/smoke
 ```
 
-Run every entry point from the repo root and give it a case directory:
+The plots are in `runs/w39b_smc_retrieval/data/smoke/plots/`.
+
+## Entry points
+
+Run every command from the repository root and give it a case directory, or a
+run directory where the table says so.
 
 | Command | Purpose |
-|---|---|
-| `run_smc <case>` | The retrieval driver. Add `--calibrate` to time it instead |
+| --- | --- |
+| `run_smc <case>` | The retrieval driver. Add `--calibrate` to time one batch instead of running |
 | `smoke_retrieval <case>` | Finite-difference and gradient-consistency checks |
 | `calibrate_count_max <case>` | Choose the solver step cap from sampled draws |
-| `probe_memory <case>` | Compile-only GPU buffer report |
-| `plot_smc <run dir>` | Corner, spectrum fit, T-P, and diagnostics figures |
-| `validate_warm <case>` | Re-solve a finished run's cloud cold and compare |
+| `probe_memory <case>` | Compile-only GPU buffer report. Run it after any change to `nu_pts`, the gradient chunk size, or the particle count |
+| `validate_warm <case>` | Re-solve a finished run without warm starts and compare |
+| `plot_smc <run dir>` | Corner, spectrum, temperature, and diagnostic figures |
+| `validate_env <project root>` | Check the interpreter, installs, data files, and FastChem binary. Takes the directory that contains this repository |
 
-## Framework and case
+## Run the WASP-39 b case
 
-Everything reusable lives in `src/retrieval_framework/`. Everything
-planet-specific lives in a **case directory** under `runs/`, which holds
-`case.py` (planet identity, priors, and presets), the submit script,
-`overrides/`, and the run outputs.
+The example case defines three presets in
+[`runs/w39b_smc_retrieval/case.py`](runs/w39b_smc_retrieval/case.py):
 
-| Path | Contents |
-|---|---|
-| `src/retrieval_framework/` | The planet-agnostic framework: config schema, observations, T-P profile, likelihood, SMC pipeline, driver, plotting, and tools |
-| `src/retrieval_framework/forward/` | The shared forward engine: `config`, `vulcan_chem`, `interp_map`, `exojax_rt`, `sensitivity` |
-| `runs/w39b_smc_retrieval/` | The WASP-39b case |
-| `examples/` | Sensitivity figures: which wavelengths constrain which parameter |
-| `validation/` | Physics and numerics validation scripts |
-| `scripts/zco_information/` | Fisher and Laplace analysis of metallicity vs C/O information |
-| `data/` | Observations, plus the seeded opacity and line-list caches |
+| Preset | Purpose |
+| --- | --- |
+| `smoke` | Small synthetic check for a local CPU |
+| `gpu` | Full JWST retrieval for a GH200-class GPU |
+| `prod` | Higher-resolution run without a wall-time limit |
 
-The forward engine imports VULCAN-JAX and ExoJax and never modifies either. It has
-one load-bearing ordering rule: **import
-`retrieval_framework.forward.vulcan_chem` before anything from exojax.**
+Measure the cost of the GPU preset before you start a full run:
 
-`vulcan_chem` sets the import-frozen `VULCAN_JAX_*` environment variables and
-enables float64 at import. It raises if exojax is already imported.
-`forward.config` is always safe to import first.
+```bash
+SMC_RETRIEVAL_PRESET=gpu python -m retrieval_framework.run_smc runs/w39b_smc_retrieval --calibrate
+```
 
-## The WASP-39b case
+The NAS batch script is
+[`runs/w39b_smc_retrieval/run_nas_w39b.pbs`](runs/w39b_smc_retrieval/run_nas_w39b.pbs).
+[`docs/wasp39b_case.md`](docs/wasp39b_case.md) covers the submit sequence, the
+GPU budget, and the parameters and priors of the shipped case.
 
-The shipped case fits the real Carter & May (2024) combined JWST transmission
-spectrum of WASP-39b: NIRISS SOSS plus NIRSpec G395H, 152 bins from 1.02 to
-5.24 um. The `gpu` preset samples 10 parameters, of which only the first six are
-chemistry-expensive.
+## Create a new case
 
-| # | Name | Prior | Role |
-|---|---|---|---|
-| 0 | `lnZ` | U(-2.303, 2.303) | Metallicity about the 10x solar baseline |
-| 1 | `c_o` | U(-1.70, 0.24) | Change in ln(C/O) at fixed oxygen, giving C/O in [0.10, 0.70] |
-| 2 | `lnKzz` | U(-4.6, 4.6) | Eddy-diffusion multiplier, +/-2 dex about the GCM baseline |
-| 3 | `Tirr` | U(1100, 2200) K | Guillot irradiation temperature |
-| 4 | `log10kappa` | U(-3.5, 0.5) | Guillot infrared opacity |
-| 5 | `log10gamma` | U(-2, 0.301) | Guillot opacity ratio, allowing a weak inversion |
-| 6 | `lnR0` | U(-0.08, 0.08) | Reference-radius nuisance |
-| 7 | `log10kappa_cloud` | U(-7, 1) | Power-law cloud opacity at 3.5 um |
-| 8 | `cloud_alpha` | U(0, 6) | Cloud slope, where 0 is a gray deck |
-| 9 | `offset_G395H` | U(-800, 800) ppm | Flat depth offset against the NIRISS reference |
+Create a new directory under `runs/`. Copy
+`runs/w39b_smc_retrieval/case.py` into the new directory. Then set the planet
+properties, observation files, priors, and presets for the new target. The
+directory must contain:
 
-Priors are anchored to Tsai et al. (2023) and Rustamkulov et al. (2023) and live
-in `case.py`. Temperature-pressure profiles are drawn raw and never clipped: a
-profile that leaves the modelable 300-3000 K window is rejected and redrawn.
+- a `PRESETS` dictionary;
+- one configuration function for each preset;
+- an optional `DEFAULT_PRESET` name.
 
-Before trusting a real-data posterior, require two things: one clean synthetic
-recovery at production fidelity, with injected truths inside their 90% intervals,
-and a passing verdict from the automatic warm-versus-cold validation. Quote both,
-together with the prior convergence-acceptance fraction.
+Use a JSON override for a temporary configuration change:
 
-See [`docs/wasp39b_case.md`](docs/wasp39b_case.md) for the submit sequence, the
-GPU budget, and the speed levers.
+```bash
+SMC_RETRIEVAL_OVERRIDES='{"smc_num_particles": 24}' python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
+```
 
-## What to know before you trust a result
+`SMC_RETRIEVAL_OVERRIDES_FILE` reads the same JSON from a file. The example case
+keeps a few of these in `runs/w39b_smc_retrieval/overrides/`.
 
-Six assumptions hold for every consumer of the forward engine. Each one is a
-modeling choice with a measured consequence, not a detail.
+## Main outputs
 
-- **Photochemistry must be on.** The warm-started forward-mode gradient relaxes
-  to the true steady-state sensitivity only in the photochemistry-on regime.
-- **The column is closed.** Metallicity and C/O act on the conserved elemental
-  column totals, because a converged column forgets its initial speciation.
-- **Condensation is forward-model only.** Gradient-based inference with
-  `use_condense=True` is refused, because the pinned condensation state is not
-  reliably differentiable.
-- **The radiative-transfer pressure grid extends one decade above the chemistry
-  top**, and the interpolation clamps the topmost chemistry values over that
-  decade. Without it the strong CO2 and CO bands saturate into a flat wall.
-- **Opacities are HITRAN at the 296 K reference** for most molecules, which
-  under-represents hot bands at the retrieved limb temperature. This is the main
-  accuracy limit for real-data inference.
-- **The likelihood is diagonal.** The data product supplies no bin-to-bin
-  covariance, so none is used.
+Each run writes its files to `runs/<case>/data/<preset>/`.
 
-The full statements, with the measurements behind them, are in
-[`docs/forward_model.md`](docs/forward_model.md). The complete limitations list is
-in [`docs/limitations.md`](docs/limitations.md). Read both before publishing a
-number.
+| File | Contents |
+| --- | --- |
+| `config.json` | Complete resolved configuration |
+| `run.log` | Run messages and diagnostics |
+| `observations.npz` | Observation data used by the run |
+| `smc_checkpoint.npz` | Restart data for the SMC run |
+| `posterior_samples.npz` | Posterior or tempered samples |
+| `smc_extra_fields.npz` | SMC diagnostics and evidence values |
+| `posterior_predictive.npz` | Model predictions from the samples |
+| `plots/` | Corner, spectrum, temperature, and SMC plots |
 
-## Why forward-mode gradients
+Check `reached_beta1` in the output before you treat samples as posterior
+samples. If it is false, the run stopped before the SMC temperature reached 1.
 
-VULCAN-JAX's integrator is a `lax.while_loop`. It supports `jvp` but not `vjp`, so
-reverse mode cannot run through the loop. Forward mode is therefore the
-end-to-end route, and it is the right shape for this problem: a few physical
-scalars in, a high-dimensional spectrum out.
+## Repository structure
 
-The sampler exploits the fact that the two halves of the chain have opposite
-economics. The chemistry loop has tiny per-lane state, so width is nearly free,
-but it only supports `jvp`. The radiative transfer is `vjp`-capable but costs
-about a gigabyte of intermediates per lane.
+| Path | Purpose |
+| --- | --- |
+| `src/retrieval_framework/` | Retrieval, configuration, input, output, and plotting code |
+| `src/retrieval_framework/forward/` | VULCAN-JAX to ExoJAX forward model |
+| `runs/` | Planet-specific cases and batch scripts |
+| `examples/` | Spectral-sensitivity examples |
+| `validation/` | Physics and gradient validation scripts |
+| `tests/` | Fast automated tests |
+| `scripts/zco_information/` | Metallicity and C/O information analysis |
+| `data/` | Tracked observations and local opacity caches |
+| `output/` | Generated example and validation data |
+| `docs/` | Model, sampler, case, limitation, and validation documents |
 
-Each mutation sweep therefore runs the chemistry as six forward-mode lanes per
-particle, with all particles in one wide batched loop. It then takes one
-reverse-mode pass per particle through the radiative transfer, chunked over
-particles. Offset and noise gradients are analytic.
+The forward model has one ordering rule. Import
+`retrieval_framework.forward.vulcan_chem` before anything from ExoJAX, because
+it sets the VULCAN-JAX environment variables and enables float64 at import time.
+It raises an error if ExoJAX is already imported.
 
-Details, including the warm-continuation scheme and its path-dependence caveat:
-[`docs/gradients_and_sampler.md`](docs/gradients_and_sampler.md).
+## Important limits
 
-## Outputs
-
-Each run directory holds the resolved `config.json`, the observations, a
-per-stage atomic `smc_checkpoint.npz`, `posterior_samples.npz`,
-`smc_extra_fields.npz` (temperature ladder, effective sample size, acceptance,
-evidence and its conditioning), `posterior_predictive.npz`, and `plots/`.
-
-Two output conventions matter when reporting. `smc_logZ` is the evidence under
-the **operational** prior, which is the declared box restricted to the modelable
-temperature window and to draws whose chemistry converges, then renormalized.
-`smc_logZ_box` is the box-prior value with the non-evaluable region assigned zero
-likelihood. Quote them together, and never compare `smc_logZ` across models whose
-support fractions differ.
-
-Separately: if a run stops before the temperature ladder reaches 1, the samples
-are tempered and the widths are lower bounds. `reached_beta1=False` travels with
-the samples, and every figure is stamped.
+- The validated gradient path requires photochemistry.
+- Gradient-based inference does not support condensation. The code refuses it
+  and runs condensation as a forward model only.
+- The likelihood uses independent Gaussian errors for each spectral bin. It
+  does not use wavelength covariance.
+- The cloud model is a simple power-law opacity model. It is not a
+  microphysical cloud model.
+- Most molecular opacities use HITRAN line lists at the 296 K reference
+  temperature. Check the effect of the opacity source for precision work.
+- A run that stops before `beta = 1` contains tempered samples, not posterior
+  samples.
+- The mutation kernel warm-starts each particle from its carried chemical
+  state, so the sampled posterior is exact only up to the measured agreement
+  between warm and cold solves. Run `validate_warm` after a production run and
+  quote the result.
+- Two evidence values are reported. `logZ` uses the operational prior, which
+  removes draws outside the modelable temperature window and draws whose
+  chemistry does not converge. `logZ_box` fills that region with zero
+  likelihood. Do not compare `logZ` across models with different support
+  fractions.
 
 ## Documentation
 
 | File | Contents |
-|---|---|
-| [`docs/forward_model.md`](docs/forward_model.md) | The forward engine: modules, physics conventions, and cross-cutting assumptions |
-| [`docs/gradients_and_sampler.md`](docs/gradients_and_sampler.md) | Gradient architecture, the staged evaluator, warm continuation, and the sampler |
-| [`docs/wasp39b_case.md`](docs/wasp39b_case.md) | The production case: submit sequence, GPU budget, numerics, speed levers |
+| --- | --- |
+| [`docs/forward_model.md`](docs/forward_model.md) | Forward-model modules, physics conventions, and shared assumptions |
+| [`docs/gradients_and_sampler.md`](docs/gradients_and_sampler.md) | Gradient architecture, warm continuation, and the SMC sampler |
+| [`docs/wasp39b_case.md`](docs/wasp39b_case.md) | The production case: submit sequence, GPU budget, and speed levers |
 | [`docs/limitations.md`](docs/limitations.md) | Every known limitation, with its measured scope |
-| [`docs/validation.md`](docs/validation.md) | The validation scripts and what each one gates |
+| [`docs/validation.md`](docs/validation.md) | The validation scripts and what each one checks |
 
-## Citation and license
+## Support
 
-GPLv3, inherited from VULCAN. Cite the VULCAN 3.0 paper for the chemistry, and
-ExoJax (Kawahara et al. 2022) for the radiative transfer.
+Open a [GitHub issue](https://github.com/imalsky/vulcan-retrieval/issues) for a
+bug or question. Include the command, resolved configuration, software
+versions, and full error message.
+
+## License
+
+This project uses the [GNU General Public License v3.0](LICENSE).
