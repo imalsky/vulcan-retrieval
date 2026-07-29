@@ -5,6 +5,14 @@ running anything on the supercomputer. **The reasoning, dated post-mortems, and
 measured numbers behind every rule below live in `notes.md`** (the dev log /
 decision record) — this file is the current contract, `notes.md` is the "why".
 
+The working documents this file cites are deliberately untracked and exist
+only in a local checkout: `notes.md`, `docs/failed_approaches.md`,
+`docs/job65815_badgrad_investigation.md`, and the sibling
+`VULCAN-JAX/docs/vulcan_jax_notes.md`. Every pointer to them below refers to
+your own disk, not to anything a fresh clone will contain. The published set a
+clone does carry is `docs/forward_model.md`, `gradients_and_sampler.md`,
+`wasp39b_case.md`, `limitations.md`, and `validation.md`.
+
 ## Fail fast and loud (standing rule, all sibling repos)
 
 No behavior-changing fallback paths, ever. Missing H2-He CIA raises; planet
