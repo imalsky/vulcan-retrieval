@@ -15,7 +15,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from retrieval_framework.retrieval_forward import _refuse_condense_inference
+# `retrieval_forward` imports vulcan_chem and exojax_rt at module scope (that
+# import order is load-bearing), so this gate test needs the full chemistry/RT
+# stack. Skip cleanly without it, like the other integration tests -- the CI
+# here is deliberately stack-free. Run it locally, where exojax is installed.
+pytest.importorskip("exojax", reason="chemistry/RT stack (exojax) not installed")
+
+from retrieval_framework.retrieval_forward import _refuse_condense_inference  # noqa: E402
 
 
 def _chem(conden_spec):

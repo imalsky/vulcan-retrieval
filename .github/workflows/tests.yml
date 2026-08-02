@@ -19,15 +19,24 @@ jobs:
         # so the requires-python = ">=3.10" claim stays verified.
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install minimal deps (no chemistry/RT stack)
-        # --no-deps: vulcan-jax lives on TestPyPI, a plain editable install would
-        # try (and fail) to resolve it from PyPI; the stub tests don't need it.
+        # --no-deps throughout: the siblings are not on PyPI, so a plain
+        # editable install would try (and fail) to resolve them there, and
+        # their heavy trees (exojax, the full JAX stack) are not wanted here.
+        #
+        # vulcan-forward IS needed, from GitHub: retrieval_framework.forward.
+        # config re-exports vulcan_forward.constants + paths at import time,
+        # so without it three test modules died at collection (red since
+        # 2026-07-15). Those two engine modules are stdlib-only; anything
+        # reaching vulcan_chem/exojax_rt still skips via importorskip.
         run: |
           pip install "jax>=0.6" numpy scipy pytest
+          pip install --no-deps "vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git"
+          pip install --no-deps "vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git"
           pip install --no-deps -e .
       - name: Run stub-pipeline unit tests
         run: python -m pytest tests -q -ra
