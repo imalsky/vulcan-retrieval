@@ -6,7 +6,7 @@ config can default ``use_condense=True`` (e.g. ``Earth.yaml``) without the flag
 appearing in ``cfg_overrides``. ``retrieval_forward._refuse_condense_inference``
 gates on the RESOLVED ``chem.conden_spec`` instead, closing that bypass.
 
-See ../../docs/condensation_differentiation.md.
+See ../../VULCAN-JAX/docs/differentiability.md.
 """
 
 from __future__ import annotations

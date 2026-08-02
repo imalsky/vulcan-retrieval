@@ -49,7 +49,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
     pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD
     on pinned species) and gradient-MALA is the only mutation kernel, so an
     inference run would sample against unreliable gradients. See
-    ``../docs/condensation_differentiation.md``.
+    ``../VULCAN-JAX/docs/differentiability.md``.
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
@@ -65,7 +65,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
             "with an independently validated gradient. This gate reads the "
             "resolved conden_spec, so it also catches use_condense=True inherited "
             "from the base config (cfg_overrides need not restate it). See "
-            "docs/condensation_differentiation.md."
+            "VULCAN-JAX docs/differentiability.md."
         )
 
 
@@ -90,7 +90,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     # Condensation is a FORWARD-model capability only; refuse inference on the
     # RESOLVED config (closes the base-config bypass of the early cfg_overrides
-    # gate). See docs/condensation_differentiation.md.
+    # gate). See VULCAN-JAX docs/differentiability.md.
     _refuse_condense_inference(chem, cfg)
 
     # Surface an uncertified warm-up baseline LOUDLY (audit 2026-07-28, FWD-09:

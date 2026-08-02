@@ -114,7 +114,7 @@ order unity, and the gas/condensate split has no derivative at all -- its centre
 difference scales like `1/dT` (a fixed-size pin-capture jump, measured
 2026-07-29), so any single relative-error figure is step-size dependent. Only the
 conserved reservoir total is step-stable. See `limitations.md` and the
-project-level `condensation_differentiation.md` contract.
+condensation contract in VULCAN-JAX `docs/differentiability.md`.
 
 ### Opacities
 

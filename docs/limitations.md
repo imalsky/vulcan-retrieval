@@ -57,7 +57,7 @@ like `1/dT` (the signature of a fixed-size jump, since the `fix_species` pin
 captures the column at a discrete accepted step), so a quoted relative error is
 really a statement about the step size chosen. Only the conserved reservoir
 total (gas + condensate) is step-stable, and the tangent reproduces that to
-18-22%. See the project-level `condensation_differentiation.md`.
+18-22%. See the condensation contract in VULCAN-JAX `docs/differentiability.md`.
 
 ## Tempered output when a run stops early
 

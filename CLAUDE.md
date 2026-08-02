@@ -213,7 +213,7 @@ FORWARD model. This is enforced TWICE: the early `cfg_overrides` gate in
 `retrieval_forward._refuse_condense_inference` (on `chem.conden_spec` after
 `build_chem_model`) that also catches `use_condense=True` inherited from a base
 config such as `Earth.yaml` (the `cfg_overrides`-only check would miss it). See
-`../docs/condensation_differentiation.md`. (2) **conden-on does NOT reduce to conden-off when nothing
+`../VULCAN-JAX/docs/differentiability.md`. (2) **conden-on does NOT reduce to conden-off when nothing
 condenses** — the window+pin freezes the reservoirs at `stop_conden_time`, so a
 too-hot / unsettled column is captured mid-transient, not at the conden-off
 steady state; enable conden only where the species genuinely condenses (a
