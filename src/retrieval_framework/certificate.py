@@ -53,7 +53,16 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
-SIBLINGS = ("VULCAN-JAX", "vulcan-forward", "vulcan-retrieval", "vulcan-jwst-tool")
+# Canonical repository labels plus accepted checkout directory names.  The
+# public repository is jax-vulcan; the NAS deployment historically clones it
+# as VULCAN-JAX.  Provenance must work in either layout without misnaming the
+# repository in the certificate.
+REPOSITORIES = {
+    "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
+    "vulcan-forward": ("vulcan-forward",),
+    "vulcan-retrieval": ("vulcan-retrieval",),
+    "vulcan-jwst-tool": ("vulcan-jwst-tool",),
+}
 
 # beta must be 1 to within this; the ladder bisects, so it lands on 1 exactly
 # or not at all, and a loose tolerance here would let a nearly-tempered cloud
@@ -63,8 +72,11 @@ BETA_TOL = 1e-6
 # The three production-fidelity artifacts (item 9). Their absence is a FAIL for
 # a few-ppm or evidence claim: a check that was never run at production settings
 # is not a check that passed.
-REQUIRED_VALIDATION_ARTIFACTS = ("resolution_ladder", "top_pressure_ladder",
-                                 "broadening_ab")
+REQUIRED_VALIDATION_ARTIFACTS = (
+    "resolution_ladder",
+    "top_pressure_ladder",
+    "broadening_ab",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -87,14 +99,18 @@ def _git(repo: Path, *args: str) -> str | None:
 
 def _repo_states() -> dict:
     out = {}
-    for name in SIBLINGS:
-        head = _git(WORKSPACE / name, "rev-parse", "HEAD")
+    for name, directory_names in REPOSITORIES.items():
+        repo = next((WORKSPACE / directory for directory in directory_names
+                     if _git(WORKSPACE / directory, "rev-parse", "HEAD")),
+                    None)
+        head = _git(repo, "rev-parse", "HEAD") if repo is not None else None
         if head is None:
             out[name] = None
             continue
-        dirty = _git(WORKSPACE / name, "status", "--porcelain") or ""
+        dirty = _git(repo, "status", "--porcelain") or ""
         out[name] = {"commit": head, "dirty": bool(dirty),
-                     "dirty_files": dirty.splitlines()[:20]}
+                     "dirty_files": dirty.splitlines()[:20],
+                     "checkout": repo.name}
     return out
 
 
@@ -105,7 +121,8 @@ def _versions() -> dict:
             out[mod] = __import__(mod).__version__
         except Exception:
             out[mod] = None
-    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval"):
+    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval",
+                 "vulcan-jwst-tool"):
         try:
             from importlib.metadata import version
             out[dist] = version(dist)
@@ -155,6 +172,17 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
                       "newest_mtime_utc": time.strftime(
                           "%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest))}
 
+    # The two CIA tables are direct radiative-transfer inputs, small enough to
+    # hash exactly and too important to hide inside only a directory count.
+    # A swapped H2-He table can leave the tree summary unchanged while changing
+    # the continuum fitted by the retrieval.
+    for name in ("H2-H2_2011.cia", "H2-He_2011.cia"):
+        p = Path(root) / "opacity_cache" / name if root else None
+        ident[name] = (
+            {"path": str(p.resolve()), "sha256": _sha256(p),
+             "bytes": p.stat().st_size}
+            if p is not None and p.is_file() else None)
+
     # the reaction network is a vendored VULCAN-JAX input; hash the exact file
     net = cfg_dict.get("vulcan_cfg_name")
     ident["vulcan_cfg_name"] = net
@@ -199,6 +227,30 @@ def _validation_artifacts() -> dict:
     return out
 
 
+def _mala_reversibility_artifact(out_dir: Path) -> dict | None:
+    """Read the warm-kernel artifact and bind it to the current checkpoint."""
+    path = out_dir / "mala_reversibility.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except Exception as exc:                                # pragma: no cover
+        return {"status": "ERROR", "error": str(exc), "sha256": _sha256(path)}
+    checkpoint = out_dir / "smc_checkpoint.npz"
+    current_sha = _sha256(checkpoint) if checkpoint.is_file() else None
+    recorded_sha = (payload.get("checkpoint") or {}).get("sha256")
+    return {
+        "status": payload.get("status"),
+        "summary": payload.get("summary"),
+        "pairs_requested": payload.get("pairs_requested"),
+        "pairs_tested": payload.get("pairs_tested"),
+        "asymmetric_pairs": payload.get("asymmetric_pairs"),
+        "checkpoint_sha256": recorded_sha,
+        "checkpoint_matches": bool(current_sha and recorded_sha == current_sha),
+        "sha256": _sha256(path),
+    }
+
+
 def collect(out_dir: Path) -> dict:
     """Assemble the certificate payload from a finished run's outputs."""
     out_dir = Path(out_dir).resolve()
@@ -206,8 +258,11 @@ def collect(out_dir: Path) -> dict:
     cfg_dict = json.loads(cfg_path.read_text()) if cfg_path.is_file() else {}
     cfg_blob = json.dumps(cfg_dict, sort_keys=True, default=str)
 
-    samples = _load_npz(out_dir / "smc_samples.npz")
-    extra = _load_npz(out_dir / "smc_extra.npz")
+    # These are the filenames written by run_smc.py.  The previous certificate
+    # looked for smc_samples.npz/smc_extra.npz, so even a successful beta=1 run
+    # was read as if it had produced no posterior or evidence.
+    samples = _load_npz(out_dir / "posterior_samples.npz")
+    extra = _load_npz(out_dir / "smc_extra_fields.npz")
     ckpt = _load_npz(out_dir / "smc_checkpoint.npz")
     vwarm = _load_npz(out_dir / "validate_warm.npz")
 
@@ -221,7 +276,7 @@ def collect(out_dir: Path) -> dict:
         return np.asarray(z[key]).tolist()
 
     return {
-        "certificate_version": 1,
+        "certificate_version": 2,
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "out_dir": str(out_dir),
         "code": {"repos": _repo_states(), "versions": _versions()},
@@ -247,10 +302,15 @@ def collect(out_dir: Path) -> dict:
             # across models with different support fractions.
             "smc_logZ": _scalar(extra, "smc_logZ"),
             "smc_logZ_box": _scalar(extra, "smc_logZ_box"),
-            "log_support_fraction": _scalar(extra, "log_support_fraction"),
-            "log_support_fraction_err": _scalar(extra, "log_support_fraction_err"),
-            "f_tp": _scalar(extra, "f_tp"),
-            "f_conv": _scalar(extra, "f_conv"),
+            "log_support_fraction": _scalar(extra, "smc_log_support_fraction"),
+            "log_support_fraction_err": _scalar(
+                extra, "smc_log_support_fraction_err"),
+            "log_support_physical": _scalar(extra, "smc_log_support_physical"),
+            "log_support_physical_err": _scalar(
+                extra, "smc_log_support_physical_err"),
+            "log_conv_attrition": _scalar(extra, "smc_log_conv_attrition"),
+            "log_conv_attrition_err": _scalar(
+                extra, "smc_log_conv_attrition_err"),
         },
         "diagnostics": {
             "ess": _arr(extra, "smc_ess"),
@@ -271,6 +331,7 @@ def collect(out_dir: Path) -> dict:
             "grad_rel_max_gated": _scalar(vwarm, "grad_rel_max_gated"),
             "grad_zeroed_frac": _scalar(vwarm, "grad_zeroed_frac"),
         }),
+        "mala_reversibility": _mala_reversibility_artifact(out_dir),
         "validation_artifacts": _validation_artifacts(),
         "checkpoint_present": ckpt is not None,
     }
@@ -333,9 +394,19 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 elif float(v) >= limit:
                     problems.append(
                         f"warm run: {label} ({key}) {float(v):.3e} >= {limit}")
-        if replay is None or not replay.get("ran"):
+        mala = cert.get("mala_reversibility")
+        if mala is None:
             problems.append(
-                "warm run without the mandatory mala_reversibility probe")
+                "warm run without mala_reversibility.json: the mandatory "
+                "warm-kernel reversibility probe was not archived")
+        elif mala.get("status") != "PASS":
+            problems.append(
+                "warm run whose mala_reversibility probe did not PASS: "
+                f"{mala.get('summary') or mala.get('error') or 'no detail'}")
+        elif not mala.get("checkpoint_matches"):
+            problems.append(
+                "warm run whose mala_reversibility artifact does not match "
+                "the current smc_checkpoint.npz")
     elif tgt["smc_chem_mode"] != "cold":
         problems.append(
             f"smc_chem_mode is {tgt['smc_chem_mode']!r}; expected 'cold' "
@@ -343,12 +414,10 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
 
     # --- evidence semantics -------------------------------------------------
     ev = cert["evidence"]
-    if ev["smc_logZ"] is None:
-        problems.append("no smc_logZ recorded")
-    if ev["log_support_fraction_err"] is None:
-        problems.append(
-            "no support-fraction uncertainty recorded -- logZ_box is not "
-            "interpretable without it")
+    for key in ("smc_logZ", "smc_logZ_box", "log_support_fraction",
+                "log_support_fraction_err"):
+        if ev.get(key) is None:
+            problems.append(f"no {key} recorded")
 
     # --- run health ---------------------------------------------------------
     diag = cert["diagnostics"]
@@ -365,13 +434,23 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "choice it measures has not been checked at production "
                 "settings, so no few-ppm or converged-evidence claim is "
                 "supported")
+        elif name == "broadening_ab":
+            if art.get("status") != "REPORT":
+                problems.append(
+                    f"validation artifact '{name}' has status "
+                    f"{art.get('status')!r}, expected REPORT")
         elif art.get("status") == "FAIL":
             problems.append(f"validation artifact '{name}' FAILED: "
                             f"{art.get('summary', '')[:160]}")
-        elif art.get("status") == "REPORT" and name != "broadening_ab":
+        elif art.get("status") == "REPORT":
             problems.append(
                 f"validation artifact '{name}' is REPORT, not PASS -- its "
                 "decisive test was not run (see its summary)")
+        elif name != "broadening_ab" and art.get("status") != "PASS":
+            problems.append(
+                f"validation artifact '{name}' has status "
+                f"{art.get('status')!r}, expected PASS: "
+                f"{art.get('summary', '')[:160]}")
 
     # --- cold replay --------------------------------------------------------
     if replay is not None and replay.get("ran"):
@@ -461,7 +540,7 @@ def main(argv=None) -> int:
 
     from retrieval_framework.run_smc import make_config
 
-    cfg, preset = make_config(Path(args.run_dir))
+    cfg, _preset = make_config(Path(args.run_dir))
     out_dir = Path(cfg.out_dir)
     if not out_dir.is_dir():
         raise SystemExit(f"certificate: no output directory at {out_dir}")

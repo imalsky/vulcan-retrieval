@@ -421,7 +421,8 @@ def main() -> None:
                    "since 2026-08-03) before publishing"))
     if not ok:
         # Distinct exit code (3) so the PBS wrapper can tell a REACHED verdict that
-        # failed the gate (validate_warm.npz written; a science finding, job rc=0)
+        # failed the gate (validate_warm.npz written; a science finding, with
+        # the PBS wrapper propagating a nonzero final job status)
         # from a crash before any verdict (uncaught exception / OOM -> exit 1, no
         # npz -- the bias is UNMEASURED). See run_nas_w39b.pbs.
         sys.exit(3)

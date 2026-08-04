@@ -24,10 +24,21 @@ warm_count_max or run the final ladder stages with smc_chem_mode="cold".
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def main() -> int:
@@ -41,9 +52,10 @@ def main() -> int:
     import jax
     import jax.numpy as jnp
 
-    cfg, preset = make_config(Path(args.run_dir))
+    cfg, _preset = make_config(Path(args.run_dir))
     out = cfg.out_dir
-    ck = np.load(out / "smc_checkpoint.npz")
+    checkpoint_path = out / "smc_checkpoint.npz"
+    ck = np.load(checkpoint_path)
     for k in ("u_particles", "y_state", "chem_refs", "loglik"):
         if k not in ck.files:
             raise KeyError(f"checkpoint lacks {k}")
@@ -55,7 +67,6 @@ def main() -> int:
     Y = np.asarray(ck["y_state"], np.float64)
     refs = np.asarray(ck["chem_refs"], np.float64)
     L = np.asarray(ck["loglik"], np.float64)
-    N = U.shape[0]
     healthy = np.isfinite(L) & (L > -1e29)
 
     # nearest-neighbor pairs among healthy particles (unique, closest first)
@@ -84,6 +95,7 @@ def main() -> int:
         return jnp.asarray(cd.accept_count, jnp.int32), cd.conv_normal
 
     asym = 0
+    pair_results = []
     for i, j in pairs:
         ac_ij, ok_ij = solve_dir(jnp.asarray(theta[j, :n_ct]), jnp.asarray(Y[i]),
                                  jnp.asarray(refs[i]))
@@ -98,6 +110,14 @@ def main() -> int:
         if rej_ij != rej_ji:
             asym += 1
             tag = "  <-- ASYMMETRIC (detailed-balance risk)"
+        pair_results.append({
+            "i": i, "j": j,
+            "i_to_j_accept_count": ac_ij,
+            "j_to_i_accept_count": ac_ji,
+            "i_to_j_rejected": bool(rej_ij),
+            "j_to_i_rejected": bool(rej_ji),
+            "asymmetric": bool(rej_ij != rej_ji),
+        })
         print(f"pair ({i:3d},{j:3d}): i->j accept={ac_ij:5d} capped={ac_ij >= wcmax} "
               f"stalled={not bool(ok_ij)} | j->i accept={ac_ji:5d} "
               f"capped={ac_ji >= wcmax} stalled={not bool(ok_ji)}{tag}", flush=True)
@@ -105,8 +125,44 @@ def main() -> int:
     frac = asym / max(1, len(pairs))
     print(f"\n==== reversibility summary ====\nasymmetric pairs: {asym}/{len(pairs)} "
           f"({frac:.0%})")
-    ok = asym == 0
-    print(f"VERDICT: {'PASS -- no state-dependent cap/stall events at this cloud' if ok else 'FAIL -- the warm cap or stall gate binds asymmetrically; raise warm_count_max or finish the ladder with smc_chem_mode=cold'}")
+    enough_pairs = len(pairs) == args.pairs
+    ok = enough_pairs and asym == 0
+    summary = (
+        "no state-dependent cap/stall events at this cloud"
+        if ok else
+        (f"only {len(pairs)}/{args.pairs} requested healthy pairs were available"
+         if not enough_pairs else
+         "the warm cap or stall gate binds asymmetrically; raise "
+         "warm_count_max or finish the ladder with smc_chem_mode=cold"))
+    print(f"VERDICT: {'PASS' if ok else 'FAIL'} -- {summary}")
+
+    # The production certificate cannot treat terminal output as evidence.
+    # Bind the machine-readable result to the exact checkpoint it probed so a
+    # stale PASS cannot be copied beside a newer cloud.
+    artifact = {
+        "schema_version": 1,
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
+        "run_dir": str(Path(args.run_dir).resolve()),
+        "out_dir": str(Path(out).resolve()),
+        "status": "PASS" if ok else "FAIL",
+        "summary": summary,
+        "pairs_requested": int(args.pairs),
+        "pairs_tested": len(pairs),
+        "healthy_particles": int(healthy.sum()),
+        "warm_count_max": wcmax,
+        "asymmetric_pairs": int(asym),
+        "asymmetric_fraction": float(frac),
+        "checkpoint": {
+            "path": str(checkpoint_path.resolve()),
+            "sha256": _sha256(checkpoint_path),
+            "bytes": checkpoint_path.stat().st_size,
+        },
+        "pairs": pair_results,
+    }
+    artifact_path = Path(out) / "mala_reversibility.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2) + "\n")
+    print(f"wrote {artifact_path}")
     return 0 if ok else 1
 
 

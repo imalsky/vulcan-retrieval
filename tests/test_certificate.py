@@ -9,12 +9,16 @@ its gates is exercised here on synthetic payloads -- no sampler, no chemistry.
 
 from __future__ import annotations
 
-import copy
+import json
 
+import numpy as np
 import pytest
 
+from retrieval_framework import certificate
 from retrieval_framework.certificate import (
-    REQUIRED_VALIDATION_ARTIFACTS, validate,
+    REQUIRED_VALIDATION_ARTIFACTS,
+    collect,
+    validate,
 )
 
 
@@ -23,7 +27,7 @@ def _passing_cert():
         "code": {
             "repos": {name: {"commit": "a" * 40, "dirty": False,
                              "dirty_files": []}
-                      for name in ("VULCAN-JAX", "vulcan-forward",
+                      for name in ("jax-vulcan", "vulcan-forward",
                                    "vulcan-retrieval", "vulcan-jwst-tool")},
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
@@ -43,6 +47,7 @@ def _passing_cert():
                         ("ess", "acceptance_rate", "unique_particles",
                          "warm_capped", "warm_stalled", "badgrad")},
         "warm_validation": None,
+        "mala_reversibility": None,
         "validation_artifacts": {
             "resolution_ladder": {"status": "PASS", "summary": "", "sha256": "d"},
             "top_pressure_ladder": {"status": "PASS", "summary": "", "sha256": "e"},
@@ -79,7 +84,7 @@ def test_beta_just_below_one_is_refused():
 def test_dirty_repo_is_refused():
     """A run that cannot be attributed to a committed state is not evidence."""
     c = _passing_cert()
-    c["code"]["repos"]["VULCAN-JAX"]["dirty"] = True
+    c["code"]["repos"]["jax-vulcan"]["dirty"] = True
     assert any("DIRTY" in p for p in validate(c, _replay()))
 
 
@@ -121,7 +126,23 @@ def test_failed_cold_replay_is_refused():
 def test_missing_support_fraction_error_is_refused():
     c = _passing_cert()
     c["evidence"]["log_support_fraction_err"] = None
-    assert any("support-fraction uncertainty" in p for p in validate(c, _replay()))
+    assert any("no log_support_fraction_err recorded" in p
+               for p in validate(c, _replay()))
+
+
+@pytest.mark.parametrize("key", ["smc_logZ", "smc_logZ_box",
+                                 "log_support_fraction",
+                                 "log_support_fraction_err"])
+def test_every_evidence_semantics_field_is_required(key):
+    c = _passing_cert()
+    c["evidence"][key] = None
+    assert any(f"no {key} recorded" in p for p in validate(c, _replay()))
+
+
+def test_unknown_validation_artifact_status_is_refused():
+    c = _passing_cert()
+    c["validation_artifacts"]["resolution_ladder"]["status"] = None
+    assert any("expected PASS" in p for p in validate(c, _replay()))
 
 
 # --- warm runs ---------------------------------------------------------------
@@ -136,6 +157,10 @@ def _warm_cert(**wv):
             "grad_zeroed_frac": 0.02}
     base.update(wv)
     c["warm_validation"] = base
+    c["mala_reversibility"] = {
+        "status": "PASS", "summary": "", "checkpoint_matches": True,
+        "pairs_requested": 24, "pairs_tested": 24, "asymmetric_pairs": 0,
+    }
     return c
 
 
@@ -154,6 +179,20 @@ def test_warm_run_missing_the_stamp_is_refused():
     c = _warm_cert()
     c["target"]["approximate_history_dependent_target"] = False
     assert any("NOT stamped" in p for p in validate(c, _replay()))
+
+
+def test_cold_replay_does_not_substitute_for_mala_reversibility():
+    c = _warm_cert()
+    c["mala_reversibility"] = None
+    problems = validate(c, _replay())
+    assert any("mala_reversibility.json" in p for p in problems), problems
+
+
+def test_stale_mala_reversibility_artifact_is_refused():
+    c = _warm_cert()
+    c["mala_reversibility"]["checkpoint_matches"] = False
+    problems = validate(c, _replay())
+    assert any("does not match" in p for p in problems), problems
 
 
 @pytest.mark.parametrize("key, bad", [
@@ -177,3 +216,33 @@ def test_unknown_chem_mode_is_refused():
     c = _passing_cert()
     c["target"]["smc_chem_mode"] = "lukewarm"
     assert any("expected 'cold'" in p for p in validate(c, _replay()))
+
+
+def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
+                                                              monkeypatch):
+    """An actual beta=1 output schema must not look like an empty run."""
+    (tmp_path / "config.json").write_text(json.dumps({
+        "smc_chem_mode": "cold", "warm_extrapolate": False,
+    }))
+    np.savez(tmp_path / "posterior_samples.npz",
+             final_beta=np.asarray(1.0), reached_beta1=np.asarray(1),
+             approximate_history_dependent_target=np.asarray(0))
+    np.savez(tmp_path / "smc_extra_fields.npz",
+             smc_betas=np.asarray([0.0, 0.4, 1.0]),
+             smc_logZ=np.asarray(-123.4), smc_logZ_box=np.asarray(-125.0),
+             smc_log_support_fraction=np.asarray(-1.6),
+             smc_log_support_fraction_err=np.asarray(0.04),
+             smc_log_support_physical=np.asarray(-0.2),
+             smc_log_support_physical_err=np.asarray(0.01),
+             smc_log_conv_attrition=np.asarray(-1.4),
+             smc_log_conv_attrition_err=np.asarray(0.03))
+    monkeypatch.setattr(certificate, "_repo_states", lambda: {})
+    monkeypatch.setattr(certificate, "_versions", lambda: {})
+    monkeypatch.setattr(certificate, "_validation_artifacts", lambda: {})
+
+    cert = collect(tmp_path)
+    assert cert["convergence"] == {
+        "reached_beta1": True, "final_beta": 1.0, "n_stages": 2}
+    assert cert["evidence"]["smc_logZ"] == pytest.approx(-123.4)
+    assert cert["evidence"]["log_support_fraction"] == pytest.approx(-1.6)
+    assert cert["evidence"]["log_support_fraction_err"] == pytest.approx(0.04)

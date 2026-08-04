@@ -231,8 +231,8 @@ def gpu_config(**overrides: Any) -> Config:
 
 def prod_config(**overrides: Any) -> Config:
     """Higher-fidelity variant (nz=100, more stages, no governor) for when >24 h is
-    available. Inherits the gpu preset's sweep-cost settings (N=144, 6 sweeps/stage,
-    warm_count_max)."""
+    available. Inherits the gpu preset's particle/chunk settings and cold target,
+    but explicitly raises the mutation budget from 4 to 8 sweeps per stage."""
     base = dict(
         nz=100, smc_num_mcmc_steps=8, smc_max_steps=48,
         ppc_draws=96,

@@ -130,8 +130,10 @@ notes.md.)
   ceil(`smc_tangent_bad_max_frac` x N) badgrad events (default 25%; measured
   worst physical sweep 7.6%) aborts -- that is AD breakage, not the corner
   class.
-- **warm_extrapolate** is ON in the gpu preset (schema default off); seeds each
-  warm solve at the first-order tangent prediction, gated PER PARTICLE: a
+- **warm_extrapolate** is OFF in the gpu preset because production now uses
+  `smc_chem_mode="cold"`; it is available only for explicit warm exploratory
+  runs. When enabled it seeds each warm solve at the first-order tangent
+  prediction, gated PER PARTICLE: a
   proposal whose predicted column would need clipping (any cell driven <= 0)
   falls back to its plain carried column + carried refs. The unconditional
   clipped seed manufactured the badgrad tangent class, and a per-cell repair
@@ -161,7 +163,7 @@ notes.md.)
 - **Never profile a first/debug run with `nsys`** — it masks the exit code
   (returns 0 on a killed/crashed process). Add `NSYS=1` only once a run is
   known-good. `NSYS_DELAY` is in seconds.
-- gpu preset: N=144, `smc_rt_vjp_chunk=12`, 6 sweeps/stage, 24 h PBS / 20 h
+- gpu preset: N=144, `smc_rt_vjp_chunk=12`, 4 sweeps/stage, 24 h PBS / 20 h
   governor. `CALIBRATE_ONLY=1` (~1 h) gives timing.json before committing a run.
 
 ## Condensation with a live T(P) (2026-07-13)

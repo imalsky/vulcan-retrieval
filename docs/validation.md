@@ -64,7 +64,7 @@ This re-solves a finished run's checkpointed cloud **cold** and compares against
 the warm-carried results. It is the direct measurement of warm-continuation
 history dependence.
 
-It gates on three axes and reports a fourth:
+It gates on all four axes:
 
 - maximum log-likelihood difference below 0.1,
 - binned-spectrum agreement within 5 ppm,
@@ -72,10 +72,9 @@ It gates on three axes and reports a fourth:
 - warm-versus-cold **gradient** agreement (the MALA drift): the cold re-solve
   recomputes each particle's u-space gradient and reports the relative
   discrepancy and drift-direction cosine against the checkpoint's carried
-  gradient. Warn-only at 0.1 relative until a production baseline is recorded;
-  set `VALIDATE_WARM_GRAD=0` to skip it and restore the cheaper
-  likelihood-only re-solve. A likelihood gate alone does not validate a
-  gradient-driven kernel; this axis closes that hole.
+  gradient. The current 0.1 relative threshold and zeroed-drift-fraction
+  threshold are certificate failures, not warnings. A likelihood gate alone
+  does not validate a gradient-driven kernel; this axis closes that hole.
 
 Run it once per production run. A published retrieval should quote its verdict,
 along with the prior convergence-acceptance fraction, which the initialization log

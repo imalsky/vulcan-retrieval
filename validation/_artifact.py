@@ -40,8 +40,12 @@ RESULTS = REPO / "validation" / "results"
 
 # The four repositories whose code can move any of these numbers. Resolved
 # relative to the workspace root (the directory containing this checkout).
-_SIBLINGS = ("VULCAN-JAX", "vulcan-forward", "vulcan-retrieval",
-             "vulcan-jwst-tool")
+_REPOSITORIES = {
+    "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
+    "vulcan-forward": ("vulcan-forward",),
+    "vulcan-retrieval": ("vulcan-retrieval",),
+    "vulcan-jwst-tool": ("vulcan-jwst-tool",),
+}
 
 
 def _git(repo: Path, *args: str) -> str | None:
@@ -121,10 +125,14 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
     """Everything needed to tie a number to an exact state."""
     workspace = REPO.parent
     repos = {}
-    for name in _SIBLINGS:
-        state = _repo_state(workspace / name)
-        if state is not None:
-            repos[name] = state
+    for name, directory_names in _REPOSITORIES.items():
+        state = None
+        for directory in directory_names:
+            state = _repo_state(workspace / directory)
+            if state is not None:
+                state["checkout"] = directory
+                break
+        repos[name] = state
     prov = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
@@ -180,6 +188,9 @@ def _md(name: str, payload: dict) -> str:
         lines.append(f"| {esc} | {val} | {gate} |")
     lines += ["", "## Provenance", "", "| key | value |", "|---|---|"]
     for repo, state in prov["repos"].items():
+        if state is None:
+            lines.append(f"| {repo} | MISSING |")
+            continue
         mark = " (DIRTY)" if state["dirty"] else ""
         lines.append(f"| {repo} | {state['commit'][:12]}{mark} |")
     for k in ("jax", "jaxlib", "numpy", "exojax", "python"):

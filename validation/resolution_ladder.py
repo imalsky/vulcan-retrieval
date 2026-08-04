@@ -10,7 +10,7 @@ by a convergence test; this script supplies the test.
 
 Method: converge the W39b chemistry ONCE (baseline theta), then rebuild the RT at
 each rung of a nu_pts ladder over the production band, bin every native spectrum
-onto the SAME R=100 bins, and difference against the finest rung. Optionally
+onto the SAME R=100 bins, and compare adjacent rungs. Optionally
 convolve with a Gaussian LSF (--lsf-r) before binning to show LSF insensitivity
 at R=100 products, and optionally check a chemistry Jacobian column (--jacobian:
 d(binned depth)/d lnZ via a warm-started jvp per rung).
@@ -20,8 +20,10 @@ finest rung is still line-count-heavy):
 
     python validation/resolution_ladder.py --ladder 1652 3304 6608 13216
 
-PASS gates (from the review): binned-depth change < 5 ppm between the top two
-rungs; Jacobian direction change < 1% where the depth response is significant.
+PASS gates (from the review): the production rung (nu_pts=1652) must change by
+< 5 ppm against the next rung; its Jacobian direction must change by < 1% where
+the depth response is significant. Testing only the two finest rungs says
+nothing about whether the much coarser production rung is adequate.
 """
 from __future__ import annotations
 
@@ -69,6 +71,18 @@ def gaussian_lsf(wl, y, R_lsf):
         w = np.exp(-0.5 * ((ln - l0) / s) ** 2)
         out[i] = np.sum(w * y) / np.sum(w)
     return out
+
+
+def production_pair(rungs, production_nu_pts):
+    """Return the production/next-rung pair or fail a mis-specified ladder."""
+    ordered = sorted({int(r) for r in rungs})
+    if len(ordered) < 2:
+        raise ValueError("resolution ladder needs at least two distinct rungs")
+    if ordered[0] != int(production_nu_pts):
+        raise ValueError(
+            f"lowest rung must be production nu_pts={production_nu_pts}, "
+            f"got {ordered[0]}")
+    return ordered, (ordered[0], ordered[1])
 
 
 def main() -> int:
@@ -137,7 +151,10 @@ def main() -> int:
         print(f"[ladder] nu_pts={nu_pts}: native R~{nu_pts / np.log(BAND[1]/BAND[0]):.0f}, "
               f"{time.time()-t0:.0f}s", flush=True)
 
-    rungs = sorted(results)
+    try:
+        rungs, decisive_pair = production_pair(results, profile["nu_pts"])
+    except ValueError as exc:
+        raise SystemExit(f"resolution_ladder: {exc}") from exc
     ok = True
     measurements = []
     print("\n==== binned-depth convergence (vs next rung) ====")
@@ -146,7 +163,7 @@ def main() -> int:
         m = np.isfinite(da) & np.isfinite(db)
         dppm = 1e6 * np.max(np.abs(da[m] - db[m]))
         print(f"nu_pts {a} -> {b}: max |Delta binned depth| = {dppm:.2f} ppm")
-        decisive = b == rungs[-1]
+        decisive = (a, b) == decisive_pair
         measurements.append({
             "name": f"max |Delta binned depth|, nu_pts {a} -> {b}",
             "value": f"{dppm:.2f} ppm",
@@ -159,7 +176,7 @@ def main() -> int:
             ok &= dppm < GATE_PPM
     if args.jacobian:
         print("\n==== Jacobian (dlnZ) convergence ====")
-        a, b = rungs[-2], rungs[-1]
+        a, b = decisive_pair
         ja, jb = results[a]["jac_lnZ"], results[b]["jac_lnZ"]
         m = np.isfinite(ja) & np.isfinite(jb) & (np.abs(jb) > 0.01 * np.nanmax(np.abs(jb)))
         jrel = float(np.max(np.abs(ja[m] - jb[m]) / np.abs(jb[m])))
@@ -171,7 +188,7 @@ def main() -> int:
             "passed": bool(jrel < GATE_JAC_REL),
         })
         ok &= jrel < GATE_JAC_REL
-    print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} (top-rung gate {GATE_PPM} ppm"
+    print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} (production-rung gate {GATE_PPM} ppm"
           + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")
 
     # A verdict printed to a terminal and lost is not evidence. Archive it with
