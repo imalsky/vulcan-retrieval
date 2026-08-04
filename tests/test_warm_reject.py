@@ -33,6 +33,12 @@ import jax.numpy as jnp  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework import run_smc as R  # noqa: E402
 
+# SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
+# line lists, FastChem, chemistry converged to steady state), so it costs
+# minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
+# is the opt-in fast inner loop.
+pytestmark = pytest.mark.slow
+
 # tests/ and runs/ are siblings inside the vulcan-retrieval package dir
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 WARM_CMAX = 5     # so a warm continuation from baseline cannot converge (<= 5 steps)

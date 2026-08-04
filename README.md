@@ -81,11 +81,24 @@ copying an existing cache saves a long first run. See
 
 ## Quick start
 
-Run the fast unit tests:
+Run the test suite:
 
 ```bash
 python -m pytest tests -q
 ```
+
+That runs everything, including three integration files that build a real
+chemistry and radiative-transfer pipeline (about 10 minutes in total). For a
+fast inner loop while developing, deselect them:
+
+```bash
+python -m pytest tests -q -m "not slow"     # ~10 s, 16 deselected
+python -m pytest tests -q -m slow           # just the integration set
+```
+
+The marker deselects nothing by default on purpose: a silently skipped test is
+a failure mode, not a convenience. Using `-m "not slow"` is an explicit choice
+and pytest reports the deselected count.
 
 Check the complete gradient path with the small WASP-39 b case:
 

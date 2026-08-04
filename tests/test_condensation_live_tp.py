@@ -32,7 +32,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+# SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
+# line lists, FastChem, chemistry converged to steady state), so it costs
+# minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
+# is the opt-in fast inner loop.
+pytestmark = [pytest.mark.slow,
+              pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 
 # Structural/thermal setup: T where the S8 saturation boundary sits inside the
 # grid for an S8 VMR of 1e-4 (sat_mix ~ 1.5e-5 at 5 bar, ~7.4e-3 at 0.01 bar).

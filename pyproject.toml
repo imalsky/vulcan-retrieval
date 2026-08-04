@@ -74,6 +74,20 @@ version = { attr = "retrieval_framework._version.__version__" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --tb=short"
+markers = [
+    # Integration tests that build a REAL chemistry + RT pipeline (ExoJAX RT
+    # model, line lists, FastChem, chemistry converged to steady state). Three
+    # files carry it and are ~98% of the suite's wall time: test_warm_extrap
+    # (~285 s), test_condensation_live_tp (~232 s), test_warm_reject (~78 s).
+    #
+    # `pytest tests` STILL RUNS THEM -- the marker deselects nothing by
+    # default, deliberately: this repo treats a silently skipped test as a
+    # failure mode, not a convenience. It exists so a developer can opt into a
+    # fast inner loop with `pytest -m \"not slow\"` (~10 s), which is an
+    # explicit choice with a visible deselected count, and so CI can report the
+    # two groups separately.
+    "slow: builds a real chemistry/RT pipeline; minutes, not seconds",
+]
 
 [tool.ruff]
 line-length = 100

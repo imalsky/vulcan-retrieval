@@ -262,7 +262,14 @@ Sampler-core edits additionally get the opt-in BlackJAX oracle:
   (or a conflicting vulcan_jax) was imported first.
 - Run from repo root: `python -m retrieval_framework.run_smc runs/w39b_smc_retrieval`
   (also `calibrate_count_max`, `probe_memory`, `smoke_retrieval`, `plot_smc`,
-  `validate_warm`). Suite: `python -m pytest tests -q`.
+  `validate_warm`). Suite: `python -m pytest tests -q` runs EVERYTHING
+  (~10 min). Three integration files build a real chemistry+RT pipeline and
+  are ~98% of that wall time (`test_warm_extrap`, `test_condensation_live_tp`,
+  `test_warm_reject`); they carry `pytestmark = pytest.mark.slow`, so
+  `pytest -m "not slow"` is the ~10 s inner loop. The marker deselects
+  NOTHING by default on purpose -- a silent skip is the failure mode this
+  repo cares about, so opting out has to be explicit and shows a deselected
+  count. Mark a new test slow if it calls `build_pipeline` on a real config.
 - `data/` = inputs (repo root; `$VULCAN_PROJECT_ROOT` = dir containing this repo);
   `output/` = generated npz caches (gitignored). Figures go to
   `../jax_paper/figures/`; never modify `../VULCAN-JAX`.
