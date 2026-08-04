@@ -72,6 +72,33 @@ def main() -> None:
     tempered_tag = ("" if final_beta >= 1.0 - 1e-6
                     else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
+    # TARGET-EXACTNESS STAMP (2026-08-03). A warm run's likelihood depends on
+    # sampler history, so its cloud is a sample from an APPROXIMATE target.
+    # Carried on every headline figure for the same reason as the tempered tag:
+    # a figure outlives the log that explained it.
+    approx_target = bool(int(s["approximate_history_dependent_target"])) \
+        if "approximate_history_dependent_target" in s.files else False
+    if approx_target:
+        tempered_tag += ("  [APPROXIMATE TARGET: warm continuation, "
+                         "history-dependent likelihood]")
+
+    # A figure that says "posterior" when the ladder stopped early, or when the
+    # target was history-dependent, is the failure this refuses. Set
+    # PLOT_SMC_ALLOW_UNCERTIFIED=1 for forensic plotting of such a run; the
+    # stamps stay on the figures either way.
+    if (final_beta < 1.0 - 1e-6 or approx_target) and \
+            os.environ.get("PLOT_SMC_ALLOW_UNCERTIFIED") != "1":
+        raise SystemExit(
+            "plot_smc: refusing to render posterior figures for an "
+            "uncertified run.\n"
+            + (f"  final beta = {final_beta:.4f} < 1: the cloud is TEMPERED, "
+               "not a posterior.\n" if final_beta < 1.0 - 1e-6 else "")
+            + ("  the target was warm/history-dependent, so these draws are "
+               "not samples from the stated posterior.\n" if approx_target
+               else "")
+            + "Re-run to beta=1 with smc_chem_mode='cold' (the default), or set "
+              "PLOT_SMC_ALLOW_UNCERTIFIED=1 to plot it as forensics.")
+
     # ---------------- corner ----------------
     try:
         import corner as corner_mod

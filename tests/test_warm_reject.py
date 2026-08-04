@@ -52,7 +52,14 @@ def smoke():
         cfg, preset = R.make_config(RUN_DIR)
         if preset != "smoke":
             pytest.skip(f"preset resolved to {preset!r}, not smoke")
-        cfg = dataclasses.replace(cfg, count_max=COLD_CMAX, warm_count_max=WARM_CMAX)
+        # This file tests the WARM mutation kernel's rejection gate, so it must
+        # ask for warm mode explicitly. `smc_chem_mode` defaults to "cold" since
+        # 2026-08-03 (a cold target is the fixed density the sampler and the
+        # evidence assume); inheriting the default here would silently build the
+        # cold evaluators and test nothing about the warm cap.
+        cfg = dataclasses.replace(cfg, count_max=COLD_CMAX,
+                                  warm_count_max=WARM_CMAX,
+                                  smc_chem_mode="warm")
         pipe = P.build_pipeline(cfg)
     except Exception as e:                       # missing fastchem / data / env / import
         pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")

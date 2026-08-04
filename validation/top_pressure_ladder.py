@@ -29,6 +29,12 @@ import time
 
 import numpy as np
 
+# PYTHONSAFEPATH strips the script's own directory from sys.path in some
+# sandboxes, so be explicit rather than relying on it.
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _artifact  # noqa: E402
+
+
 GATE_PPM = 5.0
 BIN_R = 100.0
 BAND = (1900.0, 9900.0)
@@ -72,6 +78,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tops", type=float, nargs="+", default=[1e-7, 1e-8, 1e-9])
     ap.add_argument("--extend-chem", action="store_true")
+    ap.add_argument("--no-artifact", action="store_true",
+                    help="skip writing the provenance-bearing result under "
+                         "validation/results/ (exploration only)")
     args = ap.parse_args()
 
     from retrieval_framework.forward import config
@@ -106,12 +115,18 @@ def main() -> int:
         print(f"[topP] ART top {top:.0e} bar done ({time.time()-t0:.0f}s)", flush=True)
 
     tops = sorted(binned, reverse=True)   # coarse (1e-7) -> deep (1e-9)
+    measurements = []
     print("\n==== clamp-extension ladder (same chemistry) ====")
     for a, b in zip(tops[:-1], tops[1:]):
         da, db = binned[a], binned[b]
         m = np.isfinite(da) & np.isfinite(db)
-        print(f"ART top {a:.0e} -> {b:.0e} bar: max |Delta| = "
-              f"{1e6 * np.max(np.abs(da[m] - db[m])):.2f} ppm")
+        _d = 1e6 * np.max(np.abs(da[m] - db[m]))
+        print(f"ART top {a:.0e} -> {b:.0e} bar: max |Delta| = {_d:.2f} ppm")
+        measurements.append({
+            "name": f"clamp ladder, ART top {a:.0e} -> {b:.0e} bar",
+            "value": f"{_d:.2f} ppm", "value_raw": float(_d), "unit": "ppm",
+            "gate": "(informational)", "decisive": False, "passed": None,
+        })
 
     ok = True
     if args.extend_chem:
@@ -140,8 +155,31 @@ def main() -> int:
                if ok else
                "FAIL -- extend the production chemistry grid (cfg P_t) instead of clamping")
         print(f"\nVERDICT: {msg}")
+        measurements.append({
+            "name": "clamped extension vs REAL chemistry over 1e-7..1e-8 bar",
+            "value": f"{dppm:.2f} ppm", "value_raw": float(dppm), "unit": "ppm",
+            "gate": f"< {GATE_PPM} ppm", "decisive": True,
+            "passed": bool(ok),
+        })
+        status, summary = ("PASS" if ok else "FAIL"), msg
     else:
         print("\n(no --extend-chem: clamp ladder reported, decisive test skipped)")
+        # A skipped decisive test is NOT a pass. Recording it as REPORT keeps
+        # the artifact from being cited as if the clamp had been validated.
+        status = "REPORT"
+        summary = ("DECISIVE TEST NOT RUN: without --extend-chem this only "
+                   "shows that the CLAMP is internally converged in ART top "
+                   "pressure, which says nothing about whether the clamp "
+                   "matches real chemistry over that decade. Re-run with "
+                   "--extend-chem before citing the model top.")
+
+    if not args.no_artifact:
+        _artifact.emit(
+            name="top_pressure_ladder",
+            title="Model-top treatment: clamped ART extension vs real chemistry",
+            measurements=measurements, status=status, summary=summary,
+            resolved_config=base_profile,
+        )
     return 0 if ok else 1
 
 

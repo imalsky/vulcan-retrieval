@@ -49,7 +49,14 @@ def test_extrapolate_requires_warm_map():
 def extrap():
     """One converged particle + its tangents from the real smoke pipeline built with
     warm_extrapolate=True: (pipe, U0, Y_cold, refs_cold, DY, L0, G0)."""
-    cfg = dataclasses.replace(_smoke_cfg(), warm_extrapolate=True)
+    # warm_extrapolate seeds the WARM continuation, so this file must ask for
+    # warm mode explicitly. `smc_chem_mode` defaults to "cold" since 2026-08-03;
+    # inheriting it here made validate_config raise inside the try below, and the
+    # tests then SKIPPED with a message that read like a missing-data problem --
+    # a silent coverage loss of exactly the kind this repo treats as a defect
+    # (skipped != passed).
+    cfg = dataclasses.replace(_smoke_cfg(), warm_extrapolate=True,
+                              smc_chem_mode="warm")
     try:
         pipe = P.build_pipeline(cfg)
     except Exception as e:                       # missing fastchem / data / env / import

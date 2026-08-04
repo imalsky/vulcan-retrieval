@@ -309,30 +309,81 @@ else
     echo "========== PLOTS =========="
     python -u -m retrieval_framework.plot_smc "${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}}" \
       || echo "WARNING: plotting failed (posterior npz files are still on disk)."
-    # Warm-continuation bias measurement on the final cloud (cold re-solve vs the
-    # warm-carried logL; PASS gate max|dlogL| < 0.1 -- quote the result in the paper).
-    # A FAIL verdict is a science finding, not a job failure: the posterior is already
-    # on disk, so surface it loudly but keep rc=0. Rerunnable standalone any time:
-    #   python -m retrieval_framework.validate_warm <case dir>
-    echo "========== WARM-VS-COLD VALIDATION =========="
-    # validate_warm exits 0 (PASS), 3 (a REACHED verdict that failed the gate --
-    # a science finding; validate_warm.npz is on disk), or any other nonzero
-    # (CRASHED before a verdict, e.g. an OOM at the batched cold re-solve -- no
-    # npz, the bias is UNMEASURED). Keep the job rc=0 in every case (the posterior
-    # is already on disk), but do NOT mislabel a crash as a gate FAIL.
-    vw_rc=0
-    python -u -m retrieval_framework.validate_warm "${SMC_DIR}" || vw_rc=$?
-    if [ "${vw_rc}" -eq 0 ]; then
-      echo "validate_warm: PASS -- warm-continuation bias within the gate (see validate_warm.npz)."
-    elif [ "${vw_rc}" -eq 3 ]; then
-      echo "WARNING: validate_warm verdict FAIL -- warm-continuation bias above the gate; see validate_warm.npz + log above."
+    # Post-run validation. Since 2026-08-03 smc_chem_mode DEFAULTS TO COLD, so
+    # these apply to a run that explicitly opted into warm continuation -- and
+    # for such a run they are MANDATORY, not advisory.
+    #
+    # THE VALIDATION RESULT NOW PROPAGATES INTO THE JOB EXIT STATUS. Previously
+    # a FAIL or a crash printed a message and the job still exited 0, so a run
+    # whose warm bias was above the gate, or never measured at all, ended with a
+    # successful-looking production conclusion. The posterior stays on disk
+    # either way (it is forensically useful); what changes is that the job no
+    # longer claims success for it.
+    chem_mode="$(python -c 'import os,sys; sys.path.insert(0,"'"${SMC_DIR}"'");
+from retrieval_framework.run_smc import make_config
+from pathlib import Path
+print(make_config(Path("'"${SMC_DIR}"'"))[0].smc_chem_mode)' 2>/dev/null || echo unknown)"
+    echo "========== POST-RUN VALIDATION (chem mode: ${chem_mode}) =========="
+
+    if [ "${chem_mode}" = "warm" ]; then
+      # validate_warm exits 0 (PASS), 3 (a REACHED verdict that failed the gate
+      # -- validate_warm.npz is on disk), or any other nonzero (CRASHED before a
+      # verdict, e.g. an OOM at the batched cold re-solve -- no npz, the bias is
+      # UNMEASURED). A crash is NOT a gate FAIL, but it is equally disqualifying
+      # for a production certificate: an unmeasured bias is not a passed one.
+      vw_rc=0
+      python -u -m retrieval_framework.validate_warm "${SMC_DIR}" || vw_rc=$?
+      if [ "${vw_rc}" -eq 0 ]; then
+        echo "validate_warm: PASS -- warm-continuation bias within the gate (see validate_warm.npz)."
+      elif [ "${vw_rc}" -eq 3 ]; then
+        echo "ERROR: validate_warm verdict FAIL -- warm-continuation bias above the gate; see validate_warm.npz + log above."
+        echo "  This run's posterior and evidence are NOT certified. Re-run with smc_chem_mode='cold' (the default) before reporting numbers."
+        rc=3
+      else
+        echo "ERROR: validate_warm CRASHED (rc=${vw_rc}) before any verdict -- NO validate_warm.npz, the warm-vs-cold bias is UNMEASURED (this is NOT a gate FAIL, but it is not a pass either)."
+        echo "  Common cause is a GPU OOM at the cold re-solve on a busy node; rerun standalone on a clean GPU:"
+        echo "  SMC_RETRIEVAL_PRESET=${SMC_RETRIEVAL_PRESET} python -m retrieval_framework.validate_warm ${SMC_DIR}"
+        echo "  (VALIDATE_WARM_CHUNK=24 lowers the peak further if it recurs.)"
+        rc=4
+      fi
+
+      # MALA reversibility probe -- also mandatory for a warm run. The warm
+      # kernel's forward and reverse proposal densities are evaluated at
+      # DIFFERENT carried states, which is exactly the failure mode the
+      # likelihood gate above cannot see.
+      mr_rc=0
+      python -u validation/mala_reversibility.py "${SMC_DIR}" || mr_rc=$?
+      if [ "${mr_rc}" -eq 0 ]; then
+        echo "mala_reversibility: PASS."
+      else
+        echo "ERROR: mala_reversibility FAILED or crashed (rc=${mr_rc}) -- the warm MALA kernel's detailed balance is not demonstrated."
+        [ "${rc}" -eq 0 ] && rc=5
+      fi
     else
-      echo "ERROR: validate_warm CRASHED (rc=${vw_rc}) before any verdict -- NO validate_warm.npz, the warm-vs-cold bias is UNMEASURED (this is NOT a gate FAIL). Common cause is a GPU OOM at the cold re-solve on a busy node; rerun standalone on a clean GPU:"
-      echo "  SMC_RETRIEVAL_PRESET=${SMC_RETRIEVAL_PRESET} python -m retrieval_framework.validate_warm ${SMC_DIR}"
-      echo "  (VALIDATE_WARM_CHUNK=24 lowers the peak further if it recurs.)"
+      echo "chem mode is '${chem_mode}': the likelihood is the deterministic"
+      echo "solve-from-baseline map, so there is no warm-continuation bias to"
+      echo "measure. validate_warm / mala_reversibility are warm-only."
+    fi
+
+    # PRODUCTION CERTIFICATE. Collects code/data identity, the resolved config,
+    # beta=1, target exactness, evidence semantics, run diagnostics, the three
+    # production-fidelity artifacts, and a cold replay of a small deterministic
+    # subset -- then says PASS or FAIL once. Until this passes, the run's
+    # numbers are not certified for reporting.
+    echo "========== PRODUCTION CERTIFICATE =========="
+    cert_rc=0
+    python -u -m retrieval_framework.certificate "${SMC_DIR}" || cert_rc=$?
+    if [ "${cert_rc}" -eq 0 ]; then
+      echo "certificate: PASS -- see certificate.md / certificate.json."
+    else
+      echo "ERROR: certificate FAILED (rc=${cert_rc}); see certificate.md for the reasons."
+      [ "${rc}" -eq 0 ] && rc=6
     fi
   fi
 fi
 
 echo "job finished rc=${rc} at $(date)"
+if [ "${rc}" -ne 0 ]; then
+  echo "NOT A CERTIFIED PRODUCTION RUN: see the errors above. Artifacts on disk are forensic."
+fi
 exit "${rc}"

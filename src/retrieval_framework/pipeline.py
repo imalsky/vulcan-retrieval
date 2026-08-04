@@ -1589,6 +1589,19 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, DY,
              last_step=np.asarray(int(last_step), np.int64),
              init_checkpoint=np.asarray(1 if int(last_step) < 0 else 0, np.int64),
              logZ=np.asarray(logZ),
+             # TARGET-EXACTNESS STAMP (2026-08-03). Under warm continuation a
+             # likelihood evaluation depends on the particle's carried column,
+             # hence on sampler history, so the target is not the fixed density
+             # MALA / SMC tempering / the evidence integral assume. Every
+             # artifact carries this so a warm logZ can never be read as exact
+             # downstream, however far it travels from the run that made it.
+             # A stub pipeline (unit tests, no chemistry) carries no chemistry
+             # column at all, so it cannot be history-dependent; record "none"
+             # rather than defaulting to a mode it does not have.
+             chem_mode=np.asarray(str(getattr(pipe, "chem_mode", None) or "none")),
+             approximate_history_dependent_target=np.asarray(
+                 1 if str(getattr(pipe, "chem_mode", None)) == "warm" else 0,
+                 np.int64),
              **({"init_stats_keys": np.asarray(list(init_stats.keys())),
                  "init_stats_vals": np.asarray(list(init_stats.values()), np.int64)}
                 if init_stats else {}),

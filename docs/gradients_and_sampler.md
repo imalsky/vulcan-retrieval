@@ -52,12 +52,40 @@ Each mutation sweep therefore runs:
    regrouped, and the smoke test asserts it is identical to `block`.
 3. **Offsets and noise.** Analytic.
 
+## Chemistry mode: cold is the default
+
+`smc_chem_mode` selects how each likelihood evaluation gets its chemistry.
+
+**`"cold"` is the default (since 2026-08-03).** Every evaluation runs the
+published solve-from-baseline two-stage map, so the likelihood is a fixed,
+deterministic function of theta. That is what MALA, SMC tempering, and a quoted
+Bayesian evidence all assume, and it is the only mode whose `logZ` should be
+reported without qualification.
+
+**`"warm"` is an explicit opt-in for exploration and cost-limited work.** It is
+~10-30x cheaper per sweep and remains fully supported, with two consequences:
+
+- every artifact it produces (checkpoint, samples, extras) carries
+  `approximate_history_dependent_target=1`, and `plot_smc` refuses to render
+  posterior figures for it without `PLOT_SMC_ALLOW_UNCERTIFIED=1`;
+- both post-run validators become MANDATORY before its numbers may be
+  reported: `retrieval_framework.validate_warm` and
+  `validation/mala_reversibility.py`. The PBS wrapper propagates their result
+  into the job exit status, and `retrieval_framework.certificate` refuses a warm
+  run that lacks either.
+
+Cost is a real constraint, not a footnote: a cold ladder at the W39b production
+size is expected to need more than one 24 h job. That is the supported route
+(`RESUME=1` continues from the stage checkpoint, and the init-level checkpoint
+means a restart never re-pays the init), and `run_smc --calibrate` now REFUSES
+rather than warns when the projection does not fit the governor.
+
 ## Warm continuation
 
-The mutation kernel carries each particle's converged column
-(`smc_chem_mode="warm"`, the default). Every proposal's chemistry warm-continues
-from the particle's own state with incremental metallicity and C/O scaling, rather
-than re-running the full cold two-stage solve.
+Under `smc_chem_mode="warm"` the mutation kernel carries each particle's
+converged column. Every proposal's chemistry warm-continues from the particle's
+own state with incremental metallicity and C/O scaling, rather than re-running
+the full cold two-stage solve.
 
 Measured cost for MALA-sized moves is roughly 500-800 steps to re-converge, which
 is 6-8x fewer chemistry steps than cold. The certification window dominates that
@@ -67,17 +95,21 @@ warm floor, not the minimum step count.
 2026-07-10 saved nothing on extrapolated seeds and 7% on plain ones, while
 certifying a state 0.07 dex away from the 500-window result.
 
-The cold two-stage map runs exactly once per particle, at state initialization.
-Setting `smc_chem_mode="cold"` restores the published solve-from-baseline map for
-every evaluation.
+In warm mode the cold two-stage map runs exactly once per particle, at state
+initialization.
 
 The carried likelihood also serves the tempering reweight, so a stage costs about
 one mutation call.
 
-**The documented caveat:** with warm continuation the likelihood is defined by the
-continuation map from the particle's own history, so it is path-dependent at the
-convergence-tolerance level. The smoke test finite-difference-checks the warm
-gradient against the identical warm map.
+**The documented caveat, and why cold is now the default:** with warm
+continuation the likelihood is defined by the continuation map from the
+particle's own history, so it is path-dependent at the convergence-tolerance
+level. A history-dependent target is not the fixed density the sampler and the
+evidence integral assume, and no amount of post-hoc diagnostics converts an
+approximate evidence into an exact one -- the diagnostics can only bound how
+approximate it is. The smoke test finite-difference-checks the warm gradient
+against the identical warm map, which validates the implementation, not the
+target.
 
 ### Rejecting non-converged proposals
 

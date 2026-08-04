@@ -26,7 +26,16 @@ import time
 
 import numpy as np
 
+# PYTHONSAFEPATH strips the script's own directory from sys.path in some
+# sandboxes, so be explicit rather than relying on it.
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _artifact  # noqa: E402
+
+
 BIN_R = 100.0
+# Guide, not a gate: below this the air-vs-H2/He difference is invisible under
+# the Carter & May 2024 error bars this retrieval fits.
+DECISION_INVISIBLE_PPM = 5.0
 BAND = (1900.0, 9900.0)
 
 
@@ -48,6 +57,13 @@ def bin_trapz(wl, y, edges):
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-artifact", action="store_true",
+                    help="skip writing the provenance-bearing result under "
+                         "validation/results/ (exploration only)")
+    args = ap.parse_args()
+
     from retrieval_framework.forward import config
     from vulcan_forward import interp_map
     # import order is load-bearing: vulcan_chem before exojax
@@ -89,11 +105,52 @@ def main() -> int:
     diff = 1e6 * (db[m] - da[m])
     centers = np.sqrt(edges[:-1] * edges[1:])[m]
     i = int(np.argmax(np.abs(diff)))
+    max_ppm = float(np.max(np.abs(diff)))
+    med_ppm = float(np.median(np.abs(diff)))
     print("\n==== air vs h2he broadening, binned R=100 depth ====")
-    print(f"max |Delta| = {np.max(np.abs(diff)):.2f} ppm at {centers[i]:.2f} um; "
-          f"median |Delta| = {np.median(np.abs(diff)):.2f} ppm")
+    print(f"max |Delta| = {max_ppm:.2f} ppm at {centers[i]:.2f} um; "
+          f"median |Delta| = {med_ppm:.2f} ppm")
     print("(guide: <5 ppm invisible under CM24 errors; tens of ppm -> switch the "
           "production broadening to 'h2he' / ExoMol)")
+
+    # This A/B has no pass/fail gate: it is a DECISION INPUT. The production
+    # atmosphere is H2/He, so air widths are a known approximation, and the
+    # question is only whether the approximation is visible at the quoted
+    # precision. Recorded as REPORT with an explicit recommendation so the
+    # decision is made from a measurement rather than from habit.
+    if max_ppm < DECISION_INVISIBLE_PPM:
+        rec = (f"max {max_ppm:.2f} ppm is below the {DECISION_INVISIBLE_PPM:.0f} "
+               "ppm guide, i.e. invisible under the CM24 error bars. Keeping "
+               "air-broadened HITRAN widths is defensible for THIS band and "
+               "precision; the limitation stays documented.")
+    else:
+        rec = (f"max {max_ppm:.2f} ppm is at or above the "
+               f"{DECISION_INVISIBLE_PPM:.0f} ppm guide, so the broadening "
+               "choice is visible in the binned spectrum. Select the existing "
+               "broadening='h2he' mode for production molecules that have "
+               "coverage, and fail loudly for a requested molecule that does "
+               "not -- never mix a claim of H2/He broadening with all-air data.")
+    print(f"\nRECOMMENDATION: {rec}")
+
+    if not args.no_artifact:
+        _artifact.emit(
+            name="broadening_ab",
+            title="Air vs H2/He line broadening, binned R=100 transit depth",
+            measurements=[
+                {"name": "max |Delta binned depth| (h2he - air)",
+                 "value": f"{max_ppm:.2f} ppm at {centers[i]:.2f} um",
+                 "value_raw": max_ppm, "unit": "ppm",
+                 "gate": f"guide: < {DECISION_INVISIBLE_PPM:.0f} ppm invisible",
+                 "decisive": True, "passed": None},
+                {"name": "median |Delta binned depth|",
+                 "value": f"{med_ppm:.2f} ppm", "value_raw": med_ppm,
+                 "unit": "ppm", "gate": "(informational)",
+                 "decisive": False, "passed": None},
+            ],
+            status="REPORT",
+            summary=rec,
+            resolved_config=profile,
+        )
     return 0
 
 

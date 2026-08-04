@@ -167,7 +167,8 @@ def gpu_config(**overrides: Any) -> Config:
         # chem tangents are freed before it). N=192 is memory-viable (16 chunks) if
         # ever wanted. More particles also directly answer the small-N SMC criticism
         # (ladder-adaptation noise, evidence variance).
-        smc_num_particles=144, smc_num_mcmc_steps=6, smc_max_steps=40,
+        # smc_num_mcmc_steps is set below with the cold-mode budget note.
+        smc_num_particles=144, smc_max_steps=40,
         # Init reject-and-cull sizing (raised 2026-07-12 after job on real data died
         # in init phase 2: 84/288 cold-rejected [29%, expected] then 21/152 warm
         # re-certification failures [14%] vs the schema default init_phase2_spare=8 ->
@@ -183,14 +184,38 @@ def gpu_config(**overrides: Any) -> Config:
         # flat at N=96/144/152). No memory probe needed for this bump: the 192-wide
         # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
         # neither nu_pts nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
-        init_oversample=2.5, init_phase2_spare=48,
-        # Tangent-extrapolated warm starts ON (enabled 2026-07-10): proposals seed at
-        # Y + (dy/dtheta).dtheta -- measured 1.65x fewer warm steps, same certified
-        # state (parity unit-tested; validate_warm gates the production result and
-        # the staged CALIBRATE->SYNTH->production sequence exercises it end-to-end
-        # before real data). warm_count_max stays 1500; drop toward ~800 only after
-        # heartbeat rejected-counts confirm typical warm solves sit well under it.
-        warm_extrapolate=True,
+        # COLD chemistry (2026-08-03). Every likelihood evaluation uses the
+        # published solve-from-baseline map, so the target is a fixed
+        # deterministic function of theta -- what MALA, SMC tempering, and the
+        # evidence integral all assume. Under the previous "warm" default the
+        # likelihood depended on each particle's carried column, hence on
+        # sampler history, at the convergence tolerance; the resulting logZ is
+        # approximate in a way diagnostics cannot repair.
+        smc_chem_mode="cold",
+        # warm_extrapolate is a WARM-only optimization (validate_config raises
+        # if it is on in cold mode): it seeds each warm solve at the first-order
+        # tangent prediction of the carried column, and there is no carried
+        # column to extrapolate from in cold mode.
+        warm_extrapolate=False,
+        # 4 sweeps/stage, down from 6. Sweeps are the lever that matters here:
+        # the runner is LAUNCH-BOUND and batch width was measured nearly free
+        # (peak memory width-independent to N~500, job 64944), so cutting
+        # PARTICLES would cost statistics while saving little wall time, whereas
+        # sweeps are sequential chemistry.
+        #
+        # BUDGET, STATED HONESTLY: cold is documented at ~10-30x the chemistry
+        # steps per sweep, and lockstep batching means a batch runs until its
+        # SLOWEST lane converges (warm caps at warm_count_max=1500; cold is
+        # two-stage against count_max=5000). A cold ladder at this size is
+        # therefore expected to need MORE THAN ONE 24 h job. That is fine --
+        # RESUME=1 continues from the last stage checkpoint, and the init-level
+        # checkpoint means a restart never re-pays the init. It is NOT fine to
+        # assume it fits: run
+        #     qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs
+        # first. `run_smc --calibrate` now REFUSES (nonzero) when the projection
+        # does not fit the governor, instead of warning into a log nobody reads.
+        # These numbers are provisional until that calibration lands.
+        smc_num_mcmc_steps=4,
         smc_target_ess_frac=0.6,
         # 12-wide RT vjp at nu_pts=1652 (~half the 5000-probed per-lane cost applies;
         # est. ~40-55 GiB vs the ~81 GiB pool). PROBE_MEMORY=1 once before the first

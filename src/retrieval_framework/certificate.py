@@ -1,0 +1,567 @@
+#!/usr/bin/env python3
+"""Production certificate for a finished retrieval run.
+
+    python -m retrieval_framework.certificate runs/w39b_smc_retrieval
+
+Collects, from a completed run's own outputs, everything needed to decide
+whether its numbers may be reported -- and says so with one PASS/FAIL verdict.
+
+WHY. The only archived production-like run in this repository is an older
+0.9-era forensic log that died at stage 2 with 11 particles holding finite
+likelihoods and non-finite gradients. Current code contains later zero-drift
+handling, so that failure does not show the current code is broken; equally, it
+cannot show the current code succeeds. "The old run failed for reasons since
+fixed" and "the current code produces a posterior" are different claims, and
+only the second one licenses reporting numbers.
+
+WHAT IT GATES. Each check answers "would a reader be misled?":
+
+  * code and data identity: all four repository commits, package versions, and
+    the identity of the observation / opacity / CIA / network / config inputs;
+  * the fully resolved config, hashed;
+  * `reached_beta1` and a final beta of exactly 1 within tolerance -- a
+    beta < 1 cloud is TEMPERED, not a posterior;
+  * an EXACT target: cold chemistry, or an explicit warm run whose artifacts
+    carry `approximate_history_dependent_target` and whose two validators
+    (validate_warm, mala_reversibility) both passed;
+  * evidence reported with its operational-prior / box-prior semantics and the
+    already-implemented support-fraction uncertainties;
+  * the run-health diagnostics (bad-gradient, cap, stall, rejection, ESS,
+    uniqueness);
+  * the three production-fidelity artifacts from `validation/results/`;
+  * a cold replay of a small deterministic subset, which catches an
+    environment or provenance mistake that every internal check would miss.
+
+This module READS a finished run. It never re-runs the sampler, and it never
+writes into the run's own outputs beyond the certificate itself.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import platform
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[2]
+WORKSPACE = REPO.parent
+SIBLINGS = ("VULCAN-JAX", "vulcan-forward", "vulcan-retrieval", "vulcan-jwst-tool")
+
+# beta must be 1 to within this; the ladder bisects, so it lands on 1 exactly
+# or not at all, and a loose tolerance here would let a nearly-tempered cloud
+# through as a posterior.
+BETA_TOL = 1e-6
+
+# The three production-fidelity artifacts (item 9). Their absence is a FAIL for
+# a few-ppm or evidence claim: a check that was never run at production settings
+# is not a check that passed.
+REQUIRED_VALIDATION_ARTIFACTS = ("resolution_ladder", "top_pressure_ladder",
+                                 "broadening_ab")
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _git(repo: Path, *args: str) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", str(repo), *args],
+                           capture_output=True, text=True, timeout=15)
+        out = r.stdout.strip()
+        return out if r.returncode == 0 and out else None
+    except Exception:
+        return None
+
+
+def _repo_states() -> dict:
+    out = {}
+    for name in SIBLINGS:
+        head = _git(WORKSPACE / name, "rev-parse", "HEAD")
+        if head is None:
+            out[name] = None
+            continue
+        dirty = _git(WORKSPACE / name, "status", "--porcelain") or ""
+        out[name] = {"commit": head, "dirty": bool(dirty),
+                     "dirty_files": dirty.splitlines()[:20]}
+    return out
+
+
+def _versions() -> dict:
+    out = {"python": platform.python_version(), "platform": platform.platform()}
+    for mod in ("jax", "jaxlib", "numpy", "scipy", "exojax"):
+        try:
+            out[mod] = __import__(mod).__version__
+        except Exception:
+            out[mod] = None
+    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval"):
+        try:
+            from importlib.metadata import version
+            out[dist] = version(dist)
+        except Exception:
+            out[dist] = None
+    return out
+
+
+def _load_npz(path: Path):
+    return np.load(path, allow_pickle=False) if path.is_file() else None
+
+
+def _scalar(z, key, default=None):
+    if z is None or key not in z.files:
+        return default
+    v = z[key]
+    try:
+        return v.item()
+    except Exception:
+        return v
+
+
+def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
+    """Hash the observation file; fingerprint the big opacity/line-list trees."""
+    ident = {}
+    obs = out_dir / "observations.npz"
+    ident["observations"] = ({"path": str(obs), "sha256": _sha256(obs),
+                              "bytes": obs.stat().st_size}
+                             if obs.is_file() else None)
+
+    root = os.environ.get("VULCAN_FORWARD_DATA")
+    ident["VULCAN_FORWARD_DATA"] = root
+    for sub in ("exojax_linelists", "opacity_cache"):
+        p = Path(root) / sub if root else None
+        if p is None or not p.is_dir():
+            ident[sub] = None
+            continue
+        n = tot = 0
+        newest = 0.0
+        for f in p.rglob("*"):
+            if f.is_file():
+                st = f.stat()
+                n += 1
+                tot += st.st_size
+                newest = max(newest, st.st_mtime)
+        ident[sub] = {"path": str(p.resolve()), "files": n, "bytes": tot,
+                      "newest_mtime_utc": time.strftime(
+                          "%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest))}
+
+    # the reaction network is a vendored VULCAN-JAX input; hash the exact file
+    net = cfg_dict.get("vulcan_cfg_name")
+    ident["vulcan_cfg_name"] = net
+    try:
+        import vulcan_jax
+        pkg = Path(vulcan_jax.__file__).resolve().parent
+        cfg_yaml = pkg / "configs" / f"{net}.yaml"
+        if cfg_yaml.is_file():
+            ident["vulcan_config_yaml"] = {"path": str(cfg_yaml),
+                                           "sha256": _sha256(cfg_yaml)}
+            import yaml
+            netfile = yaml.safe_load(cfg_yaml.read_text()).get("network")
+            npath = pkg / netfile if netfile else None
+            if npath and npath.is_file():
+                ident["network_file"] = {"path": str(npath),
+                                         "sha256": _sha256(npath)}
+    except Exception as exc:                                # pragma: no cover
+        ident["network_file_error"] = str(exc)
+    return ident
+
+
+def _validation_artifacts() -> dict:
+    """Read the three production-fidelity results, if they were archived."""
+    results = REPO / "validation" / "results"
+    out = {}
+    for name in REQUIRED_VALIDATION_ARTIFACTS:
+        p = results / f"{name}.json"
+        if not p.is_file():
+            out[name] = None
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except Exception as exc:                            # pragma: no cover
+            out[name] = {"error": str(exc)}
+            continue
+        out[name] = {
+            "status": d.get("verdict", {}).get("status"),
+            "summary": d.get("verdict", {}).get("summary"),
+            "generated_utc": d.get("provenance", {}).get("generated_utc"),
+            "sha256": _sha256(p),
+        }
+    return out
+
+
+def collect(out_dir: Path) -> dict:
+    """Assemble the certificate payload from a finished run's outputs."""
+    out_dir = Path(out_dir).resolve()
+    cfg_path = out_dir / "config.json"
+    cfg_dict = json.loads(cfg_path.read_text()) if cfg_path.is_file() else {}
+    cfg_blob = json.dumps(cfg_dict, sort_keys=True, default=str)
+
+    samples = _load_npz(out_dir / "smc_samples.npz")
+    extra = _load_npz(out_dir / "smc_extra.npz")
+    ckpt = _load_npz(out_dir / "smc_checkpoint.npz")
+    vwarm = _load_npz(out_dir / "validate_warm.npz")
+
+    chem_mode = str(cfg_dict.get("smc_chem_mode", "")).strip().lower() or None
+    final_beta = _scalar(samples, "final_beta")
+    reached = _scalar(samples, "reached_beta1")
+
+    def _arr(z, key):
+        if z is None or key not in z.files:
+            return None
+        return np.asarray(z[key]).tolist()
+
+    return {
+        "certificate_version": 1,
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "out_dir": str(out_dir),
+        "code": {"repos": _repo_states(), "versions": _versions()},
+        "data": _data_identity(out_dir, cfg_dict),
+        "resolved_config": cfg_dict,
+        "resolved_config_sha256": hashlib.sha256(cfg_blob.encode()).hexdigest(),
+        "target": {
+            "smc_chem_mode": chem_mode,
+            "approximate_history_dependent_target": bool(
+                _scalar(samples, "approximate_history_dependent_target", 0)),
+            "warm_extrapolate": cfg_dict.get("warm_extrapolate"),
+        },
+        "convergence": {
+            "reached_beta1": (None if reached is None else bool(reached)),
+            "final_beta": (None if final_beta is None else float(final_beta)),
+            "n_stages": (len(_arr(extra, "smc_betas") or []) - 1
+                         if extra is not None else None),
+        },
+        "evidence": {
+            # semantics preserved verbatim: smc_logZ is conditional on the
+            # OPERATIONAL prior support; logZ_box is the zero-filled declared-box
+            # quantity. They are not interchangeable and must not be differenced
+            # across models with different support fractions.
+            "smc_logZ": _scalar(extra, "smc_logZ"),
+            "smc_logZ_box": _scalar(extra, "smc_logZ_box"),
+            "log_support_fraction": _scalar(extra, "log_support_fraction"),
+            "log_support_fraction_err": _scalar(extra, "log_support_fraction_err"),
+            "f_tp": _scalar(extra, "f_tp"),
+            "f_conv": _scalar(extra, "f_conv"),
+        },
+        "diagnostics": {
+            "ess": _arr(extra, "smc_ess"),
+            "acceptance_rate": _arr(extra, "smc_acceptance_rate"),
+            "unique_particles": _arr(extra, "smc_unique_particles"),
+            "warm_capped": _arr(extra, "smc_warm_capped"),
+            "warm_stalled": _arr(extra, "smc_warm_stalled"),
+            "badgrad": _arr(extra, "smc_tangent_rejected"),
+            "step_size_history": _arr(extra, "smc_step_size_history"),
+            "n_particles": _scalar(extra, "smc_num_particles"),
+            "n_mcmc_steps": _scalar(extra, "smc_num_mcmc_steps"),
+        },
+        "warm_validation": (None if vwarm is None else {
+            "dlogl_max": float(np.nanmax(np.abs(np.asarray(vwarm["dlogl"]))))
+                         if "dlogl" in vwarm.files else None,
+            "spectrum_dppm_max": _scalar(vwarm, "spectrum_dppm_max"),
+            "atom_ratio_rel_max": _scalar(vwarm, "atom_ratio_rel_max"),
+            "grad_rel_max_gated": _scalar(vwarm, "grad_rel_max_gated"),
+            "grad_zeroed_frac": _scalar(vwarm, "grad_zeroed_frac"),
+        }),
+        "validation_artifacts": _validation_artifacts(),
+        "checkpoint_present": ckpt is not None,
+    }
+
+
+def validate(cert: dict, replay: dict | None = None) -> list[str]:
+    """Return gate failures; empty means the run may be reported."""
+    problems = []
+
+    # --- identity ----------------------------------------------------------
+    for name, state in cert["code"]["repos"].items():
+        if state is None:
+            problems.append(f"{name}: commit not recorded (not a git checkout?)")
+        elif state["dirty"]:
+            problems.append(
+                f"{name}: working tree DIRTY at {state['commit'][:12]} -- the "
+                "run cannot be attributed to a committed state")
+    if not cert["resolved_config"]:
+        problems.append("no config.json: the resolved configuration is unknown")
+    if cert["data"].get("observations") is None:
+        problems.append("no observations.npz: the fitted data is unidentified")
+
+    # --- the cloud is a posterior, not a tempered intermediate --------------
+    conv = cert["convergence"]
+    if not conv["reached_beta1"]:
+        problems.append(
+            f"reached_beta1 is {conv['reached_beta1']!r} (final beta "
+            f"{conv['final_beta']!r}): the cloud is TEMPERED, not a posterior")
+    elif conv["final_beta"] is None or abs(conv["final_beta"] - 1.0) > BETA_TOL:
+        problems.append(
+            f"final beta {conv['final_beta']!r} is not 1 within {BETA_TOL}")
+
+    # --- the target is exact, or explicitly approximate AND validated -------
+    tgt = cert["target"]
+    if tgt["smc_chem_mode"] == "warm":
+        if not tgt["approximate_history_dependent_target"]:
+            problems.append(
+                "warm run whose artifacts are NOT stamped "
+                "approximate_history_dependent_target")
+        wv = cert["warm_validation"]
+        if wv is None:
+            problems.append(
+                "warm run with no validate_warm.npz: the history-dependent "
+                "bias is UNMEASURED, which is not the same as small")
+        else:
+            from retrieval_framework.validate_warm import (
+                DLOGL_MAX_PASS, GRAD_REL_FAIL, GRAD_ZEROED_FRAC_FAIL,
+                SPEC_PPM_MAX_PASS,
+            )
+            checks = [
+                ("dlogl_max", DLOGL_MAX_PASS, "warm-vs-cold likelihood bias"),
+                ("spectrum_dppm_max", SPEC_PPM_MAX_PASS, "spectrum difference"),
+                ("grad_rel_max_gated", GRAD_REL_FAIL, "MALA drift agreement"),
+                ("grad_zeroed_frac", GRAD_ZEROED_FRAC_FAIL, "zeroed-drift fraction"),
+            ]
+            for key, limit, label in checks:
+                v = wv.get(key)
+                if v is None or (isinstance(v, float) and math.isnan(v)):
+                    problems.append(f"warm run: {label} ({key}) not measured")
+                elif float(v) >= limit:
+                    problems.append(
+                        f"warm run: {label} ({key}) {float(v):.3e} >= {limit}")
+        if replay is None or not replay.get("ran"):
+            problems.append(
+                "warm run without the mandatory mala_reversibility probe")
+    elif tgt["smc_chem_mode"] != "cold":
+        problems.append(
+            f"smc_chem_mode is {tgt['smc_chem_mode']!r}; expected 'cold' "
+            "(the default) or an explicit, validated 'warm'")
+
+    # --- evidence semantics -------------------------------------------------
+    ev = cert["evidence"]
+    if ev["smc_logZ"] is None:
+        problems.append("no smc_logZ recorded")
+    if ev["log_support_fraction_err"] is None:
+        problems.append(
+            "no support-fraction uncertainty recorded -- logZ_box is not "
+            "interpretable without it")
+
+    # --- run health ---------------------------------------------------------
+    diag = cert["diagnostics"]
+    for key in ("ess", "acceptance_rate", "unique_particles", "warm_capped",
+                "warm_stalled", "badgrad"):
+        if not diag.get(key):
+            problems.append(f"diagnostic '{key}' missing from the run outputs")
+
+    # --- production-fidelity artifacts (item 9) -----------------------------
+    for name, art in cert["validation_artifacts"].items():
+        if art is None:
+            problems.append(
+                f"validation artifact '{name}' is missing: the production "
+                "choice it measures has not been checked at production "
+                "settings, so no few-ppm or converged-evidence claim is "
+                "supported")
+        elif art.get("status") == "FAIL":
+            problems.append(f"validation artifact '{name}' FAILED: "
+                            f"{art.get('summary', '')[:160]}")
+        elif art.get("status") == "REPORT" and name != "broadening_ab":
+            problems.append(
+                f"validation artifact '{name}' is REPORT, not PASS -- its "
+                "decisive test was not run (see its summary)")
+
+    # --- cold replay --------------------------------------------------------
+    if replay is not None and replay.get("ran"):
+        if not replay.get("passed"):
+            problems.append(
+                f"cold replay MISMATCH: {replay.get('detail', '')}")
+    else:
+        problems.append(
+            "cold replay not run: a deterministic re-solve of a small subset "
+            "is what catches an environment or provenance mistake that every "
+            "internal consistency check would pass")
+
+    return problems
+
+
+def render(cert: dict, problems: list[str]) -> str:
+    ok = not problems
+    L = [
+        "# Retrieval production certificate",
+        "",
+        (f"**VERDICT: {'PASS' if ok else 'FAIL'}**"
+         + ("" if ok else f" -- {len(problems)} problem(s)")),
+        "",
+        f"Run: `{cert['out_dir']}`  ",
+        f"Generated {cert['generated_utc']}",
+        "",
+    ]
+    if problems:
+        L += ["## Why this run may not be reported", ""]
+        L += [f"- {p}" for p in problems]
+        L += [""]
+    conv, tgt, ev = cert["convergence"], cert["target"], cert["evidence"]
+    L += [
+        "## Result", "",
+        "| field | value |", "|---|---|",
+        f"| chem mode (target) | {tgt['smc_chem_mode']} |",
+        f"| approximate history-dependent target | "
+        f"{tgt['approximate_history_dependent_target']} |",
+        f"| reached beta=1 | {conv['reached_beta1']} |",
+        f"| final beta | {conv['final_beta']} |",
+        f"| stages | {conv['n_stages']} |",
+        f"| smc_logZ (operational prior) | {ev['smc_logZ']} |",
+        f"| smc_logZ_box (zero-filled box) | {ev['smc_logZ_box']} |",
+        f"| ln f_support +- err | {ev['log_support_fraction']} +- "
+        f"{ev['log_support_fraction_err']} |",
+        "",
+        "`smc_logZ` is conditional on the OPERATIONAL prior support "
+        "(box AND T-P window AND converged, renormalized). `smc_logZ_box` is "
+        "the zero-filled declared-box quantity. They are different numbers; "
+        "never difference either across models with different support "
+        "fractions.",
+        "",
+        "## Code and data", "", "| key | value |", "|---|---|",
+    ]
+    for name, st in cert["code"]["repos"].items():
+        L.append(f"| {name} | "
+                 + ("not a git checkout" if st is None else
+                    st["commit"][:12] + (" (DIRTY)" if st["dirty"] else ""))
+                 + " |")
+    for k in ("jax", "numpy", "exojax", "python"):
+        L.append(f"| {k} | {cert['code']['versions'].get(k)} |")
+    obs = cert["data"].get("observations")
+    L.append(f"| observations sha256 | "
+             f"{obs['sha256'][:16] + '...' if obs else 'MISSING'} |")
+    net = cert["data"].get("network_file")
+    L.append(f"| network sha256 | "
+             f"{net['sha256'][:16] + '...' if net else 'not resolved'} |")
+    L.append(f"| resolved config sha256 | "
+             f"{cert['resolved_config_sha256'][:16]}... |")
+    L += ["", "## Production-fidelity artifacts", "",
+          "| artifact | status |", "|---|---|"]
+    for name, art in cert["validation_artifacts"].items():
+        L.append(f"| {name} | {'MISSING' if art is None else art['status']} |")
+    L += ["", "Machine-readable: `certificate.json`", ""]
+    return "\n".join(L)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("run_dir", nargs="?", default=".",
+                    help="retrieval case directory containing case.py")
+    ap.add_argument("--replay-n", type=int, default=4,
+                    help="particles to cold-replay (0 disables; the replay is "
+                         "what catches an environment/provenance mistake)")
+    args = ap.parse_args(argv)
+
+    from retrieval_framework.run_smc import make_config
+
+    cfg, preset = make_config(Path(args.run_dir))
+    out_dir = Path(cfg.out_dir)
+    if not out_dir.is_dir():
+        raise SystemExit(f"certificate: no output directory at {out_dir}")
+
+    cert = collect(out_dir)
+
+    replay = {"ran": False, "reason": "disabled (--replay-n 0)"}
+    if args.replay_n > 0:
+        replay = cold_replay(Path(args.run_dir), cfg, out_dir, args.replay_n)
+    cert["cold_replay"] = replay
+
+    problems = validate(cert, replay)
+    cert["verdict"] = {"passed": not problems, "problems": problems}
+
+    (out_dir / "certificate.json").write_text(
+        json.dumps(cert, indent=2, default=str) + "\n")
+    (out_dir / "certificate.md").write_text(render(cert, problems))
+    print(f"wrote {out_dir / 'certificate.json'}")
+    print(f"wrote {out_dir / 'certificate.md'}")
+
+    if problems:
+        print(f"\nCERTIFICATE: FAIL ({len(problems)} problem(s))",
+              file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        print("\nThis run's numbers are NOT certified for reporting.",
+              file=sys.stderr)
+        return 1
+    print("\nCERTIFICATE: PASS")
+    return 0
+
+
+def cold_replay(run_dir: Path, cfg, out_dir: Path, n: int) -> dict:
+    """Re-evaluate a few checkpointed particles COLD and compare likelihoods.
+
+    Run even when the production run was already cold: the point is not to
+    re-test the sampler but to prove that THIS environment, with THIS data and
+    THIS config, reproduces the recorded numbers. An environment or provenance
+    mistake (a swapped line list, a stale editable install pointing at another
+    checkout, a different network file) passes every internal consistency check
+    and fails here.
+    """
+    ck = out_dir / "smc_checkpoint.npz"
+    if not ck.is_file():
+        return {"ran": False, "reason": f"no checkpoint at {ck}"}
+    obs_path = out_dir / "observations.npz"
+    if not obs_path.is_file():
+        return {"ran": False, "reason": f"no observations at {obs_path}"}
+    try:
+        import jax
+        import jax.numpy as jnp
+
+        from retrieval_framework import pipeline as P
+    except Exception as exc:
+        return {"ran": False, "reason": f"import failed: {exc}"}
+
+    try:
+        z = np.load(ck, allow_pickle=False)
+        U = np.asarray(z["u_particles"], np.float64)
+        L_rec = np.asarray(z["loglik"], np.float64)
+        # Deterministic subset, chosen by recorded likelihood rank so the choice
+        # does not depend on RNG state or on file ordering. Take the healthiest
+        # particles: a posterior-edge particle sitting on the convergence cliff
+        # would make this test about count_max, not about the environment.
+        finite = np.isfinite(L_rec) & (L_rec > -1.0e29)
+        if not finite.any():
+            return {"ran": False, "reason": "no finite likelihoods in checkpoint"}
+        idx = np.argsort(-np.where(finite, L_rec, -np.inf))[:max(1, int(n))]
+        idx = np.sort(idx)
+
+        pipe = P.build_pipeline(cfg)
+        o = np.load(obs_path, allow_pickle=False)
+        pipe.set_observations(o["depth"], o["sigma"])   # the run's OWN obs
+
+        Y0, refs0 = P._blank_state(pipe, len(idx))
+        cold_l = jax.jit(pipe.batch_eval_cold_l)
+        L_new, _Y, _refs = cold_l(jnp.asarray(U[idx]), Y0, refs0)
+        L_new = np.asarray(jax.device_get(L_new), np.float64)
+
+        d = np.abs(L_new - L_rec[idx])
+        worst = float(np.nanmax(d)) if d.size else float("nan")
+        from retrieval_framework.validate_warm import DLOGL_MAX_PASS
+        passed = bool(np.isfinite(worst) and worst < DLOGL_MAX_PASS)
+        return {
+            "ran": True, "n": int(len(idx)),
+            "particle_indices": [int(i) for i in idx],
+            "loglik_recorded": L_rec[idx].tolist(),
+            "loglik_replayed": L_new.tolist(),
+            "max_abs_dlogl": worst, "gate": DLOGL_MAX_PASS,
+            "passed": passed,
+            "detail": ("" if passed else
+                       f"max |dlogL| {worst:.3e} vs gate {DLOGL_MAX_PASS} -- "
+                       "this environment does not reproduce the recorded "
+                       "likelihoods, so the run's provenance is in doubt "
+                       "(swapped line list? stale editable install? different "
+                       "network file?)"),
+        }
+    except Exception as exc:
+        return {"ran": False, "reason": f"replay error: {exc!r}"}
+
+
+if __name__ == "__main__":
+    sys.exit(main())

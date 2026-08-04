@@ -31,6 +31,11 @@ import time
 
 import numpy as np
 
+# PYTHONSAFEPATH strips the script's own directory from sys.path in some
+# sandboxes, so be explicit rather than relying on it.
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _artifact  # noqa: E402
+
 GATE_PPM = 5.0
 GATE_JAC_REL = 0.01
 BIN_R = 100.0
@@ -73,6 +78,9 @@ def main() -> int:
                     help="optional Gaussian LSF resolving power before binning")
     ap.add_argument("--jacobian", action="store_true",
                     help="also compare d(binned)/dlnZ per rung (jvp; expensive)")
+    ap.add_argument("--no-artifact", action="store_true",
+                    help="skip writing the provenance-bearing result under "
+                         "validation/results/ (exploration only)")
     args = ap.parse_args()
 
     from retrieval_framework.forward import config
@@ -131,13 +139,23 @@ def main() -> int:
 
     rungs = sorted(results)
     ok = True
+    measurements = []
     print("\n==== binned-depth convergence (vs next rung) ====")
     for a, b in zip(rungs[:-1], rungs[1:]):
         da, db = results[a]["binned"], results[b]["binned"]
         m = np.isfinite(da) & np.isfinite(db)
         dppm = 1e6 * np.max(np.abs(da[m] - db[m]))
         print(f"nu_pts {a} -> {b}: max |Delta binned depth| = {dppm:.2f} ppm")
-        if b == rungs[-1]:
+        decisive = b == rungs[-1]
+        measurements.append({
+            "name": f"max |Delta binned depth|, nu_pts {a} -> {b}",
+            "value": f"{dppm:.2f} ppm",
+            "value_raw": float(dppm), "unit": "ppm",
+            "gate": f"< {GATE_PPM} ppm" if decisive else "(informational)",
+            "decisive": decisive,
+            "passed": bool(dppm < GATE_PPM) if decisive else None,
+        })
+        if decisive:
             ok &= dppm < GATE_PPM
     if args.jacobian:
         print("\n==== Jacobian (dlnZ) convergence ====")
@@ -146,9 +164,35 @@ def main() -> int:
         m = np.isfinite(ja) & np.isfinite(jb) & (np.abs(jb) > 0.01 * np.nanmax(np.abs(jb)))
         jrel = float(np.max(np.abs(ja[m] - jb[m]) / np.abs(jb[m])))
         print(f"nu_pts {a} -> {b}: max rel Jacobian change (significant bins) = {jrel:.3%}")
+        measurements.append({
+            "name": f"max rel Jacobian (dlnZ) change, nu_pts {a} -> {b}",
+            "value": f"{jrel:.3%}", "value_raw": float(jrel), "unit": "relative",
+            "gate": f"< {GATE_JAC_REL:.0%}", "decisive": True,
+            "passed": bool(jrel < GATE_JAC_REL),
+        })
         ok &= jrel < GATE_JAC_REL
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} (top-rung gate {GATE_PPM} ppm"
           + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")
+
+    # A verdict printed to a terminal and lost is not evidence. Archive it with
+    # enough provenance to tie the number to an exact code and data state.
+    if not args.no_artifact:
+        _artifact.emit(
+            name="resolution_ladder",
+            title="Native-spectral-resolution convergence of the binned depth",
+            measurements=measurements,
+            status="PASS" if ok else "FAIL",
+            summary=(
+                f"nu_pts ladder {rungs}; production is {profile['nu_pts']}. "
+                + ("The production resolution is converged at the declared "
+                   "gates." if ok else
+                   "NOT converged at the declared gates -- adopt the lowest "
+                   "tested passing rung as the production nu_pts.")
+                + (" Jacobian axis included." if args.jacobian else
+                   " Jacobian axis NOT run (--jacobian); the depth gate alone "
+                   "does not certify gradient convergence.")),
+            resolved_config=profile,
+        )
     return 0 if ok else 1
 
 

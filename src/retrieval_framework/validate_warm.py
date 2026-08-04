@@ -15,9 +15,19 @@ posterior-exact for all practical purposes.
 Since 2026-07-29 the cold re-solve also recomputes the u-space GRADIENT (the
 MALA drift) and compares it against the checkpoint's carried grad_u -- a
 likelihood/spectrum gate alone does not validate a gradient-driven kernel
-(2026-07-28 audit). Warn-only threshold GRAD_REL_WARN until a production
-baseline is recorded; disable with VALIDATE_WARM_GRAD=0 to restore the cheaper
-likelihood-only re-solve.
+(2026-07-28 audit). Since 2026-08-03 that comparison is a FAIL axis, not
+warn-only, on two conditions: agreement measured over rows where both drifts are
+real (`GRAD_REL_FAIL`), and the fraction of the cloud whose drift was zeroed
+(`GRAD_ZEROED_FRAC_FAIL`). Rows zeroed by the badgrad handling are EXCLUDED from
+the agreement statistic -- they read rel = 1 by construction, so gating on them
+would fail essentially every run and would be measuring "did badgrad occur", not
+"does warm continuation reproduce the cold drift". Disable the whole gradient
+axis with VALIDATE_WARM_GRAD=0 to restore the cheaper likelihood-only re-solve.
+
+Since 2026-08-03 `smc_chem_mode` DEFAULTS TO COLD, so this tool is only needed
+for a run that explicitly opted into warm continuation -- where it, and
+`validation/mala_reversibility.py`, are both MANDATORY before the run's numbers
+may be reported.
 
 Run it on the GPU node against a finished run (the per-stage checkpoint IS the
 final cloud), with the SAME preset/overrides the run used:
@@ -63,16 +73,34 @@ ATOM_REL_PASS = 1.0e-5
 # WARN if more than this fraction of the cloud fails to cold-converge: the
 # posterior would be sitting against the count_max convergence cliff.
 COLD_NONCONV_WARN_FRAC = 0.10
-# PROVISIONAL gate on the warm-vs-cold u-space GRADIENT agreement (max over the
-# cloud of ||G_cold - G_warm|| / max(||G_cold||, ||G_warm||)). The gradient is
-# what steers every MALA proposal (drift = step*scale^2*beta*G), so likelihood/
+# FAIL gate on the warm-vs-cold u-space GRADIENT agreement (max over the cloud
+# of ||G_cold - G_warm|| / max(||G_cold||, ||G_warm||)). The gradient is what
+# steers every MALA proposal (drift = step*scale^2*beta*G), so likelihood/
 # spectrum agreement alone does not validate the kernel -- the 2026-07-28 audit
-# flagged exactly this hole. WARN-only until the first production measurement
-# records a baseline (promote to a FAIL gate then; same convention as the
-# masks-mode inventory gate). 0.1 relative: a 10% drift error rescales the
+# flagged exactly this hole. 0.1 relative: a 10% drift error rescales the
 # proposal mean by ~10% of the step, well inside MALA's robustness, while a
-# sign-flipped or wildly wrong tangent (the badgrad class) lands >> 1.
-GRAD_REL_WARN = 0.1
+# sign-flipped or wildly wrong tangent lands >> 1.
+GRAD_REL_FAIL = 0.1
+
+# ZEROED-GRADIENT ROWS ARE EXCLUDED FROM THE GATE, AND COUNTED SEPARATELY.
+#
+# This is the subtlety that makes the gate implementable. The badgrad handling
+# deliberately ZEROES a non-finite warm tangent and takes the move with zero
+# drift -- a valid MH kernel, and the measured-correct choice (rejecting instead
+# biased the posterior bulk; see CLAUDE.md and docs/failed_approaches.md). But a
+# zeroed warm row against a finite cold row reads rel EXACTLY 1.0 by
+# construction. So promoting this threshold to a hard gate WITHOUT excluding
+# those rows would fail every run containing a single badgrad particle -- which
+# is most runs, since the class is posterior-concentrated (6.5% of certified
+# proposals at job 65815). The gate would then be measuring "did badgrad occur",
+# a question already answered by its own counter, instead of "does warm
+# continuation reproduce the cold drift".
+#
+# So: the gate runs on rows where BOTH gradients are finite and nonzero, and the
+# zeroed fraction is reported separately with its own ceiling. A run that zeroes
+# a large fraction of its drifts is a real problem -- it just is not the problem
+# this threshold measures.
+GRAD_ZEROED_FRAC_FAIL = 0.25          # matches smc_tangent_bad_max_frac's default
 
 logger = logging.getLogger("retrieval")
 
@@ -122,6 +150,15 @@ def compare_grad(G_warm, G_cold, ok_mask) -> dict:
     cos = np.where(ok & (nw > 0) & (nc > 0),
                    np.einsum("nd,nd->n", Gw, Gc) / np.maximum(nw * nc, 1e-300),
                    np.nan)
+
+    # Rows whose WARM gradient was zeroed by the badgrad handling read rel == 1
+    # by construction (see GRAD_ZEROED_FRAC_FAIL). They are a separate finding,
+    # not evidence about warm-vs-cold agreement, so the gate runs on `gated`
+    # while `zeroed` is counted and reported.
+    zeroed = ok & (nw == 0.0) & (nc > 0.0)
+    gated = ok & ~zeroed
+    rg = rel[gated]
+
     r = rel[ok]
     c = cos[ok & np.isfinite(cos)]
     return dict(
@@ -130,6 +167,13 @@ def compare_grad(G_warm, G_cold, ok_mask) -> dict:
         rel_median=float(np.median(r)) if r.size else float("nan"),
         rel_p95=float(np.percentile(r, 95.0)) if r.size else float("nan"),
         cos_min=float(np.min(c)) if c.size else float("nan"),
+        # --- gate inputs: zeroed-drift rows excluded, counted separately ---
+        n_zeroed=int(zeroed.sum()),
+        zeroed_frac=(float(zeroed.sum()) / float(ok.sum())
+                     if ok.sum() else float("nan")),
+        n_gated=int(gated.sum()),
+        rel_max_gated=float(np.max(rg)) if rg.size else float("nan"),
+        rel_median_gated=float(np.median(rg)) if rg.size else float("nan"),
     )
 
 
@@ -287,14 +331,11 @@ def main() -> None:
         logger.info(f"u-space gradient warm-vs-cold on {gs['n_ok']} particles: "
                     f"rel median={gs['rel_median']:.3e} p95={gs['rel_p95']:.3e} "
                     f"max={gs['rel_max']:.3e} | drift-direction cos min={gs['cos_min']:.4f}")
-        if math.isfinite(gs["rel_max"]) and gs["rel_max"] >= GRAD_REL_WARN:
-            logger.warning(
-                f"warm-vs-cold gradient discrepancy {gs['rel_max']:.3e} exceeds the "
-                f"provisional {GRAD_REL_WARN} threshold: the warm kernel's MALA drift "
-                "differs from the deterministic cold map's beyond likelihood-level "
-                "agreement (zeroed badgrad rows read rel=1 by design -- check the "
-                "per-particle rel/cos in validate_warm.npz before interpreting). "
-                "WARN-only until a production baseline is recorded.")
+        logger.info(f"  gate subset (zeroed-drift rows excluded): "
+                    f"{gs['n_gated']}/{gs['n_ok']} particles, "
+                    f"rel max={gs['rel_max_gated']:.3e}; "
+                    f"zeroed drift on {gs['n_zeroed']} "
+                    f"({gs['zeroed_frac']:.1%})")
 
     P.save_npz(out / "validate_warm.npz",
                loglik_warm=np.asarray(ck["loglik"], np.float64),
@@ -309,6 +350,11 @@ def main() -> None:
                    grad_rel=gs["rel"], grad_cos=gs["cos"],
                    grad_rel_max=np.asarray(gs["rel_max"]),
                    grad_cos_min=np.asarray(gs["cos_min"]),
+                   # gate inputs: zeroed-drift rows excluded, counted separately
+                   grad_rel_max_gated=np.asarray(gs["rel_max_gated"]),
+                   grad_n_gated=np.asarray(gs["n_gated"], np.int64),
+                   grad_n_zeroed=np.asarray(gs["n_zeroed"], np.int64),
+                   grad_zeroed_frac=np.asarray(gs["zeroed_frac"]),
                    grad_cold=G_cold_np,
                    grad_warm=np.asarray(ck["grad_u"], np.float64))))
 
@@ -330,14 +376,49 @@ def main() -> None:
                        "with abundance_mode='elemental' (default) for exact, "
                        "path-independent inventories. Not failing on it here.")
         ok_atom = True
-    ok = ok_logl and ok_spec and ok_atom
+
+    # GRADIENT is now a FAIL axis, not warn-only (item 11 of the 2026-08
+    # handoff). Two separate conditions, because they mean different things:
+    #   * agreement, measured on rows where both drifts are real; and
+    #   * how much of the cloud had its drift zeroed at all.
+    ok_grad = True
+    if gs is not None:
+        if math.isfinite(gs["rel_max_gated"]) and gs["rel_max_gated"] >= GRAD_REL_FAIL:
+            ok_grad = False
+            logger.error(
+                f"GRADIENT GATE FAILED: warm-vs-cold discrepancy "
+                f"{gs['rel_max_gated']:.3e} >= {GRAD_REL_FAIL} on "
+                f"{gs['n_gated']} particles with real drifts on both sides. The "
+                "warm kernel's MALA drift differs from the deterministic cold "
+                "map's beyond likelihood-level agreement, so the sampler is "
+                "not steering by the target's gradient. Per-particle rel/cos "
+                "are in validate_warm.npz.")
+        if (math.isfinite(gs["zeroed_frac"])
+                and gs["zeroed_frac"] >= GRAD_ZEROED_FRAC_FAIL):
+            ok_grad = False
+            logger.error(
+                f"GRADIENT GATE FAILED: {gs['n_zeroed']} of {gs['n_ok']} "
+                f"particles ({gs['zeroed_frac']:.1%}) carried a ZEROED drift, "
+                f"at or above the {GRAD_ZEROED_FRAC_FAIL:.0%} ceiling. Zeroing "
+                "a non-finite tangent is a valid MH move and the measured-right "
+                "choice, but at this rate the cloud is largely drifting without "
+                "gradient information -- that is AD breakage, not the physical "
+                "theta-corner class.")
+
+    ok = ok_logl and ok_spec and ok_atom and ok_grad
     logger.info(f"VERDICT: {'PASS' if ok else 'FAIL'} "
                 f"(max|dlogL| {s['abs_max']:.3e} vs {DLOGL_MAX_PASS}; spectrum "
                 f"{dppm_max:.2f} ppm vs {SPEC_PPM_MAX_PASS}; inventories "
-                f"{atom_rel_max:.2e} vs {ATOM_REL_PASS}) "
+                f"{atom_rel_max:.2e} vs {ATOM_REL_PASS}"
+                + ("" if gs is None else
+                   f"; gradient {gs['rel_max_gated']:.3e} vs {GRAD_REL_FAIL} on "
+                   f"{gs['n_gated']} rows, zeroed {gs['zeroed_frac']:.1%} vs "
+                   f"{GRAD_ZEROED_FRAC_FAIL:.0%}")
+                + ") "
                 + ("-- warm-continuation bias is negligible at this cloud" if ok else
                    "-- warm state is history-dependent beyond the gate; tighten "
-                   "yconv_cri or rerun with smc_chem_mode='cold' before publishing"))
+                   "yconv_cri or rerun with smc_chem_mode='cold' (the DEFAULT "
+                   "since 2026-08-03) before publishing"))
     if not ok:
         # Distinct exit code (3) so the PBS wrapper can tell a REACHED verdict that
         # failed the gate (validate_warm.npz written; a science finding, job rc=0)

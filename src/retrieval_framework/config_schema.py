@@ -309,13 +309,31 @@ class Config:
     # (These per-particle paths remain for validation; the SMC hot path is the staged
     # batched evaluator -- see smc_chem_mode / smc_rt_chunk below.)
     gradient_mode: str = "block"
-    # "warm": every MCMC proposal's chemistry re-converges by CONTINUATION from the
-    #         particle's carried converged column (incremental lnZ/C-O scaling -- the
-    #         validated Hessian-campaign pattern). ~count_min-step solves instead of
-    #         full cold two-stage solves; the cold map is used once, at initialization.
-    # "cold": the published solve-from-baseline (two-stage) map for EVERY evaluation
-    #         (the pre-2026-07-06 behavior; ~10-30x more chemistry steps per sweep).
-    smc_chem_mode: str = "warm"
+    # "cold": the published solve-from-baseline (two-stage) map for EVERY
+    #         evaluation. The likelihood is then a FIXED, DETERMINISTIC function
+    #         of theta -- the target MALA, SMC tempering, and a quoted Bayesian
+    #         evidence all assume. THE DEFAULT since 2026-08-03.
+    # "warm": every MCMC proposal's chemistry re-converges by CONTINUATION from
+    #         the particle's carried converged column (incremental lnZ/C-O
+    #         scaling -- the validated Hessian-campaign pattern). ~count_min-step
+    #         solves instead of full cold two-stage solves; the cold map is used
+    #         once, at initialization. ~10-30x cheaper per sweep.
+    #
+    # WHY COLD IS THE DEFAULT. Under "warm" a likelihood evaluation depends on
+    # the particle's CARRIED chemistry column, hence on sampler history, at the
+    # convergence tolerance. A history-dependent target is not the fixed density
+    # the sampler and the evidence integral assume, so `logZ` from a warm run is
+    # approximate in a way no amount of post-hoc diagnostics converts into an
+    # exact number. Warm remains fully supported and is the right tool for
+    # exploration and for cost-limited surveys -- it is simply not the default
+    # for a number anyone will publish.
+    #
+    # COST. Cold is documented at ~10-30x more chemistry work per sweep. That is
+    # a real budget change, not a free correctness win: the W39b production case
+    # was resized for it (see runs/w39b_smc_retrieval/case.py). If you flip back
+    # to warm, every artifact is stamped `approximate_history_dependent_target`
+    # and both post-run validators become mandatory.
+    smc_chem_mode: str = "cold"
     # Particles per lax.map chunk through the ExoJax RT. 0 = no chunking (single
     # all-particles vmap). Compile-only probe 2026-07-07 (nu_pts=5000): RT PRIMAL
     # ~0.22 GiB/lane (full width is fine); RT VJP is THE memory wall -- 18.4 GiB

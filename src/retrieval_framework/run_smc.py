@@ -230,11 +230,41 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     for k, v in proj.items():
         log.info(f"  {k:32s} {v}")
     budget = float(cfg.walltime_seconds)
+    # REFUSE, don't warn. A projection that does not fit used to be a log line
+    # in a job whose next step was a 24 h production submit, so the information
+    # arrived after the budget was spent. Cold chemistry (the default since
+    # 2026-08-03) is ~10-30x more chemistry per sweep, which makes this the
+    # normal case to hit rather than an exotic one.
+    proj["fits_walltime_budget"] = (
+        None if budget <= 0 else bool((15 * per_stage) <= budget))
+    (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
     if budget > 0 and (15 * per_stage) > budget:
-        log.warning("even 15 tempering stages exceed the walltime budget -- reduce "
-                    "smc_num_mcmc_steps / smc_num_particles / nz, or raise yconv_cri")
-    else:
-        log.info("projection fits the walltime budget (the in-run governor still guards it).")
+        raise SystemExit(
+            "CALIBRATION: the projection does NOT fit the walltime budget.\n"
+            f"  per-stage sweep      {per_stage / 3600.0:.2f} h\n"
+            f"  15 stages            {15 * per_stage / 3600.0:.2f} h\n"
+            f"  40 stages            {40 * per_stage / 3600.0:.2f} h\n"
+            f"  governor budget      {budget / 3600.0:.2f} h\n"
+            f"  chem mode            {pipe.chem_mode}\n"
+            "A tempering ladder that cannot reach beta=1 inside the budget "
+            "produces no posterior, so this refuses rather than letting a "
+            "production job discover it after the fact.\n"
+            "Choose one:\n"
+            "  * chain jobs: submit with RESUME=1 and let the ladder continue "
+            "across several walls (the stage checkpoint makes this exact, and "
+            "the init-level checkpoint means a restart never re-pays the init) "
+            "-- this is the EXPECTED route for a cold production run;\n"
+            "  * cut sequential work: lower smc_num_mcmc_steps (the runner is "
+            "launch-bound, so batch WIDTH is nearly free and cutting particles "
+            "buys little wall time while costing statistics);\n"
+            "  * raise walltime_seconds if the queue allows a longer wall;\n"
+            "  * for exploration only, set smc_chem_mode='warm' and accept an "
+            "approximate, history-dependent target (every artifact is stamped "
+            "approximate_history_dependent_target and both post-run validators "
+            "become mandatory).\n"
+            "Do NOT raise yconv_cri to make this fit: that buys speed by "
+            "certifying a less-converged chemistry state.")
+    log.info("projection fits the walltime budget (the in-run governor still guards it).")
     return proj
 
 
@@ -345,9 +375,21 @@ def main() -> None:
                    u_particles=res["U"], final_beta=np.asarray(res["final_beta"]),
                    # travels WITH the samples so no consumer can miss it: beta<1
                    # draws are tempered, not the posterior
-                   reached_beta1=np.asarray(int(res["reached_beta1"]), np.int32))
+                   reached_beta1=np.asarray(int(res["reached_beta1"]), np.int32),
+                   # ...and likewise for target exactness: a warm run's target
+                   # depends on sampler history, so its draws and its logZ are
+                   # approximate. Stamped on the samples themselves so the flag
+                   # cannot be separated from the numbers it qualifies.
+                   chem_mode=np.asarray(str(cfg.smc_chem_mode)),
+                   approximate_history_dependent_target=np.asarray(
+                       int(str(cfg.smc_chem_mode).strip().lower() == "warm"),
+                       np.int32))
         P.save_npz(extra_path,
                    inference_method=np.asarray(2, np.int32),
+                   chem_mode=np.asarray(str(cfg.smc_chem_mode)),
+                   approximate_history_dependent_target=np.asarray(
+                       int(str(cfg.smc_chem_mode).strip().lower() == "warm"),
+                       np.int32),
                    smc_kernel=np.asarray("mala+precond", dtype="<U16"),
                    smc_num_particles=np.asarray(int(cfg.smc_num_particles), np.int32),
                    smc_num_mcmc_steps=np.asarray(int(cfg.smc_num_mcmc_steps), np.int32),
