@@ -84,7 +84,6 @@ def main(out=Z.FIGS / "zco_geometry.png", combo=Z.DEFAULT_COMBO, tier="P"):
         w = np.load(WALK, allow_pickle=True)
         s = np.asarray(w["steps"], float)
         c2t = np.asarray(w["chi2_true"], float)
-        c2q = np.asarray(w["chi2_quad"], float)
         ss = np.linspace(s.min(), s.max(), 200)
         axB.plot(ss, ss ** 2, color="0.55", lw=1.8, ls="--",
                  label=r"Fisher / Gaussian  ($\Delta\chi^2 = s^2$)")

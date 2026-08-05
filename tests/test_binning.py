@@ -1,7 +1,6 @@
 """The binning MATRIX must reproduce the d(lambda)-weighted trapezoidal bin average
 (zco_lib.bin_to_obs's operation) exactly -- that equivalence is what makes the binned
 depth's jvp exact and free."""
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np

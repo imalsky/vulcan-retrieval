@@ -12,7 +12,6 @@ Run (from the repo root, or via the PBS script in this directory):
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from retrieval_framework.config_schema import Config      # light import, no jax

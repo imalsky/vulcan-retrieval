@@ -25,7 +25,7 @@ All fields are overridable per preset via kwargs, and at run time via the
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -679,7 +679,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         rule("T-P profile"),
         f"    model={cfg.tp_model}   Tint={cfg.tp_Tint_K:g}K   f={cfg.tp_f:g}   g={cfg.tp_gravity_cgs:g}cgs"
         f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}",
-        f"    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
+        "    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
         rule("data"),
         f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
         rule("SMC  (adaptive-tempered + forward-jvp MALA)"),

@@ -943,7 +943,6 @@ def load_real_into_pipe(pipe: Pipeline) -> Dict[str, np.ndarray]:
 def generate_observations(pipe: Pipeline, seed: int) -> Dict[str, np.ndarray]:
     """Synthetic injection: model at truth, add Gaussian noise at the (real, if available)
     per-bin sigma. Injects into pipe and returns the arrays."""
-    cfg = pipe.cfg
     sigma = np.asarray(pipe.obs["sigma"], pipe.npdtype)
     mu_true = np.asarray(pipe.observed_depth_model_jit(pipe.theta_truth), pipe.npdtype)
     if not np.all(np.isfinite(mu_true)):
