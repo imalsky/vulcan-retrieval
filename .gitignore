@@ -5,21 +5,18 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# Internal working documents. docs/ carries the published reference set
-# (forward_model, gradients_and_sampler, wasp39b_case, limitations, validation).
-# Everything below is a narrative development log or an incident post-mortem:
-# kept locally, not shipped to consumers. data/notes.md is deliberately NOT here
-# -- it is observation provenance and regeneration policy, which consumers need.
-# CLAUDE.md is deliberately NOT here: it is the standing contract this repo is
-# worked under, edited in the same pass as the code it governs, so it has to be
-# versioned with it.
-# docs/failed_approaches.md IS here. It is the append-only negative-results
-# register, and it cites notes.md and the incident post-mortem throughout --
-# neither of which ships. Published on its own it is a register of pointers a
-# reader outside this checkout cannot follow, so it stays local with its sources.
+# Internal working documents. README.md carries the published reference set
+# (forward model, gradients and sampler, WASP-39 b case, limitations,
+# validation, data provenance) as sections; /notes.md is the local-only
+# development diary, which also holds the merged negative-results register
+# (## docs/failed_approaches.md section) and incident post-mortems: kept
+# locally, not shipped to consumers.
+# CLAUDE.md is untracked here too (2026-08-14), matching VULCAN-JAX and
+# vulcan-jwst-tool: agent instructions are not part of a collaborator bundle.
+# It used to be tracked so it would version with the code it governs; if that
+# matters again, drop the line below and `git add -f CLAUDE.md`.
+CLAUDE.md
 /notes.md
-docs/failed_approaches.md
-docs/job65815_badgrad_investigation.md
 examples/notes.md
 runs/*/notes.md
 scripts/zco_information/notes.md

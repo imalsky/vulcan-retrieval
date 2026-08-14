@@ -87,7 +87,7 @@ GRAD_REL_FAIL = 0.1
 # This is the subtlety that makes the gate implementable. The badgrad handling
 # deliberately ZEROES a non-finite warm tangent and takes the move with zero
 # drift -- a valid MH kernel, and the measured-correct choice (rejecting instead
-# biased the posterior bulk; see CLAUDE.md and docs/failed_approaches.md). But a
+# biased the posterior bulk; see CLAUDE.md and the failed-approaches register in notes.md). But a
 # zeroed warm row against a finite cold row reads rel EXACTLY 1.0 by
 # construction. So promoting this threshold to a hard gate WITHOUT excluding
 # those rows would fail every run containing a single badgrad particle -- which

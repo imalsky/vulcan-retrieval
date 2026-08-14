@@ -300,7 +300,7 @@ class Config:
     # (e.g. a regression NaN-ing every tangent), far beyond the physical
     # theta-corner class (worst measured sweep 7.6%; the class, why forcing
     # rejection would bias the posterior, and the measurements behind this
-    # default: docs/limitations.md). 0.0 restores a
+    # default: README.md, Limitations). 0.0 restores a
     # zero-tolerance raise.
     smc_tangent_bad_max_frac: float = 0.25
     # "block": only chem+T-P dims take tangents through the VULCAN while_loop; lnR0 is
