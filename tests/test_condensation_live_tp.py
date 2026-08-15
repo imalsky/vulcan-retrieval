@@ -142,11 +142,17 @@ def chem_iso(stack):
     def tp_eval(tp, p_bar):
         return jnp.zeros_like(jnp.asarray(p_bar)) + tp[0]
 
+    # Skip ONLY on a missing-data environment. A blanket
+    # `except Exception: pytest.skip(...)` used to sit here, and it converted a
+    # real TypeError -- vulcan_chem calling a VULCAN-JAX private method whose
+    # signature had changed, which broke EVERY fresh forward run -- into a green
+    # skip. This is the one test in the workspace that actually builds the chem
+    # model, so swallowing its failures hid the defect from all of CI.
     try:
         return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval,
                                             n_tp_params=1)
-    except Exception as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"chem model build failed: {e}")
+    except (FileNotFoundError, OSError) as e:  # pragma: no cover - env-dependent
+        pytest.skip(f"chem model data unavailable: {e}")
 
 
 def _theta(T):
