@@ -40,7 +40,11 @@ dependencies = [
     # since 2026-07-29, so it -- not this package -- owns the exojax==2.2.3 pin.
     # 0.1.0 is the extraction release: same physics, engine-owned data-root
     # contract, required planet geometry, injectable molecule table.
-    "vulcan-forward>=0.1.0",
+    # >=0.4.0: the engine gained p_ref_bar, and an OLDER engine would ignore
+    # the key and silently anchor the radius at the grid bottom while the
+    # config says otherwise. config_schema pins p_ref_bar explicitly, so the
+    # floor is what makes that pin mean anything.
+    "vulcan-forward>=0.4.0",
     "vulcan-jax>=0.3.0",  # 0.3.0 enforces the condensation-not-differentiable contract at the AD entry points (F1-F5); 0.2.0 was the YAML-only config API
 ]
 

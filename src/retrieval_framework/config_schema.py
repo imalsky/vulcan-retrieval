@@ -30,6 +30,10 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# stdlib-only re-export of the engine constants (see forward/config.py); this
+# keeps the schema import-light while the RT grid bottom stays single-sourced
+from vulcan_forward.constants import ART_PBTM_BAR
+
 
 @dataclass(frozen=True)
 class Config:
@@ -184,6 +188,28 @@ class Config:
     # RP_CM / RSTAR_CM. tp_gravity_cgs below doubles as the RT's g_btm.
     rp_cm: Optional[float] = None
     rstar_cm: Optional[float] = None
+    # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
+    #
+    # PINNED to the RT grid bottom on purpose. vulcan-forward 0.4.0 added this
+    # key and defaulted it to 1e-3 bar (the transit photosphere), which is the
+    # right convention for a FORWARD model quoting an absolute depth from a
+    # catalogue radius -- it is what fixed the planner's 25% depth error. A
+    # retrieval is the other case: it INFERS lnR0, so the reference pressure is
+    # degenerate with the fitted radius and changing it just slides the lnR0
+    # posterior. Adopting the new default silently would have moved this
+    # retrieval's radius by ~0.077 in ln R against a prior_lnR0 half-width of
+    # 0.08, i.e. straight to the edge of its own prior. Switching to 1e-3 is a
+    # deliberate re-baseline that must widen prior_lnR0 with it.
+    #
+    # NOT bit-identical to the pre-0.4.0 behaviour, and deliberately so: 0.5.0
+    # also moved the anchor from the deepest layer's centre to its lower
+    # boundary, where exojax actually defines radius_btm, which is 0.176% in
+    # radius on a W39b-like column (0.35% in depth). That is a constant scale,
+    # so lnR0 absorbs it exactly -- it shifts the lnR0 posterior by 0.0018,
+    # about 2% of the prior half-width. Reproducing the old number to the last
+    # digit would mean re-introducing an nlayer-dependent anchor, which is the
+    # bug that fix removed.
+    p_ref_bar: float = ART_PBTM_BAR
 
     # ---- observed spectrum source ---------------------------------------------
     # obs_dir holds per-instrument product CSVs in the (Rp/Rs)-format observations.py
@@ -408,6 +434,7 @@ class Config:
             fastchem_met_scale=float(self.fastchem_met_scale),
             cfg_overrides=dict(self.cfg_overrides),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
+            p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
         )
         if self.count_min:
             p["count_min"] = int(self.count_min)
