@@ -33,6 +33,12 @@ validation/diag_*.py
 data/exojax_linelists/
 data/opacity_cache/
 
+# ExoMolOP k-tables (~389 MB/species; python -m vulcan_forward.fetch_exomolop)
+# and the retired HITRAN-built correlated-k cache. Regenerable, 6+ GB total;
+# note data/*.npz below does NOT match files inside these subdirectories.
+data/exomolop/
+data/ckd_cache/
+
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
 runs/*/data/
 runs/*/logs/
