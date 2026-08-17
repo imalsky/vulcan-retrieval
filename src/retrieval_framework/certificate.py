@@ -187,8 +187,15 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     net = cfg_dict.get("vulcan_cfg_name")
     ident["vulcan_cfg_name"] = net
     try:
-        import vulcan_jax
-        pkg = Path(vulcan_jax.__file__).resolve().parent
+        # find_spec, NOT import: importing vulcan_jax parses and import-locks
+        # its reaction network, and this identity collector only needs the
+        # package path. The bare import here locked the process to the default
+        # network and broke every later SNCHO chem build in the same session.
+        import importlib.util
+        spec = importlib.util.find_spec("vulcan_jax")
+        if spec is None or not spec.origin:
+            raise ModuleNotFoundError("vulcan_jax is not installed")
+        pkg = Path(spec.origin).resolve().parent
         cfg_yaml = pkg / "configs" / f"{net}.yaml"
         if cfg_yaml.is_file():
             ident["vulcan_config_yaml"] = {"path": str(cfg_yaml),
