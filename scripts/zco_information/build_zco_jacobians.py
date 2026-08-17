@@ -6,7 +6,7 @@ compute, by forward-mode AD straight through VULCAN-JAX kinetics + ExoJax transm
     J_chem = d(depth)/d[ lnZ, dln(C/O)_fixedO, lnKzz, T_int ]     (n_nu, 4)
     J_lnR0 = d(depth)/d(lnR0)   at that tier's converged profiles  (n_nu,)
 
-and cache everything (+ the baseline depth per tier) to data/zco_jacobians.npz for the
+and cache everything (+ the baseline depth per tier) to output/zco_jacobians.npz for the
 pure-numpy Fisher figures (zco_lib.py + fig_zco_*.py).
 
 The three tiers share ONE ExoJax opacity build (RT depends only on the molecule set +

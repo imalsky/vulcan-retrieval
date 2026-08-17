@@ -9,7 +9,7 @@
     the parabola, the quadratic/Gaussian error bar is no longer trustworthy -- a check the
     exact second derivatives let us make instead of assume.
 
-Reads data/zco_jacobians.npz (fig a) + data/zco_walk.npz (fig b, build_zco_walk.py). PNG only.
+Reads output/zco_jacobians.npz (fig a) + data/zco_walk.npz (fig b, build_zco_walk.py). PNG only.
 """
 from __future__ import annotations
 

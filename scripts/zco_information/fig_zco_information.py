@@ -9,7 +9,7 @@ Bottom: the per-wavelength MARGINAL 'unique information' for ln Z (red) and ln(C
         carriers (CH4 3.3, CO 4.66) and the H2O bands -- different molecules, so both are
         measurable.
 
-Reads data/zco_jacobians.npz (build_zco_jacobians.py) + data/cm24_wasp39b/*.csv. PNG only.
+Reads output/zco_jacobians.npz (build_zco_jacobians.py) + data/cm24_wasp39b/*.csv. PNG only.
 """
 from __future__ import annotations
 

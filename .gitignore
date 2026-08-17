@@ -37,7 +37,6 @@ data/opacity_cache/
 # and the retired HITRAN-built correlated-k cache. Regenerable, 6+ GB total;
 # note data/*.npz below does NOT match files inside these subdirectories.
 data/exomolop/
-data/ckd_cache/
 
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
 runs/*/data/

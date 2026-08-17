@@ -14,7 +14,7 @@ is which chemistry physics is switched on when VULCAN-JAX converges the column:
     information for equilibrium vs photochemistry. The SO2 band at ~4.05 um -- absent in
     equilibrium -- is the photochemical metallicity anchor.
 
-Reads data/zco_jacobians.npz. PNG only.
+Reads output/zco_jacobians.npz. PNG only.
 """
 from __future__ import annotations
 
