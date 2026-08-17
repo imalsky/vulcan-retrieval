@@ -34,7 +34,9 @@ jobs:
         # 2026-07-15). Those two engine modules are stdlib-only; anything
         # reaching vulcan_chem/exojax_rt still skips via importorskip.
         run: |
-          pip install "jax>=0.6" numpy scipy pytest
+          # pyyaml: vulcan-jax is installed --no-deps below but its
+          # config loader imports yaml at collection time
+          pip install "jax>=0.6" numpy scipy pytest pyyaml
           pip install --no-deps "vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git"
           pip install --no-deps "vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git"
           pip install --no-deps -e .
