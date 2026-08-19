@@ -72,7 +72,7 @@ def main() -> None:
     tempered_tag = ("" if final_beta >= 1.0 - 1e-6
                     else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
-    # TARGET-EXACTNESS STAMP (2026-08-03). A warm run's likelihood depends on
+    # TARGET-EXACTNESS STAMP. A warm run's likelihood depends on
     # sampler history, so its cloud is a sample from an APPROXIMATE target.
     # Carried on every headline figure for the same reason as the tempered tag:
     # a figure outlives the log that explained it.
@@ -170,8 +170,7 @@ def main() -> None:
         ax.set_xlabel("T [K]"); ax.set_ylabel("P [bar]")
         ax.legend(fontsize=8, frameon=False)
         # same tempered stamp as corner/spectrum: this band is NOT a posterior band
-        # when the ladder stopped at beta<1 (this figure used to be the one unstamped
-        # headline panel)
+        # when the ladder stopped at beta<1
         ax.set_title("Retrieved Guillot T-P" + tempered_tag, fontsize=9)
         fig.tight_layout(); fig.savefig(plots / "tp_posterior.png", dpi=DPI); plt.close(fig)
         print("[plot] tp_posterior.png")
@@ -208,8 +207,7 @@ def main() -> None:
         sup = ""
         # headline the ZERO-FILLED box evidence (the only integral-valid box
         # quantity; solver-dependent -- see pipeline.evidence_report) with both
-        # support fractions. The retracted f_tp-only "box_physical" is gone
-        # (2026-07-12 recheck P0-B).
+        # support fractions. The retracted f_tp-only "box_physical" is gone.
         if ("smc_log_support_fraction" in x.files
                 and np.isfinite(float(x["smc_log_support_fraction"]))):
             f_tp = (np.exp(float(x["smc_log_support_physical"]))

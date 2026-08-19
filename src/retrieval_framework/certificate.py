@@ -6,13 +6,9 @@
 Collects, from a completed run's own outputs, everything needed to decide
 whether its numbers may be reported -- and says so with one PASS/FAIL verdict.
 
-WHY. The only archived production-like run in this repository is an older
-0.9-era forensic log that died at stage 2 with 11 particles holding finite
-likelihoods and non-finite gradients. Current code contains later zero-drift
-handling, so that failure does not show the current code is broken; equally, it
-cannot show the current code succeeds. "The old run failed for reasons since
-fixed" and "the current code produces a posterior" are different claims, and
-only the second one licenses reporting numbers.
+WHY. "An old run failed for reasons since fixed" and "the current code produces
+a posterior" are different claims, and only the second one licenses reporting
+numbers.
 
 WHAT IT GATES. Each check answers "would a reader be misled?":
 
@@ -69,7 +65,24 @@ REPOSITORIES = {
 # through as a posterior.
 BETA_TOL = 1e-6
 
-# The three production-fidelity artifacts (item 9). Their absence is a FAIL for
+# --- run-health floors -------------------------------------------------------
+# A diagnostic that is merely PRESENT says nothing, and two of these read 0 in a
+# healthy run and 0 in a broken one for opposite reasons. Particle degeneracy is
+# the characteristic SMC failure and it is invisible in a corner plot: the cloud
+# still has N rows, they are just copies of a handful of states.
+UNIQUE_FRAC_FAIL = 0.25        # distinct particles at the final stage, over N
+ESS_FRAC_FAIL = 0.20           # smallest per-stage ESS over N
+ACCEPT_LO, ACCEPT_HI = 0.05, 0.95
+# warmcap + stalled are chemistry-convergence REJECTIONS the MH correction cannot
+# see. Some are expected early, while the cloud is still prior-wide; in the late
+# ladder they mean the posterior itself sits on the convergence cliff, which makes
+# the sampled target solver-defined rather than physical.
+LATE_LADDER_FRAC = 1.0 / 3.0
+LATE_REJECT_FRAC_FAIL = 0.02   # per-proposal rate over the late stages
+# A posterior median on a prior edge is set by the prior, not measured.
+PRIOR_RAIL_FRAC = 0.02
+
+# The three production-fidelity artifacts. Their absence is a FAIL for
 # a few-ppm or evidence claim: a check that was never run at production settings
 # is not a check that passed.
 REQUIRED_VALIDATION_ARTIFACTS = (
@@ -153,10 +166,29 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
                               "bytes": obs.stat().st_size}
                              if obs.is_file() else None)
 
-    root = os.environ.get("VULCAN_FORWARD_DATA")
-    ident["VULCAN_FORWARD_DATA"] = root
+    # Resolve through the engine, never from $VULCAN_FORWARD_DATA: this repo
+    # hands the engine its tree programmatically and paths.set_data_root takes
+    # precedence over the variable, so the environment says nothing about what
+    # a run actually read. Both are recorded, under names that say which is
+    # which -- a resolved path filed under the variable's name would assert
+    # the environment was set when it was not.
+    ident["VULCAN_FORWARD_DATA"] = os.environ.get("VULCAN_FORWARD_DATA")
+    root = None
+    tree_dirs = {}
+    try:
+        # importing this module is what hands the engine this repo's data tree
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
+        from vulcan_forward import paths as _fwd_paths
+        root = Path(_fwd_paths.data_root())
+        tree_dirs = {"exojax_linelists": Path(_fwd_paths.linelist_dir()),
+                     "opacity_cache": Path(_fwd_paths.opacity_cache_dir())}
+    except Exception as exc:                                # pragma: no cover
+        # Never silently null: a check that cannot run says why it could not.
+        ident["engine_data_error"] = f"{type(exc).__name__}: {exc}"
+    ident["data_root_resolved"] = str(root) if root is not None else None
+
     for sub in ("exojax_linelists", "opacity_cache"):
-        p = Path(root) / sub if root else None
+        p = tree_dirs.get(sub)
         if p is None or not p.is_dir():
             ident[sub] = None
             continue
@@ -176,8 +208,9 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     # hash exactly and too important to hide inside only a directory count.
     # A swapped H2-He table can leave the tree summary unchanged while changing
     # the continuum fitted by the retrieval.
+    opacity_dir = tree_dirs.get("opacity_cache")
     for name in ("H2-H2_2011.cia", "H2-He_2011.cia"):
-        p = Path(root) / "opacity_cache" / name if root else None
+        p = opacity_dir / name if opacity_dir is not None else None
         ident[name] = (
             {"path": str(p.resolve()), "sha256": _sha256(p),
              "bytes": p.stat().st_size}
@@ -258,6 +291,35 @@ def _mala_reversibility_artifact(out_dir: Path) -> dict | None:
     }
 
 
+def _posterior_summary(samples, cfg_dict: dict) -> list | None:
+    """Per-parameter median and where it sits inside its own prior box.
+
+    ``prior_position`` is the median's fractional position in the prior, measured
+    in the space the prior is FLAT in (log10 for a log10_uniform parameter), so 0
+    and 1 are the declared edges.
+    """
+    if samples is None or "samples" not in samples.files:
+        return None
+    names = list(cfg_dict.get("inferred_param_names") or [])
+    lo = np.asarray(cfg_dict.get("inferred_param_prior_lo") or [], float)
+    hi = np.asarray(cfg_dict.get("inferred_param_prior_hi") or [], float)
+    types = list(cfg_dict.get("inferred_param_prior_types") or [])
+    th = np.asarray(samples["samples"], float).reshape(-1, len(names) or 1)
+    if not names or lo.size != th.shape[1] or hi.size != th.shape[1]:
+        return None
+    out = []
+    for i, name in enumerate(names):
+        q05, q50, q95 = (float(v) for v in np.percentile(th[:, i], [5, 50, 95]))
+        a, b, x = lo[i], hi[i], q50
+        if i < len(types) and types[i] == "log10_uniform" and a > 0 and x > 0:
+            a, b, x = math.log10(a), math.log10(b), math.log10(x)
+        pos = (x - a) / (b - a) if b > a else None
+        out.append({"name": name, "median": q50, "q05": q05, "q95": q95,
+                    "prior_lo": float(lo[i]), "prior_hi": float(hi[i]),
+                    "prior_position": (None if pos is None else float(pos))})
+    return out
+
+
 def collect(out_dir: Path) -> dict:
     """Assemble the certificate payload from a finished run's outputs."""
     out_dir = Path(out_dir).resolve()
@@ -265,9 +327,7 @@ def collect(out_dir: Path) -> dict:
     cfg_dict = json.loads(cfg_path.read_text()) if cfg_path.is_file() else {}
     cfg_blob = json.dumps(cfg_dict, sort_keys=True, default=str)
 
-    # These are the filenames written by run_smc.py.  The previous certificate
-    # looked for smc_samples.npz/smc_extra.npz, so even a successful beta=1 run
-    # was read as if it had produced no posterior or evidence.
+    # These are the filenames written by run_smc.py.
     samples = _load_npz(out_dir / "posterior_samples.npz")
     extra = _load_npz(out_dir / "smc_extra_fields.npz")
     ckpt = _load_npz(out_dir / "smc_checkpoint.npz")
@@ -338,6 +398,7 @@ def collect(out_dir: Path) -> dict:
             "grad_rel_max_gated": _scalar(vwarm, "grad_rel_max_gated"),
             "grad_zeroed_frac": _scalar(vwarm, "grad_zeroed_frac"),
         }),
+        "posterior": _posterior_summary(samples, cfg_dict),
         "mala_reversibility": _mala_reversibility_artifact(out_dir),
         "validation_artifacts": _validation_artifacts(),
         "checkpoint_present": ckpt is not None,
@@ -432,9 +493,27 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "warm_stalled", "badgrad"):
         if not diag.get(key):
             problems.append(f"diagnostic '{key}' missing from the run outputs")
+    problems += health_problems(diag)
+    problems += rail_problems(cert.get("posterior"))
 
-    # --- production-fidelity artifacts (item 9) -----------------------------
+    # --- production-fidelity artifacts --------------------------------------
+    # broadening_ab measures the HITRAN air-vs-H2/He pressure-broadening knob.
+    # That knob does not exist on the correlated-k path -- ExoMolOP integrates
+    # H2/He widths into the tables and the engine ignores the profile key -- so
+    # requiring it there would demand a measurement of something the run cannot
+    # do. It stays required for an lbl forward model.
+    required = set(REQUIRED_VALIDATION_ARTIFACTS)
+    opa = str(cert["resolved_config"].get("opacity_mode", "")) or None
+    if opa == "exomolop":
+        required.discard("broadening_ab")
+    elif opa is None:
+        problems.append(
+            "resolved config records no opacity_mode: which opacity the run "
+            "used is unknown, and sampled line-by-line is measurably biased "
+            "on this band (config_schema.opacity_mode)")
     for name, art in cert["validation_artifacts"].items():
+        if name not in required:
+            continue
         if art is None:
             problems.append(
                 f"validation artifact '{name}' is missing: the production "
@@ -471,6 +550,77 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             "internal consistency check would pass")
 
     return problems
+
+
+def health_problems(diag: dict) -> list[str]:
+    """Value gates on the run-health diagnostics (module-level so they are
+    testable without a run)."""
+    out: list[str] = []
+    n = int(diag.get("n_particles") or 0)
+    uniq = list(diag.get("unique_particles") or [])
+    ess = list(diag.get("ess") or [])
+    acc = [float(a) for a in (diag.get("acceptance_rate") or [])
+           if a is not None and math.isfinite(float(a))]
+    if n and uniq:
+        frac = float(uniq[-1]) / n
+        if frac < UNIQUE_FRAC_FAIL:
+            out.append(
+                f"particle degeneracy: {int(uniq[-1])}/{n} distinct particles at "
+                f"the final stage ({frac:.0%} < {UNIQUE_FRAC_FAIL:.0%}). The "
+                "cloud still has N rows, so every marginal looks smooth while "
+                "resting on a handful of distinct states")
+    if n and ess:
+        i = int(np.argmin(ess))
+        frac = float(ess[i]) / n
+        if frac < ESS_FRAC_FAIL:
+            out.append(
+                f"ESS collapsed to {float(ess[i]):.1f}/{n} ({frac:.0%} < "
+                f"{ESS_FRAC_FAIL:.0%}) at stage {i}: the ladder took a "
+                "temperature step the cloud could not absorb")
+    if acc:
+        k = max(1, int(round(LATE_LADDER_FRAC * len(acc))))
+        a = float(np.mean(acc[-k:]))
+        if not (ACCEPT_LO < a < ACCEPT_HI):
+            out.append(
+                f"late-ladder MALA acceptance {a:.2f} outside "
+                f"({ACCEPT_LO}, {ACCEPT_HI}): the mutation kernel is not "
+                "moving particles at the target rate, so the cloud is not "
+                "mixing at beta=1")
+    cap = list(diag.get("warm_capped") or [])
+    stall = list(diag.get("warm_stalled") or [])
+    sweeps = int(diag.get("n_mcmc_steps") or 0)
+    if n and sweeps and cap and stall and len(cap) == len(stall):
+        k = max(1, int(round(LATE_LADDER_FRAC * len(cap))))
+        late = sum(cap[-k:]) + sum(stall[-k:])
+        rate = late / float(n * sweeps * k)
+        if rate > LATE_REJECT_FRAC_FAIL:
+            out.append(
+                f"late-ladder chemistry-convergence rejections {rate:.1%} of "
+                f"proposals (> {LATE_REJECT_FRAC_FAIL:.0%}; {late} over the last "
+                f"{k} stage(s)): the posterior sits on the convergence cliff, so "
+                "the sampled target is defined by count_max rather than by the "
+                "physics")
+    return out
+
+
+def rail_problems(post: list | None) -> list[str]:
+    """A posterior median on a prior edge is prior-determined, not measured."""
+    if not post:
+        return ["no posterior summary: the parameter medians could not be read "
+                "from posterior_samples.npz, so a prior-railed parameter would "
+                "go unnoticed"]
+    out = []
+    for row in post:
+        f = row.get("prior_position")
+        if f is None:
+            continue
+        if f < PRIOR_RAIL_FRAC or f > 1.0 - PRIOR_RAIL_FRAC:
+            out.append(
+                f"{row['name']}: posterior median sits at {f:.1%} of its prior "
+                f"range [{row['prior_lo']:g}, {row['prior_hi']:g}] -- the value "
+                "is set by the prior edge, not by the data. Widen the prior, or "
+                "report the parameter as a limit rather than a measurement")
+    return out
 
 
 def render(cert: dict, problems: list[str]) -> str:
@@ -527,7 +677,22 @@ def render(cert: dict, problems: list[str]) -> str:
              f"{net['sha256'][:16] + '...' if net else 'not resolved'} |")
     L.append(f"| resolved config sha256 | "
              f"{cert['resolved_config_sha256'][:16]}... |")
-    L += ["", "## Production-fidelity artifacts", "",
+    diag = cert["diagnostics"]
+    n = diag.get("n_particles")
+    uniq = diag.get("unique_particles") or []
+    ess = diag.get("ess") or []
+    acc = diag.get("acceptance_rate") or []
+    L += ["", "## Run health", "", "| field | value |", "|---|---|",
+          f"| particles | {n} |",
+          f"| distinct particles, final stage | {uniq[-1] if uniq else None} |",
+          f"| min ESS over the ladder | "
+          f"{min(ess):.1f} |" if ess else "| min ESS over the ladder | None |",
+          f"| final acceptance | {acc[-1]:.2f} |" if acc
+          else "| final acceptance | None |",
+          f"| late warmcap + stalled | "
+          f"{sum((diag.get('warm_capped') or [])[-3:]) + sum((diag.get('warm_stalled') or [])[-3:])} |",
+          f"| badgrad total | {sum(diag.get('badgrad') or [])} |",
+          "", "## Production-fidelity artifacts", "",
           "| artifact | status |", "|---|---|"]
     for name, art in cert["validation_artifacts"].items():
         L.append(f"| {name} | {'MISSING' if art is None else art['status']} |")

@@ -50,8 +50,9 @@ else
   exit 1
 fi
 REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"
-if [ ! -f "${REPO_DIR}/pyproject.toml" ] || [ ! -d "${PROJECT_ROOT}/VULCAN-JAX" ]; then
-  echo "ERROR: expected vulcan-retrieval and VULCAN-JAX checkouts under PROJECT_ROOT=${PROJECT_ROOT}"
+if [ ! -f "${REPO_DIR}/pyproject.toml" ] || [ ! -d "${PROJECT_ROOT}/VULCAN-JAX" ] \
+   || [ ! -d "${PROJECT_ROOT}/vulcan-forward" ]; then
+  echo "ERROR: expected vulcan-retrieval, VULCAN-JAX and vulcan-forward checkouts under PROJECT_ROOT=${PROJECT_ROOT}"
   exit 1
 fi
 export PROJECT_ROOT
@@ -118,6 +119,10 @@ echo "constraints: $(tr '\n' ' ' < "${CONSTRAINTS}")"
 
 python -m pip install --user --constraint "${CONSTRAINTS}" "exojax==2.2.3" corner tqdm
 python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
+# vulcan-forward sits between the two in the dependency DAG: every retrieval
+# path imports vulcan_forward.vulcan_chem, and the validate_env step at the end
+# of this script hard-errors without it.
+python -m pip install --user --no-deps -e "${PROJECT_ROOT}/vulcan-forward"
 python -m pip install --user --no-deps -e "${REPO_DIR}"
 
 # --- FastChem binary for this architecture (EQ init runs it at build time) ------
@@ -154,6 +159,7 @@ stamp = {
     "jax": jax.__version__,
     "jaxlib": jaxlib.__version__,
     "vulcan_jax_sha": sha("${PROJECT_ROOT}/VULCAN-JAX"),
+    "vulcan_forward_sha": sha("${PROJECT_ROOT}/vulcan-forward"),
     "vulcan_retrieval_sha": sha("${REPO_DIR}"),
 }
 Path("${PYTHONUSERBASE}/.bootstrap_stamp.json").write_text(json.dumps(stamp, indent=1))

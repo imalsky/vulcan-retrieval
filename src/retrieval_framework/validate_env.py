@@ -20,6 +20,8 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      version floor alone cannot guarantee (both pre- and post-conden checkouts
      once reported >=0.1.17-era versions);
   4. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
+  4b. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
+     engine every retrieval path imports;
   5. cross-repo pin: the installed vulcan-jax satisfies vulcan-retrieval's
      declared requirement (skipped with a warning if `packaging` is absent);
   6. exojax imports and matches the pyproject pin;
@@ -32,8 +34,8 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
 Usage:
     python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
 
-PROJECT_ROOT is the directory CONTAINING the VULCAN-JAX and vulcan-retrieval
-checkouts (same meaning as $VULCAN_PROJECT_ROOT).
+PROJECT_ROOT is the directory CONTAINING the VULCAN-JAX, vulcan-forward and
+vulcan-retrieval checkouts (same meaning as $VULCAN_PROJECT_ROOT).
 """
 from __future__ import annotations
 
@@ -249,6 +251,20 @@ def _check_data_tree(root: Path) -> None:
         _err(f"missing real spectrum CSVs in {cm24} (one-time data seed; see CLAUDE.md).")
     else:
         _ok(f"real spectrum CSVs present in {cm24}")
+    # Correlated-k tables: the PRODUCTION opacity path. A missing table raises
+    # deep inside the RT build, minutes into a job, so catch it in preflight.
+    prod = ("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S")
+    ckdir = data / "exomolop"
+    missing_k = [m for m in prod if not (ckdir / f"{m}.ktable.h5").exists()]
+    if missing_k:
+        _err(
+            f"missing ExoMolOP k-tables for {missing_k} in {ckdir}. These are the "
+            "production opacity (opacity_mode='exomolop'); sampled line-by-line is "
+            "REFUSED for inference. Fetch once with: python -m "
+            f"vulcan_forward.fetch_exomolop --molecules {','.join(prod)}"
+        )
+    else:
+        _ok(f"ExoMolOP k-tables present for {len(prod)} molecules in {ckdir}")
     lldir = data / "exojax_linelists"
     missing = [
         m
@@ -257,12 +273,13 @@ def _check_data_tree(root: Path) -> None:
     ]
     if missing:
         _warn(
-            f"HITRAN caches missing for {missing} in {lldir}; first run will "
-            "download via the NAS proxy."
+            f"HITRAN caches missing for {missing} in {lldir}; only the lbl FORWARD "
+            "path uses them, and the first such run downloads via the NAS proxy."
         )
     codir = data / "opacity_cache"
     if not (codir / "CO" / "12C-16O" / "Li2015").is_dir():
-        _err(f"missing cached CO ExoMol dir under {codir} (one-time data seed).")
+        _warn(f"missing cached CO ExoMol dir under {codir}: only the lbl FORWARD "
+              "path reads it; correlated-k runs use data/exomolop/ instead.")
     for cia in ("H2-H2_2011.cia", "H2-He_2011.cia"):
         if not (codir / cia).exists():
             _err(

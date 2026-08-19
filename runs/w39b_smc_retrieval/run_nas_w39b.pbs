@@ -40,6 +40,11 @@
 #   SMC_RETRIEVAL_PRESET    smoke | gpu | prod         (default gpu)
 #   SMC_RETRIEVAL_OVERRIDES JSON Config overrides      (optional)
 #   SMC_RETRIEVAL_OVERRIDES_FILE  JSON Config overrides file, relative to this dir (optional)
+#   SEED=<int>              independent SMC seed in its own out_dir (data/<preset>_seed<N>).
+#                           A SINGLE run's support-fraction error bar is NOT the
+#                           uncertainty on logZ or on the marginals; run >= 3 seeds
+#                           and quote the seed-to-seed spread (see the evidence_report
+#                           docstring). RESUME=1 composes with it.
 #   SYNTH=1                 inject-and-recover instead of fitting real data
 #   CALIBRATE_ONLY=1        time 1 likelihood + 1 mutation sweep, project, exit
 #   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
@@ -58,6 +63,12 @@
 #                           utilization). NSYS_GPU_METRICS_DEV overrides the device
 #                           list (default all); NSYS_GPU_METRICS_HZ the rate (1000)
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
+#
+# Deep-adiabat sensitivity (the interior temperature is FIXED and transmission does
+# not constrain it, while it does set the CO/CH4 quench points, so lnKzz inherits it):
+#   qsub -v SEED=1,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 100.0}' run_nas_w39b.pbs
+#   qsub -v SEED=2,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 300.0}' run_nas_w39b.pbs
+# Report how far lnKzz and lnZ move against their own statistical widths.
 #
 # On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
 # max|dlogL| < 0.1) run automatically; the verdict lands in the log + validate_warm.npz.
@@ -277,6 +288,17 @@ if [ "${SYNTH:-0}" = "1" ]; then
   # the real-data posterior)
   export SMC_RETRIEVAL_OVERRIDES="${SMC_RETRIEVAL_OVERRIDES:-{\"generate_synthetic_data\": true}}"
   export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/gpu_synth}"
+fi
+if [ -n "${SEED:-}" ]; then
+  # merge into whatever overrides are already set (SYNTH sets its own), and give
+  # the run its own output directory so seeds never overwrite each other
+  SMC_RETRIEVAL_OVERRIDES="$(python -c '
+import json, os
+d = json.loads(os.environ.get("SMC_RETRIEVAL_OVERRIDES") or "{}")
+d["seed"] = int(os.environ["SEED"])
+print(json.dumps(d))')"
+  export SMC_RETRIEVAL_OVERRIDES
+  export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}_seed${SEED}}"
 fi
 echo "preset=${SMC_RETRIEVAL_PRESET} overrides=${SMC_RETRIEVAL_OVERRIDES:-<none>}"
 

@@ -1,6 +1,6 @@
 """Live-T(P) condensation through the chemistry model.
 
-Validates the 2026-07-13 on-graph condensation rebuild end-to-end:
+Validates the on-graph condensation rebuild end-to-end:
 
 * the ProfileVars conden arrays in a live solve correspond to the PROPOSED
   temperature, never the baseline structural one;
@@ -146,8 +146,9 @@ def chem_iso(stack):
     # `except Exception: pytest.skip(...)` used to sit here, and it converted a
     # real TypeError -- vulcan_chem calling a VULCAN-JAX private method whose
     # signature had changed, which broke EVERY fresh forward run -- into a green
-    # skip. This is the one test in the workspace that actually builds the chem
-    # model, so swallowing its failures hid the defect from all of CI.
+    # skip. Only three tests in the workspace build the chem model for real
+    # (this one, test_warm_reject and test_warm_extrap, which reach it through
+    # build_pipeline), so swallowing their failures hides the defect from CI.
     try:
         return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval,
                                             n_tp_params=1)
@@ -394,8 +395,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     #        0.5 -> -4.87e13   0.25 -> +6.32e15   0.125 -> +1.71e16
     # i.e. FD ~ 1/dT: a fixed-size discontinuity (the pin captures at a discrete
     # accepted step) divided by 2*dT, not a converging difference quotient. The
-    # dT=0.5 used here lands on a near-cancellation and even flips sign, so the
-    # old per-species sign assertion was testing the step size.
+    # dT=0.5 used here lands on a near-cancellation and even flips sign.
     # The conserved RESERVOIR does have a derivative -- gas + condensate over
     # that same sweep: -1.264e14 -1.276e14 -1.263e14 -1.339e14 -1.338e14
     # -1.211e14, stable to ~5% across a 32x dT range, jvp -1.04e14 (18-22%).

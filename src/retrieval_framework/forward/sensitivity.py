@@ -46,8 +46,7 @@ def build_forward(profile: dict) -> SimpleNamespace:
         mmw_art = to_art(mmw_v)
         vmr = {key: to_art(ymix[:, col]) for key, col in mol_cols.items()}
         vmr_h2 = to_art(ymix[:, h2_col])
-        # He CIA was silently omitted before 2026-07-10 (vmr_he defaulted to None);
-        # the RT now REQUIRES it -- regenerate sensitivity.npz/wide_sensitivity.npz
+        # the RT REQUIRES vmr_he -- regenerate sensitivity.npz/wide_sensitivity.npz
         vmr_he = to_art(ymix[:, he_col])
         return rt.transmission_depth(vmr, vmr_h2, T_art, mmw_art, vmr_he=vmr_he)
 

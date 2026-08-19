@@ -40,23 +40,6 @@ BIN_R = 100.0
 BAND = (1900.0, 9900.0)
 
 
-def make_r_bins(wl_lo, wl_hi, R):
-    n = max(2, int(np.ceil(np.log(wl_hi / wl_lo) * R)))
-    return np.geomspace(wl_lo, wl_hi, n + 1)
-
-
-def bin_trapz(wl, y, edges):
-    w = np.empty_like(wl)
-    w[1:-1] = 0.5 * (wl[2:] - wl[:-2]); w[0] = wl[1] - wl[0]; w[-1] = wl[-1] - wl[-2]
-    idx = np.digitize(wl, edges) - 1
-    out = np.full(len(edges) - 1, np.nan)
-    for b in range(len(edges) - 1):
-        sel = idx == b
-        if sel.any():
-            out[b] = float(np.sum(w[sel] * y[sel]) / np.sum(w[sel]))
-    return out
-
-
 def binned_depth(chem, rt, config, interp_map):
     import jax.numpy as jnp
     to_art = interp_map.make_to_art(chem.p_bar, rt.p_art_bar)
@@ -96,7 +79,7 @@ def main() -> int:
                         nu_min=BAND[0], nu_max=BAND[1], nu_pts=1652,
                         art_nlayer=60, use_rayleigh=True)
     chem = vulcan_chem.build_chem_model(base_profile)
-    edges = make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
+    edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
     # A: clamp ladder (same chemistry, different ART tops)
     binned = {}
@@ -111,7 +94,7 @@ def main() -> int:
             wl, d = binned_depth(chem, rt, config, interp_map)
         finally:
             config.ART_PTOP_BAR = old
-        binned[top] = bin_trapz(wl, d, edges)
+        binned[top] = _artifact.bin_trapz(wl, d, edges)
         print(f"[topP] ART top {top:.0e} bar done ({time.time()-t0:.0f}s)", flush=True)
 
     tops = sorted(binned, reverse=True)   # coarse (1e-7) -> deep (1e-9)
@@ -144,7 +127,7 @@ def main() -> int:
             wl, d = binned_depth(chem_ext, rt, config, interp_map)
         finally:
             config.ART_PTOP_BAR = old
-        b_ext = bin_trapz(wl, d, edges)
+        b_ext = _artifact.bin_trapz(wl, d, edges)
         b_clamp = binned.get(1e-8)
         m = np.isfinite(b_ext) & np.isfinite(b_clamp)
         dppm = 1e6 * np.max(np.abs(b_ext[m] - b_clamp[m]))

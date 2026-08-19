@@ -1,10 +1,8 @@
 """The production certificate must fail closed.
 
-Item 12 of the 2026-08 handoff. The only archived production-like run in this
-repository is a 0.9-era forensic log that died at stage 2; it cannot show that
-current code succeeds, and no other artifact claims to. The certificate is what
-turns "the run finished" into "these numbers may be reported", so every one of
-its gates is exercised here on synthetic payloads -- no sampler, no chemistry.
+The certificate is what turns "the run finished" into "these numbers may be
+reported", so every one of its gates is exercised here on synthetic payloads --
+no sampler, no chemistry.
 """
 
 from __future__ import annotations
@@ -32,7 +30,8 @@ def _passing_cert():
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
         "data": {"observations": {"sha256": "b" * 64, "bytes": 1234}},
-        "resolved_config": {"smc_chem_mode": "cold", "nu_pts": 1652},
+        "resolved_config": {"smc_chem_mode": "cold", "nu_pts": 1652,
+                            "opacity_mode": "exomolop"},
         "resolved_config_sha256": "c" * 64,
         "target": {"smc_chem_mode": "cold",
                    "approximate_history_dependent_target": False,
@@ -43,9 +42,19 @@ def _passing_cert():
                      "log_support_fraction": -1.6,
                      "log_support_fraction_err": 0.04,
                      "f_tp": 0.8, "f_conv": 0.7},
-        "diagnostics": {k: [1, 2, 3] for k in
-                        ("ess", "acceptance_rate", "unique_particles",
-                         "warm_capped", "warm_stalled", "badgrad")},
+        "diagnostics": {
+            "ess": [110.0, 98.0, 105.0], "acceptance_rate": [0.55, 0.52, 0.49],
+            "unique_particles": [140, 120, 96],
+            "warm_capped": [12, 1, 0], "warm_stalled": [4, 0, 0],
+            "badgrad": [3, 1, 2],
+            "n_particles": 144, "n_mcmc_steps": 4,
+        },
+        "posterior": [
+            {"name": "lnZ", "median": 0.4, "q05": -0.2, "q95": 1.0,
+             "prior_lo": -2.303, "prior_hi": 2.303, "prior_position": 0.59},
+            {"name": "lnR0", "median": 0.0, "q05": -0.01, "q95": 0.01,
+             "prior_lo": -0.08, "prior_hi": 0.08, "prior_position": 0.5},
+        ],
         "warm_validation": None,
         "mala_reversibility": None,
         "validation_artifacts": {
@@ -91,9 +100,25 @@ def test_dirty_repo_is_refused():
 def test_missing_validation_artifact_is_refused():
     for name in REQUIRED_VALIDATION_ARTIFACTS:
         c = _passing_cert()
+        c["resolved_config"]["opacity_mode"] = "lbl"   # every artifact required
         c["validation_artifacts"][name] = None
         problems = validate(c, _replay())
         assert any(name in p and "missing" in p for p in problems), (name, problems)
+
+
+def test_broadening_artifact_is_not_required_on_the_correlated_k_path():
+    """ExoMolOP bakes H2/He widths into the tables and the engine ignores the
+    broadening key, so demanding that measurement would demand a number the run
+    cannot produce."""
+    c = _passing_cert()
+    c["validation_artifacts"]["broadening_ab"] = None
+    assert validate(c, _replay()) == []
+
+
+def test_an_unrecorded_opacity_mode_is_refused():
+    c = _passing_cert()
+    c["resolved_config"].pop("opacity_mode")
+    assert any("opacity_mode" in p for p in validate(c, _replay()))
 
 
 def test_failed_validation_artifact_is_refused():
@@ -143,6 +168,49 @@ def test_unknown_validation_artifact_status_is_refused():
     c = _passing_cert()
     c["validation_artifacts"]["resolution_ladder"]["status"] = None
     assert any("expected PASS" in p for p in validate(c, _replay()))
+
+
+# --- run health: a diagnostic that is PRESENT is not a diagnostic that PASSED --
+
+def test_particle_degeneracy_is_refused():
+    """N rows of a handful of distinct states still draws a smooth corner plot."""
+    c = _passing_cert()
+    c["diagnostics"]["unique_particles"] = [140, 120, 9]
+    assert any("particle degeneracy" in p for p in validate(c, _replay()))
+
+
+def test_ess_collapse_is_refused():
+    c = _passing_cert()
+    c["diagnostics"]["ess"] = [110.0, 12.0, 105.0]
+    assert any("ESS collapsed" in p for p in validate(c, _replay()))
+
+
+@pytest.mark.parametrize("acc", [[0.55, 0.5, 0.01], [0.55, 0.5, 0.99]])
+def test_acceptance_outside_the_band_is_refused(acc):
+    c = _passing_cert()
+    c["diagnostics"]["acceptance_rate"] = acc
+    assert any("acceptance" in p for p in validate(c, _replay()))
+
+
+def test_late_ladder_convergence_rejections_are_refused():
+    """warmcap/stalled late in the ladder mean the posterior sits on the
+    convergence cliff, so the target is set by count_max, not by the physics."""
+    c = _passing_cert()
+    c["diagnostics"]["warm_capped"] = [12, 1, 40]
+    assert any("convergence cliff" in p for p in validate(c, _replay()))
+
+
+def test_a_prior_railed_median_is_refused():
+    c = _passing_cert()
+    c["posterior"][0]["prior_position"] = 0.995
+    problems = validate(c, _replay())
+    assert any("prior edge" in p and "lnZ" in p for p in problems), problems
+
+
+def test_a_missing_posterior_summary_is_refused():
+    c = _passing_cert()
+    c["posterior"] = None
+    assert any("no posterior summary" in p for p in validate(c, _replay()))
 
 
 # --- warm runs ---------------------------------------------------------------
@@ -223,8 +291,15 @@ def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
     """An actual beta=1 output schema must not look like an empty run."""
     (tmp_path / "config.json").write_text(json.dumps({
         "smc_chem_mode": "cold", "warm_extrapolate": False,
+        "inferred_param_names": ["lnZ", "noise_inflation"],
+        "inferred_param_prior_types": ["uniform", "log10_uniform"],
+        "inferred_param_prior_lo": [-2.0, 0.5],
+        "inferred_param_prior_hi": [2.0, 3.0],
     }))
+    rng = np.random.default_rng(0)
+    draws = np.stack([rng.normal(1.0, 0.1, 64), rng.normal(1.0, 0.05, 64)], 1)
     np.savez(tmp_path / "posterior_samples.npz",
+             samples=draws.reshape(1, 64, 2),
              final_beta=np.asarray(1.0), reached_beta1=np.asarray(1),
              approximate_history_dependent_target=np.asarray(0))
     np.savez(tmp_path / "smc_extra_fields.npz",
@@ -246,3 +321,29 @@ def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
     assert cert["evidence"]["smc_logZ"] == pytest.approx(-123.4)
     assert cert["evidence"]["log_support_fraction"] == pytest.approx(-1.6)
     assert cert["evidence"]["log_support_fraction_err"] == pytest.approx(0.04)
+    # the prior-rail gate reads THESE keys; a rename must not turn it into a no-op
+    post = {r["name"]: r for r in cert["posterior"]}
+    assert post["lnZ"]["prior_position"] == pytest.approx(0.75, abs=0.05)
+    # a log10_uniform prior is flat in log10, so the position is measured there
+    assert post["noise_inflation"]["prior_position"] == pytest.approx(
+        (0.0 - np.log10(0.5)) / (np.log10(3.0) - np.log10(0.5)), abs=0.05)
+    assert certificate.rail_problems(cert["posterior"]) == []
+
+
+def test_data_identity_never_reports_null_opacity_without_saying_why(
+        tmp_path, monkeypatch):
+    """The certificate must not silently claim a run read no opacity data.
+
+    This repo never sets $VULCAN_FORWARD_DATA -- it hands the engine its tree
+    through paths.set_data_root -- so resolving the trees from the environment
+    yields null for a run that read gigabytes of them. Holds in any
+    environment: either the root resolves, or the certificate says why not.
+    """
+    monkeypatch.delenv("VULCAN_FORWARD_DATA", raising=False)
+    ident = certificate._data_identity(tmp_path, {})
+    assert not (ident["data_root_resolved"] is None
+                and "engine_data_error" not in ident), (
+        "data identity is null with no stated reason -- the environment-only "
+        "resolution regressed")
+    # the variable's own field reports the variable, never the resolved root
+    assert ident["VULCAN_FORWARD_DATA"] is None

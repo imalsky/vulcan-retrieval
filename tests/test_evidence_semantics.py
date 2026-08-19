@@ -1,4 +1,4 @@
-"""Evidence-semantics regression (2026-07-12 recheck P0-B).
+"""Evidence-semantics regression.
 
 The SMC samples the OPERATIONAL prior: the declared box conditioned on the
 T-P window (A) and chemistry convergence (C), renormalized, so its evidence

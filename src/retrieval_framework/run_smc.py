@@ -188,13 +188,14 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
     if DY is not None:
         DY = DY[idx]
-    scale_np = (P._abs_scale_diag(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
-                if cfg.mcmc_stage_adapt else np.ones(pipe.n_dim))
+    scale_np = (P._proposal_scale(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
+                if cfg.mcmc_stage_adapt else np.eye(pipe.n_dim))
     scale = jnp.asarray(scale_np, pipe.dtype)
+    scale_w = np.abs(np.diag(scale_np))        # per-dim proposal widths, for the log
     step_f = min(max(float(cfg.mala_step_size), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max)
     step = jnp.asarray(step_f, pipe.dtype)
     log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
-             f"step={step_f:.3g} scale=[{float(scale_np.min()):.3g}, {float(scale_np.max()):.3g}]")
+             f"step={step_f:.3g} width=[{float(scale_w.min()):.3g}, {float(scale_w.max()):.3g}]")
     # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
     t0 = time.perf_counter()
     out = mutate(key, U, Y, refs, L, G, DY, beta, step, scale,
@@ -215,14 +216,21 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
         "smc_chem_mode": pipe.chem_mode,
         "smc_rt_chunk": int(cfg.smc_rt_chunk), "smc_rt_vjp_chunk": int(cfg.smc_rt_vjp_chunk),
         "calibration_beta_stage0": float(dbeta), "calibration_step": step_f,
-        "calibration_scale_min": float(scale_np.min()), "calibration_scale_max": float(scale_np.max()),
+        "calibration_scale_min": float(scale_w.min()), "calibration_scale_max": float(scale_w.max()),
         "t_state_init_s": t_init,
         "t_mutation_compile_s": t_mut_compile, "t_mutation_sweep_s": t_mut,
         "mutation_accept_frac": float(jax.device_get(out[6])),
         "t_per_stage_s": per_stage,
         "projected_hours_15_stages": (t_init + t_mut_compile + 15 * per_stage) / 3600.0,
-        "projected_hours_25_stages": (t_init + t_mut_compile + 25 * per_stage) / 3600.0,
         "projected_hours_40_stages": (t_init + t_mut_compile + 40 * per_stage) / 3600.0,
+        f"projected_hours_{int(cfg.smc_max_steps)}_stages":
+            (t_init + t_mut_compile + int(cfg.smc_max_steps) * per_stage) / 3600.0,
+        "smc_max_steps": int(cfg.smc_max_steps),
+        # what the GOVERNOR actually allows in one job, which is the number that
+        # decides how many RESUME jobs a full ladder needs
+        "stages_per_job": (None if cfg.walltime_seconds <= 0 else
+                           int(max(0, (float(cfg.walltime_seconds) - t_init
+                                       - t_mut_compile) // max(per_stage, 1e-9)))),
         "walltime_budget_hours": float(cfg.walltime_seconds) / 3600.0,
     }
     (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
@@ -232,9 +240,9 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     budget = float(cfg.walltime_seconds)
     # REFUSE, don't warn. A projection that does not fit used to be a log line
     # in a job whose next step was a 24 h production submit, so the information
-    # arrived after the budget was spent. Cold chemistry (the default since
-    # 2026-08-03) is ~10-30x more chemistry per sweep, which makes this the
-    # normal case to hit rather than an exotic one.
+    # arrived after the budget was spent. Cold chemistry (the default) is
+    # ~10-30x more chemistry per sweep, which makes this the normal case to hit
+    # rather than an exotic one.
     proj["fits_walltime_budget"] = (
         None if budget <= 0 else bool((15 * per_stage) <= budget))
     (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
@@ -243,8 +251,10 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
             "CALIBRATION: the projection does NOT fit the walltime budget.\n"
             f"  per-stage sweep      {per_stage / 3600.0:.2f} h\n"
             f"  15 stages            {15 * per_stage / 3600.0:.2f} h\n"
-            f"  40 stages            {40 * per_stage / 3600.0:.2f} h\n"
+            f"  smc_max_steps={int(cfg.smc_max_steps):<3d}      "
+            f"{int(cfg.smc_max_steps) * per_stage / 3600.0:.2f} h\n"
             f"  governor budget      {budget / 3600.0:.2f} h\n"
+            f"  stages per job       {proj['stages_per_job']}\n"
             f"  chem mode            {pipe.chem_mode}\n"
             "A tempering ladder that cannot reach beta=1 inside the budget "
             "produces no posterior, so this refuses rather than letting a "
@@ -398,7 +408,7 @@ def main() -> None:
                    smc_logZ_increment=res["logZ_increment"], smc_logZ=np.asarray(res["logZ"]),
                    smc_step_size_history=res["step_size_history"],
                    smc_unique_particles=res["unique_particles"],
-                   smc_scale_diag_final=res["scale_diag_final"],
+                   smc_scale_chol_final=res["scale_chol_final"],
                    smc_warm_capped=res["warm_capped"],
                    smc_warm_stalled=res["warm_stalled"],
                    smc_tangent_rejected=res["tangent_rejected"],
@@ -407,8 +417,7 @@ def main() -> None:
                    # support fractions + the ZERO-FILLED box evidence ride along --
                    # quote them together (see run_smc_loop / evidence_report
                    # docstrings). The retracted f_tp-only smc_logZ_box_physical is
-                   # intentionally NOT exported (2026-07-12 recheck P0-B: it
-                   # reconstructs no integral).
+                   # intentionally NOT exported (it reconstructs no integral).
                    smc_log_support_fraction=np.asarray(res["log_support_fraction"]),
                    smc_log_support_fraction_err=np.asarray(res["log_support_fraction_err"]),
                    smc_logZ_box=np.asarray(res["logZ_box"]),

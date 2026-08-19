@@ -21,8 +21,8 @@ The parameter vector for the reported figures is
                 no instrument is assumed absolutely depth-calibrated. lnR0 cannot stand
                 in for the first group's offset: it is a physical radiative-transfer
                 derivative, generally NOT constant in wavelength, so the calibration
-                offset and lnR0 are distinct nuisance directions (the same P0-A
-                distinction vulcan-jwst-tool fisher.py documents; 2026-07-12 recheck).
+                offset and lnR0 are distinct nuisance directions (the same
+                distinction vulcan-jwst-tool fisher.py documents).
                 Any exact or near redundancy this introduces is the job of the
                 rank-aware whitened inversion below -- never of manually dropping a
                 column. offset_model="reference_fixed" reproduces the pre-2026-07-20
@@ -34,7 +34,7 @@ The parameter vector for the reported figures is
 We build the full Fisher F = J^T diag(1/sigma^2) J, invert it, and REPORT the
 (lnZ, dlnCO) 2x2 sub-block of C = F^-1 -- i.e. everything else is MARGINALIZED, not
 fixed. Marginalizing (not fixing) Kzz/dT/R0/offsets is what makes the error bars
-honest; see docs.
+honest.
 
 NOT modeled (documented as a toy limitation, per Isaac's scope decision): clouds/hazes,
 a free T-P profile beyond the uniform shift, individual molecular abundances, stellar
@@ -250,8 +250,8 @@ def build_design(tier_payload, wl_model, obs, use_lnR0=True, use_offsets=True,
                 keep=keep, offset_model=(offset_model if use_offsets else None))
 
 
-# Rank thresholds, ported one-to-one from vulcan-jwst-tool fisher.py (2026-07-12
-# scale-invariance audit): the rank decision runs on the Jacobi-whitened
+# Rank thresholds, ported one-to-one from vulcan-jwst-tool fisher.py
+# (scale-invariance audit): the rank decision runs on the Jacobi-whitened
 # (unit-diagonal, correlation-form) matrix, whose eigen-spectrum is invariant
 # under per-parameter unit changes -- thresholding the raw mixed-unit matrix
 # flipped finite constraints under a pure rescaling. eigh's noise floor is
@@ -364,13 +364,6 @@ def ellipse_xy(C2, center=(0.0, 0.0), dchi2=2.30, n=240):
     t = np.linspace(0, 2 * np.pi, n)
     pts = (vecs @ np.diag(np.sqrt(np.maximum(vals, 0.0) * dchi2))) @ np.stack([np.cos(t), np.sin(t)])
     return center[0] + pts[0], center[1] + pts[1]
-
-
-def scale_sigma(obs, n_transits=1):
-    """Return a copy of obs with per-bin sigma scaled as random noise: sigma/sqrt(N)."""
-    o = dict(obs)
-    o["sigma"] = obs["sigma"] / np.sqrt(n_transits)
-    return o
 
 
 # --------------------------------------------------------------------------- #

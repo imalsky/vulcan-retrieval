@@ -24,7 +24,6 @@ warm_count_max or run the final ladder stages with smc_chem_mode="cold".
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -32,13 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+# one copy of the hash primitive, owned by the certificate module
+from retrieval_framework.certificate import _sha256
 
 
 def main() -> int:

@@ -56,7 +56,7 @@ def extrap():
     """One converged particle + its tangents from the real smoke pipeline built with
     warm_extrapolate=True: (pipe, U0, Y_cold, refs_cold, DY, L0, G0)."""
     # warm_extrapolate seeds the WARM continuation, so this file must ask for
-    # warm mode explicitly. `smc_chem_mode` defaults to "cold" since 2026-08-03;
+    # warm mode explicitly. `smc_chem_mode` defaults to "cold";
     # inheriting it here made validate_config raise inside the try below, and the
     # tests then SKIPPED with a message that read like a missing-data problem --
     # a silent coverage loss of exactly the kind this repo treats as a defect
@@ -65,7 +65,9 @@ def extrap():
                               smc_chem_mode="warm")
     try:
         pipe = P.build_pipeline(cfg)
-    except Exception as e:                       # missing fastchem / data / env / import
+    # Skip ONLY on a missing-data or missing-dependency environment, for the
+    # reason the comment above gives: skipped is not passed.
+    except (FileNotFoundError, OSError, ImportError) as e:
         pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
 
@@ -113,7 +115,7 @@ def test_mutation_kernel_carries_tangents(extrap):
     mutate = P._make_mutation(pipe, 1)
     out = mutate(jax.random.PRNGKey(3), U0, Y, refs, L0, G0, DY,
                  jnp.asarray(0.5, jnp.float64), jnp.asarray(0.01, jnp.float64),
-                 jnp.ones((pipe.n_dim,), jnp.float64))
+                 jnp.eye(pipe.n_dim, dtype=jnp.float64))
     U1, Y1, refs1, L1, G1, DY1, acc, n_bad, n_capped, n_stalled = out
     assert int(n_bad) == 0
     assert int(n_capped) == 0

@@ -3,13 +3,12 @@
 cold two-stage init across many independent prior draws, so count_max can be set from
 data instead of a guess.
 
-Why this exists: README.md/config_schema.py only had two anchor points -- a single
-baseline warm-up convergence (2667 steps, job 64144) and a qualitative "typical ~5k"
-claim -- neither is a real percentile over the actual prior. This script draws
-``--n-draws`` samples from the SAME prior the production run uses (same seed
-derivation as run_smc.py's calibrate()), runs the batched full-width cold two-stage
-solve via ``pipeline.batch_eval_cold_l_diag`` (the diagnostic evaluator added
-2026-07-07 for the count_max loud-failure check), and reports the empirical
+Why this exists: a single baseline warm-up convergence (2667 steps, job 64144) and
+a qualitative "typical ~5k" claim are not a percentile over the actual prior. This
+script draws ``--n-draws`` samples from the SAME prior the production run uses (same
+seed derivation as run_smc.py's calibrate()), runs the batched full-width cold
+two-stage solve via ``pipeline.batch_eval_cold_l_diag`` (the diagnostic evaluator
+for the count_max loud-failure check), and reports the empirical
 accept_count distribution -- so you can pick a count_max that actually covers a
 chosen fraction of the prior instead of guessing.
 
@@ -77,8 +76,8 @@ def main() -> None:
 
     # Force the calibration to a cheap native resolution (default R=100). accept_count
     # depends only on the chemistry (nz, molecules, priors), NOT on nu_pts, so running
-    # the RT at R=100 instead of the production R~10000 measures the same step counts for
-    # a fraction of the build time, RT cost, and memory. exojax's premodit grid is
+    # the RT at R=100 instead of the production resolution measures the same step counts
+    # for a fraction of the build time, RT cost, and memory. exojax's premodit grid is
     # log-uniform, so R = (nu_pts-1)/ln(nu_max/nu_min); invert for the target R.
     if args.resolution > 0:
         span = math.log(float(cfg.nu_max) / float(cfg.nu_min))

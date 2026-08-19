@@ -1,7 +1,7 @@
 """Offset-model regression tests for the Z-C/O Fisher machinery (zco_lib).
 
-Pins the 2026-07-20 offset correction (propagated from vulcan-jwst-tool's
-2026-07-12 P0-A audit fix): under offset_model="all_groups" EVERY instrument
+Pins the offset correction (propagated from vulcan-jwst-tool's audit
+fix): under offset_model="all_groups" EVERY instrument
 group carries a depth-offset nuisance, the first included, because lnR0 is a
 physical radiative-transfer derivative (not spectrally constant) and cannot
 absorb an absolute depth-calibration error. Three contracts:

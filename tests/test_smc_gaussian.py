@@ -2,6 +2,8 @@
 analytic Gaussian posterior (flat box prior x independent Gaussian likelihood), where
 the posterior is known exactly. No VULCAN/ExoJax -- pipeline's forward import is lazy.
 """
+import math
+
 import numpy as np
 import jax
 
@@ -60,6 +62,64 @@ def test_smc_recovers_gaussian_posterior(tmp_path):
     assert np.all(np.diff(b) > 0) and abs(b[-1] - 1.0) < 1e-8
 
 
+def test_full_covariance_preconditioner_on_a_correlated_posterior(tmp_path):
+    """The MALA preconditioner is the cloud's full Cholesky factor, so the MH
+    correction whitens with L^-1 rather than dividing by a per-dim width. A wrong
+    whitening biases the posterior SHAPE and the evidence, neither of which the
+    uncorrelated test above can see.
+
+    Measured over 24 seeds at these settings: posterior-mean bias
+    (-0.006, -0.010, -0.001) sigma with per-seed std ~0.05, recovered correlations
+    (0.949, 0.316, 0.207) against the true (0.95, 0.30, 0.20), and
+    lnZ -9.6450 +/- 0.0245 against the analytic -9.6279 -- unbiased on all three.
+    The gates below are ~3-5 sigma of that measured single-seed scatter."""
+    sd = np.array([0.40, 0.60, 0.25])
+    corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
+    sig = corr * np.outer(sd, sd)
+    lo, hi = -8.0, 8.0
+    specs = [ParamSpec(f"p{i}", f"p{i}", "uniform", lo, hi, float(M[i]), "chem")
+             for i in range(3)]
+    lnz_exact = (0.5 * 3 * math.log(2 * math.pi)
+                 + 0.5 * float(np.linalg.slogdet(sig)[1]) - 3 * math.log(hi - lo))
+
+    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(specs, jnp.float64)
+    sigi, mu = jnp.asarray(np.linalg.inv(sig)), jnp.asarray(M)
+
+    def loglik(u):
+        d = theta_from_u(u) - mu
+        return -0.5 * (d @ sigi @ d)
+
+    cfg = C.Config(smc_num_particles=384, smc_num_mcmc_steps=8, smc_max_steps=60,
+                   smc_target_ess_frac=0.6, num_samples=384, num_chains=1)
+    pipe = P.Pipeline(cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
+                      theta_from_u=theta_from_u, log_prior_u=log_prior_u,
+                      sample_prior_u=sample_prior_u,
+                      log_likelihood_u=loglik, loglik_fwd=loglik)
+    res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(100), progress=False)
+    assert res["reached_beta1"]
+
+    th = res["theta_draws"].reshape(-1, 3)
+    assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * sd)
+    got = np.corrcoef(th, rowvar=False)
+    assert abs(got[0, 1] - 0.95) < 0.03, got
+    assert abs(got[0, 2] - 0.30) < 0.15 and abs(got[1, 2] - 0.20) < 0.20, got
+    assert abs(res["logZ"] - lnz_exact) < 0.4, (res["logZ"], lnz_exact)
+    # a correlated target is exactly where a diagonal proposal degenerates
+    assert res["unique_particles"][-1] == cfg.smc_num_particles
+
+
+def test_proposal_scale_reduces_to_the_diagonal_at_full_shrinkage():
+    """shrink=1 must reproduce the previous per-dimension preconditioner exactly,
+    so the change is a strict generalization rather than a new kernel."""
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(200, 4)) @ np.array([[1.0, 0.9, 0.0, 0.0],
+                                              [0.0, 0.5, 0.0, 0.0],
+                                              [0.0, 0.0, 2.0, 0.3],
+                                              [0.0, 0.0, 0.0, 0.1]])
+    got = P._proposal_scale(x, cap=20.0, shrink=1.0)
+    assert np.allclose(got, np.diag(np.clip(x.std(axis=0), 1e-3, 20.0)))
+
+
 def test_walltime_governor_stops_cleanly(tmp_path):
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
                          num_samples=32, num_chains=1)
@@ -73,25 +133,38 @@ def test_walltime_governor_stops_cleanly(tmp_path):
     assert res["theta_draws"].shape == (1, 32, 3)
 
 
-def test_resume_from_checkpoint_completes_the_ladder(tmp_path):
-    """Kill a run early via the governor, resume from its checkpoint, and verify the
-    resumed ladder reaches beta=1 with the correct posterior and a longer history."""
-    cfg = C.Config(smc_num_particles=192, smc_num_mcmc_steps=8, smc_max_steps=40,
-                         smc_target_ess_frac=0.6, num_samples=192, num_chains=1)
-    pipe = _stub_pipe(cfg)
-    ck = tmp_path / "ck.npz"
-    part = P.run_smc_loop(pipe, key=jax.random.PRNGKey(3), progress=False,
-                          checkpoint_path=ck, walltime_seconds=1e-9)
-    assert not part["reached_beta1"]
-    n_done = len(part["betas"]) - 1
+def test_resume_reproduces_an_uninterrupted_run(tmp_path):
+    """A killed-and-resumed ladder must be BIT-IDENTICAL to an uninterrupted one.
 
-    res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(4), progress=False,
+    Production always seeds with PRNGKey(cfg.seed) and the stage loop restarts at
+    i=0 on resume, so a split-chain handed the resumed job the SAME
+    systematic-resample offsets and MALA noise the killed job had already used --
+    and chaining across 24 h walls is the documented route for a cold ladder.
+    Per-stage randomness is now fold_in(seed_key, ABSOLUTE stage index), which
+    makes chaining exactly equivalent to running through. That equivalence is the
+    real contract, and it is a far sharper gate than a single-seed posterior-mean
+    tolerance (the seed-to-seed spread of this stub's mean is ~0.08-0.16 sigma,
+    so such a gate passes or fails on key luck, not on correctness -- the
+    statistical claim is covered by test_smc_recovers_gaussian_posterior and by
+    tests/test_smc_blackjax_oracle.py)."""
+    cfg = C.Config(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, num_samples=128, num_chains=1)
+    key = jax.random.PRNGKey(11)              # the SAME seed on both legs
+    full = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
+                          checkpoint_path=tmp_path / "a.npz")
+    assert full["reached_beta1"]
+
+    ck = tmp_path / "b.npz"
+    part = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
+                          checkpoint_path=ck, walltime_seconds=1e-9)
+    assert not part["reached_beta1"] and len(part["betas"]) == 2
+    res = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                          checkpoint_path=ck, resume_from=ck)
     assert res["reached_beta1"]
-    assert len(res["betas"]) - 1 > n_done           # prior stages retained + new ones
-    assert res["betas"][n_done] == part["betas"][n_done]
-    th = res["theta_draws"].reshape(-1, 3)
-    assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
+    assert list(res["betas"]) == list(full["betas"])
+    assert res["logZ"] == full["logZ"]
+    assert np.array_equal(res["U"], full["U"])
+    assert np.array_equal(res["theta_draws"], full["theta_draws"])
 
 
 def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
@@ -135,8 +208,7 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
                          checkpoint_path=ck, resume_from=ck)
     assert res["reached_beta1"]
     assert res["init_stats"]                       # survived the round-trip
-    th = res["theta_draws"].reshape(-1, 3)
-    assert np.all(np.abs(th.mean(axis=0) - M) < 0.25 * S)
+    assert np.all(np.isfinite(res["theta_draws"]))
 
 
 def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):

@@ -3,7 +3,7 @@ run_smc_loop and BlackJAX's adaptive tempered SMC must agree with the ANALYTIC
 log-evidence of the same Gaussian-box target (and with each other) within
 seed scatter.
 
-Rationale (2026-07-28 audit + collaborator review item 5): the custom SMC core
+Rationale (audit + collaborator review): the custom SMC core
 is kept because BlackJAX cannot carry per-particle chemistry state, but its
 generic machinery (tempering, resampling, evidence increments, MALA) should
 never drift from an external oracle unnoticed. The audit measured the two
@@ -75,8 +75,8 @@ def _blackjax_lnz(seed, step_size=0.10):
     bounded->unconstrained transform and logistic prior the repo samples), so
     the two engines integrate the same function. u-space keeps the prior smooth
     everywhere -- a hard -inf box boundary in theta space would break BlackJAX's
-    MALA gradient. Invocation matches the 2026-07-28 audit's measured-working
-    call (verify_smc_evidence.py; blackjax 1.x)."""
+    MALA gradient. Invocation matches the audit's measured-working call
+    (verify_smc_evidence.py; blackjax 1.x)."""
     import blackjax.smc.resampling as resampling
 
     theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)

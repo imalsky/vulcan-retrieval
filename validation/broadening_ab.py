@@ -39,23 +39,6 @@ DECISION_INVISIBLE_PPM = 5.0
 BAND = (1900.0, 9900.0)
 
 
-def make_r_bins(wl_lo, wl_hi, R):
-    n = max(2, int(np.ceil(np.log(wl_hi / wl_lo) * R)))
-    return np.geomspace(wl_lo, wl_hi, n + 1)
-
-
-def bin_trapz(wl, y, edges):
-    w = np.empty_like(wl)
-    w[1:-1] = 0.5 * (wl[2:] - wl[:-2]); w[0] = wl[1] - wl[0]; w[-1] = wl[-1] - wl[-2]
-    idx = np.digitize(wl, edges) - 1
-    out = np.full(len(edges) - 1, np.nan)
-    for b in range(len(edges) - 1):
-        sel = idx == b
-        if sel.any():
-            out[b] = float(np.sum(w[sel] * y[sel]) / np.sum(w[sel]))
-    return out
-
-
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
@@ -81,7 +64,7 @@ def main() -> int:
     y = chem.converged_y(jnp.zeros(4, dtype=jnp.float64))
     ymix = y / jnp.sum(y, axis=1, keepdims=True)
     he, h2 = chem.sidx["He"], chem.sidx[config.BULK_H2_VULCAN]
-    edges = make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
+    edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
     binned = {}
     for mode in ("air", "h2he"):
@@ -97,7 +80,7 @@ def main() -> int:
                                   vmr_he=to_art(ymix[:, he]))
         wl = np.asarray(rt.wl_um, np.float64)
         o = np.argsort(wl)
-        binned[mode] = bin_trapz(wl[o], np.asarray(d, np.float64)[o], edges)
+        binned[mode] = _artifact.bin_trapz(wl[o], np.asarray(d, np.float64)[o], edges)
         print(f"[ab] {mode} done ({time.time()-t0:.0f}s)", flush=True)
 
     da, db = binned["air"], binned["h2he"]

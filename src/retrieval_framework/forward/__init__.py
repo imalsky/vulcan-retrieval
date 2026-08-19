@@ -1,9 +1,9 @@
 """Retrieval-side configuration and composition for the shared forward engine.
 
-The forward-model ENGINE moved to the ``vulcan-forward`` distribution
-(2026-07-29): ``vulcan_chem``, ``exojax_rt`` and ``interp_map`` now live at
-``vulcan_forward.*`` and are shared with vulcan-jwst-tool, so neither
-application depends on the other. What remains here is this repo's own:
+The forward-model ENGINE lives in the ``vulcan-forward`` distribution:
+``vulcan_chem``, ``exojax_rt`` and ``interp_map`` are at ``vulcan_forward.*``
+and are shared with vulcan-jwst-tool, so neither application depends on the
+other. What remains here is this repo's own:
 
 - ``config``      -- this repo's paths + WASP-39 b case constants + run
                      profiles + parameter-vector labels; re-exports the shared

@@ -74,6 +74,28 @@ class Config:
     # PROBE_MEMORY=1 first. See the RT-resolution note in ../../CLAUDE.md -- this has bitten
     # the run repeatedly.
     nu_pts: int = 1652
+    # Opacity treatment. "exomolop" (the default) is correlated-k from the
+    # published ExoMolOP tables: ExoMol/HITEMP high-temperature line lists with
+    # H2/He broadening already applied, integrated over each R=1000 band offline.
+    # "lbl" samples the cross section directly on nu_pts points, which exojax's
+    # own wavenumber_grid warns is valid only above R = 700,000 -- three orders
+    # of magnitude beyond anything the RT-vjp gradient memory allows here.
+    #
+    # MEASURED on the production band (1900-9900 cm^-1, the 8 production
+    # molecules, one fixed atmosphere so the difference is opacity alone, binned
+    # to the R=100 of the fitted Carter & May products):
+    #   lbl nu_pts=1652 vs exomolop   mean-removed rms 857 ppm, max 3177 ppm,
+    #                                 feature amplitude ratio 1.300
+    #   lbl nu_pts=13216 (8x) vs same  rms 667 ppm, ratio 1.294
+    # It does not converge: adjacent lbl rungs differ by ~750 ppm max at every
+    # step, while the CM24 bins this retrieval fits have a MEDIAN sigma of 70 ppm.
+    # A 12-sigma shape error is not a modelling approximation, so validate_config
+    # refuses "lbl" for an inference run rather than letting a retrieval absorb it
+    # into lnZ, C/O, the cloud deck and the offsets. "lbl" stays available for
+    # forward models (run_inference=False) and is the only path that supports a
+    # Mie deck. nu_pts is IGNORED in exomolop mode -- the band grid comes from the
+    # tables.
+    opacity_mode: str = "exomolop"
     art_nlayer: int = 60
     use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
     co_mode: str = "fixed_O"           # C/O GUESS construction (elemental mode repairs it exactly)
@@ -152,7 +174,7 @@ class Config:
     dt_max: Optional[float] = None
     # Cold-init handling of prior draws whose chemistry doesn't converge within
     # count_max (a real, expected minority at extreme prior corners -- hot + extreme-Kzz
-    # -- for a full-kinetics forward; see README.md sec K). Best practice (petitRADTRANS,
+    # -- for a full-kinetics forward). Best practice (petitRADTRANS,
     # nested-sampling codes, Herbst-Schorfheide SMC): REJECT the failed draw with -inf
     # likelihood and OVERSAMPLE the init so the culled cloud still has N healthy
     # particles. pipeline._init_state draws ceil(N*init_oversample), rejects the
@@ -180,12 +202,16 @@ class Config:
     fastchem_met_scale: float = 10.0   # BASELINE metallicity (x solar); lnZ is relative to this
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
 
-    # ---- planet identity (case presets set these; empty -> shared-lib defaults) ---
+    # ---- planet identity (every case MUST set these; unset is a hard error) ----
+    # These defaults exist only so the dataclass is constructible; they are not
+    # fallbacks. validate_config REFUSES an unset value rather than substituting
+    # a shared-lib WASP-39b one, because silently modelling a different planet is
+    # the failure this repo most wants to make impossible.
     # VULCAN baseline config name for the chemistry pre-loop, loaded via
-    # vulcan_jax.load_config (e.g. "W39b"); "" -> config.py's W39B_CFG_NAME.
+    # vulcan_jax.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
-    # Planet/stellar radii for the RT depth normalization (cm); None -> config.py's
-    # RP_CM / RSTAR_CM. tp_gravity_cgs below doubles as the RT's g_btm.
+    # Planet/stellar radii for the RT depth normalization (cm).
+    # tp_gravity_cgs below doubles as the RT's g_btm.
     rp_cm: Optional[float] = None
     rstar_cm: Optional[float] = None
     # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
@@ -308,7 +334,7 @@ class Config:
     # steps per stage (k=3 is Chopin & Ridgway's floor, called "very sub-optimal" only
     # for HARD stages by Dau & Chopin; Buchholz+ 2018 adaptively stop near ~5 on
     # well-preconditioned targets). With the absolute-std preconditioner + per-stage
-    # step adaptation here, 6 is the right planning number; the old 12 was ~2x generous.
+    # step adaptation here, 6 is the right planning number.
     smc_num_mcmc_steps: int = 6
     # Preconditioned MALA with the staged forward-jvp(chem)+vjp(RT) gradient -- the
     # only supported kernel. No gradient-free fallback exists ON PURPOSE: a flagged
@@ -338,7 +364,7 @@ class Config:
     # "cold": the published solve-from-baseline (two-stage) map for EVERY
     #         evaluation. The likelihood is then a FIXED, DETERMINISTIC function
     #         of theta -- the target MALA, SMC tempering, and a quoted Bayesian
-    #         evidence all assume. THE DEFAULT since 2026-08-03.
+    #         evidence all assume. THE DEFAULT.
     # "warm": every MCMC proposal's chemistry re-converges by CONTINUATION from
     #         the particle's carried converged column (incremental lnZ/C-O
     #         scaling -- the validated Hessian-campaign pattern). ~count_min-step
@@ -373,15 +399,16 @@ class Config:
     # chunks per sweep). PROBE_MEMORY=1 before raising it further or changing nu_pts.
     smc_rt_vjp_chunk: int = 6
     # Particles per lax.map chunk through the CHEMISTRY GRADIENT stage. 0 = no
-    # chunking (full width) -- default since the 2026-07-07 probe: STAGED chem
-    # tangent lanes cost ~20 MB per lane-pair (0.78 GiB at 36 lanes, and
-    # nu-independent), NOT the ~1.3 GB previously claimed here -- that figure was
-    # the old all-in-one architecture's PreMODIT tangents (the 390 GiB OOM),
-    # misattributed to photo temporaries. Primal chemistry is ~55 MB/lane
-    # (5.3 GiB at 96-wide).
+    # chunking (full width) is the default: STAGED chem tangent lanes cost
+    # ~20 MB per lane-pair (0.78 GiB at 36 lanes, and nu-independent). Primal
+    # chemistry is ~55 MB/lane (5.3 GiB at 96-wide).
     smc_chem_chunk: int = 0
 
     # step-size auto-tuning (one-shot pilot) + per-stage adaptation
+    # One-shot pilot tuner. run_smc_loop only runs it when mcmc_stage_adapt is
+    # OFF: with per-stage adaptation the pilot's answer is overwritten by the
+    # first Robbins-Monro update, so paying for it would be waste. Both default
+    # True, which means the pilot is INACTIVE in every shipped preset.
     mcmc_auto_tune: bool = True
     mcmc_tune_beta: float = 0.3
     mcmc_tune_particles: int = 12
@@ -425,6 +452,7 @@ class Config:
             nu_min=float(self.nu_min),
             nu_max=float(self.nu_max),
             nu_pts=int(self.nu_pts),
+            opacity_mode=str(self.opacity_mode),
             art_nlayer=int(self.art_nlayer),
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
@@ -625,12 +653,32 @@ def validate_config(cfg: Config) -> None:
         import warnings
         warnings.warn("use_photo=False: the forward-mode tangent is only validated with "
                       "photochemistry ON (see config.FULL notes). Proceed with caution.")
+    if str(cfg.opacity_mode) not in ("exomolop", "lbl"):
+        raise ValueError(f"unknown opacity_mode {cfg.opacity_mode!r} "
+                         "(expected 'exomolop' or 'lbl')")
+    # Sampled line-by-line is biased at every affordable nu_pts, by ~12x the
+    # per-bin noise of the data this retrieval fits. Numbers + provenance: the
+    # opacity_mode field comment. Refuse it for inference rather than let the
+    # free parameters absorb an opacity error (loud-errors rule).
+    if str(cfg.opacity_mode) == "lbl" and bool(cfg.run_inference):
+        raise ValueError(
+            "opacity_mode='lbl' with run_inference=True is refused. Sampling the "
+            "cross section on nu_pts points is valid only above exojax's critical "
+            "R = 700,000; on the production band at nu_pts=1652 it differs from "
+            "the ExoMolOP correlated-k opacity by 857 ppm rms (max 3177 ppm) in "
+            "binned R=100 shape and inflates the feature amplitude by 1.30x, "
+            "against a median observed sigma of 70 ppm -- and 8x more points "
+            "moves that to 667 ppm / 1.29x, so it does not converge. A retrieval "
+            "would absorb it into lnZ, C/O, the cloud deck and the instrument "
+            "offsets. Use opacity_mode='exomolop' (the default). 'lbl' remains "
+            "supported for FORWARD models (run_inference=False) and is the only "
+            "path that carries a Mie deck.")
     # RT-vjp gradient memory scales with nu_pts (job 64601: nu_pts=16500 -> 343 GiB ->
     # OOM on the 96 GB GH200). R~1000 == nu_pts~1652 for the production band is the
     # memory-safe DEFAULT; warn loudly above it so a resolution bump can't silently
     # reintroduce the OOM (this has recurred). Not fatal -- a deliberate high-res run with
     # a heavier smc_rt_vjp_chunk can be valid -- but PROBE_MEMORY=1 FIRST.
-    if int(cfg.nu_pts) > 2500:
+    if str(cfg.opacity_mode) == "lbl" and int(cfg.nu_pts) > 2500:
         import warnings
         warnings.warn(
             f"nu_pts={cfg.nu_pts} exceeds the memory-safe ~1652 (R~1000) default: the "
@@ -651,8 +699,8 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     if specs is None:
         # Offset parameters are named per non-REFERENCE group, and the reference is
         # the wavelength-first group (see the combo field comment), NOT combo[0] --
-        # naming the banner's offsets from cfg.combo printed the WRONG parameter for
-        # any combo not already in wavelength order (audit 2026-07-28, OFF-3). Derive
+        # naming the banner's offsets from cfg.combo prints the WRONG parameter for
+        # any combo not already in wavelength order. Derive
         # the order the pipeline will actually use by reading the product CSVs (cheap,
         # numpy-only); band-edge bin drops can still differ slightly from the built
         # pipeline, which logs its resolved groups after build.
@@ -673,7 +721,11 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     def rule(title=""):
         return f"  --- {title} " + "-" * max(0, W - 8 - len(title)) if title else "  " + "-" * (W - 2)
 
+    ckd = str(cfg.opacity_mode) == "exomolop"
     R = (int(cfg.nu_pts) - 1) / math.log(float(cfg.nu_max) / float(cfg.nu_min))
+    opa = ("correlated-k (ExoMolOP tables, R=1000 bands, H2/He broadening)" if ckd
+           else f"SAMPLED line-by-line, nu_pts={cfg.nu_pts} (native R~{R:.0f}) "
+                "-- BIASED below R=700000")
     wl_lo, wl_hi = 1e4 / float(cfg.nu_max), 1e4 / float(cfg.nu_min)
     cmax = "(vulcan_cfg default)" if cfg.count_max is None else str(int(cfg.count_max))
     cmin = "(vulcan_cfg default)" if cfg.count_min is None else str(int(cfg.count_min))
@@ -687,9 +739,10 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    out_dir={cfg.out_dir}",
         bar,
         rule("forward model"),
-        f"    nz={cfg.nz}   nu_pts={cfg.nu_pts} (native R~{R:.0f}, {wl_lo:.2f}-{wl_hi:.2f} um)"
-        f"   art_nlayer={cfg.art_nlayer}",
+        f"    nz={cfg.nz}   band {wl_lo:.2f}-{wl_hi:.2f} um   art_nlayer={cfg.art_nlayer}",
+        f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
+        f"    broadening={'from the ExoMolOP tables' if ckd else cfg.broadening}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
@@ -711,8 +764,10 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
         rule("SMC  (adaptive-tempered + forward-jvp MALA)"),
         f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
-        f"max_stages={cfg.smc_max_steps}   target_ess_frac={cfg.smc_target_ess_frac:g}   "
-        f"step={cfg.mala_step_size:g}",
+        f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
+        f"target_ess_frac={cfg.smc_target_ess_frac:g}   step={cfg.mala_step_size:g}",
+        f"    preconditioner: full cloud covariance (Cholesky)   "
+        f"step tuning: {'per-stage Robbins-Monro (pilot inactive)' if cfg.mcmc_stage_adapt else ('one-shot pilot' if cfg.mcmc_auto_tune else 'fixed')}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
         f"   warm_extrapolate={'on' if cfg.warm_extrapolate else 'off'}   "
         f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",

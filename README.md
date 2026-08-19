@@ -17,13 +17,15 @@ compiler for FastChem. Clone the repository (the code finds `data/` and
 ```bash
 git clone https://github.com/imalsky/vulcan-retrieval.git
 cd vulcan-retrieval
-python -m pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "vulcan-jax>=0.3.0"
+python -m pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "vulcan-jax>=0.3.0" "vulcan-forward>=0.4.0"
 python -m pip install -e ".[dev]"
 ```
 
-Large opacity files are not tracked; place the CO line list and the two CIA
-tables under `data/opacity_cache/` (the H2-He file comes from HITRAN).
-`validate_env` checks the whole setup.
+Opacity data is not tracked. Retrievals use correlated-k tables from
+[ExoMolOP](https://www.exomol.com/data/data-types/opacity/), fetched once with
+`python -m vulcan_forward.fetch_exomolop --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S`
+into `data/exomolop/`; the two CIA tables go under `data/opacity_cache/` (the
+H2-He file comes from HITRAN). `validate_env` checks the whole setup.
 
 ## Quick start
 
@@ -36,7 +38,8 @@ python -m retrieval_framework.plot_smc runs/w39b_smc_retrieval/data/smoke
 
 Entry points (all take a case directory): `run_smc` (add `--calibrate` to
 time one batch), `smoke_retrieval` (gradient checks), `calibrate_count_max`,
-`probe_memory`, `validate_warm`, `plot_smc`, `validate_env`. The WASP-39 b
+`probe_memory`, `validate_warm`, `plot_smc`, `validate_env`, and `certificate`
+(the PASS/FAIL gate a run must clear before its numbers may be reported). The WASP-39 b
 presets (`smoke`, `gpu`, `prod`) live in `runs/w39b_smc_retrieval/case.py`;
 copy that file into a new `runs/<case>/` directory for a new target.
 `SMC_RETRIEVAL_OVERRIDES` applies a temporary JSON configuration change.

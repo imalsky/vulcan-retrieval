@@ -11,8 +11,7 @@ reasons other than accuracy:
   * most molecular lines use terrestrial-AIR HITRAN widths even though the
     atmosphere is H2/He.
 
-The scripts existed and were correct; what was missing was any archived result
-from them. A verdict printed to a terminal and lost is not evidence, and
+A verdict printed to a terminal and lost is not evidence, and
 "the script exists" is not the same as "the check passed at production
 settings". This module gives each script one `emit()` call that writes a JSON
 artifact plus a short Markdown summary under `validation/results/`, carrying
@@ -30,13 +29,36 @@ import json
 import os
 import platform
 import socket
-import subprocess
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
+# one copy of the git/hash primitives, owned by the certificate module
+from retrieval_framework.certificate import _git, _sha256  # noqa: F401
+
 REPO = Path(__file__).resolve().parent.parent
 RESULTS = REPO / "validation" / "results"
+
+
+def make_r_bins(wl_lo, wl_hi, R):
+    n = max(2, int(np.ceil(np.log(wl_hi / wl_lo) * R)))
+    return np.geomspace(wl_lo, wl_hi, n + 1)
+
+
+def bin_trapz(wl, y, edges):
+    """d(lambda)-weighted (local-trapezoid) bin means; NaN where empty."""
+    w = np.empty_like(wl)
+    w[1:-1] = 0.5 * (wl[2:] - wl[:-2]); w[0] = wl[1] - wl[0]; w[-1] = wl[-1] - wl[-2]
+    idx = np.digitize(wl, edges) - 1
+    out = np.full(len(edges) - 1, np.nan)
+    for b in range(len(edges) - 1):
+        sel = idx == b
+        if sel.any():
+            out[b] = float(np.sum(w[sel] * y[sel]) / np.sum(w[sel]))
+    return out
+
 
 # The four repositories whose code can move any of these numbers. Resolved
 # relative to the workspace root (the directory containing this checkout).
@@ -46,16 +68,6 @@ _REPOSITORIES = {
     "vulcan-retrieval": ("vulcan-retrieval",),
     "vulcan-jwst-tool": ("vulcan-jwst-tool",),
 }
-
-
-def _git(repo: Path, *args: str) -> str | None:
-    try:
-        r = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=15)
-        out = r.stdout.strip()
-        return out if r.returncode == 0 and out else None
-    except Exception:
-        return None
 
 
 def _repo_state(repo: Path) -> dict | None:
@@ -99,11 +111,22 @@ def _data_identity() -> dict:
     for env in ("VULCAN_FORWARD_DATA", "VULCAN_FORWARD_LINELISTS",
                 "VULCAN_FORWARD_OPACITY_CACHE"):
         out[env] = os.environ.get(env)
-    root = os.environ.get("VULCAN_FORWARD_DATA")
-    if not root:
+    # The env vars above are recorded for transparency only. This repo hands
+    # the engine its tree via paths.set_data_root, which takes precedence, so
+    # the trees must be resolved through the engine to be the ones a run read.
+    tree_dirs = {}
+    try:
+        # importing this module is what hands the engine this repo's data tree
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
+        from vulcan_forward import paths as _fwd_paths
+        out["data_root_resolved"] = str(_fwd_paths.data_root())
+        tree_dirs = {"exojax_linelists": Path(_fwd_paths.linelist_dir()),
+                     "opacity_cache": Path(_fwd_paths.opacity_cache_dir())}
+    except Exception as exc:                                # pragma: no cover
+        out["engine_data_error"] = f"{type(exc).__name__}: {exc}"
         return out
     for sub in ("exojax_linelists", "opacity_cache"):
-        p = Path(root) / sub
+        p = tree_dirs[sub]
         if not p.is_dir():
             out[sub] = None
             continue

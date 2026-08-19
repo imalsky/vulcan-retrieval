@@ -1,6 +1,6 @@
 """Cold is the default target, and the warm gradient gate is implementable.
 
-Two things pinned here, both from item 11 of the 2026-08 handoff:
+Two things pinned here:
 
 1. `smc_chem_mode` defaults to "cold", so a likelihood evaluation is a fixed
    deterministic function of theta -- what MALA, SMC tempering, and a quoted

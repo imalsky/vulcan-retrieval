@@ -82,7 +82,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     profile = cfg.profile()
 
     # T-P first (grid-agnostic evaluator), then hook it into the chemistry so the VULCAN
-    # column re-converges under the retrieved T-P (not the old scalar T_int shift).
+    # column re-converges under the retrieved T-P.
     tpm = tp_profile.build_tp_model(cfg)
     n_tp = tpm.n_params
 
@@ -93,8 +93,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # gate). See VULCAN-JAX README.md (Differentiability).
     _refuse_condense_inference(chem, cfg)
 
-    # Surface an uncertified warm-up baseline LOUDLY (audit 2026-07-28, FWD-09:
-    # the build used to claim "confirms the primal converges" without checking).
+    # Surface an uncertified warm-up baseline LOUDLY.
     # NOT a refusal: an uncertified baseline is a warm-start seed / elemental-map
     # anchor whose descendants are all individually certified downstream (init
     # rejects non-certified draws; warm proposals re-certify at exit), and the
@@ -134,6 +133,16 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     h2_col = chem.sidx[config.BULK_H2_VULCAN]
     he_col = chem.sidx["He"]          # H2-He CIA partner (He is inert in the network)
     species_masses = chem.species_masses
+    # GAS-phase normalization: the network's condensed-phase reservoir columns
+    # (*_l_s) are particles, not gas. Counting them dilutes every gas VMR and
+    # inflates the RT mean molecular weight as if the condensate were vapor
+    # (S8_l_s carries ~256 g/mol). The condensate's aerosol OPACITY stays
+    # deliberately excluded -- that is the cloud deck's job.
+    _gas = np.ones(int(np.asarray(species_masses).size))
+    for _sp, _i in chem.sidx.items():
+        if _sp.endswith("_l_s"):
+            _gas[int(_i)] = 0.0
+    gas_mask = jnp.asarray(_gas)
     p_art_bar_j = jnp.asarray(rt.p_art_bar)
 
     two_stage = bool(cfg.two_stage_z)
@@ -153,7 +162,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                                 lnZ_ref=0.0, c_o_ref=0.0)          # stage 2 (warm)
 
     def chem_solve_cold_diag(chem_theta):
-        """Primal-only twin of chem_solve_cold returning ``(y, ConvDiag)``.
+        """chem_solve_cold returning ``(y, ConvDiag)``.
 
         ``ConvDiag.accept_count`` is the WORSE of the two stages' (max over stage 1
         T-relax / stage 2 warm-reconverge, or just the one stage's when
@@ -161,8 +170,14 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         convergence fields (longdy / longdydt / count_since_new_min / conv_normal)
         describe STAGE 2 -- the state ``y`` actually is. accept_count alone is NOT
         a convergence test (stall fallback / hybrid phase-flip exits sit well under
-        the cap); gate on ``conv_normal`` too. Not on any AD path -- used only by
-        the SMC init's likelihood-only phase."""
+        the cap); gate on ``conv_normal`` too.
+
+        THE cold solve on the SMC init's likelihood-only phase AND on the cold
+        GRADIENT path: pipeline._make_batch_eval jvp's straight through this, so a
+        non-converged cold proposal is rejected exactly as a warm one is. Every
+        ConvDiag field rides the runner's primal carry, so reading it costs
+        nothing; the pipeline stop_gradients + casts the packed diag inside the
+        jvp chain."""
         if not two_stage:
             return chem.converged_y(chem_theta, return_conv_diag=True)
         th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)
@@ -224,7 +239,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)
         from an absolute column y (nz, ni). Differentiable and cheap (normalize +
         T-P eval + log-P interpolation); the RT consumes exactly this tuple."""
-        ymix = y / jnp.sum(y, axis=1, keepdims=True)
+        y_gas = y * gas_mask[None, :]
+        ymix = y_gas / jnp.sum(y_gas, axis=1, keepdims=True)
         T_art = tpm.eval(chem_theta[3:3 + n_tp], p_art_bar_j)      # (nlayer,)
         mmw_v = ymix @ species_masses                              # (nz,)
         mmw_art = to_art(mmw_v)

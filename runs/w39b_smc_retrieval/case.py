@@ -2,8 +2,8 @@
 that. The reusable machinery lives in the ``vulcan-retrieval`` package
 (``retrieval_framework``).
 
-theta (gpu preset, 10-D): [lnZ, dln(C/O), lnKzz, Tirr, log10kappa, log10gamma,
-lnR0, log10kappa_cloud, cloud_alpha, offset_G395H].
+theta (gpu preset, 11-D): [lnZ, dln(C/O), lnKzz, Tirr, log10kappa, log10gamma,
+lnR0, log10kappa_cloud, cloud_alpha, offset_G395H, noise_inflation].
 
 Run (from the repo root, or via the PBS script in this directory):
 
@@ -51,11 +51,11 @@ _W39B = dict(
         "NIRCam": ("NIRCam_R100.csv",),
     },
 
-    # ---- realistic WASP-39b priors (literature-anchored 2026-07-08) -----------
+    # ---- realistic WASP-39b priors (literature-anchored) ---------------------
     # Sources: Tsai et al. 2023 (Nature, VULCAN photochemistry grid for W39b) and
     # Rustamkulov et al. 2023 (Nature, NIRSpec PRISM ERS retrieval). All bounded,
     # kept wide enough not to pre-decide the posterior but physical enough that the
-    # forward model converges. See CLAUDE.md "priors" for the mapping notes.
+    # forward model converges.
     #
     #   metallicity : Tsai nominal 10x solar (tested 5-20x); ERS ~10x solar. Kept WIDE
     #                 1-100x solar (lnZ rel. to the 10x baseline) so the data localizes it.
@@ -70,8 +70,8 @@ _W39B = dict(
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
     #         gives a limb T ~770-1540 K -- physical for W39b, no unmodelably cold/hot
-    #         corners. gamma up to ~2 lets the data prefer a WEAK thermal inversion
-    #         (prior widened 2026-07-08); a mild inversion actually cools the deep atmosphere, so
+    #         corners. gamma up to ~2 lets the data prefer a WEAK thermal inversion;
+    #         a mild inversion actually cools the deep atmosphere, so
     #         it slightly LOWERS the reject rate. Any residual out-of-window profile is
     #         REJECTED, not clipped (pipeline.tp_valid).
     prior_Tirr=(1100.0, 2200.0),        # K
@@ -119,7 +119,7 @@ def gpu_config(**overrides: Any) -> Config:
     (cheap) RT grows. The short edge stays >=1 um (H2-H2 CIA table edge at 10000
     cm^-1; PRISM's <2 um saturation is a PRISM issue -- NIRISS is unaffected).
 
-    count_max=5000, fixed 2026-07-08. The old >10k-step tail was diagnosed as a
+    count_max=5000. The >10k-step tail was diagnosed as a
     dt_max-ballooning numerical artifact (see _W39B dt_max + ../../CLAUDE.md): with
     dt_max=1e11 the ballooning draws converge in ~1000 steps, well under 5000, and the
     truth needs 4275. So 5000 gives ~700 steps over the truth -- draws harder than the
@@ -129,11 +129,10 @@ def gpu_config(**overrides: Any) -> Config:
     probing AT the production cap: `qsub -v CALIBRATE_COUNT_MAX=1,
     CALIBRATE_COUNT_MAX_PROBE=5000,CALIBRATE_N_DRAWS=96 run_nas_w39b.pbs`.
 
-    Sweep-cost budget (2026-07-09 rework; see ../../CLAUDE.md "Mutation sweep cost"):
-    warm proposals are warm_count_max-capped (schema default 1500; measured typical
-    warm re-converge ~500-800 steps, conv_step-window-dominated -- the cold count_max
-    only ever binds at init), the warm gradient runs ONE chemistry while_loop (the
-    accept_count diag rides the jvp chain), 6 sweeps/stage (was 12), and the RT vjp
+    Sweep-cost budget: warm proposals are warm_count_max-capped (schema default 1500;
+    measured typical warm re-converge ~500-800 steps, conv_step-window-dominated --
+    the cold count_max only ever binds at init), the warm gradient runs ONE chemistry
+    while_loop (the accept_count diag rides the jvp chain), and the RT vjp
     runs 12-wide at nu_pts=1652 (12 serialized chunks at N=144). Projected ~20-40
     min/stage vs the ~3-6 h/stage job 64745 showed.
     Run `qsub -v PROBE_MEMORY=1` once after any nu_pts / chunk / N change, and
@@ -147,16 +146,21 @@ def gpu_config(**overrides: Any) -> Config:
         # them the likelihood is blind to the species that rule the C/O upper tail
         # in or out. All HITRAN main-isotopologue, same path as the first five.
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"),
-        # nu_pts=1652 -> native R~1000. The data is 152 binned points, so R~1000 native
-        # (~11 model pts per bin) is ample; the old nu_pts=16500 (R~10000) was overkill
-        # AND blew the RT-VJP gradient to 343 GiB (OOM on the 96 GB GH200 -- job 64601).
-        # RT-vjp memory scales with nu_pts; the 2026-07-08 decision keeps the native
-        # resolution at R~1000.
+        # Correlated-k (the schema default): the ExoMolOP R=1000 band grid over
+        # [nu_min, nu_max] replaces the sampled grid, so nu_pts is INERT here and
+        # kept only for the lbl forward models. Measured against sampled
+        # line-by-line at this band and composition, lbl nu_pts=1652 differs by
+        # 857 ppm rms / 3177 ppm max in binned R=100 shape and is 1.30x too
+        # contrasty, against a 70 ppm median observed sigma; 8x more points does
+        # not converge it (config_schema.opacity_mode).
+        # RUN PROBE_MEMORY=1 AGAIN AFTER THIS SWITCH: the correlated-k RT carries
+        # a g-ordinate axis (ng=16) through the same reverse-mode vjp, so the
+        # memory wall moved and smc_rt_vjp_chunk below is unproven for it.
         nu_min=1900.0, nu_max=9900.0, nu_pts=1652, art_nlayer=60,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N=144 (raised from 96, 2026-07-10): the GPU power trace showed real headroom
+        # N=144: the GPU power trace showed real headroom
         # (~300 W of 700 W during the 192-lane primal, ~360-390 W at 672 gradient
         # lanes) -- width fills the GPU nearly for free in the launch-bound
         # while_loop, so spend the idle silicon on particles. 144 = 12 exact RT-vjp
@@ -167,14 +171,19 @@ def gpu_config(**overrides: Any) -> Config:
         # ever wanted. More particles also directly answer the small-N SMC criticism
         # (ladder-adaptation noise, evidence variance).
         # smc_num_mcmc_steps is set below with the cold-mode budget note.
-        smc_num_particles=144, smc_max_steps=40,
-        # Init reject-and-cull sizing (raised 2026-07-12 after job on real data died
+        # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
+        # fresh budget and the stage index continues). 40 sits right at the edge
+        # of what a 10-D ladder at target_ess_frac=0.6 needs, and exhausting it
+        # yields a TEMPERED cloud the certificate refuses; an unused stage costs
+        # nothing, so the governor is left as the real limit.
+        smc_num_particles=144, smc_max_steps=80,
+        # Init reject-and-cull sizing (measured on a real-data job that died
         # in init phase 2: 84/288 cold-rejected [29%, expected] then 21/152 warm
         # re-certification failures [14%] vs the schema default init_phase2_spare=8 ->
         # 131/144 healthy, spares exhausted). The 8-spare default was sized for the
         # 3-5% warm-recert rate measured pre-pass (jobs 64854/64897, synthetic);
-        # the 2026-07-12 elemental-map + per-proposal atm rebuild and REAL prior
-        # corners push it to ~14%. count_max stays 5000 (2026-07-08 decision), so absorb the higher
+        # the elemental-map + per-proposal atm rebuild and REAL prior
+        # corners push it to ~14%. count_max stays 5000, so absorb the higher
         # attrition here: oversample 2.5 -> ceil(144*2.5)=360 cold draws (~256 alive
         # at 29% reject), spare 48 -> phase-2 pool min(n_alive, 144+48)=192, tolerating
         # a warm-recert cull up to (192-144)/192 = 25% and still leaving 144. Both are
@@ -183,20 +192,20 @@ def gpu_config(**overrides: Any) -> Config:
         # flat at N=96/144/152). No memory probe needed for this bump: the 192-wide
         # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
         # neither nu_pts nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
-        # COLD chemistry (2026-08-03). Every likelihood evaluation uses the
-        # published solve-from-baseline map, so the target is a fixed
-        # deterministic function of theta -- what MALA, SMC tempering, and the
-        # evidence integral all assume. Under the previous "warm" default the
-        # likelihood depended on each particle's carried column, hence on
-        # sampler history, at the convergence tolerance; the resulting logZ is
-        # approximate in a way diagnostics cannot repair.
+        # COLD chemistry. Every likelihood evaluation uses the published
+        # solve-from-baseline map, so the target is a fixed deterministic
+        # function of theta -- what MALA, SMC tempering, and the evidence
+        # integral all assume. Under "warm" the likelihood depends on each
+        # particle's carried column, hence on sampler history, at the
+        # convergence tolerance; the resulting logZ is approximate in a way
+        # diagnostics cannot repair.
         smc_chem_mode="cold",
         # warm_extrapolate is a WARM-only optimization (validate_config raises
         # if it is on in cold mode): it seeds each warm solve at the first-order
         # tangent prediction of the carried column, and there is no carried
         # column to extrapolate from in cold mode.
         warm_extrapolate=False,
-        # 4 sweeps/stage, down from 6. Sweeps are the lever that matters here:
+        # 4 sweeps/stage. Sweeps are the lever that matters here:
         # the runner is LAUNCH-BOUND and batch width was measured nearly free
         # (peak memory width-independent to N~500, job 64944), so cutting
         # PARTICLES would cost statistics while saving little wall time, whereas
@@ -211,11 +220,18 @@ def gpu_config(**overrides: Any) -> Config:
         # checkpoint means a restart never re-pays the init. It is NOT fine to
         # assume it fits: run
         #     qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs
-        # first. `run_smc --calibrate` now REFUSES (nonzero) when the projection
-        # does not fit the governor, instead of warning into a log nobody reads.
-        # These numbers are provisional until that calibration lands.
+        # first. `run_smc --calibrate` REFUSES (nonzero) when the projection
+        # does not fit the governor. These numbers are provisional until that
+        # calibration lands.
         smc_num_mcmc_steps=4,
         smc_target_ess_frac=0.6,
+        # Free multiplicative error inflation (Line+2015). ON for real data: the
+        # forward is a stiff self-consistent kinetics model, so its
+        # misspecification has nowhere to go but into lnZ / C-O / the cloud deck
+        # unless the noise scale is free to say the residuals are larger than the
+        # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
+        # extra dimension and nothing else.
+        infer_noise_inflation=True,
         # 12-wide RT vjp at nu_pts=1652 (~half the 5000-probed per-lane cost applies;
         # est. ~40-55 GiB vs the ~81 GiB pool). PROBE_MEMORY=1 once before the first
         # production submit -- the probe is compile-only and cannot OOM.
@@ -233,7 +249,7 @@ def prod_config(**overrides: Any) -> Config:
     available. Inherits the gpu preset's particle/chunk settings and cold target,
     but explicitly raises the mutation budget from 4 to 8 sweeps per stage."""
     base = dict(
-        nz=100, smc_num_mcmc_steps=8, smc_max_steps=48,
+        nz=100, smc_num_mcmc_steps=8, smc_max_steps=96,
         ppc_draws=96,
         walltime_seconds=0.0,
     )

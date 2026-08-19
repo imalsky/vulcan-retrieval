@@ -1,4 +1,4 @@
-"""Observation-injection validation (2026-07-12 re-audit item 4).
+"""Observation-injection validation.
 
 pipeline.validate_observations is the API-boundary guard behind
 pipe.set_observations: the Gaussian likelihood divides by sigma and logs it, so

@@ -4,13 +4,13 @@ Pins the contract between config.MOLECULES and exojax/radis: every HITRAN
 cache path handed to MdbHitran must have a path STEM that radis can parse as
 a molecule -- exojax >= 2.x derives the HITRAN molecule id from the stem. The
 old h2he layout ("<db>_h2he") violated this and every h2he run died in
-MdbHitran before downloading anything (2026-07-15 data-dependency audit);
-the layout is now "h2he/<db>".
+MdbHitran before downloading anything; the layout is "h2he/<db>".
 
-NOTE (2026-08-16): this file covers only the hitran/lbl entries. The
-retrieval never sets opacity_mode, so it runs vulcan-forward's "lbl" default
-at R~1000 while the ExoMolOP correlated-k path (forward's documented
-default) goes unused here -- an OPEN flagged finding, not yet a decision.
+NOTE: this file covers only the hitran/lbl entries, which are now the FORWARD-only
+path -- `opacity_mode` defaults to "exomolop" and inference refuses "lbl" (see
+config_schema.opacity_mode). The correlated-k tables are plain per-molecule files
+with no radis stem contract, so they need no equivalent test; validate_env checks
+they are present.
 """
 from __future__ import annotations
 

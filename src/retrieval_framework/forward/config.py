@@ -4,14 +4,13 @@ Pure constants + paths: NO heavy imports here (no jax, no vulcan_jax, no exojax)
 so this module is safe to import before the env-order-sensitive VULCAN-JAX setup
 runs.
 
-The forward-model ENGINE moved to the ``vulcan-forward`` distribution
-(2026-07-29), so the physics constants and the molecule/opacity table below are
-re-exported from ``vulcan_forward.constants`` rather than defined twice -- every
-existing ``config.MOLECULES`` / ``config.ATOM_COLS`` call site keeps working.
+The forward-model ENGINE lives in the ``vulcan-forward`` distribution, so the
+physics constants and the molecule/opacity table below are re-exported from
+``vulcan_forward.constants`` rather than defined twice.
 What stays genuinely local: this repo's filesystem layout, the WASP-39 b case
 constants, the run profiles, and the parameter-vector labels. This module also
 hands the engine its data root (see the paths section), so the opacity caches and
-line lists keep living in this repo's data/ tree exactly as before.
+line lists live in this repo's data/ tree.
 
 The demo chains the *live* VULCAN-JAX chemistry forward model into an ExoJax
 ``ArtTransPure`` transmission model and propagates forward-mode tangents from four
@@ -47,9 +46,6 @@ ART_PTOP_BAR = _fwd.ART_PTOP_BAR
 ART_PBTM_BAR = _fwd.ART_PBTM_BAR
 T_OPA_MIN_K = _fwd.T_OPA_MIN_K
 T_OPA_MAX_K = _fwd.T_OPA_MAX_K
-VULCAN_NETWORK = _fwd.DEFAULT_NETWORK
-VULCAN_ATOM_LIST = _fwd.DEFAULT_ATOM_LIST
-W39B_CFG_NAME = _fwd.DEFAULT_CFG_NAME
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -81,26 +77,12 @@ OUTPUTS = REPO_DIR / "output"                                   # GENERATED: npz
 FIGS = JP / "figures"                                           # manuscript figures stay in jax_paper/figures
 DEMO_DATABASE = DATA_DIR / "exojax_linelists"                   # HITRAN line lists
 
-# Hand the shared engine this repo's data tree. The layout it expects
-# (exojax_linelists/ + opacity_cache/) is exactly what data/ already holds, so
-# nothing moves on disk; the engine simply stops inferring the location from its
-# own __file__ (it used to resolve a repo root by parent-directory indexing and
-# refuse to import without this tree present).
+# Hand the shared engine this repo's data tree (exojax_linelists/ +
+# opacity_cache/, exactly what data/ already holds), so the engine never infers
+# the location from its own __file__. It then owns every path INSIDE that tree:
+# ask paths.opacity_cache_dir / cia_h2h2_file / cia_h2he_file rather than
+# rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
-
-# Offline opacity cache (CO ExoMol Li2015 + H2-H2/H2-He CIA), lives IN the repo
-# (data/opacity_cache/) so it has no dependency on any sibling project --
-# copied in 2026-07-07 from what was previously a reused emulator-demo/ cache.
-_CACHE = DATA_DIR / "opacity_cache"
-CO_CACHED_DIR = _CACHE / "CO" / "12C-16O" / "Li2015"
-CIA_H2H2_FILE = _CACHE / "H2-H2_2011.cia"
-# H2-He CIA (He is ~14% by number; real continuum contribution).
-# Download once: https://hitran.org/data/CIA/main/H2-He_2011.cia -> this path
-# (~147 MB; the /main/ segment is required -- the bare /data/CIA/ URL 404s).
-# exojax_rt REFUSES to build without it, and the He VMR profile is a required
-# argument of every depth/flux function (silently skipping the He continuum
-# used to be possible and biased the sensitivity-demo spectra).
-CIA_H2HE_FILE = _CACHE / "H2-He_2011.cia"
 
 # ---------------------------------------------------------------------------
 # WASP-39b physical constants (from vulcan_jax/configs/W39b.yaml)
@@ -137,8 +119,8 @@ SMOKE = {
     "nu_pts": 600,
     "art_nlayer": 20,
     # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a caller who forgot used to get W39b
-    # silently). Same values as the old implicit fallback.
+    # defaulting to WASP-39 b (a forgotten key would silently model a
+    # different planet).
     "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 FULL = {
@@ -151,8 +133,8 @@ FULL = {
     "nu_pts": 6000,
     "art_nlayer": 60,
     # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a caller who forgot used to get W39b
-    # silently). Same values as the old implicit fallback.
+    # defaulting to WASP-39 b (a forgotten key would silently model a
+    # different planet).
     "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 # Wide-band overview: 1-15 um (the supported window -- H2-H2 CIA stops at 1 um / 10000
@@ -169,8 +151,8 @@ WIDE = {
     "art_nlayer": 60,
     "display_R": 100,
     # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a caller who forgot used to get W39b
-    # silently). Same values as the old implicit fallback.
+    # defaulting to WASP-39 b (a forgotten key would silently model a
+    # different planet).
     "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 

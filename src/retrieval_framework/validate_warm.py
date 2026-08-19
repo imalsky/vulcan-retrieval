@@ -12,19 +12,18 @@ difference, i.e. exactly the quantity that enters MH acceptance and tempering
 weights -- if it is small relative to ~0.1 log-units, the warm kernel is
 posterior-exact for all practical purposes.
 
-Since 2026-07-29 the cold re-solve also recomputes the u-space GRADIENT (the
-MALA drift) and compares it against the checkpoint's carried grad_u -- a
-likelihood/spectrum gate alone does not validate a gradient-driven kernel
-(2026-07-28 audit). Since 2026-08-03 that comparison is a FAIL axis, not
-warn-only, on two conditions: agreement measured over rows where both drifts are
-real (`GRAD_REL_FAIL`), and the fraction of the cloud whose drift was zeroed
+The cold re-solve also recomputes the u-space GRADIENT (the MALA drift) and
+compares it against the checkpoint's carried grad_u -- a likelihood/spectrum
+gate alone does not validate a gradient-driven kernel. That comparison is a
+FAIL axis, not warn-only, on two conditions: agreement measured over rows where
+both drifts are real (`GRAD_REL_FAIL`), and the fraction of the cloud whose drift was zeroed
 (`GRAD_ZEROED_FRAC_FAIL`). Rows zeroed by the badgrad handling are EXCLUDED from
 the agreement statistic -- they read rel = 1 by construction, so gating on them
 would fail essentially every run and would be measuring "did badgrad occur", not
 "does warm continuation reproduce the cold drift". Disable the whole gradient
 axis with VALIDATE_WARM_GRAD=0 to restore the cheaper likelihood-only re-solve.
 
-Since 2026-08-03 `smc_chem_mode` DEFAULTS TO COLD, so this tool is only needed
+`smc_chem_mode` DEFAULTS TO COLD, so this tool is only needed
 for a run that explicitly opted into warm continuation -- where it, and
 `validation/mala_reversibility.py`, are both MANDATORY before the run's numbers
 may be reported.
@@ -76,8 +75,7 @@ COLD_NONCONV_WARN_FRAC = 0.10
 # FAIL gate on the warm-vs-cold u-space GRADIENT agreement (max over the cloud
 # of ||G_cold - G_warm|| / max(||G_cold||, ||G_warm||)). The gradient is what
 # steers every MALA proposal (drift = step*scale^2*beta*G), so likelihood/
-# spectrum agreement alone does not validate the kernel -- the 2026-07-28 audit
-# flagged exactly this hole. 0.1 relative: a 10% drift error rescales the
+# spectrum agreement alone does not validate the kernel. 0.1 relative: a 10% drift error rescales the
 # proposal mean by ~10% of the step, well inside MALA's robustness, while a
 # sign-flipped or wildly wrong tangent lands >> 1.
 GRAD_REL_FAIL = 0.1
@@ -226,10 +224,10 @@ def main() -> None:
     chunk = int(os.environ.get("VALIDATE_WARM_CHUNK", "0") or 0)
     if chunk <= 0 or chunk > N:
         chunk = min(N, 48)
-    # Gradient comparison (audit 2026-07-28: likelihood/spectrum gates alone do
-    # not validate a MALA kernel -- the drift is the gradient). Default ON: the
+    # Gradient comparison (likelihood/spectrum gates alone do not validate a
+    # MALA kernel -- the drift is the gradient). Default ON: the
     # cold VALUE-AND-GRAD evaluator returns L, G, and Y in one pass, so the
-    # marginal cost over the old likelihood-only pass is the chem jvp lanes
+    # marginal cost over a likelihood-only pass is the chem jvp lanes
     # (~the cost of one mutation sweep, minutes). VALIDATE_WARM_GRAD=0 restores
     # the likelihood-only re-solve. Requires the checkpoint's carried grad_u
     # (present in every state-carrying checkpoint).
@@ -323,7 +321,7 @@ def main() -> None:
     logger.info(f"elemental inventories (He,O,C,N,S per H) warm-vs-cold: max rel diff "
                 f"{atom_rel_max:.3e} (abundance_mode={abundance_mode})")
 
-    # ---- u-space GRADIENT comparison (the MALA drift; audit 2026-07-28) ----
+    # ---- u-space GRADIENT comparison (the MALA drift) ----
     gs = None
     if want_grad:
         G_cold_np = np.concatenate(G_parts, axis=0)
@@ -377,8 +375,8 @@ def main() -> None:
                        "path-independent inventories. Not failing on it here.")
         ok_atom = True
 
-    # GRADIENT is now a FAIL axis, not warn-only (item 11 of the 2026-08
-    # handoff). Two separate conditions, because they mean different things:
+    # GRADIENT is a FAIL axis, not warn-only.
+    # Two separate conditions, because they mean different things:
     #   * agreement, measured on rows where both drifts are real; and
     #   * how much of the cloud had its drift zeroed at all.
     ok_grad = True
@@ -417,8 +415,8 @@ def main() -> None:
                 + ") "
                 + ("-- warm-continuation bias is negligible at this cloud" if ok else
                    "-- warm state is history-dependent beyond the gate; tighten "
-                   "yconv_cri or rerun with smc_chem_mode='cold' (the DEFAULT "
-                   "since 2026-08-03) before publishing"))
+                   "yconv_cri or rerun with smc_chem_mode='cold' (the DEFAULT) "
+                   "before publishing"))
     if not ok:
         # Distinct exit code (3) so the PBS wrapper can tell a REACHED verdict that
         # failed the gate (validate_warm.npz written; a science finding, with

@@ -5,9 +5,9 @@ A warm_count_max-exhausted (non-converged) warm MALA proposal must be REJECTED (
 L, dropped from n_bad_grad), NOT fed into the jvp/RT-vjp as a finite-likelihood MH
 candidate -- the pre-fix behavior that surfaced as a spurious n_bad_grad RuntimeError
 (or a NaN gradient) at SMC stage 0 and made the timing calibration fail. See CLAUDE.md
-"Cold-init reject-and-cull" (the warm-mutation analogue that was previously deferred).
+"Init / mutation handling".
 
-Also covers the 2026-07-09 warm-cap plumbing: the warm solvers run a TWIN runner
+Also covers the warm-cap plumbing: the warm solvers run a TWIN runner
 capped at warm_count_max < count_max, so a doomed proposal is cut off at the warm cap
 (here 5) instead of marching to the cold cap (here 50) -- asserted via the observed
 accept_count landing at the warm cap, far below the cold one.
@@ -59,15 +59,17 @@ def smoke():
         if preset != "smoke":
             pytest.skip(f"preset resolved to {preset!r}, not smoke")
         # This file tests the WARM mutation kernel's rejection gate, so it must
-        # ask for warm mode explicitly. `smc_chem_mode` defaults to "cold" since
-        # 2026-08-03 (a cold target is the fixed density the sampler and the
+        # ask for warm mode explicitly. `smc_chem_mode` defaults to "cold"
+        # (a cold target is the fixed density the sampler and the
         # evidence assume); inheriting the default here would silently build the
         # cold evaluators and test nothing about the warm cap.
         cfg = dataclasses.replace(cfg, count_max=COLD_CMAX,
                                   warm_count_max=WARM_CMAX,
                                   smc_chem_mode="warm")
         pipe = P.build_pipeline(cfg)
-    except Exception as e:                       # missing fastchem / data / env / import
+    # Skip ONLY on a missing-data or missing-dependency environment; a broader
+    # handler reports a real forward-model break as a green skip.
+    except (FileNotFoundError, OSError, ImportError) as e:
         pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
 
@@ -81,7 +83,7 @@ def smoke():
 
     ACC = np.asarray(jax.vmap(_ac)(C_, Y0, refs0))
     L_g, G, _Yn, _rn, n_bad, _dy, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
-    L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]
+    L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]   # gated too, since this pass
     return dict(pipe=pipe, cmax=int(pipe.fwd.chem.warm_count_max), ACC=ACC,
                 L_gated=np.asarray(L_g), G=np.asarray(G), n_bad=int(n_bad),
                 L_ungated=np.asarray(L_u))
@@ -129,11 +131,30 @@ def test_init_eval_is_uncapped(smoke):
 
 
 def test_gate_is_load_bearing(smoke):
-    # the ungated primal likelihood (move_l) carries these non-converged proposals as
-    # FINITE MH candidates; the gated gradient evaluator (move_vg) rejects them. Every
-    # finite-forward proposal here is non-converged (see test_warm_diag_detects_...), so
-    # each must be gated out -- proving the gate changes behavior, not just documents it.
-    finite_ungated = smoke["L_ungated"] > -1.0e29
-    if not np.any(finite_ungated):
-        pytest.skip("no finite-forward non-converged proposal in this batch to compare")
-    assert np.all(smoke["L_gated"][finite_ungated] <= -1.0e29)
+    """The rejected proposals have a perfectly FINITE forward -- the gate, not a
+    blown solve, is what rejects them.
+
+    Both batched evaluators gate now (the primal-only one is the FD reference for
+    the gradient, the certificate's cold replay, and validate_warm's comparison
+    arm, so it has to be the same likelihood function the sampler targets). That
+    removes the old ungated-vs-gated comparison, so the load-bearing claim is
+    made directly instead: run the RAW warm map, show its spectrum is finite, and
+    show both evaluators reject it anyway."""
+    pipe = smoke["pipe"]
+    U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)
+    Theta = jax.vmap(pipe.theta_from_u)(U)
+    C_ = Theta[:, : pipe.n_chem_tp]
+    Y0, refs0 = P._blank_state(pipe, N)
+
+    def _raw_depth(cc, th, yw, rf):
+        y = pipe.fwd.chem_solve_warm(cc, yw, rf[0], rf[1])   # ungated, non-converged
+        aux = pipe.fwd.aux_from_y(y, cc)
+        cloud = (th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
+                 if pipe.n_cloud else None)
+        return pipe.fwd.rt_depth(aux, th[pipe.lnR0_idx], cloud)
+
+    depth = np.asarray(jax.vmap(_raw_depth)(C_, Theta, Y0, refs0))
+    assert np.all(np.isfinite(depth)), "raw warm map blew up; this tests nothing"
+    # ...and yet every one of them is rejected, by BOTH evaluators
+    assert np.all(smoke["L_gated"] <= -1.0e29)
+    assert np.all(smoke["L_ungated"] <= -1.0e29)
