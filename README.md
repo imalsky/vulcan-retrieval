@@ -1,63 +1,97 @@
 # vulcan-retrieval
 
-vulcan-retrieval runs exoplanet atmospheric retrievals with gradients from a
-full photochemical forward model: VULCAN-JAX kinetics and ExoJAX radiative
+`vulcan-retrieval` fits exoplanet spectra with a live photochemical forward
+model. It uses VULCAN-JAX for chemical kinetics and ExoJAX for radiative
 transfer through the shared
-[vulcan-forward](https://github.com/imalsky/vulcan-forward) engine, sampled
-with adaptive-tempered SMC and MALA. It ships a reusable framework, a
-WASP-39 b JWST case, a small synthetic case, and validation scripts. This is
-research software; run the validation checks before publishing results.
+[`vulcan-forward`](https://github.com/imalsky/vulcan-forward) package.
+
+The sampler uses adaptive-tempered sequential Monte Carlo (SMC). Optional
+MALA moves use forward derivatives from the atmosphere model. The repository
+contains a WASP-39 b case, a small synthetic case, validation scripts, and a
+run-certificate check.
+
+This is research software. Validate a new target and model setup before using
+the posterior in a publication.
 
 ## Install
 
-Requires Python 3.10-3.12, ExoJAX 2.2.3, JAX (CPU or GPU), and a C++
-compiler for FastChem. Clone the repository (the code finds `data/` and
-`output/` from an editable checkout):
+Use Python 3.10 to 3.12 and a C++ compiler for FastChem.
 
 ```bash
 git clone https://github.com/imalsky/vulcan-retrieval.git
 cd vulcan-retrieval
-python -m pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "vulcan-jax>=0.3.0" "vulcan-forward>=0.4.0"
-python -m pip install -e ".[dev]"
+python -m pip install \
+  -i https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  "vulcan-jax>=0.3.0" "vulcan-forward>=0.4.0"
+python -m pip install -e ".[dev,plot]"
 ```
 
-Opacity data is not tracked. Retrievals use correlated-k tables from
-[ExoMolOP](https://www.exomol.com/data/data-types/opacity/), fetched once with
-`python -m vulcan_forward.fetch_exomolop --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S`
-into `data/exomolop/`; the two CIA tables go under `data/opacity_cache/` (the
-H2-He file comes from HITRAN). `validate_env` checks the whole setup.
+Opacity data are not stored in Git. Set `VULCAN_FORWARD_DATA`, then fetch the
+needed ExoMolOP tables. CIA data go in `opacity_cache/`.
 
-## Quick start
+```bash
+export VULCAN_FORWARD_DATA="$PWD/data"
+python -m vulcan_forward.fetch_exomolop \
+  --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S
+python -m retrieval_framework.validate_env runs/w39b_smc_retrieval
+```
+
+## Test and run
+
+Start with the fast tests and the gradient smoke check:
 
 ```bash
 python -m pytest tests -q -m "not slow"
 python -m retrieval_framework.smoke_retrieval runs/w39b_smc_retrieval
-SMC_RETRIEVAL_PRESET=smoke python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
-python -m retrieval_framework.plot_smc runs/w39b_smc_retrieval/data/smoke
 ```
 
-Entry points (all take a case directory): `run_smc` (add `--calibrate` to
-time one batch), `smoke_retrieval` (gradient checks), `calibrate_count_max`,
-`probe_memory`, `validate_warm`, `plot_smc`, `validate_env`, and `certificate`
-(the PASS/FAIL gate a run must clear before its numbers may be reported). The WASP-39 b
-presets (`smoke`, `gpu`, `prod`) live in `runs/w39b_smc_retrieval/case.py`;
-copy that file into a new `runs/<case>/` directory for a new target.
-`SMC_RETRIEVAL_OVERRIDES` applies a temporary JSON configuration change.
+Run the small SMC preset and plot it:
 
-## Outputs
+```bash
+SMC_RETRIEVAL_PRESET=smoke \
+  python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
+python -m retrieval_framework.plot_smc \
+  runs/w39b_smc_retrieval/data/smoke
+```
 
-Each run writes `runs/<case>/data/<preset>/`: the resolved `config.json`,
-checkpoints, posterior samples, diagnostics, predictions, and `plots/`.
-Check `reached_beta1` before treating samples as posterior samples.
+The `smoke`, `gpu`, and `prod` presets are defined in
+[`runs/w39b_smc_retrieval/case.py`](runs/w39b_smc_retrieval/case.py). Copy the
+case file to `runs/<new-case>/` for another target.
 
-## Limitations
+Each run writes its resolved configuration, checkpoints, posterior samples,
+diagnostics, predictions, and plots to the case data directory. Check
+`reached_beta1` before treating samples as posterior samples. Run
+`python -m retrieval_framework.certificate` before reporting a production
+result.
 
-The likelihood is diagonal Gaussian; binning is trapezoidal; condensation is
-refused for gradient inference; the certificate gate refuses runs missing
-their production-fidelity validation artifacts. The full limitation list
-with measured scopes is kept in the maintainer's log.
+## Limits
+
+- The likelihood is diagonal Gaussian.
+- Spectral binning uses trapezoidal integration.
+- Condensation is refused during gradient inference.
+- A certificate checks required artifacts and numerical gates. It does not
+  prove that the physical model is complete.
+- Results depend on the reaction network, opacity coverage, pressure and
+  temperature profiles, clouds, priors, and data-reduction assumptions.
+
+## Papers and citation
+
+Published work should cite this repository and the model components used:
+
+- VULCAN: [Tsai et al. (2017)](https://doi.org/10.3847/1538-4365/228/2/20)
+  and [Tsai et al. (2021)](https://doi.org/10.3847/1538-4357/ac29bc)
+- ExoJAX: [Kawahara et al. (2022)](https://arxiv.org/abs/2105.14782) and
+  [Kawahara et al. (2025)](https://arxiv.org/abs/2410.06900)
+- ExoMolOP tables: [Chubb et al. (2021)](https://doi.org/10.1051/0004-6361/202038350)
+- FastChem initialization: [Stock et al. (2018)](https://doi.org/10.1093/mnras/sty1531)
+
+Record the repository commit, package versions, data releases, reaction
+network, priors, and full resolved configuration.
 
 ## Support and license
 
-Open a [GitHub issue](https://github.com/imalsky/vulcan-retrieval/issues).
-GPLv3, inherited from VULCAN.
+Open a [GitHub issue](https://github.com/imalsky/vulcan-retrieval/issues) and
+include the case configuration, package versions, run log, and error message.
+
+`vulcan-retrieval` is released under GPLv3.
