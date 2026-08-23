@@ -34,8 +34,12 @@ needed ExoMolOP tables. CIA data go in `opacity_cache/`.
 export VULCAN_FORWARD_DATA="$PWD/data"
 python -m vulcan_forward.fetch_exomolop \
   --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S
-python -m retrieval_framework.validate_env runs/w39b_smc_retrieval
+python -m retrieval_framework.validate_env ..
 ```
+
+`validate_env` takes the project root: the directory that contains the
+`VULCAN-JAX`, `vulcan-forward`, and `vulcan-retrieval` checkouts side by side
+(`..` when run from this repo).
 
 ## Test and run
 
