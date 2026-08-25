@@ -203,30 +203,36 @@ def _check_config_api() -> None:
 
 
 def _check_cross_repo_pin() -> None:
+    """Every sibling-engine requirement vulcan-retrieval declares (vulcan-jax
+    AND vulcan-forward) must be satisfied by the INSTALLED sibling."""
     from importlib import metadata
 
     try:
         reqs = metadata.requires("vulcan-retrieval") or []
-        vj_version = metadata.version("vulcan-jax")
     except metadata.PackageNotFoundError:
         return  # already reported by _check_editable
-    spec = next((r for r in reqs if r.split()[0].startswith("vulcan-jax")), None)
-    if spec is None:
-        return
     try:
         from packaging.requirements import Requirement
     except ImportError:
-        _warn(f"`packaging` unavailable; cannot verify '{spec}' against vulcan-jax {vj_version}.")
+        _warn("`packaging` unavailable; cannot verify the sibling-engine requirements.")
         return
-    req = Requirement(spec)
-    if not req.specifier.contains(vj_version, prereleases=True):
-        _err(
-            f"installed vulcan-jax {vj_version} does not satisfy "
-            f"vulcan-retrieval's requirement '{spec}'. Pull/update the "
-            "VULCAN-JAX checkout and re-run the bootstrap."
-        )
-    else:
-        _ok(f"vulcan-jax {vj_version} satisfies '{spec}'")
+    for dist in ("vulcan-jax", "vulcan-forward"):
+        spec = next((r for r in reqs if r.split()[0].startswith(dist)), None)
+        if spec is None:
+            continue
+        try:
+            version = metadata.version(dist)
+        except metadata.PackageNotFoundError:
+            continue  # already reported by _check_editable
+        req = Requirement(spec)
+        if not req.specifier.contains(version, prereleases=True):
+            _err(
+                f"installed {dist} {version} does not satisfy "
+                f"vulcan-retrieval's requirement '{spec}'. Pull/update the "
+                f"{dist} checkout and re-run the bootstrap."
+            )
+        else:
+            _ok(f"{dist} {version} satisfies '{spec}'")
 
 
 def _check_exojax() -> None:
@@ -258,28 +264,13 @@ def _check_data_tree(root: Path) -> None:
     missing_k = [m for m in prod if not (ckdir / f"{m}.ktable.h5").exists()]
     if missing_k:
         _err(
-            f"missing ExoMolOP k-tables for {missing_k} in {ckdir}. These are the "
-            "production opacity (opacity_mode='exomolop'); sampled line-by-line is "
-            "REFUSED for inference. Fetch once with: python -m "
+            f"missing ExoMolOP k-tables for {missing_k} in {ckdir}. Correlated-k "
+            "over these tables is the only opacity path. Fetch once with: python -m "
             f"vulcan_forward.fetch_exomolop --molecules {','.join(prod)}"
         )
     else:
         _ok(f"ExoMolOP k-tables present for {len(prod)} molecules in {ckdir}")
-    lldir = data / "exojax_linelists"
-    missing = [
-        m
-        for m in ("H2O", "CO2", "CH4", "SO2", "HCN", "C2H2", "H2S")
-        if not (lldir / f"{m}.h5").exists()
-    ]
-    if missing:
-        _warn(
-            f"HITRAN caches missing for {missing} in {lldir}; only the lbl FORWARD "
-            "path uses them, and the first such run downloads via the NAS proxy."
-        )
     codir = data / "opacity_cache"
-    if not (codir / "CO" / "12C-16O" / "Li2015").is_dir():
-        _warn(f"missing cached CO ExoMol dir under {codir}: only the lbl FORWARD "
-              "path reads it; correlated-k runs use data/exomolop/ instead.")
     for cia in ("H2-H2_2011.cia", "H2-He_2011.cia"):
         if not (codir / cia).exists():
             _err(

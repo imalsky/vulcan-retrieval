@@ -82,13 +82,12 @@ LATE_REJECT_FRAC_FAIL = 0.02   # per-proposal rate over the late stages
 # A posterior median on a prior edge is set by the prior, not measured.
 PRIOR_RAIL_FRAC = 0.02
 
-# The three production-fidelity artifacts. Their absence is a FAIL for
+# The two production-fidelity artifacts. Their absence is a FAIL for
 # a few-ppm or evidence claim: a check that was never run at production settings
 # is not a check that passed.
 REQUIRED_VALIDATION_ARTIFACTS = (
     "resolution_ladder",
     "top_pressure_ladder",
-    "broadening_ab",
 )
 
 
@@ -180,14 +179,14 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import paths as _fwd_paths
         root = Path(_fwd_paths.data_root())
-        tree_dirs = {"exojax_linelists": Path(_fwd_paths.linelist_dir()),
-                     "opacity_cache": Path(_fwd_paths.opacity_cache_dir())}
+        tree_dirs = {"opacity_cache": Path(_fwd_paths.opacity_cache_dir()),
+                     "exomolop": Path(_fwd_paths.exomolop_dir())}
     except Exception as exc:                                # pragma: no cover
         # Never silently null: a check that cannot run says why it could not.
         ident["engine_data_error"] = f"{type(exc).__name__}: {exc}"
     ident["data_root_resolved"] = str(root) if root is not None else None
 
-    for sub in ("exojax_linelists", "opacity_cache"):
+    for sub in ("opacity_cache", "exomolop"):
         p = tree_dirs.get(sub)
         if p is None or not p.is_dir():
             ident[sub] = None
@@ -497,20 +496,18 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
     problems += rail_problems(cert.get("posterior"))
 
     # --- production-fidelity artifacts --------------------------------------
-    # broadening_ab measures the HITRAN air-vs-H2/He pressure-broadening knob.
-    # That knob does not exist on the correlated-k path -- ExoMolOP integrates
-    # H2/He widths into the tables and the engine ignores the profile key -- so
-    # requiring it there would demand a measurement of something the run cannot
-    # do. It stays required for an lbl forward model.
     required = set(REQUIRED_VALIDATION_ARTIFACTS)
     opa = str(cert["resolved_config"].get("opacity_mode", "")) or None
-    if opa == "exomolop":
-        required.discard("broadening_ab")
-    elif opa is None:
+    if opa is None:
         problems.append(
             "resolved config records no opacity_mode: which opacity the run "
-            "used is unknown, and sampled line-by-line is measurably biased "
-            "on this band (config_schema.opacity_mode)")
+            "used is unknown")
+    elif opa != "exomolop":
+        problems.append(
+            f"resolved config records opacity_mode={opa!r}: the sampled "
+            "line-by-line path was removed with vulcan-forward 0.11.0 and is "
+            "measurably biased on this band; only correlated-k ('exomolop') "
+            "runs are certifiable")
     for name, art in cert["validation_artifacts"].items():
         if name not in required:
             continue
@@ -520,11 +517,6 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "choice it measures has not been checked at production "
                 "settings, so no few-ppm or converged-evidence claim is "
                 "supported")
-        elif name == "broadening_ab":
-            if art.get("status") != "REPORT":
-                problems.append(
-                    f"validation artifact '{name}' has status "
-                    f"{art.get('status')!r}, expected REPORT")
         elif art.get("status") == "FAIL":
             problems.append(f"validation artifact '{name}' FAILED: "
                             f"{art.get('summary', '')[:160]}")
@@ -532,7 +524,7 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             problems.append(
                 f"validation artifact '{name}' is REPORT, not PASS -- its "
                 "decisive test was not run (see its summary)")
-        elif name != "broadening_ab" and art.get("status") != "PASS":
+        elif art.get("status") != "PASS":
             problems.append(
                 f"validation artifact '{name}' has status "
                 f"{art.get('status')!r}, expected PASS: "

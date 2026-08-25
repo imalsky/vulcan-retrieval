@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -57,13 +56,6 @@ def main() -> None:
     ap.add_argument("--seed-offset", type=int, default=0,
                      help="added to cfg.seed before splitting, so repeated calibration "
                           "runs sample different prior corners")
-    ap.add_argument("--resolution", type=float, default=100.0,
-                     help="native spectral resolution R for the calibration (default 100, "
-                          "matching the data). accept_count is a property of the CHEMISTRY "
-                          "convergence and is band/resolution-INDEPENDENT, so the RT is run "
-                          "at low resolution purely to cheapen the opacity build + RT eval "
-                          "and slash memory -- it does not change the measured step counts. "
-                          "Pass <=0 to keep the preset's own nu_pts.")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -74,27 +66,13 @@ def main() -> None:
     preset_count_max = cfg.count_max   # the cap the production run would use (None -> library default)
     cfg = replace(cfg, count_max=int(args.count_max_probe))
 
-    # Force the calibration to a cheap native resolution (default R=100). accept_count
-    # depends only on the chemistry (nz, molecules, priors), NOT on nu_pts, so running
-    # the RT at R=100 instead of the production resolution measures the same step counts
-    # for a fraction of the build time, RT cost, and memory. exojax's premodit grid is
-    # log-uniform, so R = (nu_pts-1)/ln(nu_max/nu_min); invert for the target R.
-    if args.resolution > 0:
-        span = math.log(float(cfg.nu_max) / float(cfg.nu_min))
-        nu_pts_R = max(4, int(round(args.resolution * span)) + 1)
-        if nu_pts_R < int(cfg.nu_pts):
-            log.info(f"calibration resolution: R~{args.resolution:.0f} -> nu_pts "
-                     f"{cfg.nu_pts} -> {nu_pts_R} (accept_count is nu_pts-independent; "
-                     "this only cheapens the RT/build + memory, not the chemistry).")
-            cfg = replace(cfg, nu_pts=nu_pts_R)
-        else:
-            log.info(f"calibration resolution R~{args.resolution:.0f} would need "
-                     f"nu_pts={nu_pts_R} >= preset {cfg.nu_pts}; keeping preset nu_pts.")
-
-    # loud dump of the RESOLVED calibration config (shows the R=100 nu_pts + probe cap)
+    # accept_count depends only on the chemistry (nz, molecules, priors), not on
+    # the RT; the correlated-k band grid is fixed by the tables, so the RT runs at
+    # the production band as-is.
+    # loud dump of the RESOLVED calibration config (shows the probe cap)
     from retrieval_framework import config_schema as C
     log.info(C.describe_config(cfg, f"{_preset}+CALIBRATE"))
-    log.info(f"calibration: nz={cfg.nz} nu_pts={cfg.nu_pts} art_nlayer={cfg.art_nlayer} "
+    log.info(f"calibration: nz={cfg.nz} art_nlayer={cfg.art_nlayer} "
              f"count_max(probe)={cfg.count_max} n_draws={args.n_draws}")
 
     from retrieval_framework import pipeline as P

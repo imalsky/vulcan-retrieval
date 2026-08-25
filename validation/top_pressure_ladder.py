@@ -76,7 +76,7 @@ def main() -> int:
     base_profile.update(nz=50, count_max=5000, dt_max=1.0e11,
                         abundance_mode="elemental", co_mode="fixed_O",
                         molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
-                        nu_min=BAND[0], nu_max=BAND[1], nu_pts=1652,
+                        nu_min=BAND[0], nu_max=BAND[1],
                         art_nlayer=60, use_rayleigh=True)
     chem = vulcan_chem.build_chem_model(base_profile)
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)

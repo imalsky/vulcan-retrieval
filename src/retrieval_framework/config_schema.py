@@ -65,36 +65,14 @@ class Config:
     molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
     nu_min: float = 1923.0             # ~5.2 um
     nu_max: float = 3450.0             # ~2.9 um  (NIRSpec G395H/PRISM red)
-    # DEFAULT nu_pts is MEMORY-SAFE by design. R~1000 (nu_pts~1652 over the production
-    # NIRISS+G395H band) is the standard resolution: the data is binned to ~150 points, so
-    # R~1000 (~11 model pts/bin) is ample. The RT-vjp gradient memory scales with nu_pts
-    # (NOT with R -- a narrow-band smoke can be high-R at tiny nu_pts), and blew to 343 GiB
-    # (OOM on the 96 GB GH200, job 64601) at the old ~R10000 native resolution. The old
-    # default here (6000) was exactly that memory bomb. NEVER raise nu_pts without
-    # PROBE_MEMORY=1 first. See the RT-resolution note in ../../CLAUDE.md -- this has bitten
-    # the run repeatedly.
-    nu_pts: int = 1652
-    # Opacity treatment. "exomolop" (the default) is correlated-k from the
-    # published ExoMolOP tables: ExoMol/HITEMP high-temperature line lists with
-    # H2/He broadening already applied, integrated over each R=1000 band offline.
-    # "lbl" samples the cross section directly on nu_pts points, which exojax's
-    # own wavenumber_grid warns is valid only above R = 700,000 -- three orders
-    # of magnitude beyond anything the RT-vjp gradient memory allows here.
-    #
-    # MEASURED on the production band (1900-9900 cm^-1, the 8 production
-    # molecules, one fixed atmosphere so the difference is opacity alone, binned
-    # to the R=100 of the fitted Carter & May products):
-    #   lbl nu_pts=1652 vs exomolop   mean-removed rms 857 ppm, max 3177 ppm,
-    #                                 feature amplitude ratio 1.300
-    #   lbl nu_pts=13216 (8x) vs same  rms 667 ppm, ratio 1.294
-    # It does not converge: adjacent lbl rungs differ by ~750 ppm max at every
-    # step, while the CM24 bins this retrieval fits have a MEDIAN sigma of 70 ppm.
-    # A 12-sigma shape error is not a modelling approximation, so validate_config
-    # refuses "lbl" for an inference run rather than letting a retrieval absorb it
-    # into lnZ, C/O, the cloud deck and the offsets. "lbl" stays available for
-    # forward models (run_inference=False) and is the only path that supports a
-    # Mie deck. nu_pts is IGNORED in exomolop mode -- the band grid comes from the
-    # tables.
+    # Opacity treatment: correlated-k from the published ExoMolOP tables
+    # (ExoMol/HITEMP high-temperature line lists with H2/He broadening already
+    # applied, integrated over each R=1000 band offline; the band grid and the
+    # 16-point quadrature come from the files, so there is no spectral-resolution
+    # knob). Since vulcan-forward 0.11.0 this is the ONLY value the engine
+    # accepts; validate_config refuses anything else. The retired sampled
+    # line-by-line path was measured 857 ppm rms / 1.30x too contrasty on the
+    # production band and did not converge (notes.md).
     opacity_mode: str = "exomolop"
     art_nlayer: int = 60
     use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
@@ -110,11 +88,6 @@ class Config:
     # and sum(n) != M init are documented in vulcan_chem. See chem.audit_init.
     abundance_mode: str = "elemental"
     reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
-    # Pressure-broadening perturber for HITRAN opacities: "air" (terrestrial widths,
-    # the documented default approximation) or "h2he" (HITRAN planetary H2/He widths
-    # where available, blended per config.H2HE_BROADENING_MIX; per-molecule coverage
-    # printed at build; run validation/broadening_ab.py for the measured A/B).
-    broadening: str = "air"
     # Two-stage solve (REQUIRED for a live lnZ/C-O response when the T-P is retrieved):
     # stage 1 converges the column at (T(theta), Kzz(theta)) with BASELINE composition;
     # stage 2 applies the lnZ/C-O scaling to that converged column and re-converges warm.
@@ -387,16 +360,18 @@ class Config:
     # and both post-run validators become mandatory.
     smc_chem_mode: str = "cold"
     # Particles per lax.map chunk through the ExoJax RT. 0 = no chunking (single
-    # all-particles vmap). Compile-only probe 2026-07-07 (nu_pts=5000): RT PRIMAL
-    # ~0.22 GiB/lane (full width is fine); RT VJP is THE memory wall -- 18.4 GiB
-    # for the first lane + ~9.4 GiB per additional (65.4 GiB at 6-wide vs the
-    # ~81 GiB pool), even with the per-molecule jax.checkpoint in exojax_rt.
-    # Scales with n_nu: re-probe (PROBE_MEMORY=1) before raising or changing nu_pts.
+    # all-particles vmap). Compile-only probe 2026-07-07 (5000-point sampled grid):
+    # RT PRIMAL ~0.22 GiB/lane (full width is fine); RT VJP is THE memory wall --
+    # 18.4 GiB for the first lane + ~9.4 GiB per additional (65.4 GiB at 6-wide vs
+    # the ~81 GiB pool), even with the per-molecule jax.checkpoint in exojax_rt.
+    # Scales with the spectral axis: re-probe (PROBE_MEMORY=1) before raising it or
+    # changing the band / art_nlayer.
     smc_rt_chunk: int = 16              # primal-likelihood RT chunk
-    # Gradient-sweep RT chunk. The default 6 is the value PROBED SAFE at nu_pts=5000;
-    # the vjp memory scales ~linearly with nu_pts, so at the production nu_pts=1652 a
-    # chunk of 12 fits with margin (the gpu preset sets it -- ~half the serialized RT
-    # chunks per sweep). PROBE_MEMORY=1 before raising it further or changing nu_pts.
+    # Gradient-sweep RT chunk. The default 6 was PROBED SAFE on the old 5000-point
+    # sampled grid; the correlated-k grid (~1650 R=1000 bands x a 16-point g axis
+    # through the random-overlap folds) is a different memory profile, so the gpu
+    # preset's 12 is unproven for it. PROBE_MEMORY=1 before raising it or changing
+    # the band / art_nlayer.
     smc_rt_vjp_chunk: int = 6
     # Particles per lax.map chunk through the CHEMISTRY GRADIENT stage. 0 = no
     # chunking (full width) is the default: STAGED chem tangent lanes cost
@@ -451,13 +426,11 @@ class Config:
             molecules=list(self.molecules),
             nu_min=float(self.nu_min),
             nu_max=float(self.nu_max),
-            nu_pts=int(self.nu_pts),
             opacity_mode=str(self.opacity_mode),
             art_nlayer=int(self.art_nlayer),
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
             abundance_mode=str(self.abundance_mode),
-            broadening=str(self.broadening),
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
             fastchem_met_scale=float(self.fastchem_met_scale),
             cfg_overrides=dict(self.cfg_overrides),
@@ -634,8 +607,6 @@ def validate_config(cfg: Config) -> None:
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
         raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "
                          "(expected 'elemental' or 'masks')")
-    if str(cfg.broadening) not in ("air", "h2he"):
-        raise ValueError(f"unknown broadening {cfg.broadening!r} (expected 'air' or 'h2he')")
     # Planet identity must be declared explicitly by the case: without these the RT
     # would silently normalize with the shared-lib WASP-39b radius/gravity and the
     # chemistry would run WASP-39b's baseline column -- a silently-wrong retrieval of
@@ -653,38 +624,14 @@ def validate_config(cfg: Config) -> None:
         import warnings
         warnings.warn("use_photo=False: the forward-mode tangent is only validated with "
                       "photochemistry ON (see config.FULL notes). Proceed with caution.")
-    if str(cfg.opacity_mode) not in ("exomolop", "lbl"):
-        raise ValueError(f"unknown opacity_mode {cfg.opacity_mode!r} "
-                         "(expected 'exomolop' or 'lbl')")
-    # Sampled line-by-line is biased at every affordable nu_pts, by ~12x the
-    # per-bin noise of the data this retrieval fits. Numbers + provenance: the
-    # opacity_mode field comment. Refuse it for inference rather than let the
-    # free parameters absorb an opacity error (loud-errors rule).
-    if str(cfg.opacity_mode) == "lbl" and bool(cfg.run_inference):
+    if str(cfg.opacity_mode) != "exomolop":
         raise ValueError(
-            "opacity_mode='lbl' with run_inference=True is refused. Sampling the "
-            "cross section on nu_pts points is valid only above exojax's critical "
-            "R = 700,000; on the production band at nu_pts=1652 it differs from "
-            "the ExoMolOP correlated-k opacity by 857 ppm rms (max 3177 ppm) in "
-            "binned R=100 shape and inflates the feature amplitude by 1.30x, "
-            "against a median observed sigma of 70 ppm -- and 8x more points "
-            "moves that to 667 ppm / 1.29x, so it does not converge. A retrieval "
-            "would absorb it into lnZ, C/O, the cloud deck and the instrument "
-            "offsets. Use opacity_mode='exomolop' (the default). 'lbl' remains "
-            "supported for FORWARD models (run_inference=False) and is the only "
-            "path that carries a Mie deck.")
-    # RT-vjp gradient memory scales with nu_pts (job 64601: nu_pts=16500 -> 343 GiB ->
-    # OOM on the 96 GB GH200). R~1000 == nu_pts~1652 for the production band is the
-    # memory-safe DEFAULT; warn loudly above it so a resolution bump can't silently
-    # reintroduce the OOM (this has recurred). Not fatal -- a deliberate high-res run with
-    # a heavier smc_rt_vjp_chunk can be valid -- but PROBE_MEMORY=1 FIRST.
-    if str(cfg.opacity_mode) == "lbl" and int(cfg.nu_pts) > 2500:
-        import warnings
-        warnings.warn(
-            f"nu_pts={cfg.nu_pts} exceeds the memory-safe ~1652 (R~1000) default: the "
-            "RT-vjp gradient memory scales with nu_pts and OOM'd the 96 GB GH200 at 343 "
-            "GiB when nu_pts=16500 (job 64601). Run PROBE_MEMORY=1 to confirm the RT-vjp "
-            "fits (lower smc_rt_vjp_chunk if needed) before a production run.")
+            f"opacity_mode={cfg.opacity_mode!r} is not available: the sampled "
+            "line-by-line path ('lbl') was removed with vulcan-forward 0.11.0 "
+            "(measured 857 ppm rms / 3177 ppm max binned-shape error and 1.30x "
+            "too much feature contrast on the production band, non-convergent; "
+            "notes.md). Correlated-k over the ExoMolOP tables ('exomolop', the "
+            "default) is the only opacity path -- drop the key.")
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +641,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     """A prominent, human-readable dump of the RESOLVED configuration (after preset +
     overrides) -- forward-model fidelity, convergence criteria, T-P handling, data
     source, SMC settings, and the full parameter/prior table. Every entry point logs
-    this so the exact numbers a run uses (nu_pts/resolution, count_max, priors, ...)
+    this so the exact numbers a run uses (band, count_max, priors, ...)
     are visible up front rather than buried in the code. Pure string formatting."""
     if specs is None:
         # Offset parameters are named per non-REFERENCE group, and the reference is
@@ -721,11 +668,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     def rule(title=""):
         return f"  --- {title} " + "-" * max(0, W - 8 - len(title)) if title else "  " + "-" * (W - 2)
 
-    ckd = str(cfg.opacity_mode) == "exomolop"
-    R = (int(cfg.nu_pts) - 1) / math.log(float(cfg.nu_max) / float(cfg.nu_min))
-    opa = ("correlated-k (ExoMolOP tables, R=1000 bands, H2/He broadening)" if ckd
-           else f"SAMPLED line-by-line, nu_pts={cfg.nu_pts} (native R~{R:.0f}) "
-                "-- BIASED below R=700000")
+    opa = "correlated-k (ExoMolOP tables, R=1000 bands, H2/He broadening)"
     wl_lo, wl_hi = 1e4 / float(cfg.nu_max), 1e4 / float(cfg.nu_min)
     cmax = "(vulcan_cfg default)" if cfg.count_max is None else str(int(cfg.count_max))
     cmin = "(vulcan_cfg default)" if cfg.count_min is None else str(int(cfg.count_min))
@@ -742,7 +685,6 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    nz={cfg.nz}   band {wl_lo:.2f}-{wl_hi:.2f} um   art_nlayer={cfg.art_nlayer}",
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
-        f"    broadening={'from the ExoMolOP tables' if ckd else cfg.broadening}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",

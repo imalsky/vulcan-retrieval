@@ -91,7 +91,7 @@ def smoke_config(**overrides: Any) -> Config:
         _W39B,
         nz=30,
         molecules=("CO",),
-        nu_min=4280.0, nu_max=4360.0, nu_pts=400,   # cached CO 2-0 band (fully offline)
+        nu_min=4280.0, nu_max=4360.0,   # the CO 2-0 band (CO k-table only, fully offline)
         art_nlayer=20,
         combo=("G395H",),          # single group -> no offsets in the smoke
         infer_offsets=False,
@@ -133,9 +133,9 @@ def gpu_config(**overrides: Any) -> Config:
     measured typical warm re-converge ~500-800 steps, conv_step-window-dominated --
     the cold count_max only ever binds at init), the warm gradient runs ONE chemistry
     while_loop (the accept_count diag rides the jvp chain), and the RT vjp
-    runs 12-wide at nu_pts=1652 (12 serialized chunks at N=144). Projected ~20-40
-    min/stage vs the ~3-6 h/stage job 64745 showed.
-    Run `qsub -v PROBE_MEMORY=1` once after any nu_pts / chunk / N change, and
+    runs 12-wide on the ~1650-band correlated-k grid (12 serialized chunks at
+    N=144). Projected ~20-40 min/stage vs the ~3-6 h/stage job 64745 showed.
+    Run `qsub -v PROBE_MEMORY=1` once after any band / chunk / N change, and
     `qsub -v CALIBRATE_ONLY=1` (~1 h) to get timing.json before committing a full run.
     """
     base = dict(
@@ -144,19 +144,17 @@ def gpu_config(**overrides: Any) -> Config:
         count_max=5000,
         # + HCN/C2H2 (high-C/O discriminators) + H2S (reduced-S reservoir): without
         # them the likelihood is blind to the species that rule the C/O upper tail
-        # in or out. All HITRAN main-isotopologue, same path as the first five.
+        # in or out. All have ExoMolOP k-tables, same path as the first five.
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"),
-        # Correlated-k (the schema default): the ExoMolOP R=1000 band grid over
-        # [nu_min, nu_max] replaces the sampled grid, so nu_pts is INERT here and
-        # kept only for the lbl forward models. Measured against sampled
-        # line-by-line at this band and composition, lbl nu_pts=1652 differs by
-        # 857 ppm rms / 3177 ppm max in binned R=100 shape and is 1.30x too
-        # contrasty, against a 70 ppm median observed sigma; 8x more points does
-        # not converge it (config_schema.opacity_mode).
+        # Correlated-k (the schema default and, since vulcan-forward 0.11.0, the
+        # only opacity path): the ExoMolOP R=1000 band grid over [nu_min, nu_max].
+        # The retired sampled line-by-line path differed by 857 ppm rms / 3177 ppm
+        # max in binned R=100 shape and was 1.30x too contrasty, against a 70 ppm
+        # median observed sigma; 8x more points did not converge it (notes.md).
         # RUN PROBE_MEMORY=1 AGAIN AFTER THIS SWITCH: the correlated-k RT carries
         # a g-ordinate axis (ng=16) through the same reverse-mode vjp, so the
         # memory wall moved and smc_rt_vjp_chunk below is unproven for it.
-        nu_min=1900.0, nu_max=9900.0, nu_pts=1652, art_nlayer=60,
+        nu_min=1900.0, nu_max=9900.0, art_nlayer=60,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
@@ -191,7 +189,7 @@ def gpu_config(**overrides: Any) -> Config:
         # phase-2 memory is width-independent to N~500 (probe 64944 measured 73.25 GiB
         # flat at N=96/144/152). No memory probe needed for this bump: the 192-wide
         # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
-        # neither nu_pts nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
+        # neither the spectral band nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
         # COLD chemistry. Every likelihood evaluation uses the published
         # solve-from-baseline map, so the target is a fixed deterministic
         # function of theta -- what MALA, SMC tempering, and the evidence
@@ -232,9 +230,10 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # 12-wide RT vjp at nu_pts=1652 (~half the 5000-probed per-lane cost applies;
-        # est. ~40-55 GiB vs the ~81 GiB pool). PROBE_MEMORY=1 once before the first
-        # production submit -- the probe is compile-only and cannot OOM.
+        # 12-wide RT vjp on the ~1650-band correlated-k grid (sized from the
+        # 5000-point sampled-grid probe; est. ~40-55 GiB vs the ~81 GiB pool).
+        # PROBE_MEMORY=1 once before the first production submit -- the probe is
+        # compile-only and cannot OOM.
         smc_rt_vjp_chunk=12,
         mcmc_stage_adapt=True, mcmc_auto_tune=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,

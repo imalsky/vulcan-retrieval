@@ -6,18 +6,12 @@ resolve the physics does not average into the correct R~100 bin -- narrow
 saturated lines and low-opacity windows must be resolved, or treated with a
 validated k-distribution.
 
-WHICH KNOB THIS SWEEPS depends on the production opacity mode, because they have
-different free axes:
-
-  * ``exomolop`` (production): correlated-k on the tables' own R=1000 band grid
-    and their own 16-point quadrature. There is no spectral resolution knob --
-    both come from the files -- so the remaining free numerical axis is the ART
-    VERTICAL grid, ``art_nlayer``, and that is what the ladder sweeps. The script
-    also records the sampled-line-by-line alternative as an informational
-    measurement, because that comparison is why the production mode is what it is.
-  * ``lbl``: sweeps ``nu_pts``. Kept for forward models; measured NOT to converge
-    on this band (see config_schema.opacity_mode), which is why inference refuses
-    it.
+WHICH KNOB THIS SWEEPS: the production RT is correlated-k on the tables' own
+R=1000 band grid and their own 16-point quadrature. There is no spectral
+resolution knob -- both come from the files -- so the remaining free numerical
+axis is the ART VERTICAL grid, ``art_nlayer``, and that is what the ladder
+sweeps. (The retired sampled-line-by-line alternative was measured NOT to
+converge on this band; the numbers are archived in notes.md.)
 
 Method: converge the W39b chemistry ONCE (baseline theta), then rebuild the RT at
 each rung, bin every native spectrum onto the SAME R=100 bins, and compare
@@ -65,7 +59,7 @@ def gaussian_lsf(wl, y, R_lsf):
     return out
 
 
-def production_pair(rungs, production_value, knob="nu_pts"):
+def production_pair(rungs, production_value, knob="art_nlayer"):
     """Return the production/next-rung pair or fail a mis-specified ladder."""
     ordered = sorted({int(r) for r in rungs})
     if len(ordered) < 2:
@@ -78,17 +72,10 @@ def production_pair(rungs, production_value, knob="nu_pts"):
 
 
 def main() -> int:
-    from retrieval_framework.config_schema import Config as _Cfg
-
     ap = argparse.ArgumentParser()
-    ap.add_argument("--opacity-mode", default=_Cfg.opacity_mode,
-                    choices=("exomolop", "lbl"),
-                    help="which production RT path to certify (default: the "
-                         "schema default, i.e. what a run actually uses)")
-    ap.add_argument("--ladder", type=int, nargs="+", default=None,
-                    help="rungs of the swept knob; the lowest must be the "
-                         "production value (default: an art_nlayer ladder in "
-                         "exomolop mode, a nu_pts ladder in lbl mode)")
+    ap.add_argument("--ladder", type=int, nargs="+", default=[60, 90, 135],
+                    help="art_nlayer rungs; the lowest must be the production "
+                         "value (default: 60 90 135)")
     ap.add_argument("--lsf-r", type=float, default=0.0,
                     help="optional Gaussian LSF resolving power before binning")
     ap.add_argument("--jacobian", action="store_true",
@@ -97,10 +84,7 @@ def main() -> int:
                     help="skip writing the provenance-bearing result under "
                          "validation/results/ (exploration only)")
     args = ap.parse_args()
-    ckd = args.opacity_mode == "exomolop"
-    knob = "art_nlayer" if ckd else "nu_pts"
-    if args.ladder is None:
-        args.ladder = [60, 90, 135] if ckd else [1652, 3304, 6608]
+    knob = "art_nlayer"
 
     from retrieval_framework.forward import config
     from vulcan_forward import interp_map
@@ -115,8 +99,7 @@ def main() -> int:
                    abundance_mode="elemental", co_mode="fixed_O",
                    molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
                    nu_min=BAND[0], nu_max=BAND[1], art_nlayer=60,
-                   nu_pts=int(_Cfg.nu_pts), opacity_mode=args.opacity_mode,
-                   use_rayleigh=True)
+                   opacity_mode="exomolop", use_rayleigh=True)
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)
     y0 = chem.converged_y(theta0)
@@ -184,33 +167,6 @@ def main() -> int:
         })
         if decisive:
             ok &= dppm < GATE_PPM
-    # The opacity-mode decision itself, archived with the rest of the evidence:
-    # sampled line-by-line against the correlated-k production path, same column
-    # and same bins, so the difference is opacity treatment alone. Informational
-    # -- validate_config already REFUSES lbl for inference -- but this is the
-    # number behind that refusal, measured on the production column rather than
-    # on a hand-written one.
-    if ckd:
-        prof = dict(profile); prof["opacity_mode"] = "lbl"
-        lbl = run_rung(prof, False)["binned"]
-        b = results[profile[knob]]["binned"]
-        m = np.isfinite(lbl) & np.isfinite(b)
-        dd = 1e6 * (lbl[m] - b[m])
-        rms = float(np.sqrt(np.mean((dd - dd.mean()) ** 2)))
-        amp = float((np.max(lbl[m]) - np.min(lbl[m])) / (np.max(b[m]) - np.min(b[m])))
-        print(f"\n==== opacity mode: sampled lbl (nu_pts={profile['nu_pts']}) "
-              f"vs production correlated-k ====")
-        print(f"mean-removed rms {rms:.1f} ppm, feature-amplitude ratio {amp:.3f}")
-        for nm, val, unit in (("mean-removed rms, sampled lbl vs correlated-k",
-                               rms, "ppm"),
-                              ("feature-amplitude ratio, sampled lbl / correlated-k",
-                               amp, "ratio")):
-            measurements.append({
-                "name": nm, "value": f"{val:.3f} {unit}".strip(),
-                "value_raw": val, "unit": unit,
-                "gate": "(informational; lbl is refused for inference)",
-                "decisive": False, "passed": None})
-
     if args.jacobian:
         print("\n==== Jacobian (dlnZ) convergence ====")
         a, b = decisive_pair
@@ -233,11 +189,11 @@ def main() -> int:
     if not args.no_artifact:
         _artifact.emit(
             name="resolution_ladder",
-            title="Native-spectral-resolution convergence of the binned depth",
+            title="Vertical-grid (art_nlayer) convergence of the binned depth",
             measurements=measurements,
             status="PASS" if ok else "FAIL",
             summary=(
-                f"opacity_mode={args.opacity_mode}; {knob} ladder {rungs}; "
+                f"opacity_mode=exomolop; {knob} ladder {rungs}; "
                 f"production is {profile[knob]}. "
                 + ("The production resolution is converged at the declared "
                    "gates." if ok else

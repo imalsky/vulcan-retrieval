@@ -23,7 +23,7 @@ cd vulcan-retrieval
 python -m pip install \
   -i https://test.pypi.org/simple/ \
   --extra-index-url https://pypi.org/simple/ \
-  "vulcan-jax>=0.3.0" "vulcan-forward>=0.4.0"
+  "vulcan-jax>=0.3.0" "vulcan-forward>=0.11.0"
 python -m pip install -e ".[dev,plot]"
 ```
 

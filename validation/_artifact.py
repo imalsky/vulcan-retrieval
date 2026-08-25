@@ -1,15 +1,14 @@
 """Provenance-bearing result artifacts for the production-fidelity checks.
 
-The three convergence scripts (`resolution_ladder.py`, `top_pressure_ladder.py`,
-`broadening_ab.py`) measure the three production choices that were made for
-reasons other than accuracy:
+The two convergence scripts (`resolution_ladder.py`, `top_pressure_ladder.py`)
+measure the two production choices that were made for reasons other than
+accuracy:
 
-  * `nu_pts = 1652` was chosen for GPU gradient MEMORY, not from a convergence
+  * `art_nlayer = 60` (the ART vertical grid; the spectral grid is fixed by the
+    ExoMolOP tables) was chosen for GPU gradient MEMORY, not from a convergence
     result;
   * the ART grid extends one decade above the chemistry grid on a
-    constant-VMR / isothermal CLAMP;
-  * most molecular lines use terrestrial-AIR HITRAN widths even though the
-    atmosphere is H2/He.
+    constant-VMR / isothermal CLAMP.
 
 A verdict printed to a terminal and lost is not evidence, and
 "the script exists" is not the same as "the check passed at production
@@ -108,8 +107,7 @@ def _data_identity() -> dict:
     swapped, extended, or regenerated, which is what matters here.
     """
     out = {}
-    for env in ("VULCAN_FORWARD_DATA", "VULCAN_FORWARD_LINELISTS",
-                "VULCAN_FORWARD_OPACITY_CACHE"):
+    for env in ("VULCAN_FORWARD_DATA", "VULCAN_FORWARD_OPACITY_CACHE"):
         out[env] = os.environ.get(env)
     # The env vars above are recorded for transparency only. This repo hands
     # the engine its tree via paths.set_data_root, which takes precedence, so
@@ -120,12 +118,12 @@ def _data_identity() -> dict:
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import paths as _fwd_paths
         out["data_root_resolved"] = str(_fwd_paths.data_root())
-        tree_dirs = {"exojax_linelists": Path(_fwd_paths.linelist_dir()),
-                     "opacity_cache": Path(_fwd_paths.opacity_cache_dir())}
+        tree_dirs = {"opacity_cache": Path(_fwd_paths.opacity_cache_dir()),
+                     "exomolop": Path(_fwd_paths.exomolop_dir())}
     except Exception as exc:                                # pragma: no cover
         out["engine_data_error"] = f"{type(exc).__name__}: {exc}"
         return out
-    for sub in ("exojax_linelists", "opacity_cache"):
+    for sub in ("opacity_cache", "exomolop"):
         p = tree_dirs[sub]
         if not p.is_dir():
             out[sub] = None
@@ -222,7 +220,7 @@ def _md(name: str, payload: dict) -> str:
     lines.append(f"| host | {prov['hardware']['hostname']} "
                  f"({prov['hardware']['platform']}) |")
     data = prov.get("data", {})
-    for sub in ("exojax_linelists", "opacity_cache"):
+    for sub in ("opacity_cache", "exomolop"):
         d = data.get(sub)
         if isinstance(d, dict):
             lines.append(f"| {sub} | {d['files']} files, {d['bytes']} bytes, "

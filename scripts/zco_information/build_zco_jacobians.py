@@ -53,7 +53,7 @@ from vulcan_forward import interp_map
 OUT = config.OUTPUTS / "zco_jacobians.npz"
 
 # 1.0-5.28 um: covers NIRISS water bands + NIRSpec SO2/CO2/CO. 1 um = H2-H2 CIA short edge.
-_ZCO_BAND = dict(nu_min=1893.0, nu_max=10000.0, nu_pts=6000, art_nlayer=60)
+_ZCO_BAND = dict(nu_min=1893.0, nu_max=10000.0, art_nlayer=60)
 
 TIER_CFG = {
     # Equilibrium: photo off + eddy mixing off (Kzz=0) + molecular diffusion off, so each
@@ -102,7 +102,7 @@ def tier_profile_overrides(tier: str) -> dict:
 def _profile(smoke: bool, tier: str) -> dict:
     if smoke:
         base = dict(config.SMOKE, co_mode="fixed_O",
-                    nu_min=4280.0, nu_max=4360.0, nu_pts=600, art_nlayer=20,
+                    nu_min=4280.0, nu_max=4360.0, art_nlayer=20,
                     molecules=["CO"], nz=40, yconv_cri=1.0e-3)
     else:
         base = dict(config.FULL, co_mode="fixed_O", nz=150, yconv_cri=1.0e-3,

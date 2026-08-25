@@ -64,7 +64,7 @@ def main():
     prof = dict(config.FULL, co_mode="fixed_O", nz=150, yconv_cri=1.0e-4, yconv_min=1.0e-4,
                 slope_cri=1.0e-7, count_min=300, count_max=12000, reanchor_atom_ini=True,
                 molecules=["H2O", "CO2", "CO", "CH4", "SO2"],
-                nu_min=1893.0, nu_max=10000.0, nu_pts=6000, art_nlayer=60,
+                nu_min=1893.0, nu_max=10000.0, art_nlayer=60,
                 **zco_lib_tier_cfg(TIER))
     t0 = time.time()
     chem = vulcan_chem.build_chem_model(prof)

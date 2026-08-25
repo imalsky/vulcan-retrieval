@@ -1,5 +1,4 @@
 {
-  "nu_pts": 5000,
   "smc_chem_chunk": 0,
   "smc_rt_chunk": 0,
   "smc_rt_vjp_chunk": 6,

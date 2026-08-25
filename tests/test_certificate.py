@@ -30,8 +30,7 @@ def _passing_cert():
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
         "data": {"observations": {"sha256": "b" * 64, "bytes": 1234}},
-        "resolved_config": {"smc_chem_mode": "cold", "nu_pts": 1652,
-                            "opacity_mode": "exomolop"},
+        "resolved_config": {"smc_chem_mode": "cold", "opacity_mode": "exomolop"},
         "resolved_config_sha256": "c" * 64,
         "target": {"smc_chem_mode": "cold",
                    "approximate_history_dependent_target": False,
@@ -60,7 +59,6 @@ def _passing_cert():
         "validation_artifacts": {
             "resolution_ladder": {"status": "PASS", "summary": "", "sha256": "d"},
             "top_pressure_ladder": {"status": "PASS", "summary": "", "sha256": "e"},
-            "broadening_ab": {"status": "REPORT", "summary": "", "sha256": "f"},
         },
         "checkpoint_present": True,
     }
@@ -100,25 +98,20 @@ def test_dirty_repo_is_refused():
 def test_missing_validation_artifact_is_refused():
     for name in REQUIRED_VALIDATION_ARTIFACTS:
         c = _passing_cert()
-        c["resolved_config"]["opacity_mode"] = "lbl"   # every artifact required
         c["validation_artifacts"][name] = None
         problems = validate(c, _replay())
         assert any(name in p and "missing" in p for p in problems), (name, problems)
 
 
-def test_broadening_artifact_is_not_required_on_the_correlated_k_path():
-    """ExoMolOP bakes H2/He widths into the tables and the engine ignores the
-    broadening key, so demanding that measurement would demand a number the run
-    cannot produce."""
-    c = _passing_cert()
-    c["validation_artifacts"]["broadening_ab"] = None
-    assert validate(c, _replay()) == []
-
-
-def test_an_unrecorded_opacity_mode_is_refused():
+def test_an_unrecorded_or_removed_opacity_mode_is_refused():
+    """Only correlated-k runs are certifiable: no record at all, or a record
+    of the removed sampled line-by-line path, is a problem."""
     c = _passing_cert()
     c["resolved_config"].pop("opacity_mode")
     assert any("opacity_mode" in p for p in validate(c, _replay()))
+    c = _passing_cert()
+    c["resolved_config"]["opacity_mode"] = "lbl"
+    assert any("removed" in p for p in validate(c, _replay()))
 
 
 def test_failed_validation_artifact_is_refused():
@@ -134,8 +127,6 @@ def test_report_status_is_refused_for_a_gated_artifact():
     c["validation_artifacts"]["top_pressure_ladder"] = {
         "status": "REPORT", "summary": "decisive test not run", "sha256": "e"}
     assert any("REPORT, not PASS" in p for p in validate(c, _replay()))
-    # broadening_ab is legitimately REPORT (no pass gate; a decision input)
-    assert validate(_passing_cert(), _replay()) == []
 
 
 def test_missing_cold_replay_is_refused():

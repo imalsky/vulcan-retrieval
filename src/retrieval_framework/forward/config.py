@@ -40,8 +40,6 @@ ATOM_COLS = _fwd.ATOM_COLS
 ATOMIC_MASSES = _fwd.ATOMIC_MASSES
 BULK_H2_VULCAN = _fwd.BULK_H2_VULCAN
 CLOUD_NUC0 = _fwd.CLOUD_NUC0
-BROADENING = _fwd.BROADENING
-H2HE_BROADENING_MIX = _fwd.H2HE_BROADENING_MIX
 ART_PTOP_BAR = _fwd.ART_PTOP_BAR
 ART_PBTM_BAR = _fwd.ART_PBTM_BAR
 T_OPA_MIN_K = _fwd.T_OPA_MIN_K
@@ -68,17 +66,16 @@ if not (REPO_DIR / "data" / "cm24_wasp39b").is_dir():    # tracked marker, in ev
     raise RuntimeError(
         f"vulcan-retrieval data tree not found at {REPO_DIR}/data. Set VULCAN_PROJECT_ROOT "
         "to the directory that contains the vulcan-retrieval/ checkout (a site-packages "
-        "install cannot infer it). Large caches (data/opacity_cache, data/exojax_linelists) "
+        "install cannot infer it). Large caches (data/opacity_cache, data/exomolop) "
         "are seeded separately -- see the repo README data policy.")
 
 JP = PROJECT_ROOT / "jax_paper"  # for _common.apply_style (house figure style)
 DATA_DIR = REPO_DIR / "data"                                    # INPUTS: observed spectra + opacity caches
 OUTPUTS = REPO_DIR / "output"                                   # GENERATED: npz caches from examples/validation/zco
 FIGS = JP / "figures"                                           # manuscript figures stay in jax_paper/figures
-DEMO_DATABASE = DATA_DIR / "exojax_linelists"                   # HITRAN line lists
 
-# Hand the shared engine this repo's data tree (exojax_linelists/ +
-# opacity_cache/, exactly what data/ already holds), so the engine never infers
+# Hand the shared engine this repo's data tree (exomolop/ + opacity_cache/,
+# exactly what data/ already holds), so the engine never infers
 # the location from its own __file__. It then owns every path INSIDE that tree:
 # ask paths.opacity_cache_dir / cia_h2h2_file / cia_h2he_file rather than
 # rebuilding them here, or the two copies drift and this one wins silently.
@@ -116,7 +113,7 @@ SMOKE = {
     "molecules": ["CO"],       # fully offline
     "nu_min": 4280.0,          # ~2.31-2.34 um, the cached CO 2-0 band (matches smc.py)
     "nu_max": 4360.0,
-    "nu_pts": 600,
+    "opacity_mode": "exomolop",
     "art_nlayer": 20,
     # planet identity, explicit: the engine requires it rather than
     # defaulting to WASP-39 b (a forgotten key would silently model a
@@ -130,7 +127,7 @@ FULL = {
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
     "nu_min": 1923.0,          # ~5.2 um
     "nu_max": 3450.0,          # ~2.9 um  (NIRSpec G395H/PRISM red: CH4 3.3, SO2 4.0, CO2 4.3, CO 4.7)
-    "nu_pts": 6000,
+    "opacity_mode": "exomolop",
     "art_nlayer": 60,
     # planet identity, explicit: the engine requires it rather than
     # defaulting to WASP-39 b (a forgotten key would silently model a
@@ -138,8 +135,9 @@ FULL = {
     "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
 # Wide-band overview: 1-15 um (the supported window -- H2-H2 CIA stops at 1 um / 10000
-# cm-1 on the short side, line lists reach ~20 um). Computed on a finer native grid and
-# displayed at R=100. Used for BOTH the transmission and emission figures.
+# cm-1 on the short side; the ExoMolOP tables reach 50 um). Computed on the tables'
+# R=1000 band grid and displayed at R=100. Used for BOTH the transmission and emission
+# figures.
 WIDE = {
     "use_photo": True,
     "nz": 150,
@@ -147,7 +145,7 @@ WIDE = {
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
     "nu_min": 667.0,           # 15 um
     "nu_max": 10000.0,         # 1 um  (H2-H2 CIA upper edge)
-    "nu_pts": 8000,            # native R ~ 2950; binned to display_R for the figure
+    "opacity_mode": "exomolop",
     "art_nlayer": 60,
     "display_R": 100,
     # planet identity, explicit: the engine requires it rather than

@@ -298,7 +298,7 @@ def main() -> None:
     )
     log = logging.getLogger("retrieval")
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={cfg.out_dir}")
-    # loud, up-front dump of the RESOLVED config so nothing (nu_pts, count_max, priors,
+    # loud, up-front dump of the RESOLVED config so nothing (band, count_max, priors,
     # ...) is a surprise; shown BEFORE the ~minutes-long forward build.
     log.info(C.describe_config(cfg, preset))
 

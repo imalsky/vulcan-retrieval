@@ -29,24 +29,19 @@ def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path):
     _reset()
     data = tmp_path / "vulcan-retrieval" / "data"
     (data / "cm24_wasp39b").mkdir(parents=True)
-    (data / "exojax_linelists").mkdir()
     (data / "opacity_cache").mkdir()
     (data / "exomolop").mkdir()
     V._check_data_tree(tmp_path)
-    # ERRORS: missing CSVs, missing ExoMolOP k-tables (the PRODUCTION opacity),
-    # and both CIA files. WARNINGS: the HITRAN line lists and the cached CO
-    # ExoMol dir, which only the lbl FORWARD path reads.
+    # ERRORS: missing CSVs, missing ExoMolOP k-tables (the only opacity path),
+    # and both CIA files. Nothing else is read, so nothing else may warn.
     assert len(V._ERRORS) == 4
     assert any("exomolop" in e or "ExoMolOP" in e for e in V._ERRORS), V._ERRORS
-    assert len(V._WARNINGS) == 2
+    assert V._WARNINGS == []
 
     _reset()
     (data / "cm24_wasp39b" / "obs.csv").write_text("wl,depth\n")
-    (data / "opacity_cache" / "CO" / "12C-16O" / "Li2015").mkdir(parents=True)
     (data / "opacity_cache" / "H2-H2_2011.cia").write_text("")
     (data / "opacity_cache" / "H2-He_2011.cia").write_text("")
-    for m in ("H2O", "CO2", "CH4", "SO2", "HCN", "C2H2", "H2S"):
-        (data / "exojax_linelists" / f"{m}.h5").write_text("")
     for m in ("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"):
         (data / "exomolop" / f"{m}.ktable.h5").write_text("")
     V._check_data_tree(tmp_path)

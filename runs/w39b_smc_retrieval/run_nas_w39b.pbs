@@ -315,7 +315,7 @@ elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
 elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # measures the REAL accept_count distribution over CALIBRATE_N_DRAWS prior draws at
-  # whatever nz/nu_pts/prior SMC_RETRIEVAL_OVERRIDES_FILE resolves to, at a generous
+  # whatever nz/prior SMC_RETRIEVAL_OVERRIDES_FILE resolves to, at a generous
   # CALIBRATE_COUNT_MAX_PROBE cap so the true tail isn't truncated -- see
   # retrieval_framework/calibrate_count_max.py's docstring. No SMC run happens.
   echo "========== CALIBRATE COUNT_MAX (accept_count distribution only) =========="
