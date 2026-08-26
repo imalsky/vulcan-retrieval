@@ -4,6 +4,7 @@ depth's jvp exact and free."""
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from retrieval_framework import observations as OBS
 
@@ -50,6 +51,12 @@ def test_binning_matrix_matches_trapezoid_reference():
         ref = _reference_bin(wl_model, y, lo, hi)
         got = B @ y
         assert np.allclose(got, ref[keep], rtol=1e-12, atol=1e-14)
+
+
+def test_binning_matrix_refuses_duplicate_model_coordinates():
+    obs = {"wl_lo": np.array([2.1]), "wl_hi": np.array([2.9])}
+    with pytest.raises(ValueError):
+        OBS.build_binning_matrix(np.array([2.0, 2.5, 2.5, 3.0]), obs)
 
 
 def test_binning_matrix_on_real_cm24_bins():

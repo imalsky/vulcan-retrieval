@@ -32,6 +32,18 @@ import numpy as np
 OFFSET_UNIT = 1.0e-6   # offset parameter is in ppm -> fractional depth
 
 
+def _validated_model_wavelengths(wl_model_um: np.ndarray) -> np.ndarray:
+    """Return a finite, positive, duplicate-free 1-D model grid."""
+    wl = np.asarray(wl_model_um, float)
+    if wl.ndim != 1 or wl.size < 2:
+        raise ValueError("model wavelength grid must be 1-D with at least two points")
+    if not np.all(np.isfinite(wl)) or np.any(wl <= 0.0):
+        raise ValueError("model wavelength grid must be finite and positive")
+    if np.unique(wl).size != wl.size:
+        raise ValueError("model wavelength grid contains duplicate coordinates")
+    return wl
+
+
 def read_rprs_csv(path: Path) -> Tuple[np.ndarray, ...]:
     """Read one (Rp/Rs)-format product CSV -> (wl, wl_lo, wl_hi, depth_frac, sigma_frac).
 
@@ -155,7 +167,7 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     d(lambda)-weighted trapezoidal bin average of zco_lib.bin_to_obs -- exact, so the
     JVP of a binned depth is B @ (JVP of native depth).
     """
-    wl = np.asarray(wl_model_um, float)
+    wl = _validated_model_wavelengths(wl_model_um)
     order = np.argsort(wl)
     wl_s = wl[order]
     n_native = wl.size
@@ -184,7 +196,7 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
         for xend, wend in ((x[0], wnode[0]), (x[-1], wnode[-1])):
             jj = int(np.clip(np.searchsorted(wl_s, xend), 1, n_native - 1))
             xl, xr = wl_s[jj - 1], wl_s[jj]
-            t = 0.0 if xr == xl else (xend - xl) / (xr - xl)
+            t = (xend - xl) / (xr - xl)
             row[order[jj - 1]] += wend * (1.0 - t)
             row[order[jj]] += wend * t
         rows.append(row)
