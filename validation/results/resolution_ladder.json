@@ -2,40 +2,40 @@
   "artifact": "resolution_ladder",
   "title": "Vertical-grid (art_nlayer) convergence of the binned depth",
   "verdict": {
-    "status": "FAIL",
-    "summary": "opacity_mode=exomolop; art_nlayer ladder [60, 90, 135]; production is 60. NOT converged at the declared gates -- adopt the lowest tested passing rung as the production art_nlayer. Jacobian axis included."
+    "status": "PASS",
+    "summary": "opacity_mode=exomolop; art_nlayer ladder [67, 101, 151]; production is 67. The production resolution is converged at the declared gates. Jacobian axis included."
   },
   "measurements": [
     {
-      "name": "max |Delta binned depth|, art_nlayer 60 -> 90",
-      "value": "1.41 ppm",
-      "value_raw": 1.4056861445677082,
+      "name": "max |Delta binned depth|, art_nlayer 67 -> 101",
+      "value": "1.02 ppm",
+      "value_raw": 1.0199006478250894,
       "unit": "ppm",
       "gate": "< 5.0 ppm",
       "decisive": true,
       "passed": true
     },
     {
-      "name": "max |Delta binned depth|, art_nlayer 90 -> 135",
-      "value": "1.07 ppm",
-      "value_raw": 1.065070082240105,
+      "name": "max |Delta binned depth|, art_nlayer 101 -> 151",
+      "value": "0.68 ppm",
+      "value_raw": 0.6750809541586356,
       "unit": "ppm",
       "gate": "(informational)",
       "decisive": false,
       "passed": null
     },
     {
-      "name": "max rel Jacobian (dlnZ) change, art_nlayer 60 -> 90",
-      "value": "1.345%",
-      "value_raw": 0.013452166964193164,
+      "name": "max rel Jacobian (dlnZ) change, art_nlayer 67 -> 101",
+      "value": "0.933%",
+      "value_raw": 0.009329936241552813,
       "unit": "relative",
       "gate": "< 1%",
       "decisive": true,
-      "passed": false
+      "passed": true
     }
   ],
   "provenance": {
-    "generated_utc": "2026-08-27T20:56:26Z",
+    "generated_utc": "2026-08-27T21:12:01Z",
     "command": "resolution_ladder.py --jacobian",
     "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
     "repos": {
@@ -52,13 +52,13 @@
         "checkout": "vulcan-forward"
       },
       "vulcan-retrieval": {
-        "commit": "e4d590757343a29337b156242a0426ced2e7268b",
+        "commit": "833862870ba9f239596c414f7d6e5deb64119f16",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-retrieval"
       },
       "vulcan-jwst-tool": {
-        "commit": "ecf0cf752b9ef86f92272d52d728d2f367a362ae",
+        "commit": "8f6b8e5434133b676642cee97c52663e5458d554",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-jwst-tool"
@@ -121,7 +121,7 @@
       "nu_min": 1900.0,
       "nu_max": 9900.0,
       "opacity_mode": "exomolop",
-      "art_nlayer": 60,
+      "art_nlayer": 67,
       "rp_cm": 9143826800.0,
       "gs_cgs": 422.0,
       "rstar_cm": 64839240000.0,
@@ -131,6 +131,6 @@
       "co_mode": "fixed_O",
       "use_rayleigh": true
     },
-    "resolved_config_sha256": "8476d69c622932502ddc0dfc5a7cb33f08cfd0a5cc5b54954b7a39f7a0270aaa"
+    "resolved_config_sha256": "009ef6d973710e481a9fe68b9a8fcae0aa7c26ac797a9f18ddabedaee9510d26"
   }
 }
