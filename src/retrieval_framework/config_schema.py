@@ -470,7 +470,7 @@ class ParamSpec:
     lo: float
     hi: float
     truth: float
-    kind: str         # {"chem", "tp", "lnR0", "offset", "noise"} -- how the forward consumes it
+    kind: str         # {"chem", "tp", "lnR0", "cloud", "offset", "noise"} -- how the forward consumes it
 
 
 def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[ParamSpec]:

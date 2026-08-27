@@ -22,10 +22,6 @@ runs/*/notes.md
 scripts/zco_information/notes.md
 validation/notes.md
 
-# One-off diagnostic scripts from closed investigations. validation/ ships the
-# reusable smokes and the audit-response suite; these are not reusable.
-validation/badgrad_65815/
-validation/diag_*.py
 
 # Large opacity/line-list caches -- NOT tracked. ExoJax downloads HITRAN line lists
 # and CIA tables on first use (via the NAS proxy on HPC; see run_nas_w39b.pbs), and
