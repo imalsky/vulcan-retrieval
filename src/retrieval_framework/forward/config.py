@@ -132,7 +132,7 @@ FULL = {
     "nu_min": 1923.0,          # ~5.2 um
     "nu_max": 3450.0,          # ~2.9 um  (NIRSpec G395H/PRISM red: CH4 3.3, SO2 4.0, CO2 4.3, CO 4.7)
     "opacity_mode": "exomolop",
-    "art_nlayer": 60,
+    "art_nlayer": 67,
     # planet identity, explicit: the engine requires it rather than
     # defaulting to WASP-39 b (a forgotten key would silently model a
     # different planet).
@@ -150,7 +150,7 @@ WIDE = {
     "nu_min": 667.0,           # 15 um
     "nu_max": 10000.0,         # 1 um  (H2-H2 CIA upper edge)
     "opacity_mode": "exomolop",
-    "art_nlayer": 60,
+    "art_nlayer": 67,
     "display_R": 100,
     # planet identity, explicit: the engine requires it rather than
     # defaulting to WASP-39 b (a forgotten key would silently model a

@@ -74,7 +74,7 @@ class Config:
     # line-by-line path was measured 857 ppm rms / 1.30x too contrasty on the
     # production band and did not converge (notes.md).
     opacity_mode: str = "exomolop"
-    art_nlayer: int = 60
+    art_nlayer: int = 67
     use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
     co_mode: str = "fixed_O"           # C/O GUESS construction (elemental mode repairs it exactly)
     # Abundance-knob semantics. "elemental" (production default) makes lnZ / c_o EXACT

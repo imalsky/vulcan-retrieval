@@ -4,7 +4,7 @@ The two convergence scripts (`resolution_ladder.py`, `top_pressure_ladder.py`)
 measure the two production choices that were made for reasons other than
 accuracy:
 
-  * `art_nlayer = 60` (the ART vertical grid; the spectral grid is fixed by the
+  * `art_nlayer = 67` (the ART vertical grid; the spectral grid is fixed by the
     ExoMolOP tables) was chosen for GPU gradient MEMORY, not from a convergence
     result;
   * the model top (ART_PTOP_BAR, both grids) was set by band saturation

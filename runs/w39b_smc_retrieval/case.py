@@ -154,7 +154,7 @@ def gpu_config(**overrides: Any) -> Config:
         # RUN PROBE_MEMORY=1 AGAIN AFTER THIS SWITCH: the correlated-k RT carries
         # a g-ordinate axis (ng=16) through the same reverse-mode vjp, so the
         # memory wall moved and smc_rt_vjp_chunk below is unproven for it.
-        nu_min=1900.0, nu_max=9900.0, art_nlayer=60,
+        nu_min=1900.0, nu_max=9900.0, art_nlayer=67,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,

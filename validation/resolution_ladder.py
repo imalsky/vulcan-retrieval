@@ -73,9 +73,9 @@ def production_pair(rungs, production_value, knob="art_nlayer"):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ladder", type=int, nargs="+", default=[60, 90, 135],
+    ap.add_argument("--ladder", type=int, nargs="+", default=[67, 101, 151],
                     help="art_nlayer rungs; the lowest must be the production "
-                         "value (default: 60 90 135)")
+                         "value (default: 67 101 151)")
     ap.add_argument("--lsf-r", type=float, default=0.0,
                     help="optional Gaussian LSF resolving power before binning")
     ap.add_argument("--jacobian", action="store_true",
@@ -98,7 +98,7 @@ def main() -> int:
     profile.update(nz=62, count_max=5000, dt_max=1.0e11,
                    abundance_mode="elemental", co_mode="fixed_O",
                    molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
-                   nu_min=BAND[0], nu_max=BAND[1], art_nlayer=60,
+                   nu_min=BAND[0], nu_max=BAND[1], art_nlayer=67,
                    opacity_mode="exomolop", use_rayleigh=True)
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)
