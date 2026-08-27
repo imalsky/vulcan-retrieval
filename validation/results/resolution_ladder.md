@@ -2,7 +2,7 @@
 
 **VERDICT: PASS** -- opacity_mode=exomolop; art_nlayer ladder [67, 101, 151]; production is 67. The production resolution is converged at the declared gates. Jacobian axis included.
 
-Generated 2026-08-27T21:12:01Z by `resolution_ladder.py --jacobian`.
+Generated 2026-08-27T21:48:44Z by `resolution_ladder.py --jacobian`.
 
 ## Measurements
 
@@ -18,7 +18,7 @@ Generated 2026-08-27T21:12:01Z by `resolution_ladder.py --jacobian`.
 |---|---|
 | jax-vulcan | cf993e24d0b6 |
 | vulcan-forward | fb244c761b35 |
-| vulcan-retrieval | 833862870ba9 |
+| vulcan-retrieval | 90c08542d4bf |
 | vulcan-jwst-tool | 8f6b8e543413 |
 | jax | 0.6.2 |
 | jaxlib | 0.6.2 |
@@ -29,6 +29,6 @@ Generated 2026-08-27T21:12:01Z by `resolution_ladder.py --jacobian`.
 | host | Alizas-MacBook-Pro-2.local (macOS-14.2.1-arm64-arm-64bit) |
 | opacity_cache | 11 files, 178817677 bytes, newest 2026-07-07T23:52:00Z |
 | exomolop | 26 files, 9724969441 bytes, newest 2026-08-25T19:48:40Z |
-| resolved config sha256 | 009ef6d973710e48... |
+| resolved config sha256 | f994b00117e722c9... |
 
 Machine-readable: `resolution_ladder.json`

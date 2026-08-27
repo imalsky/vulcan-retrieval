@@ -35,7 +35,7 @@
     }
   ],
   "provenance": {
-    "generated_utc": "2026-08-27T21:12:01Z",
+    "generated_utc": "2026-08-27T21:48:44Z",
     "command": "resolution_ladder.py --jacobian",
     "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
     "repos": {
@@ -52,7 +52,7 @@
         "checkout": "vulcan-forward"
       },
       "vulcan-retrieval": {
-        "commit": "833862870ba9f239596c414f7d6e5deb64119f16",
+        "commit": "90c08542d4bfc006b7feef05f2eaf6b69fcce458",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-retrieval"
@@ -129,8 +129,9 @@
       "dt_max": 100000000000.0,
       "abundance_mode": "elemental",
       "co_mode": "fixed_O",
+      "art_ptop_bar": 1e-09,
       "use_rayleigh": true
     },
-    "resolved_config_sha256": "009ef6d973710e481a9fe68b9a8fcae0aa7c26ac797a9f18ddabedaee9510d26"
+    "resolved_config_sha256": "f994b00117e722c948de9b0e253f7f89407de32c0815484ce1239f09adc53d52"
   }
 }
