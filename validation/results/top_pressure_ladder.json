@@ -1,33 +1,15 @@
 {
   "artifact": "top_pressure_ladder",
-  "title": "Model-top treatment: clamped ART extension vs real chemistry",
+  "title": "Model top: production vs one decade higher on both grids",
   "verdict": {
     "status": "FAIL",
-    "summary": "FAIL -- extend the production chemistry grid (cfg P_t) instead of clamping"
+    "summary": "FAIL -- the 1e-08 bar model top is NOT converged; a higher top needs a measured T-P/Kzz there, not a constant fill"
   },
   "measurements": [
     {
-      "name": "clamp ladder, ART top 1e-07 -> 1e-08 bar",
-      "value": "75.28 ppm",
-      "value_raw": 75.27995432470708,
-      "unit": "ppm",
-      "gate": "(informational)",
-      "decisive": false,
-      "passed": null
-    },
-    {
-      "name": "clamp ladder, ART top 1e-08 -> 1e-09 bar",
-      "value": "22.00 ppm",
-      "value_raw": 22.00192973871723,
-      "unit": "ppm",
-      "gate": "(informational)",
-      "decisive": false,
-      "passed": null
-    },
-    {
-      "name": "clamped extension vs REAL chemistry over 1e-7..1e-8 bar",
-      "value": "73.47 ppm",
-      "value_raw": 73.47060035919547,
+      "name": "production (1e-08 bar) vs extended (1e-09 bar) model top",
+      "value": "14.65 ppm",
+      "value_raw": 14.649218529387554,
       "unit": "ppm",
       "gate": "< 5.0 ppm",
       "decisive": true,
@@ -35,8 +17,8 @@
     }
   ],
   "provenance": {
-    "generated_utc": "2026-08-27T18:11:34Z",
-    "command": "top_pressure_ladder.py --extend-chem",
+    "generated_utc": "2026-08-27T19:54:46Z",
+    "command": "top_pressure_ladder.py",
     "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
     "repos": {
       "jax-vulcan": {
@@ -46,13 +28,13 @@
         "checkout": "VULCAN-JAX"
       },
       "vulcan-forward": {
-        "commit": "aedbcbc70a1b138d8afa8f6c23de095b351dcf53",
+        "commit": "0ee65a448cdaaad74d2e31f503d14be94ce7586a",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-forward"
       },
       "vulcan-retrieval": {
-        "commit": "5f5eb37a53015da9c399c63285cb5c4bbb498221",
+        "commit": "ed8b37741b32a4cb1cb121f742e36ee656a4b729",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-retrieval"
@@ -105,32 +87,62 @@
     },
     "user": "alizabeverage",
     "resolved_config": {
-      "use_photo": true,
-      "nz": 50,
-      "yconv_cri": 0.001,
-      "molecules": [
-        "H2O",
-        "CO2",
-        "CO",
-        "CH4",
-        "SO2",
-        "HCN",
-        "C2H2",
-        "H2S"
-      ],
-      "nu_min": 1900.0,
-      "nu_max": 9900.0,
-      "opacity_mode": "exomolop",
-      "art_nlayer": 60,
-      "rp_cm": 9143826800.0,
-      "gs_cgs": 422.0,
-      "rstar_cm": 64839240000.0,
-      "count_max": 5000,
-      "dt_max": 100000000000.0,
-      "abundance_mode": "elemental",
-      "co_mode": "fixed_O",
-      "use_rayleigh": true
+      "production": {
+        "use_photo": true,
+        "nz": 56,
+        "yconv_cri": 0.001,
+        "molecules": [
+          "H2O",
+          "CO2",
+          "CO",
+          "CH4",
+          "SO2",
+          "HCN",
+          "C2H2",
+          "H2S"
+        ],
+        "nu_min": 1900.0,
+        "nu_max": 9900.0,
+        "opacity_mode": "exomolop",
+        "art_nlayer": 60,
+        "rp_cm": 9143826800.0,
+        "gs_cgs": 422.0,
+        "rstar_cm": 64839240000.0,
+        "count_max": 5000,
+        "dt_max": 100000000000.0,
+        "abundance_mode": "elemental",
+        "co_mode": "fixed_O",
+        "use_rayleigh": true
+      },
+      "extended": {
+        "use_photo": true,
+        "nz": 62,
+        "yconv_cri": 0.001,
+        "molecules": [
+          "H2O",
+          "CO2",
+          "CO",
+          "CH4",
+          "SO2",
+          "HCN",
+          "C2H2",
+          "H2S"
+        ],
+        "nu_min": 1900.0,
+        "nu_max": 9900.0,
+        "opacity_mode": "exomolop",
+        "art_nlayer": 67,
+        "rp_cm": 9143826800.0,
+        "gs_cgs": 422.0,
+        "rstar_cm": 64839240000.0,
+        "count_max": 5000,
+        "dt_max": 100000000000.0,
+        "abundance_mode": "elemental",
+        "co_mode": "fixed_O",
+        "use_rayleigh": true,
+        "art_ptop_bar": 1e-09
+      }
     },
-    "resolved_config_sha256": "615908f2153d30c2db98471ef2416edd616efed8a3779f2ce933ccb642a12349"
+    "resolved_config_sha256": "01eeb277c2ed381ba53a2fe7b4807ca069711b296b1682d50d367a0c6898b6c1"
   }
 }
