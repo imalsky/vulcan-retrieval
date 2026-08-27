@@ -2,22 +2,22 @@
   "artifact": "top_pressure_ladder",
   "title": "Model top: production vs one decade higher on both grids",
   "verdict": {
-    "status": "FAIL",
-    "summary": "FAIL -- the 1e-08 bar model top is NOT converged; a higher top needs a measured T-P/Kzz there, not a constant fill"
+    "status": "PASS",
+    "summary": "PASS -- the 1e-09 bar model top is converged at the quoted precision"
   },
   "measurements": [
     {
-      "name": "production (1e-08 bar) vs extended (1e-09 bar) model top",
-      "value": "14.65 ppm",
-      "value_raw": 14.649218529387554,
+      "name": "production (1e-09 bar) vs extended (1e-10 bar) model top",
+      "value": "1.14 ppm",
+      "value_raw": 1.1397040328708918,
       "unit": "ppm",
       "gate": "< 5.0 ppm",
       "decisive": true,
-      "passed": false
+      "passed": true
     }
   ],
   "provenance": {
-    "generated_utc": "2026-08-27T19:54:46Z",
+    "generated_utc": "2026-08-27T20:53:22Z",
     "command": "top_pressure_ladder.py",
     "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
     "repos": {
@@ -28,19 +28,19 @@
         "checkout": "VULCAN-JAX"
       },
       "vulcan-forward": {
-        "commit": "0ee65a448cdaaad74d2e31f503d14be94ce7586a",
+        "commit": "fb244c761b3517332ca1589a7550771c2bcf02c2",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-forward"
       },
       "vulcan-retrieval": {
-        "commit": "ed8b37741b32a4cb1cb121f742e36ee656a4b729",
+        "commit": "51becfb691a5c937a38d8996c318a635a1cb089d",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-retrieval"
       },
       "vulcan-jwst-tool": {
-        "commit": "341aed2a94f2294fba59b1faec397370e8e52e80",
+        "commit": "ecf0cf752b9ef86f92272d52d728d2f367a362ae",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-jwst-tool"
@@ -89,7 +89,7 @@
     "resolved_config": {
       "production": {
         "use_photo": true,
-        "nz": 56,
+        "nz": 62,
         "yconv_cri": 0.001,
         "molecules": [
           "H2O",
@@ -116,7 +116,7 @@
       },
       "extended": {
         "use_photo": true,
-        "nz": 62,
+        "nz": 68,
         "yconv_cri": 0.001,
         "molecules": [
           "H2O",
@@ -131,7 +131,7 @@
         "nu_min": 1900.0,
         "nu_max": 9900.0,
         "opacity_mode": "exomolop",
-        "art_nlayer": 67,
+        "art_nlayer": 66,
         "rp_cm": 9143826800.0,
         "gs_cgs": 422.0,
         "rstar_cm": 64839240000.0,
@@ -140,9 +140,9 @@
         "abundance_mode": "elemental",
         "co_mode": "fixed_O",
         "use_rayleigh": true,
-        "art_ptop_bar": 1e-09
+        "art_ptop_bar": 1e-10
       }
     },
-    "resolved_config_sha256": "01eeb277c2ed381ba53a2fe7b4807ca069711b296b1682d50d367a0c6898b6c1"
+    "resolved_config_sha256": "b2b86eefc23c903d28c03177284d25a437ced727c92cb462c61e1388027cbad2"
   }
 }
