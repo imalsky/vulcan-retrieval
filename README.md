@@ -72,7 +72,13 @@ result.
 ## Limits
 
 - The likelihood is diagonal Gaussian.
-- Spectral binning uses trapezoidal integration.
+- Spectral binning uses trapezoidal integration. No instrument line-spread
+  function is applied, so a product whose resolution approaches the model band
+  R is refused rather than modelled without it.
+- The reported posterior is CONDITIONED, not just the evidence: draws whose
+  T-P profile leaves the modelable window, or whose chemistry does not
+  converge, are rejected and the target is renormalized over what remains.
+  The figures carry the two surviving fractions.
 - Condensation is refused during gradient inference.
 - A certificate checks required artifacts and numerical gates. It does not
   prove that the physical model is complete.
