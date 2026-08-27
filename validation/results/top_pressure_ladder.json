@@ -8,8 +8,8 @@
   "measurements": [
     {
       "name": "production (1e-09 bar) vs extended (1e-10 bar) model top",
-      "value": "1.14 ppm",
-      "value_raw": 1.1397040328708918,
+      "value": "0.54 ppm",
+      "value_raw": 0.5358410393521695,
       "unit": "ppm",
       "gate": "< 5.0 ppm",
       "decisive": true,
@@ -17,7 +17,7 @@
     }
   ],
   "provenance": {
-    "generated_utc": "2026-08-27T20:53:22Z",
+    "generated_utc": "2026-08-27T21:08:52Z",
     "command": "top_pressure_ladder.py",
     "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
     "repos": {
@@ -34,13 +34,13 @@
         "checkout": "vulcan-forward"
       },
       "vulcan-retrieval": {
-        "commit": "51becfb691a5c937a38d8996c318a635a1cb089d",
+        "commit": "8e01d44ade545100ee9858c4f3fc725bb1c3707b",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-retrieval"
       },
       "vulcan-jwst-tool": {
-        "commit": "ecf0cf752b9ef86f92272d52d728d2f367a362ae",
+        "commit": "8f6b8e5434133b676642cee97c52663e5458d554",
         "dirty": false,
         "dirty_files": [],
         "checkout": "vulcan-jwst-tool"
@@ -104,7 +104,7 @@
         "nu_min": 1900.0,
         "nu_max": 9900.0,
         "opacity_mode": "exomolop",
-        "art_nlayer": 60,
+        "art_nlayer": 67,
         "rp_cm": 9143826800.0,
         "gs_cgs": 422.0,
         "rstar_cm": 64839240000.0,
@@ -131,7 +131,7 @@
         "nu_min": 1900.0,
         "nu_max": 9900.0,
         "opacity_mode": "exomolop",
-        "art_nlayer": 66,
+        "art_nlayer": 74,
         "rp_cm": 9143826800.0,
         "gs_cgs": 422.0,
         "rstar_cm": 64839240000.0,
@@ -143,6 +143,6 @@
         "art_ptop_bar": 1e-10
       }
     },
-    "resolved_config_sha256": "b2b86eefc23c903d28c03177284d25a437ced727c92cb462c61e1388027cbad2"
+    "resolved_config_sha256": "6f24cde6138b4709b3c26f609bb6deb6827790974272b258cce682a3d4e47c72"
   }
 }
