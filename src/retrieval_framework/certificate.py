@@ -85,6 +85,10 @@ PRIOR_RAIL_FRAC = 0.02
 # The two production-fidelity artifacts. Their absence is a FAIL for
 # a few-ppm or evidence claim: a check that was never run at production settings
 # is not a check that passed.
+# the resolved-config keys a validation artifact certifies; a run whose values
+# differ from the artifact's is refused (validate())
+GRID_KEYS = ("art_ptop_bar", "nz", "art_nlayer")
+
 REQUIRED_VALIDATION_ARTIFACTS = (
     "resolution_ladder",
     "top_pressure_ladder",
@@ -275,11 +279,17 @@ def _validation_artifacts() -> dict:
         except Exception as exc:                            # pragma: no cover
             out[name] = {"error": str(exc)}
             continue
+        # the grid the artifact was measured on (top_pressure_ladder nests the
+        # production profile under "production"); validate() refuses a run
+        # whose grid differs, so a changed constant cannot ride on a stale PASS
+        rc = d.get("provenance", {}).get("resolved_config") or {}
+        rc = rc.get("production", rc)
         out[name] = {
             "status": d.get("verdict", {}).get("status"),
             "summary": d.get("verdict", {}).get("summary"),
             "generated_utc": d.get("provenance", {}).get("generated_utc"),
             "sha256": _sha256(p),
+            "grid": {k: rc.get(k) for k in GRID_KEYS},
         }
     return out
 
@@ -554,6 +564,18 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 f"validation artifact '{name}' has status "
                 f"{art.get('status')!r}, expected PASS: "
                 f"{art.get('summary', '')[:160]}")
+        else:
+            run = {k: cert["resolved_config"].get(k) for k in GRID_KEYS}
+            got = art.get("grid") or {}
+            same = all(
+                got.get(k) is not None and run[k] is not None
+                and math.isclose(float(got[k]), float(run[k]), rel_tol=1e-9)
+                for k in GRID_KEYS)
+            if not same:
+                problems.append(
+                    f"validation artifact '{name}' was measured on a different "
+                    f"grid (artifact {got} vs run {run}): re-run it at the "
+                    "production settings")
 
     # --- cold replay --------------------------------------------------------
     if replay is not None and replay.get("ran"):

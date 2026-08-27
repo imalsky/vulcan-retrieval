@@ -99,6 +99,7 @@ def main() -> int:
                    abundance_mode="elemental", co_mode="fixed_O",
                    molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
                    nu_min=BAND[0], nu_max=BAND[1], art_nlayer=67,
+                   art_ptop_bar=config.ART_PTOP_BAR,
                    opacity_mode="exomolop", use_rayleigh=True)
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)

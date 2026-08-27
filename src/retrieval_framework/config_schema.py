@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # stdlib-only re-export of the engine constants (see forward/config.py); this
 # keeps the schema import-light while the RT grid bottom stays single-sourced
-from vulcan_forward.constants import ART_PBTM_BAR
+from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,7 @@ class Config:
     # production band and did not converge (notes.md).
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
+    art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
     use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
     co_mode: str = "fixed_O"           # C/O GUESS construction (elemental mode repairs it exactly)
     # Abundance-knob semantics. "elemental" (production default) makes lnZ / c_o EXACT
@@ -434,6 +435,7 @@ class Config:
             nu_max=float(self.nu_max),
             opacity_mode=str(self.opacity_mode),
             art_nlayer=int(self.art_nlayer),
+            art_ptop_bar=float(self.art_ptop_bar),
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
             abundance_mode=str(self.abundance_mode),

@@ -20,6 +20,9 @@ from retrieval_framework.certificate import (
 )
 
 
+_GRID = {"art_ptop_bar": 1e-9, "nz": 62, "art_nlayer": 67}
+
+
 def _passing_cert():
     return {
         "code": {
@@ -30,7 +33,8 @@ def _passing_cert():
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
         "data": {"observations": {"sha256": "b" * 64, "bytes": 1234}},
-        "resolved_config": {"smc_chem_mode": "cold", "opacity_mode": "exomolop"},
+        "resolved_config": {"smc_chem_mode": "cold", "opacity_mode": "exomolop",
+                            "art_ptop_bar": 1e-9, "nz": 62, "art_nlayer": 67},
         "resolved_config_sha256": "c" * 64,
         "target": {"smc_chem_mode": "cold",
                    "approximate_history_dependent_target": False,
@@ -57,8 +61,10 @@ def _passing_cert():
         "warm_validation": None,
         "mala_reversibility": None,
         "validation_artifacts": {
-            "resolution_ladder": {"status": "PASS", "summary": "", "sha256": "d"},
-            "top_pressure_ladder": {"status": "PASS", "summary": "", "sha256": "e"},
+            "resolution_ladder": {"status": "PASS", "summary": "", "sha256": "d",
+                                  "grid": _GRID},
+            "top_pressure_ladder": {"status": "PASS", "summary": "", "sha256": "e",
+                                    "grid": _GRID},
         },
         "checkpoint_present": True,
     }
@@ -119,6 +125,19 @@ def test_failed_validation_artifact_is_refused():
     c["validation_artifacts"]["resolution_ladder"] = {
         "status": "FAIL", "summary": "not converged", "sha256": "d"}
     assert any("FAILED" in p for p in validate(c, _replay()))
+
+
+def test_artifact_measured_on_a_different_grid_is_refused():
+    """A PASS artifact certifies only the grid it was measured on: a run whose
+    model top, nz or art_nlayer differ (or an artifact that never recorded
+    them) is refused, so a changed constant cannot ride on a stale PASS."""
+    c = _passing_cert()
+    c["resolved_config"]["art_ptop_bar"] = 1e-8
+    assert any("different grid" in p for p in validate(c, _replay()))
+    c = _passing_cert()
+    del c["validation_artifacts"]["resolution_ladder"]["grid"]
+    assert any("different grid" in p for p in validate(c, _replay()))
+    assert not [p for p in validate(_passing_cert(), _replay()) if "grid" in p]
 
 
 def test_report_status_is_refused_for_a_gated_artifact():

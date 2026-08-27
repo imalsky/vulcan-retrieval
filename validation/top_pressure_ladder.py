@@ -66,7 +66,7 @@ def main() -> int:
                 abundance_mode="elemental", co_mode="fixed_O",
                 molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
                 nu_min=BAND[0], nu_max=BAND[1],
-                art_nlayer=67, use_rayleigh=True)
+                art_nlayer=67, art_ptop_bar=config.ART_PTOP_BAR, use_rayleigh=True)
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
     chem = vulcan_chem.build_chem_model(prod)
