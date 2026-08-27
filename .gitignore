@@ -35,9 +35,11 @@ data/opacity_cache/
 data/exomolop/
 
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
-runs/*/data/
-runs/*/logs/
-runs/*/plots/
+# ** so a nested run dir (a repo-root-relative SMC_RETRIEVAL_OUT_DIR
+# resolved against the run dir) cannot escape the way runs/*/data/ did
+runs/**/data/
+runs/**/logs/
+runs/**/plots/
 runs/*/*.o[0-9]*
 *.nsys-rep
 

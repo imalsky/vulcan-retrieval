@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the certificate module
-from retrieval_framework.certificate import _git, _sha256  # noqa: F401
+from retrieval_framework.certificate import _git, _repo_states, _sha256  # noqa: F401
 
 REPO = Path(__file__).resolve().parent.parent
 RESULTS = REPO / "validation" / "results"
@@ -57,25 +57,6 @@ def bin_trapz(wl, y, edges):
         if sel.any():
             out[b] = float(np.sum(w[sel] * y[sel]) / np.sum(w[sel]))
     return out
-
-
-# The four repositories whose code can move any of these numbers. Resolved
-# relative to the workspace root (the directory containing this checkout).
-_REPOSITORIES = {
-    "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
-    "vulcan-forward": ("vulcan-forward",),
-    "vulcan-retrieval": ("vulcan-retrieval",),
-    "vulcan-jwst-tool": ("vulcan-jwst-tool",),
-}
-
-
-def _repo_state(repo: Path) -> dict | None:
-    head = _git(repo, "rev-parse", "HEAD")
-    if head is None:
-        return None
-    dirty = _git(repo, "status", "--porcelain") or ""
-    return {"commit": head, "dirty": bool(dirty),
-            "dirty_files": dirty.splitlines()[:20]}
 
 
 def _versions() -> dict:
@@ -144,16 +125,7 @@ def _data_identity() -> dict:
 
 def collect_provenance(resolved_config: dict | None = None) -> dict:
     """Everything needed to tie a number to an exact state."""
-    workspace = REPO.parent
-    repos = {}
-    for name, directory_names in _REPOSITORIES.items():
-        state = None
-        for directory in directory_names:
-            state = _repo_state(workspace / directory)
-            if state is not None:
-                state["checkout"] = directory
-                break
-        repos[name] = state
+    repos = _repo_states(REPO.parent)
     prov = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),

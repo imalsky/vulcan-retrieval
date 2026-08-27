@@ -5,6 +5,7 @@ the posterior is known exactly. No VULCAN/ExoJax -- pipeline's forward import is
 import math
 
 import numpy as np
+import pytest
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -165,6 +166,29 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     assert res["logZ"] == full["logZ"]
     assert np.array_equal(res["U"], full["U"])
     assert np.array_equal(res["theta_draws"], full["theta_draws"])
+
+
+def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path):
+    """Every checkpoint carries a target-exactness stamp; resume must read it.
+
+    Adopting betas/logZ/loglik across a target change splices two densities into
+    one evidence integral, and the certificate cannot detect it -- it reads the
+    last job only.
+    """
+    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
+    key = jax.random.PRNGKey(3)
+    ck = tmp_path / "ck.npz"
+    P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
+                   checkpoint_path=ck, walltime_seconds=1e-9)
+
+    d = {k: v for k, v in np.load(ck, allow_pickle=True).items()}
+    d["chem_mode"] = np.asarray("warm")
+    np.savez(ck, **d)
+
+    with pytest.raises(ValueError, match="chem_mode"):
+        P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
+                       checkpoint_path=tmp_path / "out.npz", resume_from=ck)
 
 
 def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):

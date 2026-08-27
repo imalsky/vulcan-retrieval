@@ -160,9 +160,9 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     # gate exercises the same prior corners the production init will hit (a PRNGKey(0)
     # pilot cloud let job 64073's >16 h worst-corner init slip past calibration).
     key = jax.random.PRNGKey(int(cfg.seed))
-    key, sub = jax.random.split(key)
     # oversampled cold-init draw (rejected corners culled back to N healthy in _init_state)
-    U = pipe.sample_prior_u(sub, P._init_draw_count(pipe, N))
+    U = pipe.sample_prior_u(jax.random.fold_in(key, P._INIT_KEY),
+                            P._init_draw_count(pipe, N))
 
     t0 = time.perf_counter()
     U, L, G, Y, refs, DY, _init_stats = P._init_state(pipe, U, target_n=N)

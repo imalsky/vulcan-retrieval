@@ -1752,6 +1752,18 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         if ck["u_particles"].shape != (N, n_dim):
             raise ValueError(f"checkpoint particles {ck['u_particles'].shape} != ({N},{n_dim}); "
                              "resume requires the same smc_num_particles and parameter set")
+        # The checkpoint carries a TARGET-EXACTNESS STAMP (written below).
+        # Adopting betas/logZ/loglik across a target change would splice two
+        # different densities into one evidence integral, and nothing
+        # downstream could detect it -- the certificate reads the last job only.
+        ck_mode = str(ck["chem_mode"]) if "chem_mode" in ck.files else "none"
+        now_mode = str(getattr(pipe, "chem_mode", None) or "none")
+        if ck_mode != now_mode:
+            raise ValueError(
+                f"checkpoint was produced with chem_mode={ck_mode!r} but this run "
+                f"is chem_mode={now_mode!r}; the tempering ladder and logZ are not "
+                "transferable across a target change. Start a fresh run or restore "
+                "the original chem_mode.")
         U = jnp.asarray(ck["u_particles"], dtype)
         betas = [float(b) for b in ck["betas"]]
         beta = betas[-1]

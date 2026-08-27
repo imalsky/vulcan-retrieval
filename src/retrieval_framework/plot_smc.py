@@ -82,6 +82,26 @@ def main() -> None:
         tempered_tag += ("  [APPROXIMATE TARGET: warm continuation, "
                          "history-dependent likelihood]")
 
+    # SUPPORT STAMP. The beta=1 target is the posterior RESTRICTED to
+    # {T-P inside the modelable window} and {chemistry converges}, renormalized:
+    # pipeline returns the -1e30 sentinel for anything else and culls such draws
+    # at init. Every existing disclosure of that conditioning is scoped to logZ,
+    # so the SAMPLES carry it here -- the draws are conditioned too, not just
+    # the evidence.
+    xf = out / "smc_extra_fields.npz"
+    if xf.exists():
+        _x = np.load(xf, allow_pickle=True)
+
+        def _frac(key):
+            if key in _x.files and np.isfinite(float(_x[key])):
+                return float(np.exp(float(_x[key])))
+            return float("nan")
+
+        _f_tp, _f_conv = _frac("smc_log_support_physical"), _frac("smc_log_conv_attrition")
+        if np.isfinite(_f_tp) or np.isfinite(_f_conv):
+            tempered_tag += (f"  [CONDITIONED on modelable T-P (f_tp={_f_tp:.2f}) "
+                             f"and converged chemistry (f_conv={_f_conv:.2f})]")
+
     # A figure that says "posterior" when the ladder stopped early, or when the
     # target was history-dependent, is the failure this refuses. Set
     # PLOT_SMC_ALLOW_UNCERTIFIED=1 for forensic plotting of such a run; the

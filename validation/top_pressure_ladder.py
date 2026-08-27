@@ -85,15 +85,13 @@ def main() -> int:
     binned = {}
     for top in args.tops:
         t0 = time.time()
-        # ART grid construction reads config.ART_PTOP_BAR (module constant);
-        # override it for this build only, restoring after.
-        old = config.ART_PTOP_BAR
-        config.ART_PTOP_BAR = float(top)
-        try:
-            rt = exojax_rt.build_rt_model(base_profile)
-            wl, d = binned_depth(chem, rt, config, interp_map)
-        finally:
-            config.ART_PTOP_BAR = old
+        # build_rt_model reads the ART top from the PROFILE (exojax_rt.py:392),
+        # falling back to vulcan_forward.constants. Rebinding the re-exported
+        # module constant here changes nothing -- config.ART_PTOP_BAR is a value
+        # copy -- so every rung used to build the same grid and the ladder
+        # reported a structural zero.
+        rt = exojax_rt.build_rt_model({**base_profile, "art_ptop_bar": float(top)})
+        wl, d = binned_depth(chem, rt, config, interp_map)
         binned[top] = _artifact.bin_trapz(wl, d, edges)
         print(f"[topP] ART top {top:.0e} bar done ({time.time()-t0:.0f}s)", flush=True)
 
@@ -120,13 +118,8 @@ def main() -> int:
         nz_ext = int(round(base_profile["nz"] * (n_dec_base + 1.0) / n_dec_base))
         ext.update(nz=nz_ext, cfg_overrides={"P_t": 0.01})
         chem_ext = vulcan_chem.build_chem_model(ext)
-        old = config.ART_PTOP_BAR
-        config.ART_PTOP_BAR = 1e-8
-        try:
-            rt = exojax_rt.build_rt_model(ext)
-            wl, d = binned_depth(chem_ext, rt, config, interp_map)
-        finally:
-            config.ART_PTOP_BAR = old
+        rt = exojax_rt.build_rt_model({**ext, "art_ptop_bar": 1e-8})
+        wl, d = binned_depth(chem_ext, rt, config, interp_map)
         b_ext = _artifact.bin_trapz(wl, d, edges)
         b_clamp = binned.get(1e-8)
         m = np.isfinite(b_ext) & np.isfinite(b_clamp)

@@ -198,6 +198,15 @@ def test_a_prior_railed_median_is_refused():
     assert any("prior edge" in p and "lnZ" in p for p in problems), problems
 
 
+def test_a_prior_railed_TAIL_is_refused_even_with_a_central_median():
+    """A bimodal marginal can pin a mode to an edge with the median mid-box."""
+    c = _passing_cert()
+    c["posterior"][0]["prior_position"] = 0.50
+    c["posterior"][0]["q95_position"] = 0.995
+    problems = validate(c, _replay())
+    assert any("95th percentile" in p and "lnZ" in p for p in problems), problems
+
+
 def test_a_missing_posterior_summary_is_refused():
     c = _passing_cert()
     c["posterior"] = None

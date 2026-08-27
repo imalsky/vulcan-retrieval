@@ -40,6 +40,10 @@ ATOM_COLS = _fwd.ATOM_COLS
 ATOMIC_MASSES = _fwd.ATOMIC_MASSES
 BULK_H2_VULCAN = _fwd.BULK_H2_VULCAN
 CLOUD_NUC0 = _fwd.CLOUD_NUC0
+# Value copies for reading. Rebinding one here does NOT reach the engine:
+# build_rt_model resolves the ART bounds from the profile
+# (profile["art_ptop_bar"] / ["art_pbtm_bar"]), falling back to
+# vulcan_forward.constants. Pass an override through the profile.
 ART_PTOP_BAR = _fwd.ART_PTOP_BAR
 ART_PBTM_BAR = _fwd.ART_PBTM_BAR
 T_OPA_MIN_K = _fwd.T_OPA_MIN_K

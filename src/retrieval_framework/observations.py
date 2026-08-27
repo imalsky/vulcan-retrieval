@@ -159,6 +159,35 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, n
     return grid, False
 
 
+# The model band resolution is set by the k-tables (ExoMolOP R1000). A cell
+# average is a faithful binning operator only when the data bins are much wider
+# than one model band; within this factor the missing LSF is a real error.
+_LSF_R_SAFETY = 3.0
+
+
+def _refuse_unresolved_products(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]) -> None:
+    """Refuse data bins fine enough that the missing LSF matters."""
+    lo = np.asarray(obs["wl_lo"], float)
+    hi = np.asarray(obs["wl_hi"], float)
+    inside = (lo > 0) & (hi > lo)
+    if not inside.any():
+        return
+    r_data = 0.5 * (lo[inside] + hi[inside]) / (hi[inside] - lo[inside])
+    wl_s = np.sort(np.asarray(wl_model_um, float))
+    if wl_s.size < 2:
+        return
+    r_model = float(np.median(0.5 * (wl_s[1:] + wl_s[:-1]) / np.diff(wl_s)))
+    limit = r_model / _LSF_R_SAFETY
+    bad = int(np.sum(r_data > limit))
+    if bad:
+        raise ValueError(
+            f"{bad} of {r_data.size} data bins have R up to {r_data.max():.0f}, "
+            f"within a factor {_LSF_R_SAFETY:g} of the model band R "
+            f"({r_model:.0f}). The binning operator is a pure cell average with "
+            "no instrument line-spread function, so it would model those bins "
+            "wrong. Bin the product down, or add an LSF before the cell average.")
+
+
 def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
                          ) -> Tuple[np.ndarray, np.ndarray]:
     """Linear bin-averaging matrix. Returns (keep_mask (n_bin,), B (n_keep, n_native)).
@@ -166,8 +195,16 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     B[b] are the native-grid weights whose dot with the native depth equals the
     d(lambda)-weighted trapezoidal bin average of zco_lib.bin_to_obs -- exact, so the
     JVP of a binned depth is B @ (JVP of native depth).
+
+    NO INSTRUMENT LINE-SPREAD FUNCTION is applied: this is a pure cell average.
+    That is only defensible while the data bins are much coarser than the model
+    band resolution (the ExoMolOP R1000 grid), so the model is already smooth
+    across a bin. A product approaching the model's own R is refused rather than
+    silently modelled without its LSF -- the sibling vulcan-jwst-tool applies one
+    (binning.smooth_to_native_r) and the two would disagree.
     """
     wl = _validated_model_wavelengths(wl_model_um)
+    _refuse_unresolved_products(wl, obs)
     order = np.argsort(wl)
     wl_s = wl[order]
     n_native = wl.size

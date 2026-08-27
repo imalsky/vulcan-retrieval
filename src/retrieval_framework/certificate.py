@@ -99,29 +99,47 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _git(repo: Path, *args: str) -> str | None:
+_GIT_FAILED = object()   # git did not run (or exited non-zero): NOT "clean"
+
+
+def _git_raw(repo: Path, *args: str):
+    """Stdout on a zero exit -- possibly empty -- or `_GIT_FAILED`.
+
+    `git status --porcelain` on a clean tree exits 0 with zero bytes, which is
+    indistinguishable from a failed call if both collapse to None. Provenance
+    must not record a repo as clean because git was missing.
+    """
     try:
         r = subprocess.run(["git", "-C", str(repo), *args],
                            capture_output=True, text=True, timeout=15)
-        out = r.stdout.strip()
-        return out if r.returncode == 0 and out else None
     except Exception:
-        return None
+        return _GIT_FAILED
+    return r.stdout.strip() if r.returncode == 0 else _GIT_FAILED
 
 
-def _repo_states() -> dict:
+def _git(repo: Path, *args: str) -> str | None:
+    out = _git_raw(repo, *args)
+    return out or None if out is not _GIT_FAILED else None
+
+
+def _repo_states(workspace: Path | None = None) -> dict:
+    """Commit + dirty state per repository. `dirty` is None when git could not
+    be run, so "unknown" never reads as "clean"."""
+    workspace = WORKSPACE if workspace is None else Path(workspace)
     out = {}
     for name, directory_names in REPOSITORIES.items():
-        repo = next((WORKSPACE / directory for directory in directory_names
-                     if _git(WORKSPACE / directory, "rev-parse", "HEAD")),
+        repo = next((workspace / directory for directory in directory_names
+                     if _git(workspace / directory, "rev-parse", "HEAD")),
                     None)
         head = _git(repo, "rev-parse", "HEAD") if repo is not None else None
         if head is None:
             out[name] = None
             continue
-        dirty = _git(repo, "status", "--porcelain") or ""
-        out[name] = {"commit": head, "dirty": bool(dirty),
-                     "dirty_files": dirty.splitlines()[:20],
+        dirty = _git_raw(repo, "status", "--porcelain")
+        failed = dirty is _GIT_FAILED
+        out[name] = {"commit": head,
+                     "dirty": None if failed else bool(dirty),
+                     "dirty_files": [] if failed else dirty.splitlines()[:20],
                      "checkout": repo.name}
     return out
 
@@ -295,7 +313,9 @@ def _posterior_summary(samples, cfg_dict: dict) -> list | None:
 
     ``prior_position`` is the median's fractional position in the prior, measured
     in the space the prior is FLAT in (log10 for a log10_uniform parameter), so 0
-    and 1 are the declared edges.
+    and 1 are the declared edges. ``q05_position`` / ``q95_position`` are the
+    same measure for the 5th and 95th percentiles: a median-only test is blind
+    to a bimodal marginal with a mode pinned to an edge.
     """
     if samples is None or "samples" not in samples.files:
         return None
@@ -309,13 +329,18 @@ def _posterior_summary(samples, cfg_dict: dict) -> list | None:
     out = []
     for i, name in enumerate(names):
         q05, q50, q95 = (float(v) for v in np.percentile(th[:, i], [5, 50, 95]))
-        a, b, x = lo[i], hi[i], q50
-        if i < len(types) and types[i] == "log10_uniform" and a > 0 and x > 0:
-            a, b, x = math.log10(a), math.log10(b), math.log10(x)
-        pos = (x - a) / (b - a) if b > a else None
+        is_log = i < len(types) and types[i] == "log10_uniform" and lo[i] > 0
+
+        def _pos(x, i=i, is_log=is_log):
+            a, b = lo[i], hi[i]
+            if is_log and x > 0:
+                a, b, x = math.log10(a), math.log10(b), math.log10(x)
+            return float((x - a) / (b - a)) if b > a else None
+
         out.append({"name": name, "median": q50, "q05": q05, "q95": q95,
                     "prior_lo": float(lo[i]), "prior_hi": float(hi[i]),
-                    "prior_position": (None if pos is None else float(pos))})
+                    "prior_position": _pos(q50),
+                    "q05_position": _pos(q05), "q95_position": _pos(q95)})
     return out
 
 
@@ -596,22 +621,30 @@ def health_problems(diag: dict) -> list[str]:
 
 
 def rail_problems(post: list | None) -> list[str]:
-    """A posterior median on a prior edge is prior-determined, not measured."""
+    """A posterior quantile on a prior edge is prior-determined, not measured.
+
+    Both tails are tested, not only the median: a bimodal marginal can put a
+    mode hard on an edge while the median sits comfortably mid-box.
+    """
     if not post:
         return ["no posterior summary: the parameter medians could not be read "
                 "from posterior_samples.npz, so a prior-railed parameter would "
                 "go unnoticed"]
     out = []
     for row in post:
-        f = row.get("prior_position")
-        if f is None:
-            continue
-        if f < PRIOR_RAIL_FRAC or f > 1.0 - PRIOR_RAIL_FRAC:
-            out.append(
-                f"{row['name']}: posterior median sits at {f:.1%} of its prior "
-                f"range [{row['prior_lo']:g}, {row['prior_hi']:g}] -- the value "
-                "is set by the prior edge, not by the data. Widen the prior, or "
-                "report the parameter as a limit rather than a measurement")
+        for label, key in (("median", "prior_position"),
+                           ("5th percentile", "q05_position"),
+                           ("95th percentile", "q95_position")):
+            f = row.get(key)
+            if f is None:
+                continue
+            if f < PRIOR_RAIL_FRAC or f > 1.0 - PRIOR_RAIL_FRAC:
+                out.append(
+                    f"{row['name']}: posterior {label} sits at {f:.1%} of its "
+                    f"prior range [{row['prior_lo']:g}, {row['prior_hi']:g}] -- "
+                    "the value is set by the prior edge, not by the data. Widen "
+                    "the prior, or report the parameter as a limit rather than "
+                    "a measurement")
     return out
 
 
