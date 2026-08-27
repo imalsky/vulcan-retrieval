@@ -53,7 +53,7 @@ class Config:
 
     # ---- forward-model fidelity (the "profile" dict consumed by vulcan_chem /
     #      exojax_rt; see config.FULL in the parent package) --------------------
-    nz: int = 56                       # VULCAN vertical layers (56 -> ~1/3 the nz=169 cost; 6.3 layers/decade over 1e-8..7.6 bar)
+    nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
     # Convergence uses the VULCAN-master canonical W39b criteria: yconv_cri=0.01 (NOT the
     # 1e-3 the sensitivity demo used for tight jvps). The operative convergence gate is

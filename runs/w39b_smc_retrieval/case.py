@@ -108,7 +108,7 @@ def smoke_config(**overrides: Any) -> Config:
 
 
 def gpu_config(**overrides: Any) -> Config:
-    """The <24 h GH200 production preset: nz=56, photo on, full molecule set over the
+    """The <24 h GH200 production preset: nz=62, photo on, full molecule set over the
     real Carter & May combined NIRISS+G395H band, N=144 forward-mode-jvp MALA particles
     with per-stage adaptation. Fits the real spectrum (generate_synthetic_data=False).
 
@@ -140,7 +140,7 @@ def gpu_config(**overrides: Any) -> Config:
     """
     base = dict(
         _W39B,
-        nz=56,
+        nz=62,
         count_max=5000,
         # + HCN/C2H2 (high-C/O discriminators) + H2S (reduced-S reservoir): without
         # them the likelihood is blind to the species that rule the C/O upper tail

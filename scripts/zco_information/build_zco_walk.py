@@ -61,7 +61,7 @@ def main():
           flush=True)
 
     # --- forward model with FINITE-step-safe chemistry (reanchor + tight convergence) ---
-    prof = dict(config.FULL, co_mode="fixed_O", nz=169, yconv_cri=1.0e-4, yconv_min=1.0e-4,
+    prof = dict(config.FULL, co_mode="fixed_O", nz=188, yconv_cri=1.0e-4, yconv_min=1.0e-4,
                 slope_cri=1.0e-7, count_min=300, count_max=12000, reanchor_atom_ini=True,
                 molecules=["H2O", "CO2", "CO", "CH4", "SO2"],
                 nu_min=1893.0, nu_max=10000.0, art_nlayer=60,

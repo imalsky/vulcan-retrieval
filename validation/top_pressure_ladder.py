@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Model-top convergence of the production forward.
 
-Chemistry and RT grids both end at the model top (constants.ART_PTOP_BAR;
+Chemistry and RT grids both end at the model top (constants.ART_PTOP_BAR, 1e-9 bar;
 vulcan_chem sets the chemistry P_t from it, interp_map refuses a clamped top).
 This script extends BOTH grids one decade higher at the same layers per decade,
 solves the chemistry there, and compares the R=100 binned depth with production.
@@ -61,7 +61,7 @@ def main() -> int:
     from vulcan_forward import exojax_rt
 
     prod = dict(config.FULL)
-    prod.update(nz=56,   # = runs/w39b_smc_retrieval/case.py gpu_config nz; keep in step
+    prod.update(nz=62,   # = runs/w39b_smc_retrieval/case.py gpu_config nz; keep in step
                 count_max=5000, dt_max=1.0e11,
                 abundance_mode="elemental", co_mode="fixed_O",
                 molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],

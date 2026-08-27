@@ -95,7 +95,7 @@ def main() -> int:
     import jax.numpy as jnp
 
     profile = dict(config.FULL)
-    profile.update(nz=56, count_max=5000, dt_max=1.0e11,
+    profile.update(nz=62, count_max=5000, dt_max=1.0e11,
                    abundance_mode="elemental", co_mode="fixed_O",
                    molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
                    nu_min=BAND[0], nu_max=BAND[1], art_nlayer=60,

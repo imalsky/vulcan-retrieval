@@ -45,7 +45,7 @@ dependencies = [
     # opacity_mode other than 'exomolop'); this schema no longer emits them.
     # (0.4.0 was the p_ref_bar floor: config_schema pins p_ref_bar explicitly,
     # and an older engine would silently anchor the radius at the grid bottom.)
-    "vulcan-forward>=0.12.0",
+    "vulcan-forward>=0.12.1",
     "vulcan-jax>=0.3.0",  # 0.3.0 enforces the condensation-not-differentiable contract at the AD entry points (F1-F5); 0.2.0 was the YAML-only config API
 ]
 

@@ -126,7 +126,7 @@ SMOKE = {
 }
 FULL = {
     "use_photo": True,         # photo ON -> SO2 chemistry (WASP-39b story)
-    "nz": 169,                 # canonical W39b grid: 19 layers/decade over 1e-8..7.6 bar
+    "nz": 188,                 # canonical W39b grid: 19 layers/decade over 1e-9..7.6 bar
     "yconv_cri": 1.0e-3,
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
     "nu_min": 1923.0,          # ~5.2 um
@@ -144,7 +144,7 @@ FULL = {
 # figures.
 WIDE = {
     "use_photo": True,
-    "nz": 169,
+    "nz": 188,
     "yconv_cri": 1.0e-3,
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
     "nu_min": 667.0,           # 15 um
