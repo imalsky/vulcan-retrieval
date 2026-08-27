@@ -32,7 +32,7 @@ cache a Jacobian from a non-steady state.
 
 Run (base env, from the repo root):
     python scripts/zco_information/build_zco_jacobians.py --smoke        # nz=40, CO-only, fast full-pipeline check
-    python scripts/zco_information/build_zco_jacobians.py                # full nz=150 build (~15-45 min)
+    python scripts/zco_information/build_zco_jacobians.py                # full nz=169 build (~15-45 min)
     python scripts/zco_information/build_zco_jacobians.py --tier P       # (re)build one tier only, merge into cache
 """
 from __future__ import annotations
@@ -105,7 +105,7 @@ def _profile(smoke: bool, tier: str) -> dict:
                     nu_min=4280.0, nu_max=4360.0, art_nlayer=20,
                     molecules=["CO"], nz=40, yconv_cri=1.0e-3)
     else:
-        base = dict(config.FULL, co_mode="fixed_O", nz=150, yconv_cri=1.0e-3,
+        base = dict(config.FULL, co_mode="fixed_O", nz=169, yconv_cri=1.0e-3,
                     molecules=["H2O", "CO2", "CO", "CH4", "SO2"], **_ZCO_BAND)
     return dict(base, **tier_profile_overrides(tier))
 

@@ -11,12 +11,10 @@ any exojax import, which is the required order.
 
 SCOPE: this is the smoke-test / Fisher chain (validation/smoke_test.py), NOT the
 SMC likelihood path. Its temperature parameterization is a uniform offset on the
-VULCAN grid, so T is mapped through ``to_art`` and therefore CLAMPED above the
-chemistry top; the SMC path (retrieval_forward.aux_from_y) has an analytic T(P)
-and evaluates it directly on the ART grid, so its temperature is not clamped.
-Every other mapped quantity (VMRs, mean molecular weight) goes through ``to_art``
-on both paths -- temperature is the only asymmetry, and it lives here. Do not
-quote a Fisher number from this module against an SMC posterior without it.
+VULCAN grid, mapped through ``to_art`` like the VMRs; the SMC path
+(retrieval_forward.aux_from_y) has an analytic T(P) evaluated directly on the ART
+grid. Do not quote a Fisher number from this module against an SMC posterior
+without that difference in mind.
 """
 from __future__ import annotations
 

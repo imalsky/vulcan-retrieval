@@ -122,7 +122,7 @@ def test_failed_validation_artifact_is_refused():
 
 
 def test_report_status_is_refused_for_a_gated_artifact():
-    """top_pressure_ladder REPORT means --extend-chem was not run."""
+    """REPORT (a decisive test skipped) is refused for a gated artifact."""
     c = _passing_cert()
     c["validation_artifacts"]["top_pressure_ladder"] = {
         "status": "REPORT", "summary": "decisive test not run", "sha256": "e"}

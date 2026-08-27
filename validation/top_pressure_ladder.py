@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
-"""Model-top convergence: clamped upper-atmosphere extension vs REAL chemistry.
+"""Model-top convergence of the production forward.
 
-The production ART grid tops at 1e-8 bar while the chemistry tops at 1e-7 bar;
-the decade in between uses the constant-VMR/isothermal clamp (interp_map). That
-choice prevents strong bands from saturating into a model-top wall, but a clamp
-is an assumption, not chemistry -- photochemical abundances can genuinely vary at
-sub-microbar pressures. This script measures both effects on the binned depth:
+Chemistry and RT grids both end at the model top (constants.ART_PTOP_BAR;
+vulcan_chem sets the chemistry P_t from it, interp_map refuses a clamped top).
+This script extends BOTH grids one decade higher at the same layers per decade,
+solves the chemistry there, and compares the R=100 binned depth with production.
 
-  A. clamp ladder: same chemistry (P_t = 1e-7 bar), ART top in {1e-7, 1e-8, 1e-9}
-     -- how much the extension choice itself moves the R=100 spectrum;
-  B. --extend-chem: chemistry actually SOLVED to 1e-8 bar (cfg P_t=0.01 dyn/cm2,
-     proportionally deeper nz), ART top 1e-8 -- clamped-vs-real chemistry over
-     the extra decade, the review's decisive comparison.
+    python validation/top_pressure_ladder.py
 
-Run on the GPU node (two chemistry solves with --extend-chem):
-
-    python validation/top_pressure_ladder.py --extend-chem
-
-PASS gate: |Delta binned depth| < 5 ppm between the clamped production choice
-(top 1e-8) and the extended-chemistry run; the pure clamp ladder is reported for
-context (1e-7 vs 1e-8 is EXPECTED to differ -- that is the wall being removed).
+PASS gate: |Delta binned depth| < 5 ppm. The former one-decade constant-VMR
+clamp above a 1e-7 bar chemistry top measured 73.47 ppm against chemistry
+solved there (2026-08-27 artifact) and was replaced by extending the grid.
 """
 from __future__ import annotations
 
@@ -33,7 +24,6 @@ import numpy as np
 # sandboxes, so be explicit rather than relying on it.
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 import _artifact  # noqa: E402
-
 
 GATE_PPM = 5.0
 BIN_R = 100.0
@@ -59,8 +49,6 @@ def binned_depth(chem, rt, config, interp_map):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tops", type=float, nargs="+", default=[1e-7, 1e-8, 1e-9])
-    ap.add_argument("--extend-chem", action="store_true")
     ap.add_argument("--no-artifact", action="store_true",
                     help="skip writing the provenance-bearing result under "
                          "validation/results/ (exploration only)")
@@ -72,89 +60,56 @@ def main() -> int:
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
 
-    base_profile = dict(config.FULL)
-    base_profile.update(nz=50, count_max=5000, dt_max=1.0e11,
-                        abundance_mode="elemental", co_mode="fixed_O",
-                        molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
-                        nu_min=BAND[0], nu_max=BAND[1],
-                        art_nlayer=60, use_rayleigh=True)
-    chem = vulcan_chem.build_chem_model(base_profile)
+    prod = dict(config.FULL)
+    prod.update(nz=56,   # = runs/w39b_smc_retrieval/case.py gpu_config nz; keep in step
+                count_max=5000, dt_max=1.0e11,
+                abundance_mode="elemental", co_mode="fixed_O",
+                molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
+                nu_min=BAND[0], nu_max=BAND[1],
+                art_nlayer=60, use_rayleigh=True)
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
-    # A: clamp ladder (same chemistry, different ART tops)
-    binned = {}
-    for top in args.tops:
-        t0 = time.time()
-        # build_rt_model reads the ART top from the PROFILE (exojax_rt.py:392),
-        # falling back to vulcan_forward.constants. Rebinding the re-exported
-        # module constant here changes nothing -- config.ART_PTOP_BAR is a value
-        # copy -- so every rung used to build the same grid and the ladder
-        # reported a structural zero.
-        rt = exojax_rt.build_rt_model({**base_profile, "art_ptop_bar": float(top)})
-        wl, d = binned_depth(chem, rt, config, interp_map)
-        binned[top] = _artifact.bin_trapz(wl, d, edges)
-        print(f"[topP] ART top {top:.0e} bar done ({time.time()-t0:.0f}s)", flush=True)
+    chem = vulcan_chem.build_chem_model(prod)
+    rt = exojax_rt.build_rt_model(prod)
+    p_top, p_btm = float(np.min(chem.p_bar)), float(np.max(chem.p_bar))
+    wl, d = binned_depth(chem, rt, config, interp_map)
+    b_prod = _artifact.bin_trapz(wl, d, edges)
+    print(f"[topP] production: model top {p_top:.0e} bar, nz={prod['nz']}, "
+          f"art_nlayer={prod['art_nlayer']}", flush=True)
 
-    tops = sorted(binned, reverse=True)   # coarse (1e-7) -> deep (1e-9)
-    measurements = []
-    print("\n==== clamp-extension ladder (same chemistry) ====")
-    for a, b in zip(tops[:-1], tops[1:]):
-        da, db = binned[a], binned[b]
-        m = np.isfinite(da) & np.isfinite(db)
-        _d = 1e6 * np.max(np.abs(da[m] - db[m]))
-        print(f"ART top {a:.0e} -> {b:.0e} bar: max |Delta| = {_d:.2f} ppm")
-        measurements.append({
-            "name": f"clamp ladder, ART top {a:.0e} -> {b:.0e} bar",
-            "value": f"{_d:.2f} ppm", "value_raw": float(_d), "unit": "ppm",
-            "gate": "(informational)", "decisive": False, "passed": None,
-        })
+    # one decade higher on BOTH grids, same layers per decade
+    f = (np.log10(p_btm / p_top) + 1.0) / np.log10(p_btm / p_top)
+    ext = dict(prod, nz=int(round(prod["nz"] * f)),
+               art_nlayer=int(round(prod["art_nlayer"] * f)),
+               art_ptop_bar=p_top / 10.0)
+    t0 = time.time()
+    chem_x = vulcan_chem.build_chem_model(ext)
+    rt_x = exojax_rt.build_rt_model(ext)
+    wl, d = binned_depth(chem_x, rt_x, config, interp_map)
+    b_ext = _artifact.bin_trapz(wl, d, edges)
+    print(f"[topP] extended: model top {ext['art_ptop_bar']:.0e} bar, nz={ext['nz']}, "
+          f"art_nlayer={ext['art_nlayer']} ({time.time() - t0:.0f}s)", flush=True)
 
-    ok = True
-    if args.extend_chem:
-        print("\n[topP] solving EXTENDED chemistry to 1e-8 bar ...", flush=True)
-        ext = dict(base_profile)
-        # deepen the grid by one decade at matching per-decade layer density
-        n_dec_base = np.log10(7.6e6 / 0.1)       # cfg P_b=7.6e6, P_t=0.1 dyn/cm2
-        nz_ext = int(round(base_profile["nz"] * (n_dec_base + 1.0) / n_dec_base))
-        ext.update(nz=nz_ext, cfg_overrides={"P_t": 0.01})
-        chem_ext = vulcan_chem.build_chem_model(ext)
-        rt = exojax_rt.build_rt_model({**ext, "art_ptop_bar": 1e-8})
-        wl, d = binned_depth(chem_ext, rt, config, interp_map)
-        b_ext = _artifact.bin_trapz(wl, d, edges)
-        b_clamp = binned.get(1e-8)
-        m = np.isfinite(b_ext) & np.isfinite(b_clamp)
-        dppm = 1e6 * np.max(np.abs(b_ext[m] - b_clamp[m]))
-        print("\n==== clamped extension vs REAL chemistry over 1e-7..1e-8 bar ====")
-        print(f"max |Delta binned depth| = {dppm:.2f} ppm  (gate {GATE_PPM} ppm)")
-        ok = dppm < GATE_PPM
-        msg = ("PASS -- the clamp is a faithful stand-in at the quoted precision"
-               if ok else
-               "FAIL -- extend the production chemistry grid (cfg P_t) instead of clamping")
-        print(f"\nVERDICT: {msg}")
-        measurements.append({
-            "name": "clamped extension vs REAL chemistry over 1e-7..1e-8 bar",
-            "value": f"{dppm:.2f} ppm", "value_raw": float(dppm), "unit": "ppm",
-            "gate": f"< {GATE_PPM} ppm", "decisive": True,
-            "passed": bool(ok),
-        })
-        status, summary = ("PASS" if ok else "FAIL"), msg
-    else:
-        print("\n(no --extend-chem: clamp ladder reported, decisive test skipped)")
-        # A skipped decisive test is NOT a pass. Recording it as REPORT keeps
-        # the artifact from being cited as if the clamp had been validated.
-        status = "REPORT"
-        summary = ("DECISIVE TEST NOT RUN: without --extend-chem this only "
-                   "shows that the CLAMP is internally converged in ART top "
-                   "pressure, which says nothing about whether the clamp "
-                   "matches real chemistry over that decade. Re-run with "
-                   "--extend-chem before citing the model top.")
-
+    m = np.isfinite(b_prod) & np.isfinite(b_ext)
+    dppm = 1e6 * np.max(np.abs(b_ext[m] - b_prod[m]))
+    ok = bool(dppm < GATE_PPM)
+    msg = (f"PASS -- the {p_top:.0e} bar model top is converged at the quoted precision"
+           if ok else
+           f"FAIL -- the {p_top:.0e} bar model top is NOT converged; a higher top needs "
+           "a measured T-P/Kzz there, not a constant fill")
+    print(f"\nmax |Delta binned depth| = {dppm:.2f} ppm  (gate {GATE_PPM} ppm)")
+    print(f"\nVERDICT: {msg}")
     if not args.no_artifact:
         _artifact.emit(
             name="top_pressure_ladder",
-            title="Model-top treatment: clamped ART extension vs real chemistry",
-            measurements=measurements, status=status, summary=summary,
-            resolved_config=base_profile,
+            title="Model top: production vs one decade higher on both grids",
+            measurements=[{
+                "name": f"production ({p_top:.0e} bar) vs extended ({p_top / 10:.0e} bar) model top",
+                "value": f"{dppm:.2f} ppm", "value_raw": float(dppm), "unit": "ppm",
+                "gate": f"< {GATE_PPM} ppm", "decisive": True, "passed": ok,
+            }],
+            status="PASS" if ok else "FAIL", summary=msg,
+            resolved_config={"production": prod, "extended": ext},
         )
     return 0 if ok else 1
 

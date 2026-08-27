@@ -7,8 +7,8 @@ accuracy:
   * `art_nlayer = 60` (the ART vertical grid; the spectral grid is fixed by the
     ExoMolOP tables) was chosen for GPU gradient MEMORY, not from a convergence
     result;
-  * the ART grid extends one decade above the chemistry grid on a
-    constant-VMR / isothermal CLAMP.
+  * the model top (ART_PTOP_BAR = 1e-8 bar on both grids) was set by band
+    saturation, not by a convergence result.
 
 A verdict printed to a terminal and lost is not evidence, and
 "the script exists" is not the same as "the check passed at production
