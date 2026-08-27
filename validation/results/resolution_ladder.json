@@ -1,0 +1,136 @@
+{
+  "artifact": "resolution_ladder",
+  "title": "Vertical-grid (art_nlayer) convergence of the binned depth",
+  "verdict": {
+    "status": "PASS",
+    "summary": "opacity_mode=exomolop; art_nlayer ladder [60, 90, 135]; production is 60. The production resolution is converged at the declared gates. Jacobian axis included."
+  },
+  "measurements": [
+    {
+      "name": "max |Delta binned depth|, art_nlayer 60 -> 90",
+      "value": "1.16 ppm",
+      "value_raw": 1.155938462650552,
+      "unit": "ppm",
+      "gate": "< 5.0 ppm",
+      "decisive": true,
+      "passed": true
+    },
+    {
+      "name": "max |Delta binned depth|, art_nlayer 90 -> 135",
+      "value": "0.48 ppm",
+      "value_raw": 0.47904259365197377,
+      "unit": "ppm",
+      "gate": "(informational)",
+      "decisive": false,
+      "passed": null
+    },
+    {
+      "name": "max rel Jacobian (dlnZ) change, art_nlayer 60 -> 90",
+      "value": "0.733%",
+      "value_raw": 0.007330433756536053,
+      "unit": "relative",
+      "gate": "< 1%",
+      "decisive": true,
+      "passed": true
+    }
+  ],
+  "provenance": {
+    "generated_utc": "2026-08-27T20:22:04Z",
+    "command": "resolution_ladder.py --jacobian",
+    "cwd": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval",
+    "repos": {
+      "jax-vulcan": {
+        "commit": "cf993e24d0b671afc972ac3425762d8801044d13",
+        "dirty": false,
+        "dirty_files": [],
+        "checkout": "VULCAN-JAX"
+      },
+      "vulcan-forward": {
+        "commit": "0ee65a448cdaaad74d2e31f503d14be94ce7586a",
+        "dirty": false,
+        "dirty_files": [],
+        "checkout": "vulcan-forward"
+      },
+      "vulcan-retrieval": {
+        "commit": "89aec9416cee7109909b86b564418d4136943601",
+        "dirty": false,
+        "dirty_files": [],
+        "checkout": "vulcan-retrieval"
+      },
+      "vulcan-jwst-tool": {
+        "commit": "bcb0b0ad6a3c52f5b399155b883365e0e6680e64",
+        "dirty": false,
+        "dirty_files": [],
+        "checkout": "vulcan-jwst-tool"
+      }
+    },
+    "versions": {
+      "python": "3.11.4",
+      "jax": "0.6.2",
+      "jaxlib": "0.6.2",
+      "numpy": "1.26.4",
+      "scipy": "1.17.1",
+      "exojax": "2.2.3"
+    },
+    "jax_devices": [
+      "cpu:cpu"
+    ],
+    "hardware": {
+      "platform": "macOS-14.2.1-arm64-arm-64bit",
+      "processor": "arm",
+      "cpu_count": 10,
+      "hostname": "Alizas-MacBook-Pro-2.local"
+    },
+    "data": {
+      "VULCAN_FORWARD_DATA": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval/data",
+      "VULCAN_FORWARD_OPACITY_CACHE": null,
+      "data_root_resolved": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval/data",
+      "opacity_cache": {
+        "path": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval/data/opacity_cache",
+        "files": 11,
+        "bytes": 178817677,
+        "newest_mtime_utc": "2026-07-07T23:52:00Z"
+      },
+      "exomolop": {
+        "path": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval/data/exomolop",
+        "files": 26,
+        "bytes": 9724969441,
+        "newest_mtime_utc": "2026-08-25T19:48:40Z"
+      }
+    },
+    "env_overrides": {
+      "VULCAN_FORWARD_DATA": "/Users/alizabeverage/Desktop/Isaac/Emulators/VULCAN_Project/vulcan-retrieval/data",
+      "VULCAN_JAX_ATOM_LIST": "H,O,C,N,S",
+      "VULCAN_JAX_NETWORK": "thermo/SNCHO_photo_network.txt"
+    },
+    "user": "alizabeverage",
+    "resolved_config": {
+      "use_photo": true,
+      "nz": 56,
+      "yconv_cri": 0.001,
+      "molecules": [
+        "H2O",
+        "CO2",
+        "CO",
+        "CH4",
+        "SO2",
+        "HCN",
+        "C2H2",
+        "H2S"
+      ],
+      "nu_min": 1900.0,
+      "nu_max": 9900.0,
+      "opacity_mode": "exomolop",
+      "art_nlayer": 60,
+      "rp_cm": 9143826800.0,
+      "gs_cgs": 422.0,
+      "rstar_cm": 64839240000.0,
+      "count_max": 5000,
+      "dt_max": 100000000000.0,
+      "abundance_mode": "elemental",
+      "co_mode": "fixed_O",
+      "use_rayleigh": true
+    },
+    "resolved_config_sha256": "657de46b3e62b8b8add014e2f8bae3a1fd6806fc1d920a5ad5cc3d70004ba917"
+  }
+}
