@@ -25,13 +25,18 @@ def test_repo_version_parses_version_file(tmp_path: Path):
     assert V._repo_version(tmp_path, "otherpkg") is None
 
 
+# the real list is resolved from the case (V.production_molecules); this
+# fixture only needs A list, so the check is exercised without a case dir
+PROD = ("H2O", "CO2", "SO2")
+
+
 def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path):
     _reset()
     data = tmp_path / "vulcan-retrieval" / "data"
     (data / "cm24_wasp39b").mkdir(parents=True)
     (data / "opacity_cache").mkdir()
     (data / "exomolop").mkdir()
-    V._check_data_tree(tmp_path)
+    V._check_data_tree(tmp_path, PROD)
     # ERRORS: missing CSVs, missing ExoMolOP k-tables (the only opacity path),
     # and both CIA files. Nothing else is read, so nothing else may warn.
     assert len(V._ERRORS) == 4
@@ -42,9 +47,9 @@ def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path):
     (data / "cm24_wasp39b" / "obs.csv").write_text("wl,depth\n")
     (data / "opacity_cache" / "H2-H2_2011.cia").write_text("")
     (data / "opacity_cache" / "H2-He_2011.cia").write_text("")
-    for m in ("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"):
+    for m in PROD:
         (data / "exomolop" / f"{m}.ktable.h5").write_text("")
-    V._check_data_tree(tmp_path)
+    V._check_data_tree(tmp_path, PROD)
     assert V._ERRORS == []
     assert V._WARNINGS == []
 

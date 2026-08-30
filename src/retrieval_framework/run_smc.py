@@ -46,6 +46,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from retrieval_framework import config_schema as C  # light import (no jax)
+from retrieval_framework.certificate import refuse_mismatched_resume
 
 
 def load_case(run_dir: Path):
@@ -131,6 +132,19 @@ def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
         gradient_mode=pipe.gradient_mode,
     ))
     (cfg.out_dir / "config.json").write_text(json.dumps(d, indent=2, default=str))
+
+
+def predictive_replicates(mu_draws, obs_sigma, infl, rng):
+    """Replicated observations under the run's OWN likelihood.
+
+    The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
+    noise_inflation, and mu already carries the instrument offsets, so a
+    posterior-predictive replicate is mu + N(0, sigma_eff^2). Returns
+    (y_rep, sigma_eff). The spread of ``mu_draws`` alone is the LATENT band and
+    is not comparable to data -- it ignores the inferred noise entirely.
+    """
+    sig_eff = np.asarray(obs_sigma)[None, :] * np.asarray(infl)
+    return mu_draws + rng.normal(size=mu_draws.shape) * sig_eff, sig_eff
 
 
 def output_truth(cfg: C.Config, pipe) -> np.ndarray:
@@ -313,10 +327,13 @@ def main() -> None:
     log.info(f"Built pipeline in {time.perf_counter()-t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names} "
              f"| {pipe.n_bin} bins | groups={pipe.groups} | gradient_mode={pipe.gradient_mode} "
              f"| dtype={pipe.dtype.__name__} two_stage_z={cfg.two_stage_z}")
-    write_config_json(cfg, pipe, preset)
 
     # ---- observations (set exactly once, BEFORE any jitted likelihood call) ----
+    # NOTHING is written to the run directory until the resume identity is
+    # settled below: a refused resume must leave the killed run's archived
+    # identity exactly as it was.
     obs_path = cfg.out_dir / "observations.npz"
+    obs_save = None
     if cfg.generate_synthetic_data:
         if obs_path.exists() and not cfg.overwrite:
             d = np.load(obs_path)
@@ -326,21 +343,45 @@ def main() -> None:
         else:
             log.info("Generating synthetic observations (injection at truth_*)...")
             o = P.generate_observations(pipe, seed=int(cfg.seed))
-            P.save_npz(obs_path, wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
-                       depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
-                       group=np.asarray(pipe.obs["group"], dtype="<U16"),
-                       synthetic=np.asarray(1, np.int32),
-                       inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
-                       inferred_param_truth=np.asarray(pipe.param_truth))
-            log.info(f"Saved synthetic observations: {obs_path}")
+            obs_save = dict(
+                wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
+                depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
+                group=np.asarray(pipe.obs["group"], dtype="<U16"),
+                synthetic=np.asarray(1, np.int32),
+                inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
+                inferred_param_truth=np.asarray(pipe.param_truth))
     else:
         o = P.load_real_into_pipe(pipe)
-        P.save_npz(obs_path, wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
-                   depth=o["depth"], sigma=o["sigma"],
-                   group=np.asarray(pipe.obs["group"], dtype="<U16"),
-                   synthetic=np.asarray(0, np.int32))
+        obs_save = dict(
+            wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
+            depth=o["depth"], sigma=o["sigma"],
+            group=np.asarray(pipe.obs["group"], dtype="<U16"),
+            synthetic=np.asarray(0, np.int32))
         log.info(f"Using REAL observed spectrum: {pipe.n_bin} bins "
-                 f"({', '.join(pipe.groups)}); saved copy to {obs_path}")
+                 f"({', '.join(pipe.groups)})")
+
+    # ---- resume identity: BEFORE the run directory is touched ---------------
+    # pipeline.run_smc_loop refuses a mismatched checkpoint, but by then the
+    # driver had already overwritten config.json, observations.npz and the
+    # manifest -- leaving a killed run's samples beside a DIFFERENT run's
+    # recorded identity, which is exactly the state a certificate cannot detect
+    # from the npz copies alone (they all still agree with each other).
+    from retrieval_framework import certificate as _cert
+    ckpt_path = cfg.out_dir / "smc_checkpoint.npz"
+    resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
+    if resume:
+        refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
+
+    write_config_json(cfg, pipe, preset)
+    if obs_save is not None:
+        P.save_npz(obs_path, **obs_save)
+        log.info(f"Saved observations: {obs_path}")
+    # The CANONICAL manifest, not only its hash: a refused resume names the
+    # differing class only if the two manifests can be diffed. The digest that
+    # binds the checkpoint is sha256 of exactly this document.
+    (cfg.out_dir / _cert.MANIFEST_FILE).write_text(json.dumps(
+        _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True,
+        default=str) + "\n")
 
     dspan = float(np.nanmax(pipe.obs_depth) - np.nanmin(pipe.obs_depth))
     smean = float(np.mean(pipe.obs_sigma))
@@ -356,8 +397,7 @@ def main() -> None:
     if cfg.run_inference:
         log.info(f"Running adaptive-tempered SMC (N={cfg.smc_num_particles}, "
                  f"mcmc_steps={cfg.smc_num_mcmc_steps}, kernel=preconditioned fwd-jvp MALA)...")
-        ckpt = cfg.out_dir / "smc_checkpoint.npz"
-        resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
+        ckpt = ckpt_path
         if resume:
             # SMC_RESUME=1 means "continue a killed run". If the checkpoint is missing,
             # fail loud rather than silently restarting a multi-hour job from scratch.
@@ -381,6 +421,11 @@ def main() -> None:
         P.save_npz(samples_path,
                    param_names=np.asarray(pipe.names, dtype="<U64"),
                    param_labels=np.asarray(pipe.labels, dtype="<U64"),
+                   # the target identity rides with the POSTERIOR as well as the
+                   # checkpoint and the diagnostics; the certificate refuses any
+                   # disagreement between the three
+                   smc_target_digest=np.asarray(
+                       str(getattr(pipe, "target_digest", "") or "")),
                    samples=res["theta_draws"],
                    u_particles=res["U"], final_beta=np.asarray(res["final_beta"]),
                    # travels WITH the samples so no consumer can miss it: beta<1
@@ -406,6 +451,7 @@ def main() -> None:
                    smc_betas=res["betas"], smc_ess=res["ess"],
                    smc_acceptance_rate=res["acceptance_rate"],
                    smc_logZ_increment=res["logZ_increment"], smc_logZ=np.asarray(res["logZ"]),
+                   smc_logZ_err_lb=np.asarray(res["logZ_err_lb"]),
                    smc_step_size_history=res["step_size_history"],
                    smc_unique_particles=res["unique_particles"],
                    smc_scale_chol_final=res["scale_chol_final"],
@@ -423,6 +469,10 @@ def main() -> None:
                    smc_logZ_box=np.asarray(res["logZ_box"]),
                    smc_log_support_physical=np.asarray(res["log_support_physical"]),
                    smc_log_support_physical_err=np.asarray(res["log_support_physical_err"]),
+                   # the resume-binding target identity travels with the samples,
+                   # not only with the checkpoint (certificate reads it back)
+                   smc_target_digest=np.asarray(
+                       str(getattr(pipe, "target_digest", "") or "")),
                    smc_log_conv_attrition=np.asarray(res["log_conv_attrition"]),
                    smc_log_conv_attrition_err=np.asarray(res["log_conv_attrition_err"]),
                    init_stats_keys=np.asarray(list(res["init_stats"].keys()), dtype="<U32"),
@@ -468,17 +518,48 @@ def main() -> None:
             batch = jnp.asarray(sel[i0:i0 + int(cfg.ppc_chunk_size)], pipe.dtype)
             preds.append(np.asarray(jax.vmap(pipe.observed_depth_model_jit)(batch)))
             log.info(f"  ppc {min(i0+int(cfg.ppc_chunk_size), n_take)}/{n_take}")
-        ppc = np.concatenate(preds, axis=0)
+        mu_draws = np.concatenate(preds, axis=0)     # LATENT model curves, no noise
+
+        # The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
+        # noise_inflation, and mu already carries the instrument offsets, so a true
+        # replicate is mu + N(0, sigma_eff^2). The latent band (spread of mu) and
+        # the predictive band (spread of y_rep) are different objects: only the
+        # second is comparable to the data, and only it responds to the inferred
+        # noise inflation. Both are saved, named apart.
+        names = list(pipe.names)
+        ni = names.index("noise_inflation") if "noise_inflation" in names else None
+        infl = sel[:, ni][:, None] if ni is not None else np.ones((sel.shape[0], 1))
+        y_rep, sig_eff = predictive_replicates(mu_draws, pipe.obs_sigma, infl, rng)
+
+        # Calibrated posterior-predictive check on the likelihood's OWN discrepancy
+        # T(y, theta) = sum(((y - mu)/sigma_eff)^2), observed vs replicated per draw.
+        # p near 0 or 1 is a misfit; ~0.5 is consistent.
+        t_obs = np.sum(((np.asarray(pipe.obs_depth)[None, :] - mu_draws) / sig_eff) ** 2, axis=1)
+        t_rep = np.sum(((y_rep - mu_draws) / sig_eff) ** 2, axis=1)
+        ppp = float(np.mean(t_rep >= t_obs))
+
         theta_med = np.median(theta_all, axis=0)
         mu_med = np.asarray(pipe.observed_depth_model_jit(jnp.asarray(theta_med, pipe.dtype)))
+        sig_med = np.asarray(pipe.obs_sigma) * (float(theta_med[ni]) if ni is not None else 1.0)
+        dof = int(pipe.n_bin) - int(pipe.n_dim)
+        chi2_nu = (float(np.sum(((pipe.obs_depth - mu_med) / sig_med) ** 2) / dof)
+                   if dof > 0 else float("nan"))
         P.save_npz(cfg.out_dir / "posterior_predictive.npz",
-                   ppc_draws=ppc, theta_sel=sel, wl=pipe.obs["wl"],
-                   p05=np.nanquantile(ppc, 0.05, axis=0), p50=np.nanquantile(ppc, 0.50, axis=0),
-                   p95=np.nanquantile(ppc, 0.95, axis=0),
+                   model_draws=mu_draws, pred_draws=y_rep, theta_sel=sel, wl=pipe.obs["wl"],
+                   model_p05=np.nanquantile(mu_draws, 0.05, axis=0),
+                   model_p50=np.nanquantile(mu_draws, 0.50, axis=0),
+                   model_p95=np.nanquantile(mu_draws, 0.95, axis=0),
+                   pred_p05=np.nanquantile(y_rep, 0.05, axis=0),
+                   pred_p50=np.nanquantile(y_rep, 0.50, axis=0),
+                   pred_p95=np.nanquantile(y_rep, 0.95, axis=0),
                    theta_median=theta_med, mu_at_median=mu_med,
+                   sigma_eff_at_median=sig_med, ppp_chi2=np.asarray(ppp),
+                   chi2_reduced=np.asarray(chi2_nu), chi2_dof=np.asarray(dof),
                    obs_depth=pipe.obs_depth, obs_sigma=pipe.obs_sigma)
-        chi2 = float(np.sum(((pipe.obs_depth - mu_med) / pipe.obs_sigma) ** 2) / pipe.n_bin)
-        log.info(f"Saved posterior predictive | reduced chi2 at posterior median: {chi2:.2f}")
+        log.info(f"Saved posterior predictive | posterior-predictive p (chi2 discrepancy) "
+                 f"= {ppp:.3f} | chi2/dof at posterior median = {chi2_nu:.2f} "
+                 f"(dof = {pipe.n_bin} bins - {pipe.n_dim} params = {dof}, "
+                 "sigma includes the inferred noise inflation)")
 
     log.info("DONE.")
 

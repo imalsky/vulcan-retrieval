@@ -147,14 +147,15 @@ def main() -> None:
     # What the production cold init would do at candidate caps. _init_state now REJECTS
     # non-converged draws and OVERSAMPLES: it draws ceil(N*init_oversample) and keeps N
     # healthy survivors, raising ONLY when the reject fraction leaves < N survivors, i.e.
-    # reject frac > 1 - 1/init_oversample. init_max_nonconverged_frac is a WARNING
-    # threshold. A draw counts as non-converged at cap c when accept_count >= c (same
+    # reject frac > 1 - 1/init_oversample. init_max_nonconverged_frac is a GATE:
+    # _init_state raises above it. A draw counts as non-converged at cap c when
+    # accept_count >= c (same
     # convention as the censoring check above and _init_state's exhausted test).
-    warn = float(cfg.init_max_nonconverged_frac)
+    warn = float(cfg.init_max_nonconverged_frac)   # the gate, not a warning
     over = float(cfg.init_oversample)
     fail_frac = 1.0 - 1.0 / over    # reject frac above which oversampling can't fill N
     log.info(f"=== production cold-init gate (reject+oversample: init_oversample={over:g} "
-             f"tolerates reject frac up to {fail_frac:.0%}, warns above {warn:.0%}; "
+             f"tolerates reject frac up to {fail_frac:.0%}, RAISES above {warn:.0%}; "
              f"this preset's count_max={preset_count_max}) ===")
     cands = sorted({int(c) for c in (preset_count_max, 5000, 10000,
                                      int(args.count_max_probe)) if c})

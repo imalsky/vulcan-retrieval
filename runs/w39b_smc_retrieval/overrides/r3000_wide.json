@@ -1,6 +1,0 @@
-{
-  "smc_chem_chunk": 0,
-  "smc_rt_chunk": 0,
-  "smc_rt_vjp_chunk": 6,
-  "prior_c_o": [-1.6, 0.45]
-}

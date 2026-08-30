@@ -250,7 +250,19 @@ def _check_exojax() -> None:
         _ok(f"exojax {exojax.__version__}")
 
 
-def _check_data_tree(root: Path) -> None:
+def production_molecules(root: Path) -> tuple[str, ...]:
+    """The case's own molecule list. Never a copy of it: a hand-copied list is how
+    the validation ladders ended up certifying a different opacity model than
+    production ran (and how this preflight kept checking 8 tables for a 12-molecule
+    run)."""
+    import os
+    from retrieval_framework import run_smc as _R
+    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
+    cfg, _ = _R.make_config(root / "vulcan-retrieval" / "runs" / "w39b_smc_retrieval")
+    return tuple(cfg.molecules)
+
+
+def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
     data = root / "vulcan-retrieval" / "data"
     cm24 = data / "cm24_wasp39b"
     if not any(cm24.glob("*.csv")):
@@ -259,7 +271,6 @@ def _check_data_tree(root: Path) -> None:
         _ok(f"real spectrum CSVs present in {cm24}")
     # Correlated-k tables: the PRODUCTION opacity path. A missing table raises
     # deep inside the RT build, minutes into a job, so catch it in preflight.
-    prod = ("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S")
     ckdir = data / "exomolop"
     missing_k = [m for m in prod if not (ckdir / f"{m}.ktable.h5").exists()]
     if missing_k:
@@ -340,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         _check_cross_repo_pin()
         _check_exojax()
-        _check_data_tree(root)
+        _check_data_tree(root, production_molecules(root))
         _check_fastchem(root)
 
     print()

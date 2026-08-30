@@ -24,10 +24,13 @@ smoke), or when ``obs_dir`` is unset, a constant-R synthetic bin grid is generat
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 OFFSET_UNIT = 1.0e-6   # offset parameter is in ppm -> fractional depth
 
@@ -86,6 +89,14 @@ def load_real_observations(cfg: Any) -> Dict[str, np.ndarray]:
     wl = np.concatenate(W); lo = np.concatenate(LO); hi = np.concatenate(HI)
     depth = np.concatenate(D); sigma = np.concatenate(S); group = np.concatenate(G)
     sel = (wl >= float(cfg.obs_wl_lo)) & (wl <= float(cfg.obs_wl_hi))
+    r_max = float(getattr(cfg, "obs_max_bin_R", 0.0) or 0.0)
+    if r_max > 0.0:
+        drop = sel & (0.5 * (lo + hi) / (hi - lo) > r_max)
+        if drop.any():
+            logger.warning(
+                "obs_max_bin_R=%g drops %d truncation-remnant bin(s) at wl %s um",
+                r_max, int(drop.sum()), np.round(wl[drop], 5).tolist())
+        sel &= ~drop
     wl, lo, hi, depth, sigma, group = (wl[sel], lo[sel], hi[sel], depth[sel],
                                        sigma[sel], group[sel])
     o = np.argsort(wl)

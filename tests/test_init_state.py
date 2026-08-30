@@ -37,7 +37,9 @@ def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
     which particles _init_state must reject. A draw 'stall-certifies' (under the cap
     but not canonically certified) iff its first coordinate is exactly 0.5.
     Likelihoods/gradients are finite Gaussians."""
-    cfg = C.Config(smc_num_particles=8, init_oversample=oversample)
+    # these tests exercise the CULL, so they declare the attrition they construct
+    cfg = C.Config(smc_num_particles=8, init_oversample=oversample,
+                   init_max_nonconverged_frac=1.0)
     y_baseline = jnp.zeros(y_shape, jnp.float64)
 
     def cold_l_diag(U, Y0, refs0):

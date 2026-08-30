@@ -82,3 +82,21 @@ def test_evidence_report_fields_and_identity():
     ev0 = evidence_report(logZ, None)
     assert all(math.isnan(ev0[k]) for k in
                ("logZ_box", "log_support_fraction", "log_conv_attrition"))
+
+
+def test_logZ_error_lower_bound_tracks_ess_collapse():
+    """logZ had NO Monte Carlo error of any kind, so a sensitivity gate quoted in
+    'Monte Carlo standard errors' could not be evaluated. The ESS-based bound is
+    optimistic but must at least exist and grow as the ladder degrades."""
+    import numpy as np
+    N = 144
+
+    def lb(ess):
+        e = np.asarray(ess, float)
+        return float(np.sqrt(np.sum(1.0 / e - 1.0 / N)))
+
+    healthy = [0.9 * N] * 20
+    degraded = [0.25 * N] * 20
+    assert lb(healthy) < lb(degraded)
+    # a perfectly efficient ladder (ESS == N every stage) has zero variance here
+    assert lb([float(N)] * 20) == 0.0

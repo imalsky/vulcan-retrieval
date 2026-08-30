@@ -49,9 +49,7 @@
 #   CALIBRATE_ONLY=1        time 1 likelihood + 1 mutation sweep, project, exit
 #   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
 #                           CALIBRATE_N_DRAWS (default 48), CALIBRATE_COUNT_MAX_PROBE (default
-#                           20000), CALIBRATE_SEED_OFFSET (default 0), CALIBRATE_RESOLUTION
-#                           (default 100 -- native R for the RT; accept_count is
-#                           resolution-independent so this just cheapens the build/RT/memory)
+#                           20000), CALIBRATE_SEED_OFFSET (default 0)
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
 #   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
 #                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
@@ -322,8 +320,7 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
     --n-draws "${CALIBRATE_N_DRAWS:-48}" \
     --count-max-probe "${CALIBRATE_COUNT_MAX_PROBE:-20000}" \
-    --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
-    --resolution "${CALIBRATE_RESOLUTION:-100}" || rc=$?
+    --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" || rc=$?
 else
   echo "========== SMC RETRIEVAL =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?

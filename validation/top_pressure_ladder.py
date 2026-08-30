@@ -60,13 +60,8 @@ def main() -> int:
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
 
-    prod = dict(config.FULL)
-    prod.update(nz=62,   # = runs/w39b_smc_retrieval/case.py gpu_config nz; keep in step
-                count_max=5000, dt_max=1.0e11,
-                abundance_mode="elemental", co_mode="fixed_O",
-                molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
-                nu_min=BAND[0], nu_max=BAND[1],
-                art_nlayer=67, art_ptop_bar=config.ART_PTOP_BAR, use_rayleigh=True)
+    # The production case IS the specification (see _artifact.production_profile).
+    prod = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
     chem = vulcan_chem.build_chem_model(prod)

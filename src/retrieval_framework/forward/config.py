@@ -25,9 +25,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
 # Shared physics constants -- single source of truth is the engine package
-# ---------------------------------------------------------------------------
 # Re-exported (not redefined) so this repo and vulcan-jwst-tool cannot drift
 # apart on molecule masses, opacity sources, the ART grid bounds, or the
 # composition tables. vulcan_forward.constants is stdlib-only, so importing it
@@ -49,9 +47,7 @@ ART_PBTM_BAR = _fwd.ART_PBTM_BAR
 T_OPA_MIN_K = _fwd.T_OPA_MIN_K
 T_OPA_MAX_K = _fwd.T_OPA_MAX_K
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 # VULCAN_PROJECT_ROOT = the directory CONTAINING the vulcan-retrieval/ checkout
 # (and, for HPC runs + manuscript figures, its siblings VULCAN-JAX/ and jax_paper/).
 # The explicit env var wins; otherwise the repo root is inferred from this file's
@@ -85,9 +81,7 @@ FIGS = JP / "figures"                                           # manuscript fig
 # rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
 
-# ---------------------------------------------------------------------------
 # WASP-39b physical constants (from vulcan_jax/configs/W39b.yaml)
-# ---------------------------------------------------------------------------
 R_SUN_CM = 6.957e10
 # Planet radius ASSIGNED to the bottom pressure of the ART grid (7 bar). The
 # literature transit radius does not itself specify a 7-bar reference level, so
@@ -98,9 +92,7 @@ RP_CM = 1.279 * 7.1492e9   # planet radius (cm) at the bottom pressure P_b
 GS_CGS = 422.0             # surface gravity (cm/s^2), held fixed (incl. under lnR0)
 RSTAR_CM = 0.932 * R_SUN_CM
 
-# ---------------------------------------------------------------------------
 # Run profiles
-# ---------------------------------------------------------------------------
 # Wavenumbers in cm^-1. wavelength(um) = 1e4 / nu.
 #
 # Two non-obvious requirements, both about keeping the forward-mode tangent valid:

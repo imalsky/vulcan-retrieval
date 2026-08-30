@@ -168,26 +168,59 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     assert np.array_equal(res["theta_draws"], full["theta_draws"])
 
 
-def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path):
-    """Every checkpoint carries a target-exactness stamp; resume must read it.
+@pytest.mark.parametrize("field, bad, match", [
+    ("chem_mode", "warm", "chem_mode"),
+    ("target_digest", "0" * 64, "target digest"),
+])
+def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path, field, bad, match):
+    """A checkpoint may only resume against the target it was written for.
 
-    Adopting betas/logZ/loglik across a target change splices two densities into
-    one evidence integral, and the certificate cannot detect it -- it reads the
-    last job only.
+    Adopting betas/logZ/loglik/gradients across a target change splices two
+    densities into one evidence integral, and the certificate cannot detect it --
+    it reads the last job only. chem_mode alone was not enough: it let ANY
+    same-dimensional change to priors, data, opacity, tolerances or code resume.
     """
+    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
+    key = jax.random.PRNGKey(3)
+    ck = tmp_path / "ck.npz"
+
+    def pipe():                      # the real path sets this in set_observations
+        p = _stub_pipe(cfg)
+        p.target_digest = "d" * 64
+        return p
+
+    P.run_smc_loop(pipe(), key=key, progress=False,
+                   checkpoint_path=ck, walltime_seconds=1e-9)
+    # unchanged target: the same checkpoint resumes
+    P.run_smc_loop(pipe(), key=key, progress=False,
+                   checkpoint_path=tmp_path / "ok.npz", resume_from=ck)
+
+    d = {k: v for k, v in np.load(ck, allow_pickle=True).items()}
+    d[field] = np.asarray(bad)
+    np.savez(ck, **d)
+
+    with pytest.raises(ValueError, match=match):
+        P.run_smc_loop(pipe(), key=key, progress=False,
+                       checkpoint_path=tmp_path / "out.npz", resume_from=ck)
+
+
+def test_resume_refuses_a_checkpoint_with_no_target_digest(tmp_path):
+    """Checkpoints written before the digest existed are not resumable."""
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     key = jax.random.PRNGKey(3)
     ck = tmp_path / "ck.npz"
     P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                    checkpoint_path=ck, walltime_seconds=1e-9)
-
     d = {k: v for k, v in np.load(ck, allow_pickle=True).items()}
-    d["chem_mode"] = np.asarray("warm")
+    del d["target_digest"]
     np.savez(ck, **d)
 
-    with pytest.raises(ValueError, match="chem_mode"):
-        P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
+    pipe = _stub_pipe(cfg)
+    pipe.target_digest = "d" * 64
+    with pytest.raises(ValueError, match="absent"):
+        P.run_smc_loop(pipe, key=key, progress=False,
                        checkpoint_path=tmp_path / "out.npz", resume_from=ck)
 
 

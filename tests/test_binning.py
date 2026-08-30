@@ -105,3 +105,29 @@ def test_offset_design_groups():
     O = OBS.build_offset_design(obs)
     assert O.shape == (5, 1)
     assert np.array_equal(O[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
+
+
+# --- posterior predictive (RC-05) --------------------------------------------
+
+def test_replicates_carry_the_likelihood_conditional_variance():
+    """The saved predictive band must be replicated DATA, not model curves.
+
+    run_smc used to store deterministic model curves, label them "PPC 5-95%" and
+    report a reduced chi2 against the RAW sigma -- while inferring a
+    noise-inflation parameter that neither object used. A predictive replicate
+    must carry sigma * b, and must widen when b does.
+    """
+    from retrieval_framework.run_smc import predictive_replicates
+    rng = np.random.default_rng(0)
+    n_draw, n_bin = 20000, 3
+    sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])
+    mu = np.tile(np.array([1e-2, 2e-2, 3e-2]), (n_draw, 1))
+
+    for b in (1.0, 2.5):
+        infl = np.full((n_draw, 1), b)
+        y_rep, sig_eff = predictive_replicates(mu, sigma, infl, rng)
+        assert np.allclose(sig_eff, sigma[None, :] * b)
+        # the realized spread is the conditional sigma the likelihood declares
+        assert np.allclose(y_rep.std(axis=0), sigma * b, rtol=0.05)
+        # and it is centred on the latent model, not shifted by it
+        assert np.allclose(y_rep.mean(axis=0), mu[0], atol=4 * sigma * b / np.sqrt(n_draw))

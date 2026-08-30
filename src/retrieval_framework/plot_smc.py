@@ -146,9 +146,14 @@ def main() -> None:
         ppc = np.load(ppc_path)
         o = np.argsort(np.asarray(ppc["wl"], float))
         wlm = np.asarray(ppc["wl"], float)[o]
-        ax.fill_between(wlm, 1e6 * np.asarray(ppc["p05"], float)[o],
-                        1e6 * np.asarray(ppc["p95"], float)[o],
-                        color="#ff7f0e", alpha=0.30, lw=0, label="PPC 5-95%", zorder=2)
+        ax.fill_between(wlm, 1e6 * np.asarray(ppc["pred_p05"], float)[o],
+                        1e6 * np.asarray(ppc["pred_p95"], float)[o],
+                        color="#ff7f0e", alpha=0.18, lw=0,
+                        label="posterior predictive 5-95%", zorder=1)
+        ax.fill_between(wlm, 1e6 * np.asarray(ppc["model_p05"], float)[o],
+                        1e6 * np.asarray(ppc["model_p95"], float)[o],
+                        color="#ff7f0e", alpha=0.35, lw=0,
+                        label="model (latent) 5-95%", zorder=2)
         ax.plot(wlm, 1e6 * np.asarray(ppc["mu_at_median"], float)[o],
                 color="#ff7f0e", lw=1.4, label="model @ posterior median", zorder=3)
     for g in dict.fromkeys(group.tolist()):

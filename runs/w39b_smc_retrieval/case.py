@@ -17,9 +17,7 @@ from typing import Any
 from retrieval_framework.config_schema import Config      # light import, no jax
 from retrieval_framework.forward import config as fwd_config  # pure constants + repo paths
 
-# ---------------------------------------------------------------------------
 # Planet + data identity (WASP-39b, Carter & May 2024 combined JWST spectrum)
-# ---------------------------------------------------------------------------
 R_SUN_CM = 6.957e10
 _W39B = dict(
     run_label="WASP-39b",
@@ -28,18 +26,9 @@ _W39B = dict(
     rp_cm=1.279 * 7.1492e9,                     # planet radius at P_btm
     rstar_cm=0.932 * R_SUN_CM,
     fastchem_met_scale=10.0,                    # baseline 10x solar; lnZ relative to it
-    # Physical step-size cap (s). The VULCAN-master default (runtime*1e-5 = 1e17 s) lets
-    # the adaptive Ros2 step balloon to ~1e16 s on high-Kzz columns (per-step local error
-    # stays tiny), so the solver SPINS in a large-dt oscillation and never converges --
-    # this was the BULK of the >10k-step tail. Local diagnostic 2026-07-08 (chemistry-only,
-    # scratchpad diag_*.py): capping dt_max converges the ballooning draws in ~1000 steps
-    # (d10/d19/d59 from calib job 64523; d19 was >11000 uncapped) and leaves normal draws
-    # untouched (truth 4275 steps identically capped/uncapped; converged dt ~1e8 << cap).
-    # 1e11 s catches the ballooning with margin (reaches t~1e15 in 10k steps, >> physical
-    # settling ~1e13). NOT a convergence criterion -- yconv_cri/slope_cri stay master
-    # (Tsai+2017: 0.01, 1e-4). A residual minority still fails for OTHER reasons dt_max
-    # can't fix (longdy stuck ~0.13 just above the 0.1 gate; hot/low-Kzz photolysis limit
-    # cycles with aflux oscillating) -- those get rejected at init.
+    # Cap physically meaningless large-dt Ros2 oscillations on high-Kzz columns.
+    # This is not a convergence criterion: yconv_cri/slope_cri remain the canonical
+    # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected at init.
     dt_max=1.0e11,
     # Carter & May (2024) fixed-limb-darkening products (repo data/):
     # NRS1/NRS2 share the G395H group (one offset); NIRISS O1+O2 share NIRISS.
@@ -50,6 +39,10 @@ _W39B = dict(
         "G395H":  ("G395H_NRS1_R100.csv", "G395H_NRS2_R100.csv"),
         "NIRCam": ("NIRCam_R100.csv",),
     },
+    # Drop two masked-gap truncation remnants (R=252 and 464, not R=100 bins).
+    # R=200 removes both; the highest retained bin is R=103, safely below the
+    # model/LSF refusal limit of R=333.
+    obs_max_bin_R=200.0,
 
     # ---- realistic WASP-39b priors (literature-anchored) ---------------------
     # Sources: Tsai et al. 2023 (Nature, VULCAN photochemistry grid for W39b) and
@@ -81,9 +74,7 @@ _W39B = dict(
 )
 
 
-# ---------------------------------------------------------------------------
 # Presets
-# ---------------------------------------------------------------------------
 def smoke_config(**overrides: Any) -> Config:
     """Tiny fully-offline preset: CO-only opacity (cached), coarse column, a small SMC
     swarm. Proves the chain end-to-end and FD-checks the gradient in minutes on CPU."""
@@ -99,7 +90,7 @@ def smoke_config(**overrides: Any) -> Config:
         tp_infer_gamma=False,      # 5-D smoke: lnZ, c_o, lnKzz, Tirr, log10kappa (+lnR0)
         generate_synthetic_data=True,               # smoke always self-tests on an injection
         smc_num_particles=12, smc_num_mcmc_steps=4, smc_max_steps=8,
-        smc_target_ess_frac=0.5, mcmc_tune_particles=6, mcmc_tune_steps=4, mcmc_tune_iters=4,
+        smc_target_ess_frac=0.5,
         num_samples=12, num_chains=1, ppc_draws=12, ppc_chunk_size=6,
         do_ppc=True,
     )
@@ -108,35 +99,13 @@ def smoke_config(**overrides: Any) -> Config:
 
 
 def gpu_config(**overrides: Any) -> Config:
-    """The <24 h GH200 production preset: nz=62, photo on, full molecule set over the
-    real Carter & May combined NIRISS+G395H band, N=144 forward-mode-jvp MALA particles
-    with per-stage adaptation. Fits the real spectrum (generate_synthetic_data=False).
+    """GH200 production preset for the Carter & May NIRISS+G395H spectrum.
 
     Band note: the native model band is 1.01-5.26 um (nu 1900-9900). NIRISS SOSS
-    order 1 spans 0.85-2.83 um -- extending the band to ~1 um keeps 93 NIRISS bins
-    (vs 29 at a 2.0 um cut): the 1.1-1.9 um water bands, the inter-instrument offset
-    lever, and the cloud/haze slope. Chemistry cost is band-independent; only the
-    (cheap) RT grows. The short edge stays >=1 um (H2-H2 CIA table edge at 10000
-    cm^-1; PRISM's <2 um saturation is a PRISM issue -- NIRISS is unaffected).
-
-    count_max=5000. The >10k-step tail was diagnosed as a
-    dt_max-ballooning numerical artifact (see _W39B dt_max + ../../CLAUDE.md): with
-    dt_max=1e11 the ballooning draws converge in ~1000 steps, well under 5000, and the
-    truth needs 4275. So 5000 gives ~700 steps over the truth -- draws harder than the
-    truth (needing 5000-10000 steps) and the genuine residual (marginal-longdy /
-    photolysis limit cycles) will FAIL at 5000, which is accepted (they are rejected at
-    init). Measure the real failure fraction with the calibration (now cheap at R=100),
-    probing AT the production cap: `qsub -v CALIBRATE_COUNT_MAX=1,
-    CALIBRATE_COUNT_MAX_PROBE=5000,CALIBRATE_N_DRAWS=96 run_nas_w39b.pbs`.
-
-    Sweep-cost budget: warm proposals are warm_count_max-capped (schema default 1500;
-    measured typical warm re-converge ~500-800 steps, conv_step-window-dominated --
-    the cold count_max only ever binds at init), the warm gradient runs ONE chemistry
-    while_loop (the accept_count diag rides the jvp chain), and the RT vjp
-    runs 12-wide on the ~1650-band correlated-k grid (12 serialized chunks at
-    N=144). Projected ~20-40 min/stage vs the ~3-6 h/stage job 64745 showed.
-    Run `qsub -v PROBE_MEMORY=1` once after any band / chunk / N change, and
-    `qsub -v CALIBRATE_ONLY=1` (~1 h) to get timing.json before committing a full run.
+    order 1 supplies the short-wavelength water bands and offset/cloud leverage;
+    the 1.02 um edge stays inside the H2-H2 CIA table. count_max=5000 is a hard
+    convergence gate, not a reason to extend failed draws. Run PROBE_MEMORY after
+    any band/chunk/N change and CALIBRATE_ONLY before a full submission.
     """
     base = dict(
         _W39B,
@@ -145,51 +114,40 @@ def gpu_config(**overrides: Any) -> Config:
         # + HCN/C2H2 (high-C/O discriminators) + H2S (reduced-S reservoir): without
         # them the likelihood is blind to the species that rule the C/O upper tail
         # in or out. All have ExoMolOP k-tables, same path as the first five.
-        molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"),
-        # Correlated-k (the schema default and, since vulcan-forward 0.11.0, the
-        # only opacity path): the ExoMolOP R=1000 band grid over [nu_min, nu_max].
-        # The retired sampled line-by-line path differed by 857 ppm rms / 3177 ppm
-        # max in binned R=100 shape and was 1.30x too contrasty, against a 70 ppm
-        # median observed sigma; 8x more points did not converge it (notes.md).
-        # RUN PROBE_MEMORY=1 AGAIN AFTER THIS SWITCH: the correlated-k RT carries
-        # a g-ordinate axis (ng=16) through the same reverse-mode vjp, so the
-        # memory wall moved and smc_rt_vjp_chunk below is unproven for it.
+        # + NH3/OCS/SH/SO: each exceeds the min(5 ppm, 0.1 sigma) leave-one-out
+        # gate at the nominal state. Omitting a produced absorber biases the
+        # abundances that must absorb its opacity.
+        # NOT YET SCREENED: 13 further species have both a solved abundance and an
+        # installed ExoMolOP table (CS N2O NO NS NH CN OH CH3 H2CO C2H4 CH C2
+        # H2O2). validation/opacity_leave_one_out.py measures them; a species may
+        # be dropped only with a recorded bound below the gate.
+        molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S",
+                   "NH3", "OCS", "SH", "SO"),
+        # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
+        # carried through the RT vjp, so PROBE_MEMORY must certify the chunk below.
         nu_min=1900.0, nu_max=9900.0, art_nlayer=67,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N=144: the GPU power trace showed real headroom
-        # (~300 W of 700 W during the 192-lane primal, ~360-390 W at 672 gradient
-        # lanes) -- width fills the GPU nearly for free in the launch-bound
-        # while_loop, so spend the idle silicon on particles. 144 = 12 exact RT-vjp
-        # chunks of 12 (RT tail x1.5 vs N=96's 8 chunks). MEASURED (probe job 64944):
-        # peak memory is WIDTH-INDEPENDENT -- 73.25 GiB at N=96, 144, and the
-        # 152-wide init eval alike (the peak is the fixed-width RT-vjp chunk stage;
-        # chem tangents are freed before it). N=192 is memory-viable (16 chunks) if
-        # ever wanted. More particles also directly answer the small-N SMC criticism
-        # (ladder-adaptation noise, evidence variance).
-        # smc_num_mcmc_steps is set below with the cold-mode budget note.
+        # N=144 gives 12 exact RT-vjp chunks and reduces small-cloud SMC noise.
         # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
         # fresh budget and the stage index continues). 40 sits right at the edge
         # of what a 10-D ladder at target_ess_frac=0.6 needs, and exhausting it
         # yields a TEMPERED cloud the certificate refuses; an unused stage costs
         # nothing, so the governor is left as the real limit.
         smc_num_particles=144, smc_max_steps=80,
-        # Init reject-and-cull sizing (measured on a real-data job that died
-        # in init phase 2: 84/288 cold-rejected [29%, expected] then 21/152 warm
-        # re-certification failures [14%] vs the schema default init_phase2_spare=8 ->
-        # 131/144 healthy, spares exhausted). The 8-spare default was sized for the
-        # 3-5% warm-recert rate measured pre-pass (jobs 64854/64897, synthetic);
-        # the elemental-map + per-proposal atm rebuild and REAL prior
-        # corners push it to ~14%. count_max stays 5000, so absorb the higher
-        # attrition here: oversample 2.5 -> ceil(144*2.5)=360 cold draws (~256 alive
-        # at 29% reject), spare 48 -> phase-2 pool min(n_alive, 144+48)=192, tolerating
-        # a warm-recert cull up to (192-144)/192 = 25% and still leaving 144. Both are
-        # ~free: phase-1 wall = the slowest lane (lockstep max, batch width irrelevant),
-        # phase-2 memory is width-independent to N~500 (probe 64944 measured 73.25 GiB
-        # flat at N=96/144/152). No memory probe needed for this bump: the 192-wide
-        # init eval only adds serialized RT-vjp chunks (not chunk width) and touches
-        # neither the spectral band nor smc_rt_vjp_chunk -- the only two knobs that move the peak.
+        # Draw 360 cold candidates and reserve 48 phase-2 spares. The 192-column
+        # phase-2 pool can cull 25% and still return N=144; peak memory remains set
+        # by the fixed RT-vjp chunk, not the number of serialized chunks.
+        init_oversample=2.5,
+        init_phase2_spare=48,
+        # DECLARED convergence attrition. The cold reject fraction is a gate, not a
+        # warning (pipeline._init_state raises above it), because conditioning on
+        # convergence removes part of the declared prior. 0.35 covers the measured
+        # 29% with margin. It is NOT a claim that the removed region is negligible:
+        # certificate.validate still fails any run above CONV_ATTRITION_FAIL until
+        # that region is shown to carry negligible posterior mass.
+        init_max_nonconverged_frac=0.35,
         # COLD chemistry. Every likelihood evaluation uses the published
         # solve-from-baseline map, so the target is a fixed deterministic
         # function of theta -- what MALA, SMC tempering, and the evidence
@@ -203,24 +161,9 @@ def gpu_config(**overrides: Any) -> Config:
         # tangent prediction of the carried column, and there is no carried
         # column to extrapolate from in cold mode.
         warm_extrapolate=False,
-        # 4 sweeps/stage. Sweeps are the lever that matters here:
-        # the runner is LAUNCH-BOUND and batch width was measured nearly free
-        # (peak memory width-independent to N~500, job 64944), so cutting
-        # PARTICLES would cost statistics while saving little wall time, whereas
-        # sweeps are sequential chemistry.
-        #
-        # BUDGET, STATED HONESTLY: cold is documented at ~10-30x the chemistry
-        # steps per sweep, and lockstep batching means a batch runs until its
-        # SLOWEST lane converges (warm caps at warm_count_max=1500; cold is
-        # two-stage against count_max=5000). A cold ladder at this size is
-        # therefore expected to need MORE THAN ONE 24 h job. That is fine --
-        # RESUME=1 continues from the last stage checkpoint, and the init-level
-        # checkpoint means a restart never re-pays the init. It is NOT fine to
-        # assume it fits: run
-        #     qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs
-        # first. `run_smc --calibrate` REFUSES (nonzero) when the projection
-        # does not fit the governor. These numbers are provisional until that
-        # calibration lands.
+        # Four sequential cold sweeps preserve particle count but may require
+        # multiple 24 h jobs. RESUME continues the absolute stage index from the
+        # checkpoint; CALIBRATE_ONLY must fit the configured governor before submit.
         smc_num_mcmc_steps=4,
         smc_target_ess_frac=0.6,
         # Free multiplicative error inflation (Line+2015). ON for real data: the
@@ -230,12 +173,10 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # 12-wide RT vjp on the ~1650-band correlated-k grid (sized from the
-        # 5000-point sampled-grid probe; est. ~40-55 GiB vs the ~81 GiB pool).
-        # PROBE_MEMORY=1 once before the first production submit -- the probe is
-        # compile-only and cannot OOM.
+        # PROBE_MEMORY=1 must certify this RT-vjp width for all 12 absorbers before
+        # production; the compile-only probe cannot OOM.
         smc_rt_vjp_chunk=12,
-        mcmc_stage_adapt=True, mcmc_auto_tune=True,
+        mcmc_stage_adapt=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall
     )                                     # for build/compile + init + PPC + plots

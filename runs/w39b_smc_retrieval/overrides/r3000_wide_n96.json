@@ -1,8 +1,0 @@
-{
-  "smc_chem_chunk": 0,
-  "smc_rt_chunk": 0,
-  "smc_rt_vjp_chunk": 6,
-  "smc_num_particles": 96,
-  "num_samples": 96,
-  "prior_c_o": [-1.6, 0.45]
-}

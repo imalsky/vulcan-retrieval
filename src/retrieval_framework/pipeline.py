@@ -62,9 +62,7 @@ import jax.scipy.linalg
 logger = logging.getLogger("retrieval")
 
 
-# =============================================================================
 # Pipeline container
-# =============================================================================
 class Pipeline:
     def __init__(self, **kw: Any) -> None:
         self.__dict__.update(kw)
@@ -490,12 +488,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     if grad_mode not in ("block", "naive"):
         raise ValueError(f"gradient_mode must be 'block' or 'naive', got {grad_mode!r}")
 
-    # =========================================================================
     # Staged BATCHED likelihood / gradient (the SMC hot path; see module docstring).
     # Exact -- the same chain rule as _value_and_grad_block, regrouped:
     #   dL/dtheta_chem[k] = < d aux / d theta[k]  (fwd jvp through the chemistry),
     #                         d L / d aux          (rev vjp through the RT) >.
-    # =========================================================================
     chem_mode = str(cfg.smc_chem_mode).strip().lower()
     if chem_mode not in ("warm", "cold"):
         raise ValueError(f"smc_chem_mode must be 'warm' or 'cold', got {chem_mode!r}")
@@ -841,14 +837,17 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         pipe.obs_sigma = sigma
         pipe.obs_depth_jax = jnp.asarray(depth, dtype=dtype)
         pipe.obs_sigma_jax = jnp.asarray(sigma, dtype=dtype)
+        # The target density is fully defined only now -- observations are its last
+        # input. Fingerprint it once here so every checkpoint carries the identity
+        # its numbers belong to (run_smc_loop refuses a resume across a change).
+        from retrieval_framework import certificate as _cert
+        pipe.target_digest = _cert.target_digest(cfg, pipe)
 
     pipe.set_observations = set_observations
     return pipe
 
 
-# =============================================================================
 # Observations
-# =============================================================================
 def evidence_report(logZ: float, init_stats: dict | None) -> dict:
     """Evidence-semantics fields from the SMC ``logZ`` and the init cull
     counters. Module-level and jax-free so the semantics are unit-testable
@@ -969,9 +968,7 @@ def generate_observations(pipe: Pipeline, seed: int) -> Dict[str, np.ndarray]:
     return dict(depth=depth, sigma=sigma, flux_true=mu_true)
 
 
-# =============================================================================
 # SMC core (self-contained, pure JAX)
-# =============================================================================
 def _ess_from_incremental(L: np.ndarray, dbeta: float) -> float:
     a = dbeta * (L - L.max())
     w = np.exp(a)
@@ -1200,6 +1197,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     alive = np.flatnonzero(~dead)
     n_alive, n_dead = int(alive.size), int(dead.sum())
 
+    frac, msg = 0.0, ""
     if n_dead:
         frac = n_dead / M
         n_ex, n_st = int(exhausted.sum()), int(stalled.sum())
@@ -1209,16 +1207,10 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
                f"count_max, {n_st} stall-certified (not a canonical steady state), "
                f"{n_nf} non-finite forward; first indices {idx_head}); "
                f"keeping {target_n} of {n_alive} survivors")
-        if frac > float(pipe.cfg.init_max_nonconverged_frac):
-            logger.warning(
-                msg + f" -- reject fraction exceeds init_max_nonconverged_frac "
-                f"({float(pipe.cfg.init_max_nonconverged_frac):.0%}); the prior reaches "
-                "many non-convergent corners (hot / extreme-Kzz). Expected for a "
-                "full-kinetics forward and absorbed by reject+oversample, but if it "
-                "keeps climbing, tighten the prior or raise count_max.")
-        else:
-            logger.info(msg)
+        logger.info(msg)
 
+    # Systemic breakage first: it is the more actionable failure and its remedy
+    # (oversample / prior / count_max) is different from the attrition gate's.
     if n_alive < target_n:
         raise RuntimeError(
             f"only {n_alive}/{M} cold draws converged; need {target_n}. The "
@@ -1226,6 +1218,19 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             f"{float(getattr(pipe.cfg, 'init_oversample', 2.0)):g}), tighten the prior, "
             "or raise count_max. This is a systemic prior/config problem, not a few hard "
             "corners.")
+
+    # Conditioning the posterior on "chemistry converged" removes a region of the
+    # declared prior. Surviving computationally is not evidence that the removed
+    # region is scientifically negligible, so the tolerance is a GATE, not a hint:
+    # a case must declare the attrition it expects.
+    if frac > float(pipe.cfg.init_max_nonconverged_frac):
+        raise RuntimeError(
+            msg + f" -- reject fraction {frac:.0%} exceeds the declared "
+            f"init_max_nonconverged_frac "
+            f"({float(pipe.cfg.init_max_nonconverged_frac):.0%}). The operational "
+            "prior is the declared box conditioned on convergence; an undeclared "
+            "attrition rate silently changes the target. Raise the knob in the case "
+            "(and justify it) or tighten the prior / raise count_max.")
 
     # phase 2 evaluates a few SPARE survivors beyond target_n (width is ~free in the
     # lockstep chemistry) so marginal columns that cannot RE-certify warm can be
@@ -1451,7 +1456,12 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         # PROPOSAL, not the target), so the certified likelihood decides
         # acceptance unbiasedly; forcing rejection instead biases against the
         # theta-corner where the class concentrates
-        # (README.md, Limitations; blown-tangent class). Kept loud:
+        # (README.md, Limitations; blown-tangent class).
+        # The validity argument needs the zero PATTERN to be a deterministic
+        # function of theta: true in COLD mode (the solve is a fixed map of
+        # theta), NOT in warm, where it depends on the carried column and hence
+        # on sampler history. Production is cold; do not port this to a warm run.
+        # Kept loud:
         # badgrad= per sweep, forensics dumps, and the
         # smc_tangent_bad_max_frac backstop raise in _check_mutation_health.
         # The accepted particle's DY rows were zeroed in eval_batch.
@@ -1468,7 +1478,10 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         LP = jax.vmap(log_prior_u)(U) + beta * L
         LP_new = jax.vmap(log_prior_u)(U_new) + beta * L_new
         log_acc = LP_new - LP + log_q_rev - log_q_fwd
-        log_acc = jnp.where(jnp.isfinite(log_acc), log_acc, -jnp.inf)
+        # L_new <= -1e29 is the invalid-forward sentinel, not a likelihood. It is
+        # FINITE, so beta*L_new alone only rejects for beta >> 1e-29; force it.
+        log_acc = jnp.where(jnp.isfinite(log_acc) & (L_new > -1.0e29),
+                            log_acc, -jnp.inf)
         accept = jnp.log(jax.random.uniform(ka, (U.shape[0],), dtype=U.dtype)) < log_acc
         U = jnp.where(accept[:, None], U_new, U)
         Y = jnp.where(accept[:, None, None], Y_new, Y)
@@ -1579,40 +1592,8 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
         "theta-INDEPENDENT rate is the anomaly to investigate." + detail)
 
 
-def tune_step_size(pipe: Pipeline, key) -> float:
-    """One-shot Robbins-Monro pilot at a low beta (unpreconditioned)."""
-    cfg = pipe.cfg
-    if not bool(cfg.mcmc_auto_tune):
-        return float(cfg.mala_step_size)
-    dtype = pipe.dtype
-    n_p = int(cfg.mcmc_tune_particles)
-    beta = jnp.asarray(float(cfg.mcmc_tune_beta), dtype=dtype)
-    scale = jnp.eye(pipe.n_dim, dtype=dtype)
-    key, sub = jax.random.split(key)
-    U = pipe.sample_prior_u(sub, _init_draw_count(pipe, n_p))
-    U, L, G, Y, refs, DY, _init_stats = _init_state(pipe, U, target_n=n_p)
-    mutate = _make_mutation(pipe, int(cfg.mcmc_tune_steps))
-    log_step = math.log(min(max(float(cfg.mala_step_size), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
-    target = float(cfg.mcmc_target_accept_mala)
-    for it in range(int(cfg.mcmc_tune_iters)):
-        key, sub = jax.random.split(key)
-        # badgrad events warn+dump INSIDE mutate; only a sweep beyond the
-        # systematic-breakage backstop raises
-        U, Y, refs, L, G, DY, acc, _nbad, _ncap, _nstall = mutate(
-            sub, U, Y, refs, L, G, DY, beta,
-            jnp.asarray(math.exp(log_step), dtype), scale,
-            where=f"step-size tuning iteration {it}")
-        acc_f = float(acc)
-        log_step += float(cfg.mcmc_tune_gain) * (acc_f - target)
-        log_step = math.log(min(max(math.exp(log_step), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
-    tuned = float(math.exp(log_step))
-    logger.info(f"Auto-tuned MALA step (u-space): {tuned:.4g} (target_accept={target:.2f})")
-    return tuned
-
-
 # Reserved fold_in(key, .) namespaces. Stage keys use the absolute stage index
 # (0, 1, 2, ...), so anything else must sit far above any reachable stage count.
-_TUNE_KEY = 1_000_000
 _DRAW_KEY = 2_000_000
 _INIT_KEY = 3_000_000
 
@@ -1662,6 +1643,11 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, DY,
              # column at all, so it cannot be history-dependent; record "none"
              # rather than defaulting to a mode it does not have.
              chem_mode=np.asarray(str(getattr(pipe, "chem_mode", None) or "none")),
+             # Full target identity (certificate.target_digest): resolved config,
+             # ordered priors, observation arrays, opacity/network content, code
+             # commits and versions. chem_mode alone let a checkpoint resume
+             # against a DIFFERENT density at the same dimension.
+             target_digest=np.asarray(str(getattr(pipe, "target_digest", "") or "")),
              approximate_history_dependent_target=np.asarray(
                  1 if str(getattr(pipe, "chem_mode", None)) == "warm" else 0,
                  np.int64),
@@ -1728,11 +1714,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     U = pipe.sample_prior_u(jax.random.fold_in(key, _INIT_KEY),
                             _init_draw_count(pipe, N))
 
-    # fold_in derives an independent stream for the pilot tuner: passing `key` itself
-    # would replay the tuner's splits in the main loop (resample/mutation reuse).
-    # _TUNE_KEY / _DRAW_KEY sit outside the per-stage fold_in namespace below.
-    step = (tune_step_size(pipe, jax.random.fold_in(key, _TUNE_KEY))
-            if (cfg.mcmc_auto_tune and not cfg.mcmc_stage_adapt) else float(cfg.mala_step_size))
+    # _DRAW_KEY / _INIT_KEY sit outside the per-stage fold_in namespace below.
+    step = float(cfg.mala_step_size)
     log_step = math.log(min(max(step, cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
     scale = np.eye(n_dim)
     mutate = _make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
@@ -1747,7 +1730,14 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     init_stats: Optional[Dict[str, int]] = None
 
     state_loaded = False
-    if resume_from is not None and Path(resume_from).exists():
+    if resume_from is not None and not Path(resume_from).exists():
+        raise FileNotFoundError(
+            f"resume_from={resume_from} was requested but does not exist. Refusing to "
+            "silently start a fresh run (the CLI refuses the same way); pass "
+            "resume_from=None to start over.")
+    if resume_from is not None:
+        from retrieval_framework.certificate import refuse_mismatched_resume
+        refuse_mismatched_resume(Path(resume_from), getattr(pipe, "target_digest", ""))
         ck = np.load(resume_from)
         if ck["u_particles"].shape != (N, n_dim):
             raise ValueError(f"checkpoint particles {ck['u_particles'].shape} != ({N},{n_dim}); "
@@ -1986,11 +1976,25 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                        "checkpoint) -- the operational-prior support fraction is "
                        "unknown; do NOT quote logZ as a box-prior evidence.")
 
+    # Monte Carlo uncertainty on logZ. Each tempering stage is an importance
+    # step whose relative weight variance is approximated by (N/ESS - 1)/N; the
+    # stage increments sum, so Var(log Z) ~ sum_t (1/ESS_t - 1/N).
+    # OPTIMISTIC BY CONSTRUCTION: it ignores the correlation resampling and the
+    # MALA sweeps induce between stages, so treat it as a LOWER bound. The
+    # honest estimate is still the spread across independent seeds -- but
+    # without this there was no logZ error bar at all, and a sensitivity gate
+    # quoted in "Monte Carlo standard errors" could not be evaluated.
+    _ess = np.asarray(ess_hist, np.float64)
+    _ess = _ess[np.isfinite(_ess) & (_ess > 0.0)]
+    logZ_err_lb = (float(np.sqrt(np.sum(1.0 / _ess - 1.0 / N)))
+                   if _ess.size else float("nan"))
+
     return dict(
         U=np.asarray(jax.device_get(U), np.float64), reached_beta1=reached, final_beta=beta,
         step_size_used=math.exp(log_step), betas=np.asarray(betas),
         ess=np.asarray(ess_hist), acceptance_rate=np.asarray(acc_hist),
         logZ_increment=np.asarray(logz_inc_hist), logZ=logZ,
+        logZ_err_lb=logZ_err_lb,
         # evidence-semantics fields from evidence_report: logZ_box is the
         # ZERO-FILLED box evidence; the retracted logZ_box_physical is
         # intentionally ABSENT

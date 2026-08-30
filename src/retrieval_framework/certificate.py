@@ -81,18 +81,43 @@ LATE_LADDER_FRAC = 1.0 / 3.0
 LATE_REJECT_FRAC_FAIL = 0.02   # per-proposal rate over the late stages
 # A posterior median on a prior edge is set by the prior, not measured.
 PRIOR_RAIL_FRAC = 0.02
+# Chemistry-convergence attrition: the fraction of the declared prior removed by
+# conditioning on "the solver converged". Surviving the run is not evidence that
+# the removed region carries negligible posterior mass, so past this the run is
+# reportable only with an independent demonstration that it does.
+CONV_ATTRITION_FAIL = 0.10
+# Below CONV_ATTRITION_FAIL but above this, the run is reportable only with the
+# independent demonstration NAMED in the config (cfg.attrition_justification):
+# a per-cent of the declared prior removed by the solver is still a support
+# change, and "it was only a few per cent" is not the demonstration.
+CONV_ATTRITION_JUSTIFY = 0.01
+# Zero-drift (badgrad) proposals are a valid MH move, but a late ladder made
+# mostly of them is sampling with a drift that is largely fictitious. Same rate
+# as the in-run systematic-breakage backstop (smc_tangent_bad_max_frac).
+BADGRAD_FRAC_FAIL = 0.25
+# Per-stage diagnostics describe the SAME stages, so they must be equal length
+# and finite. Mismatched lengths used to silently disable the rejection gate.
+_PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
+                   "warm_capped", "warm_stalled", "badgrad")
 
-# The two production-fidelity artifacts. Their absence is a FAIL for
-# a few-ppm or evidence claim: a check that was never run at production settings
-# is not a check that passed.
-# the resolved-config keys a validation artifact certifies; a run whose values
-# differ from the artifact's is refused (validate())
-GRID_KEYS = ("art_ptop_bar", "nz", "art_nlayer")
-
+# The two production-fidelity artifacts. Their absence is a FAIL for a few-ppm or
+# evidence claim: a check that was never run at production settings is not a check
+# that passed. And each certifies ONE resolved state, so validate() compares every
+# key it recorded against the run -- not a hand-picked three. A ladder measured at
+# a different chemistry tolerance, molecule list, pressure domain or code revision
+# measured a different model, whatever its grid says.
 REQUIRED_VALIDATION_ARTIFACTS = (
     "resolution_ladder",
     "top_pressure_ladder",
 )
+
+# An artifact records the forward PROFILE it measured (Config.profile()); the
+# certificate holds the flat Config. profile() renames the fields below, so a
+# freshly generated artifact would otherwise read as drifted on a key that is
+# only spelled differently. test_certificate pins that this map covers every
+# profile key with no Config counterpart -- add one and the test fails loudly
+# rather than every artifact being silently rejected.
+_PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs"}
 
 
 def _sha256(path: Path) -> str:
@@ -126,6 +151,23 @@ def _git(repo: Path, *args: str) -> str | None:
     return out or None if out is not _GIT_FAILED else None
 
 
+def _src_state(repo: Path):
+    """Content of the uncommitted src/ state: tracked diff + untracked files.
+
+    Returns `_GIT_FAILED` if git could not run, so "unknown" never reads as
+    "unmodified".
+    """
+    diff = _git_raw(repo, "diff", "HEAD", "--", "src")
+    others = _git_raw(repo, "ls-files", "--others", "--exclude-standard", "--", "src")
+    if diff is _GIT_FAILED or others is _GIT_FAILED:
+        return _GIT_FAILED
+    parts = [diff]
+    for rel in sorted(p for p in others.splitlines() if p.strip()):
+        f = repo / rel
+        parts.append(f"?? {rel} {_sha256(f) if f.is_file() else 'gone'}")
+    return "\n".join(parts)
+
+
 def _repo_states(workspace: Path | None = None) -> dict:
     """Commit + dirty state per repository. `dirty` is None when git could not
     be run, so "unknown" never reads as "clean"."""
@@ -141,9 +183,18 @@ def _repo_states(workspace: Path | None = None) -> dict:
             continue
         dirty = _git_raw(repo, "status", "--porcelain")
         failed = dirty is _GIT_FAILED
+        # Content hash of the uncommitted SOURCE state. Scoped to src/ on
+        # purpose: an uncommitted solver edit is a different target and must move
+        # the digest, while editing a PBS or plotting script mid-campaign must
+        # not break a chained resume. UNTRACKED src files are hashed too -- a new
+        # module that gets imported is invisible to `git diff HEAD`, so a
+        # diff-only hash lets two different source states collide.
+        diff = _src_state(repo)
         out[name] = {"commit": head,
                      "dirty": None if failed else bool(dirty),
                      "dirty_files": [] if failed else dirty.splitlines()[:20],
+                     "src_diff": (None if diff is _GIT_FAILED else
+                                  hashlib.sha256(diff.encode()).hexdigest()),
                      "checkout": repo.name}
     return out
 
@@ -179,8 +230,85 @@ def _scalar(z, key, default=None):
         return v
 
 
+def _survival_fractions(extra) -> dict:
+    """f_c1 (cold init) and f_c2 (phase-2 warm recertification), separately.
+
+    ``evidence_report`` only exports their product; the raw counts ride in the
+    npz as init_stats. RC-06 requires both fractions in the certificate, because
+    the two culls remove different regions of the declared prior.
+    """
+    if extra is None or "init_stats_keys" not in extra.files:
+        return {"f_c1": None, "f_c2": None, "init_stats": None}
+    st = {str(k): int(v) for k, v in zip(extra["init_stats_keys"],
+                                         extra["init_stats_vals"])}
+
+    def _frac(k, n):
+        return (k / n) if n > 0 else None
+
+    n_p2 = st.get("n_phase2", 0)
+    return {
+        "f_c1": _frac(st.get("n_alive_phase1", 0), st.get("n_drawn", 0)),
+        "f_c2": _frac(n_p2 - st.get("n_recert_fail", 0), n_p2),
+        "init_stats": st,
+    }
+
+
+CIA_TABLES = ("H2-H2_2011.cia", "H2-He_2011.cia")
+
+
+def _cia_identity(opacity_dir: Path | None = None) -> dict:
+    """Exact hashes of the two CIA tables.
+
+    They are direct radiative-transfer inputs, small enough to hash exactly and
+    too important to hide inside a directory file-count: a swapped H2-He table
+    leaves the tree summary unchanged while changing the continuum the retrieval
+    fits. They are also the only target-affecting inputs NOT tracked in git --
+    everything else (network, baseline T-P, Kzz, elemental abundances) is
+    vendored in vulcan-jax and therefore bound by its commit.
+    """
+    if opacity_dir is None:
+        try:
+            from retrieval_framework.forward import config as _fwd_config  # noqa: F401
+            from vulcan_forward import paths as _fwd_paths
+            opacity_dir = Path(_fwd_paths.opacity_cache_dir())
+        except Exception:                                   # pragma: no cover
+            opacity_dir = None
+    out = {}
+    for name in CIA_TABLES:
+        p = opacity_dir / name if opacity_dir is not None else None
+        out[name] = ({"path": str(p.resolve()), "sha256": _sha256(p),
+                      "bytes": p.stat().st_size}
+                     if p is not None and p.is_file() else None)
+    return out
+
+
+def science_data_identity(molecules) -> dict:
+    """CONTENT identity of the data inputs that define the radiative model.
+
+    The per-molecule k-tables plus the two CIA tables, by sha256. This is the
+    part of the target manifest a validation artifact can also record -- an
+    artifact has no observations or priors, but it reads exactly these files, so
+    binding them is what lets validate() refuse a ladder measured against
+    different opacity data. Tree summaries (file counts, newest mtime) are
+    deliberately NOT used: they churn on any cache write and would refuse every
+    artifact.
+    """
+    opa = {}
+    try:
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
+        from vulcan_forward import exomolop as _exo
+        for m in molecules:
+            f = _exo.table_path(m)
+            opa[str(m)] = _sha256(f) if f.is_file() else None
+    except Exception as exc:                                # pragma: no cover
+        opa["error"] = f"{type(exc).__name__}: {exc}"
+    return {"opacity_sha256": opa,
+            "cia_sha256": {k: (v or {}).get("sha256")
+                           for k, v in _cia_identity().items()}}
+
+
 def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
-    """Hash the observation file; fingerprint the big opacity/line-list trees."""
+    """Hash observations and record the resolved data and VULCAN inputs."""
     ident = {}
     obs = out_dir / "observations.npz"
     ident["observations"] = ({"path": str(obs), "sha256": _sha256(obs),
@@ -195,47 +323,15 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     # the environment was set when it was not.
     ident["VULCAN_FORWARD_DATA"] = os.environ.get("VULCAN_FORWARD_DATA")
     root = None
-    tree_dirs = {}
     try:
         # importing this module is what hands the engine this repo's data tree
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import paths as _fwd_paths
         root = Path(_fwd_paths.data_root())
-        tree_dirs = {"opacity_cache": Path(_fwd_paths.opacity_cache_dir()),
-                     "exomolop": Path(_fwd_paths.exomolop_dir())}
     except Exception as exc:                                # pragma: no cover
         # Never silently null: a check that cannot run says why it could not.
         ident["engine_data_error"] = f"{type(exc).__name__}: {exc}"
     ident["data_root_resolved"] = str(root) if root is not None else None
-
-    for sub in ("opacity_cache", "exomolop"):
-        p = tree_dirs.get(sub)
-        if p is None or not p.is_dir():
-            ident[sub] = None
-            continue
-        n = tot = 0
-        newest = 0.0
-        for f in p.rglob("*"):
-            if f.is_file():
-                st = f.stat()
-                n += 1
-                tot += st.st_size
-                newest = max(newest, st.st_mtime)
-        ident[sub] = {"path": str(p.resolve()), "files": n, "bytes": tot,
-                      "newest_mtime_utc": time.strftime(
-                          "%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest))}
-
-    # The two CIA tables are direct radiative-transfer inputs, small enough to
-    # hash exactly and too important to hide inside only a directory count.
-    # A swapped H2-He table can leave the tree summary unchanged while changing
-    # the continuum fitted by the retrieval.
-    opacity_dir = tree_dirs.get("opacity_cache")
-    for name in ("H2-H2_2011.cia", "H2-He_2011.cia"):
-        p = opacity_dir / name if opacity_dir is not None else None
-        ident[name] = (
-            {"path": str(p.resolve()), "sha256": _sha256(p),
-             "bytes": p.stat().st_size}
-            if p is not None and p.is_file() else None)
 
     # the reaction network is a vendored VULCAN-JAX input; hash the exact file
     net = cfg_dict.get("vulcan_cfg_name")
@@ -265,6 +361,121 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     return ident
 
 
+# --- target identity ---------------------------------------------------------
+# Keys a CHAINED job may legitimately differ in: none of them changes the target
+# density or the numbers a resume carries. Per-JOB caps (smc_max_steps, the
+# walltime governor) are documented as such; the chunk sizes are batch splits
+# that are numerically identical at any width; the rest is bookkeeping or
+# post-processing that runs after sampling. Everything NOT listed here is bound.
+TARGET_FREE_KEYS = frozenset({
+    "out_dir", "run_label", "log_level", "overwrite",
+    "attrition_justification",
+    "smc_max_steps", "walltime_seconds",
+    "smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk",
+    "run_inference", "do_ppc", "ppc_draws", "ppc_chunk_size",
+    "num_samples", "num_chains",
+})
+
+
+def target_manifest(cfg, pipe) -> dict:
+    """Everything that defines the TARGET a checkpoint's numbers belong to.
+
+    A resume that changes any of this is splicing two different densities into
+    one tempering ladder and one evidence integral, which nothing downstream can
+    detect -- the certificate only ever sees the last job.
+    """
+    from dataclasses import asdict
+    cfg_bound = {k: v for k, v in asdict(cfg).items() if k not in TARGET_FREE_KEYS}
+
+    # The likelihood's actual inputs, not the file paths that produced them.
+    h = hashlib.sha256()
+    for arr in (pipe.obs["wl"], pipe.obs["wl_lo"], pipe.obs["wl_hi"],
+                pipe.obs_depth, pipe.obs_sigma):
+        h.update(np.ascontiguousarray(np.asarray(arr, np.float64)).tobytes())
+    h.update("\x00".join(map(str, pipe.obs.get("group", []))).encode())
+
+    return {
+        "manifest_version": 2,
+        "config": cfg_bound,
+        "params": {"names": list(pipe.names),
+                   "prior_types": list(pipe.prior_types),
+                   "prior_lo": np.asarray(pipe.param_prior_lo, float).tolist(),
+                   "prior_hi": np.asarray(pipe.param_prior_hi, float).tolist()},
+        "groups": list(pipe.groups),
+        "observations_sha256": h.hexdigest(),
+        "n_bin": int(pipe.n_bin),
+        **science_data_identity(cfg.molecules),
+        # commit + dirty flag + the src/ diff hash. NOT dirty_files: that list
+        # churns with any scratch edit and would refuse every resume in a
+        # campaign without identifying a different code state, while src_diff
+        # moves only when the code that defines the target actually changes.
+        "code": {r: None if s is None else
+                 {"commit": s.get("commit"), "dirty": s.get("dirty"),
+                  "src_diff": s.get("src_diff")}
+                 for r, s in _repo_states().items()},
+        "versions": _versions(),
+    }
+
+
+MANIFEST_FILE = "target_manifest.json"
+
+
+class ResumeTargetMismatchError(RuntimeError, ValueError):
+    """A checkpoint belongs to a different target density."""
+
+
+def refuse_mismatched_resume(ckpt_path: Path, want: str) -> None:
+    """Refuse a mismatched or legacy checkpoint; ignore an absent checkpoint."""
+    ckpt_path = Path(ckpt_path)
+    if not ckpt_path.exists():
+        return
+    with np.load(ckpt_path) as checkpoint:
+        have = (str(checkpoint["target_digest"].item())
+                if "target_digest" in checkpoint.files else "")
+    want = str(want or "")
+    if have == want:
+        return
+    raise ResumeTargetMismatchError(
+        f"SMC resume refused: {ckpt_path.name} belongs to a DIFFERENT target "
+        f"(checkpoint target digest {have[:16] + '...' if have else '<absent>'}; "
+        f"this run's target digest {want[:16] + '...' if want else '<absent>'}). "
+        "The checkpoint's particles, likelihoods, gradients, tempering ladder and "
+        "logZ are not transferable. Nothing has been written, so the killed run's "
+        f"config.json, observations.npz and {MANIFEST_FILE} remain intact. Restore "
+        "the original target or start in a fresh output directory.")
+
+
+def _canonical(manifest: dict) -> str:
+    """The one serialization the digest is taken over.
+
+    Shared by the live digest and by the re-hash of the ARCHIVED manifest, so
+    the two can never drift into disagreeing about what the digest covers.
+    """
+    return json.dumps(manifest, sort_keys=True, default=str)
+
+
+def target_digest(cfg, pipe) -> str:
+    return hashlib.sha256(_canonical(target_manifest(cfg, pipe)).encode()).hexdigest()
+
+
+def archived_manifest_digest(out_dir: Path) -> str | None:
+    """Digest of the manifest ARCHIVED in a run directory, or None if absent.
+
+    The run directory is written before the sampler runs, so a refused resume
+    can leave a NEW manifest beside OLD samples. Re-hashing the archived
+    document is what detects that: the three npz copies agree with each other
+    (they are all old) and only the manifest dissents.
+    """
+    p = Path(out_dir) / MANIFEST_FILE
+    if not p.is_file():
+        return None
+    try:
+        return hashlib.sha256(
+            _canonical(json.loads(p.read_text())).encode()).hexdigest()
+    except Exception as exc:                                # pragma: no cover
+        return f"unreadable: {type(exc).__name__}: {exc}"
+
+
 def _validation_artifacts() -> dict:
     """Read the three production-fidelity results, if they were archived."""
     results = REPO / "validation" / "results"
@@ -289,7 +500,11 @@ def _validation_artifacts() -> dict:
             "summary": d.get("verdict", {}).get("summary"),
             "generated_utc": d.get("provenance", {}).get("generated_utc"),
             "sha256": _sha256(p),
-            "grid": {k: rc.get(k) for k in GRID_KEYS},
+            # the WHOLE state it was measured at, plus the code that measured it
+            "resolved_config": rc,
+            "repos": d.get("provenance", {}).get("repos") or {},
+            # content identity of the opacity/CIA files it actually read
+            "science_data": d.get("provenance", {}).get("science_data") or {},
         }
     return out
 
@@ -385,6 +600,18 @@ def collect(out_dir: Path) -> dict:
         "resolved_config": cfg_dict,
         "resolved_config_sha256": hashlib.sha256(cfg_blob.encode()).hexdigest(),
         "target": {
+            # The resume-binding digest (certificate.target_digest), read from
+            # all THREE artifacts that must agree: the checkpoint the numbers
+            # were produced under, the samples they were written to, and the
+            # diagnostics. validate() refuses any disagreement or absence.
+            "digest": _scalar(extra, "smc_target_digest"),
+            "digest_samples": _scalar(samples, "smc_target_digest"),
+            "digest_checkpoint": _scalar(ckpt, "target_digest"),
+            # re-hashed from the archived canonical document, not copied
+            "digest_manifest": archived_manifest_digest(out_dir),
+            # content identity of the opacity/CIA files this run read
+            "science_data": science_data_identity(
+                cfg_dict.get("molecules") or ()),
             "smc_chem_mode": chem_mode,
             "approximate_history_dependent_target": bool(
                 _scalar(samples, "approximate_history_dependent_target", 0)),
@@ -409,9 +636,18 @@ def collect(out_dir: Path) -> dict:
             "log_support_physical": _scalar(extra, "smc_log_support_physical"),
             "log_support_physical_err": _scalar(
                 extra, "smc_log_support_physical_err"),
+            # ESS-based LOWER BOUND on the logZ Monte Carlo error (optimistic:
+            # ignores stage correlation). The definitive number is the spread
+            # across independent seeds; this exists so an evidence claim is never
+            # quoted with no error at all.
+            "logZ_err_lb": _scalar(extra, "smc_logZ_err_lb"),
             "log_conv_attrition": _scalar(extra, "smc_log_conv_attrition"),
             "log_conv_attrition_err": _scalar(
                 extra, "smc_log_conv_attrition_err"),
+            # BOTH survival fractions, not only their product: the cold-init and
+            # the phase-2 warm-recertification culls remove different regions and
+            # a combined number hides which solver stage did it.
+            **_survival_fractions(extra),
         },
         "diagnostics": {
             "ess": _arr(extra, "smc_ess"),
@@ -453,6 +689,30 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "run cannot be attributed to a committed state")
     if not cert["resolved_config"]:
         problems.append("no config.json: the resolved configuration is unknown")
+
+    # --- target identity (RC-03): one digest, carried by all three artifacts --
+    tgt_ident = cert["target"]
+    dig = {k: (str(tgt_ident.get(k) or "") or None)
+           for k in ("digest", "digest_samples", "digest_checkpoint",
+                     "digest_manifest")}
+    named = {"digest": "smc_extra_fields.npz",
+             "digest_samples": "posterior_samples.npz",
+             "digest_checkpoint": "smc_checkpoint.npz",
+             "digest_manifest": MANIFEST_FILE}
+    missing = sorted(named[k] for k, v in dig.items()
+                     if v is None and (k != "digest_checkpoint"
+                                       or cert["checkpoint_present"]))
+    if missing:
+        problems.append(
+            f"no target digest in {', '.join(missing)}: the reported numbers do "
+            "not name the target they belong to, so nothing prevents reporting "
+            "two different targets as one run")
+    elif len({v for v in dig.values() if v}) > 1:
+        problems.append(
+            "target digest DISAGREES across " + ", ".join(
+                f"{named[k]}={v[:12]}" for k, v in dig.items() if v)
+            + ": the checkpoint, the samples and the diagnostics were not all "
+              "produced under the same target")
     if cert["data"].get("observations") is None:
         problems.append("no observations.npz: the fitted data is unidentified")
 
@@ -529,6 +789,67 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             problems.append(f"diagnostic '{key}' missing from the run outputs")
     problems += health_problems(diag)
     problems += rail_problems(cert.get("posterior"))
+    # A survival fraction is a probability: finite and in (0, 1]. Zero means the
+    # solver rejected the ENTIRE prior, which is not a run to report either.
+    def _bad_fraction(x):
+        if x is None:
+            return False        # absence is the separate "not both recorded" gate
+        return (not isinstance(x, (int, float)) or not math.isfinite(float(x))
+                or not (0.0 < float(x) <= 1.0))
+
+    lca = ev.get("log_conv_attrition")
+    f1, f2 = ev.get("f_c1"), ev.get("f_c2")
+    bad_f = sorted(n for n, x in (("f_c1", f1), ("f_c2", f2)) if _bad_fraction(x))
+    if bad_f:
+        problems.append(
+            f"survival fraction(s) {', '.join(bad_f)} are not probabilities in "
+            "(0, 1]: a value of 0, a negative, a value above 1 or a non-finite "
+            "one cannot describe a fraction of the prior that survived, so the "
+            "recorded support is not usable")
+    if lca is None or not math.isfinite(float(lca)):
+        # fail CLOSED: an unmeasured support fraction is not a small one
+        problems.append(
+            "log_conv_attrition is missing or non-finite: the fraction of the "
+            "declared prior removed by conditioning on convergence is unknown, "
+            "so neither the operational posterior nor logZ has a stated support")
+    elif float(lca) > 0.0:
+        problems.append(
+            f"log_conv_attrition is {float(lca):+.6f}: ln of a survival "
+            "fraction cannot be positive (that claims MORE draws survived than "
+            "were drawn)")
+    else:
+        attrition = 1.0 - math.exp(float(lca))
+        # the aggregate IS ln(f_c1 f_c2); a disagreement means one of the three
+        # numbers describes a different run
+        if (not bad_f and f1 is not None and f2 is not None
+                and abs(float(lca) - (math.log(f1) + math.log(f2))) > 1e-6):
+            problems.append(
+                f"log_conv_attrition {float(lca):.6f} does not equal "
+                f"ln(f_c1 f_c2) = {math.log(f1) + math.log(f2):.6f}: the "
+                "aggregate and the per-stage survival fractions were not "
+                "measured on the same run")
+        if attrition > CONV_ATTRITION_FAIL:
+            problems.append(
+                f"chemistry-convergence attrition {attrition:.1%} exceeds "
+                f"{CONV_ATTRITION_FAIL:.0%}: conditioning on convergence removed "
+                "that much of the declared prior. The operational posterior and "
+                "logZ are conditional on a solver-defined support; report them "
+                "only with independent evidence that the rejected region carries "
+                "negligible posterior mass")
+        elif attrition > CONV_ATTRITION_JUSTIFY and not str(
+                cert["resolved_config"].get("attrition_justification", "")).strip():
+            problems.append(
+                f"chemistry-convergence attrition {attrition:.1%} exceeds "
+                f"{CONV_ATTRITION_JUSTIFY:.0%} and no attrition_justification is "
+                "recorded: set cfg.attrition_justification to the independent "
+                "demonstration that the rejected region carries negligible "
+                "posterior mass (e.g. the artifact that re-solved the rejected "
+                "high-likelihood draws more robustly)")
+    if ev.get("f_c1") is None or ev.get("f_c2") is None:
+        problems.append(
+            "the cold-init and warm-recertification survival fractions are not "
+            "both recorded: their product alone does not say which solver stage "
+            "removed the prior mass")
 
     # --- production-fidelity artifacts --------------------------------------
     required = set(REQUIRED_VALIDATION_ARTIFACTS)
@@ -565,17 +886,48 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 f"{art.get('status')!r}, expected PASS: "
                 f"{art.get('summary', '')[:160]}")
         else:
-            run = {k: cert["resolved_config"].get(k) for k in GRID_KEYS}
-            got = art.get("grid") or {}
-            same = all(
-                got.get(k) is not None and run[k] is not None
-                and math.isclose(float(got[k]), float(run[k]), rel_tol=1e-9)
-                for k in GRID_KEYS)
-            if not same:
+            run_cfg = cert["resolved_config"]
+            got = {_PROFILE_ALIASES.get(k, k): v
+                   for k, v in (art.get("resolved_config") or {}).items()}
+            def _norm(v):
+                return json.dumps(v, sort_keys=True, default=str)
+            drift = sorted(k for k, v in got.items()
+                           if _norm(run_cfg.get(k)) != _norm(v))
+            # the artifact measured what the code of its day computed
+            run_repos = cert.get("code", {}).get("repos") or {}
+            drift += sorted(
+                f"code:{r}" for r, s in (art.get("repos") or {}).items()
+                if (s or {}).get("commit")
+                and ((run_repos.get(r) or {}).get("commit") != s.get("commit")))
+            # ... and against the opacity/CIA CONTENT it read. A swapped k-table
+            # leaves every config key identical while changing the model the
+            # ladder certified.
+            run_data = cert["target"].get("science_data") or {}
+            art_data = art.get("science_data") or {}
+            if not art_data:
+                drift.append("data:not recorded")
+            else:
+                for group in ("opacity_sha256", "cia_sha256"):
+                    a, r = art_data.get(group) or {}, run_data.get(group) or {}
+                    # SYMMETRIC: iterating the artifact's keys alone lets an
+                    # artifact that simply omits a molecule match a run that
+                    # radiates it. Absent on either side is a difference.
+                    drift += sorted(f"data:{group}:{k}" for k in set(a) | set(r)
+                                    if a.get(k) != r.get(k))
+            if not got:
                 problems.append(
-                    f"validation artifact '{name}' was measured on a different "
-                    f"grid (artifact {got} vs run {run}): re-run it at the "
-                    "production settings")
+                    f"validation artifact '{name}' records no resolved config, so "
+                    "nothing binds it to this run")
+            elif drift:
+                detail = ", ".join(
+                    f"{k}: artifact={got.get(k)!r} run={run_cfg.get(k)!r}"
+                    if not k.startswith("code:") else k
+                    for k in drift[:8])
+                problems.append(
+                    f"validation artifact '{name}' was measured at a different "
+                    f"state than this run ({len(drift)} difference(s): {detail}"
+                    f"{', ...' if len(drift) > 8 else ''}). It measured a "
+                    "different model; re-run it on the production manifest")
 
     # --- cold replay --------------------------------------------------------
     if replay is not None and replay.get("ran"):
@@ -596,6 +948,20 @@ def health_problems(diag: dict) -> list[str]:
     testable without a run)."""
     out: list[str] = []
     n = int(diag.get("n_particles") or 0)
+
+    # Structure before values: a ragged or non-finite series cannot be gated, and
+    # skipping a gate because its inputs are malformed reads exactly like passing.
+    lens = {k: len(diag.get(k) or []) for k in _PER_STAGE_KEYS if diag.get(k)}
+    if len(set(lens.values())) > 1:
+        out.append(
+            f"per-stage diagnostics have mismatched lengths {lens}: they describe "
+            "the same stages, so a gate reading them is comparing different runs "
+            "of the ladder")
+    for k in _PER_STAGE_KEYS:
+        vals = [v for v in (diag.get(k) or []) if v is not None]
+        if vals and not all(math.isfinite(float(v)) for v in vals):
+            out.append(f"diagnostic '{k}' contains non-finite values")
+
     uniq = list(diag.get("unique_particles") or [])
     ess = list(diag.get("ess") or [])
     acc = [float(a) for a in (diag.get("acceptance_rate") or [])
@@ -639,6 +1005,16 @@ def health_problems(diag: dict) -> list[str]:
                 f"{k} stage(s)): the posterior sits on the convergence cliff, so "
                 "the sampled target is defined by count_max rather than by the "
                 "physics")
+    bad = list(diag.get("badgrad") or [])
+    if n and sweeps and bad:
+        k = max(1, int(round(LATE_LADDER_FRAC * len(bad))))
+        rate = sum(bad[-k:]) / float(n * sweeps * k)
+        if rate > BADGRAD_FRAC_FAIL:
+            out.append(
+                f"late-ladder zero-drift (badgrad) proposals {rate:.1%} of "
+                f"proposals (> {BADGRAD_FRAC_FAIL:.0%}): the MALA drift is "
+                "mostly zeroed where the posterior sits, so the kernel is "
+                "effectively a random walk there")
     return out
 
 
@@ -697,9 +1073,13 @@ def render(cert: dict, problems: list[str]) -> str:
         f"| final beta | {conv['final_beta']} |",
         f"| stages | {conv['n_stages']} |",
         f"| smc_logZ (operational prior) | {ev['smc_logZ']} |",
+        f"| logZ MC error (ESS lower bound) | {ev.get('logZ_err_lb')} "
+        "-- OPTIMISTIC; the definitive number is the multi-seed spread |",
         f"| smc_logZ_box (zero-filled box) | {ev['smc_logZ_box']} |",
         f"| ln f_support +- err | {ev['log_support_fraction']} +- "
         f"{ev['log_support_fraction_err']} |",
+        f"| survival: cold init f_c1 | {ev.get('f_c1')} |",
+        f"| survival: warm recert f_c2 | {ev.get('f_c2')} |",
         "",
         "`smc_logZ` is conditional on the OPERATIONAL prior support "
         "(box AND T-P window AND converged, renormalized). `smc_logZ_box` is "
@@ -724,6 +1104,12 @@ def render(cert: dict, problems: list[str]) -> str:
              f"{net['sha256'][:16] + '...' if net else 'not resolved'} |")
     L.append(f"| resolved config sha256 | "
              f"{cert['resolved_config_sha256'][:16]}... |")
+    dig = cert["target"].get("digest")
+    L.append(f"| target digest | {dig[:16] + '...' if dig else 'MISSING'} |")
+    for name in CIA_TABLES:
+        c = cert["data"].get(name)
+        L.append(f"| {name} sha256 | "
+                 f"{c['sha256'][:16] + '...' if c else 'MISSING'} |")
     diag = cert["diagnostics"]
     n = diag.get("n_particles")
     uniq = diag.get("unique_particles") or []

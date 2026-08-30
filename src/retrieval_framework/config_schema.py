@@ -69,10 +69,8 @@ class Config:
     # (ExoMol/HITEMP high-temperature line lists with H2/He broadening already
     # applied, integrated over each R=1000 band offline; the band grid and the
     # 16-point quadrature come from the files, so there is no spectral-resolution
-    # knob). Since vulcan-forward 0.11.0 this is the ONLY value the engine
-    # accepts; validate_config refuses anything else. The retired sampled
-    # line-by-line path was measured 857 ppm rms / 1.30x too contrasty on the
-    # production band and did not converge (notes.md).
+    # knob). This is the only value the engine accepts; validate_config refuses
+    # anything else.
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
@@ -91,60 +89,31 @@ class Config:
     reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
     # Two-stage solve (REQUIRED for a live lnZ/C-O response when the T-P is retrieved):
     # stage 1 converges the column at (T(theta), Kzz(theta)) with BASELINE composition;
-    # stage 2 applies the lnZ/C-O scaling to that converged column and re-converges warm.
-    # Rationale (measured, 2026-07-05): perturbing the cold EQ init and re-converging
-    # through the violent T-displacement transient ERASES the initial-inventory
-    # perturbation (converged CO change 1e-11 for a 5% metals step under a Guillot T-P,
-    # vs the exact 5% response at T=T_base) -- the same class of init-forgetting the
-    # SO2 Hessian campaign dodged with warm continuation. Stage 2 from the T-consistent
-    # converged state is gentle, keeps the inventory, and is also the validated
-    # warm-started-jvp pattern.
+    # stage 2 applies lnZ/C-O to that T-consistent state and re-converges warm.
+    # Starting the composition perturbation before the large T displacement can erase
+    # its inventory response; the second stage preserves it.
     two_stage_z: bool = True
     count_min: Optional[int] = None
     count_max: Optional[int] = None
     # Warm-continuation step cap for the MUTATION path (accepted steps). A proposal
     # still unconverged at warm_count_max is rejected there (-inf L, same convention as
     # the count_max reject, just a tighter threshold) instead of dragging the whole
-    # full-width lockstep while_loop to the cold cap. This is THE early-ladder
-    # wall-clock lever (diagnosed 2026-07-09, job 64745): while the cloud is prior-like,
-    # essentially every sweep step contains at least one non-convergent-corner proposal,
-    # so every sweep step used to pay count_max (5000) chemistry steps -- ~hours per
-    # stage. VALUE (measured, smoke chain 2026-07-09): a MALA-small warm move needs
-    # ~780 accepted steps -- the conv_step=500 longdy certification window dominates the
-    # warm floor, NOT count_min -- so an 800 cap would reject typical GOOD proposals;
-    # 1500 keeps ~2x margin while still cutting the gated worst case 3.3x vs 5000.
-    # (warm_extrapolate=True converges the same move in ~470 steps -- once A/B-validated
-    # on the GPU, this cap can drop to ~800 alongside it.) Statistical effect:
-    # proposals converging in (warm_count_max, count_max] become extra MH rejections --
-    # a valid kernel either way; watch the per-sweep heartbeat's rejected counts.
-    # Cold/two-stage solves are NOT affected (they keep count_max). Must be <= count_max
-    # (build_chem_model raises); a cap below the effective warm floor rejects every
-    # proposal, which the init gradient pass catches loudly within minutes.
+    # full-width lockstep while_loop to the cold cap. The conv_step=500 certification
+    # window sets the effective warm floor; 1500 keeps margin without paying count_max.
+    # Proposals needing more become ordinary MH rejections. Cold/two-stage solves keep
+    # count_max, and validate_config requires this cap not to exceed it.
     warm_count_max: int = 1500
     # Tangent-extrapolated warm starts (OPT-IN). Seed each MALA proposal's warm solve
     # from Y + (dy/dtheta)·dtheta -- dy = the converged column's parameter tangents,
     # which the gradient pass already computes per particle (and otherwise discards).
-    # The proposal then starts a first-order prediction away from its own answer.
-    # MEASURED (smoke chain 2026-07-09): the ~780-step MALA-small warm re-converge
-    # drops to ~470 steps (1.65x), same column to 9e-3 dex; once validated on a GH200
-    # SYNTH A/B, warm_count_max can drop toward ~800 for the second half of the win.
-    # First-order in the move: exactly right for MALA-sized steps, useless for large
-    # jumps (those hit warm_count_max either way). Requires smc_chem_mode="warm".
-    # The extrapolated column carries the predicted lnZ/C-O shift, so the solver's own
-    # refs-rescale is bypassed (refs are set to the proposal's values -- the validated
-    # no-double-scaling recipe). Costs ~14 MB of carried tangents at N=96 and adds a
-    # y_tangents field to the checkpoint; resuming an extrapolated run from a
-    # checkpoint without tangents raises (restart or resume with this off).
+    # It helps MALA-sized moves, not large jumps, and requires smc_chem_mode="warm".
+    # The predicted state already carries the lnZ/C-O shift, so refs are updated to
+    # avoid double scaling. Its tangents ride in checkpoints; a legacy checkpoint
+    # without them is refused.
     warm_extrapolate: bool = False
-    # Max integrator step size (s). None -> VULCAN-master default (runtime*1e-5 = 1e17 s).
-    # DIAGNOSED 2026-07-08: that master default is physically absurd for a photochemical
-    # column (nothing evolves on >~1e12 s timescales) and is the ROOT of most of the
-    # >10k-step tail -- at high Kzz the Ros2 local error stays tiny so dt balloons to
-    # ~1e16 s and the solver SPINS in a large-dt oscillation (longdy stuck ~2-4, t marched
-    # to ~1e17 s) instead of settling. Capping dt_max to ~1e12 converged a censored
-    # high-Kzz draw in 986 steps (was >11000 uncapped) and does NOT touch normal draws
-    # (their converged dt is ~1e8, well below the cap). This is a STEP-SIZE control, not
-    # one of the master convergence CRITERIA (yconv_cri/slope_cri/... stay at master).
+    # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
+    # physically meaningless large-dt Ros2 oscillations without changing the canonical
+    # convergence criteria.
     dt_max: Optional[float] = None
     # Cold-init handling of prior draws whose chemistry doesn't converge within
     # count_max (a real, expected minority at extreme prior corners -- hot + extreme-Kzz
@@ -155,23 +124,25 @@ class Config:
     # non-converged/non-finite draws, and keeps the first N survivors; it raises ONLY if
     # fewer than N survive (a systemic prior/config problem, not a few hard corners).
     #   init_oversample            -- draw factor for the cold init (>=1). 2.0 tolerates
-    #                                 up to 50% non-convergence before the floor bites;
-    #                                 the W39b calibration (job 64575) measured ~27% at
-    #                                 count_max=5000, so 2.0 fills N=48 with margin.
-    #   init_max_nonconverged_frac -- WARNING threshold on the observed reject fraction:
-    #                                 above it, a loud warning fires (the prior reaches
-    #                                 many non-convergent corners) but the run continues.
+    #                                 up to 50% non-convergence before the floor bites.
+    #   init_max_nonconverged_frac -- GATE on the observed reject fraction: above it
+    #                                 _init_state RAISES. Conditioning on convergence
+    #                                 removes part of the DECLARED prior, so a run that
+    #                                 rejects heavily is sampling a different support.
+    #                                 This is the per-run floor; certificate.validate
+    #                                 applies the tighter release gates
+    #                                 (CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_FAIL).
     # Both only apply when has_chem_state (real pipelines); stubs draw exactly N.
     init_max_nonconverged_frac: float = 0.1
     init_oversample: float = 2.0
-    # Phase 2 (the init gradient pass) evaluates target_n + init_phase2_spare survivors
-    # and culls the ones that certify cold but cannot RE-certify warm within the cold
-    # count_max (marginal oscillators / stall-fallback columns; NAS jobs 64854 + 64897
-    # saw 5/96 and 3/96 respectively -- a repeatable class, not a fluke). Width is
-    # nearly free in the lockstep chemistry, and MEASURED width-free in memory too
-    # (probe 64944: the 152-wide init eval peaks at the same 73.25 GiB as N=96 --
-    # the peak is the fixed-width RT-vjp chunk stage; PROBE_MEMORY covers it). A true RT/AD failure at phase 2 (non-finite
-    # forward WITHOUT a count_max-exhausted accept count) still raises.
+    # The independent demonstration that the region the solver rejected carries
+    # negligible posterior mass (an artifact name, job number or DOI).
+    # certificate.validate REFUSES a run whose attrition exceeds
+    # CONV_ATTRITION_JUSTIFY with this left empty.
+    attrition_justification: str = ""
+    # Phase 2 evaluates target_n + init_phase2_spare survivors, culls columns that
+    # cannot re-certify within count_max, and backfills from the spares. A true RT/AD
+    # failure still raises.
     init_phase2_spare: int = 8
     fastchem_met_scale: float = 10.0   # BASELINE metallicity (x solar); lnZ is relative to this
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
@@ -190,25 +161,9 @@ class Config:
     rstar_cm: Optional[float] = None
     # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
     #
-    # PINNED to the RT grid bottom on purpose. vulcan-forward 0.4.0 added this
-    # key and defaulted it to 1e-3 bar (the transit photosphere), which is the
-    # right convention for a FORWARD model quoting an absolute depth from a
-    # catalogue radius -- it is what fixed the planner's 25% depth error. A
-    # retrieval is the other case: it INFERS lnR0, so the reference pressure is
-    # degenerate with the fitted radius and changing it just slides the lnR0
-    # posterior. Adopting the new default silently would have moved this
-    # retrieval's radius by ~0.077 in ln R against a prior_lnR0 half-width of
-    # 0.08, i.e. straight to the edge of its own prior. Switching to 1e-3 is a
-    # deliberate re-baseline that must widen prior_lnR0 with it.
-    #
-    # NOT bit-identical to the pre-0.4.0 behaviour, and deliberately so: 0.5.0
-    # also moved the anchor from the deepest layer's centre to its lower
-    # boundary, where exojax actually defines radius_btm, which is 0.176% in
-    # radius on a W39b-like column (0.35% in depth). That is a constant scale,
-    # so lnR0 absorbs it exactly -- it shifts the lnR0 posterior by 0.0018,
-    # about 2% of the prior half-width. Reproducing the old number to the last
-    # digit would mean re-introducing an nlayer-dependent anchor, which is the
-    # bug that fix removed.
+    # Pinned to the RT grid bottom, where ExoJAX defines radius_btm. Because lnR0
+    # is inferred, changing the reference pressure only re-anchors that posterior;
+    # doing so requires an explicit re-baseline and a compatible prior_lnR0.
     p_ref_bar: float = ART_PBTM_BAR
 
     # ---- observed spectrum source ---------------------------------------------
@@ -224,6 +179,12 @@ class Config:
     combo: Tuple[str, ...] = ("NIRISS", "G395H")   # 2 groups -> ONE offset (on the non-reference group)
     obs_wl_lo: float = 1.00            # um (H2-H2 CIA short edge)
     obs_wl_hi: float = 5.28            # um (model band red edge)
+    # Drop product bins finer than this R before they reach the binning operator.
+    # Published R100 products carry truncation remnants where a masked region cuts a
+    # bin short: they are a few times narrower than the nominal grid, carry a much
+    # larger sigma, and are fine enough that the missing LSF matters
+    # (observations._refuse_unresolved_products refuses them). 0 disables the cut.
+    obs_max_bin_R: float = 0.0
 
     # ---- T-P profile (ExoJax built-ins: exojax.atm.atmprof) -------------------
     # "guillot" : atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f) -- the built-in
@@ -327,13 +288,8 @@ class Config:
     # proposals are handled as ZERO-DRIFT MALA moves -- eval-zeroed gradient
     # entries used consistently in both proposal densities, certified
     # likelihood decides acceptance -- logged per sweep as badgrad= with
-    # per-particle forensics dumped. The run RAISES only when a single
-    # sweep's count exceeds ceil(this * N): that is systematic AD breakage
-    # (e.g. a regression NaN-ing every tangent), far beyond the physical
-    # theta-corner class (worst measured sweep 7.6%; the class, why forcing
-    # rejection would bias the posterior, and the measurements behind this
-    # default: README.md, Limitations). 0.0 restores a
-    # zero-tolerance raise.
+    # per-particle forensics dumped. A sweep exceeding ceil(this * N) indicates
+    # systematic AD breakage rather than the known theta-corner class and raises.
     smc_tangent_bad_max_frac: float = 0.25
     # "block": only chem+T-P dims take tangents through the VULCAN while_loop; lnR0 is
     #          one RT-only jvp; offsets/noise are analytic (exact, ~25-35% cheaper).
@@ -345,61 +301,29 @@ class Config:
     #         evaluation. The likelihood is then a FIXED, DETERMINISTIC function
     #         of theta -- the target MALA, SMC tempering, and a quoted Bayesian
     #         evidence all assume. THE DEFAULT.
-    # "warm": every MCMC proposal's chemistry re-converges by CONTINUATION from
-    #         the particle's carried converged column (incremental lnZ/C-O
-    #         scaling -- the validated Hessian-campaign pattern). ~count_min-step
-    #         solves instead of full cold two-stage solves; the cold map is used
-    #         once, at initialization. ~10-30x cheaper per sweep.
-    #
-    # WHY COLD IS THE DEFAULT. Under "warm" a likelihood evaluation depends on
+    # "warm": every proposal re-converges by continuation from the particle's
+    #         carried column. It is cheaper, but a likelihood evaluation depends on
     # the particle's CARRIED chemistry column, hence on sampler history, at the
     # convergence tolerance. A history-dependent target is not the fixed density
-    # the sampler and the evidence integral assume, so `logZ` from a warm run is
-    # approximate in a way no amount of post-hoc diagnostics converts into an
-    # exact number. Warm remains fully supported and is the right tool for
-    # exploration and for cost-limited surveys -- it is simply not the default
-    # for a number anyone will publish.
-    #
-    # COST. Cold is documented at ~10-30x more chemistry work per sweep. That is
-    # a real budget change, not a free correctness win: the W39b production case
-    # was resized for it (see runs/w39b_smc_retrieval/case.py). If you flip back
-    # to warm, every artifact is stamped `approximate_history_dependent_target`
-    # and both post-run validators become mandatory.
+    # the sampler/evidence assume. Warm runs are stamped approximate and require
+    # both post-run validators; cold is the publication default.
     smc_chem_mode: str = "cold"
-    # Particles per lax.map chunk through the ExoJax RT. 0 = no chunking (single
-    # all-particles vmap). Compile-only probe 2026-07-07 (5000-point sampled grid):
-    # RT PRIMAL ~0.22 GiB/lane (full width is fine); RT VJP is THE memory wall --
-    # 18.4 GiB for the first lane + ~9.4 GiB per additional (65.4 GiB at 6-wide vs
-    # the ~81 GiB pool), even with the per-molecule jax.checkpoint in exojax_rt.
-    # Scales with the spectral axis: re-probe (PROBE_MEMORY=1) before raising it or
-    # changing the band / art_nlayer.
+    # Particles per lax.map chunk through the ExoJAX RT. 0 = one all-particle
+    # batch. RT VJP is the memory wall; run PROBE_MEMORY=1 before raising widths
+    # or changing the spectral band/art_nlayer.
     smc_rt_chunk: int = 16              # primal-likelihood RT chunk
-    # Gradient-sweep RT chunk. The default 6 was PROBED SAFE on the old 5000-point
-    # sampled grid; the correlated-k grid (~1650 R=1000 bands x a 16-point g axis
-    # through the random-overlap folds) is a different memory profile, so the gpu
-    # preset's 12 is unproven for it. PROBE_MEMORY=1 before raising it or changing
-    # the band / art_nlayer.
+    # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
+    # random-overlap folds; PROBE_MEMORY=1 before raising this or changing the grid.
     smc_rt_vjp_chunk: int = 6
-    # Particles per lax.map chunk through the CHEMISTRY GRADIENT stage. 0 = no
-    # chunking (full width) is the default: STAGED chem tangent lanes cost
-    # ~20 MB per lane-pair (0.78 GiB at 36 lanes, and nu-independent). Primal
-    # chemistry is ~55 MB/lane (5.3 GiB at 96-wide).
+    # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
+    # chemistry memory is independent of the spectral grid.
     smc_chem_chunk: int = 0
 
-    # step-size auto-tuning (one-shot pilot) + per-stage adaptation
-    # One-shot pilot tuner. run_smc_loop only runs it when mcmc_stage_adapt is
-    # OFF: with per-stage adaptation the pilot's answer is overwritten by the
-    # first Robbins-Monro update, so paying for it would be waste. Both default
-    # True, which means the pilot is INACTIVE in every shipped preset.
-    mcmc_auto_tune: bool = True
-    mcmc_tune_beta: float = 0.3
-    mcmc_tune_particles: int = 12
-    mcmc_tune_steps: int = 6
-    mcmc_tune_iters: int = 6
+    # MALA step size: the per-stage Robbins-Monro adaptation below is the only
+    # tuner. mala_step_size seeds it.
     mcmc_target_accept_mala: float = 0.55
     mcmc_step_size_min: float = 1.0e-3
     mcmc_step_size_max: float = 3.0
-    mcmc_tune_gain: float = 0.7
     # Per-stage adaptation: the MALA proposal is preconditioned with the ABSOLUTE
     # per-dim std of the freshly resampled cloud (clipped to [1e-3, mcmc_scale_clip]),
     # so the proposal narrows in lockstep with tempering; the scalar step size is then
@@ -423,7 +347,6 @@ class Config:
     # output (0 -> no limit).
     walltime_seconds: float = 0.0
 
-    # -------------------------------------------------------------------------
     def profile(self) -> Dict[str, Any]:
         """The dict consumed by vulcan_chem.build_chem_model / exojax_rt.build_rt_model."""
         p: Dict[str, Any] = dict(
@@ -461,15 +384,11 @@ class Config:
         return p
 
 
-# ---------------------------------------------------------------------------
 # Presets live with each case (runs/<case>/case.py), not here: a preset IS the
 # planet-specific part of a retrieval. The framework only defines the schema.
-# ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
 # Parameter specification (the ordered, active parameter list + priors)
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ParamSpec:
     name: str
@@ -550,6 +469,25 @@ def validate_config(cfg: Config) -> None:
                          "deliberately no gradient-free fallback kernel")
     if not (0.0 < cfg.smc_target_ess_frac <= 1.0):
         raise ValueError("smc_target_ess_frac must be in (0, 1]")
+    # Counts that silently produce a broken or empty run if they reach zero: a
+    # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
+    # empty envelope. Chunk sizes are batch splits where 0 means "one batch".
+    for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws", "ppc_chunk_size"):
+        if int(getattr(cfg, name)) < 1:
+            raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
+    for name in ("smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk"):
+        if int(getattr(cfg, name)) < 0:
+            raise ValueError(f"{name} must be >= 0 (0 = no chunking), "
+                             f"got {getattr(cfg, name)!r}")
+    if not math.isfinite(cfg.walltime_seconds):
+        raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
+    if not (0.0 < cfg.smc_tangent_bad_max_frac <= 1.0):
+        raise ValueError("smc_tangent_bad_max_frac must be in (0, 1] -- it is the "
+                         "systematic-breakage backstop, not an off switch")
+    if not (0.0 < cfg.mcmc_step_size_min < cfg.mcmc_step_size_max):
+        raise ValueError(
+            f"need 0 < mcmc_step_size_min < mcmc_step_size_max, got "
+            f"{cfg.mcmc_step_size_min!r} and {cfg.mcmc_step_size_max!r}")
     # Condensation forward solves are supported (on-graph rebuild from the live
     # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
     # is NOT validated: the fix_species pin captures the column at the first
@@ -643,9 +581,7 @@ def validate_config(cfg: Config) -> None:
             "default) is the only opacity path -- drop the key.")
 
 
-# ---------------------------------------------------------------------------
 # Loud config banner (printed at the top of every run so nothing is a surprise)
-# ---------------------------------------------------------------------------
 def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpec]] = None) -> str:
     """A prominent, human-readable dump of the RESOLVED configuration (after preset +
     overrides) -- forward-model fidelity, convergence criteria, T-P handling, data
@@ -705,7 +641,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "
         "high-Kzz non-convergence)",
         f"    cold-init: draw {cfg.init_oversample:g}xN, REJECT non-converged draws (-inf), "
-        f"keep first N healthy   (warn if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
+        f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
         "raise only if < N survive)",
         rule("T-P profile"),
         f"    model={cfg.tp_model}   Tint={cfg.tp_Tint_K:g}K   f={cfg.tp_f:g}   g={cfg.tp_gravity_cgs:g}cgs"
@@ -718,7 +654,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
         f"target_ess_frac={cfg.smc_target_ess_frac:g}   step={cfg.mala_step_size:g}",
         f"    preconditioner: full cloud covariance (Cholesky)   "
-        f"step tuning: {'per-stage Robbins-Monro (pilot inactive)' if cfg.mcmc_stage_adapt else ('one-shot pilot' if cfg.mcmc_auto_tune else 'fixed')}",
+        f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
         f"   warm_extrapolate={'on' if cfg.warm_extrapolate else 'off'}   "
         f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",

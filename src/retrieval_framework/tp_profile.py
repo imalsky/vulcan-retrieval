@@ -60,7 +60,6 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
         eval(tp_params, p_bar) -> T (len(p_bar),)   pure-JAX, differentiable
         n_params : int
         model    : str
-        unpack(tp_params) -> dict of the physical T-P quantities (for logging/plots)
     """
     from exojax.atm.atmprof import atmprof_Guillot, atmprof_powerlow  # lazy: after vulcan_chem
 
@@ -88,12 +87,6 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
             # into range (see pipeline.tp_valid).
             return atmprof_Guillot(p, g, kappa, gamma, jnp.asarray(Tint, dtype=tp.dtype), Tirr, f)
 
-        def unpack(tp_params):
-            tp = jnp.asarray(tp_params)
-            Tirr, kappa, gamma = _phys(tp)
-            return dict(Tirr=float(Tirr), kappa=float(kappa), gamma=float(gamma),
-                        Tint=Tint, f=f, gravity=g, model="guillot")
-
     elif model == "powerlaw":
         n_params = 2
 
@@ -102,12 +95,8 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
             p = jnp.asarray(p_bar, dtype=tp.dtype)
             return atmprof_powerlow(p, tp[0], tp[1])   # RAW -- no clip (see pipeline.tp_valid)
 
-        def unpack(tp_params):
-            tp = jnp.asarray(tp_params)
-            return dict(T0=float(tp[0]), alpha=float(tp[1]), gravity=g, model="powerlaw")
-
     else:
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
 
-    return SimpleNamespace(eval=eval_fn, n_params=int(n_params), model=model, unpack=unpack,
+    return SimpleNamespace(eval=eval_fn, n_params=int(n_params), model=model,
                            T_min=_T_MIN, T_max=_T_MAX)

@@ -94,13 +94,10 @@ def main() -> int:
     import jax
     import jax.numpy as jnp
 
-    profile = dict(config.FULL)
-    profile.update(nz=62, count_max=5000, dt_max=1.0e11,
-                   abundance_mode="elemental", co_mode="fixed_O",
-                   molecules=["H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S"],
-                   nu_min=BAND[0], nu_max=BAND[1], art_nlayer=67,
-                   art_ptop_bar=config.ART_PTOP_BAR,
-                   opacity_mode="exomolop", use_rayleigh=True)
+    # The production case IS the specification: nz, art_nlayer, art_ptop_bar,
+    # molecules, yconv_cri, count_max and dt_max all come from it, so this ladder
+    # can never certify a model production does not run.
+    profile = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)
     y0 = chem.converged_y(theta0)
@@ -182,7 +179,10 @@ def main() -> int:
             "passed": bool(jrel < GATE_JAC_REL),
         })
         ok &= jrel < GATE_JAC_REL
-    print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} (production-rung gate {GATE_PPM} ppm"
+    # Without --jacobian the depth gate alone cannot certify gradient convergence,
+    # so a clean run is REPORT, not PASS. certificate.validate refuses REPORT.
+    status = ("PASS" if args.jacobian else "REPORT") if ok else "FAIL"
+    print(f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
           + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")
 
     # A verdict printed to a terminal and lost is not evidence. Archive it with
@@ -192,7 +192,7 @@ def main() -> int:
             name="resolution_ladder",
             title="Vertical-grid (art_nlayer) convergence of the binned depth",
             measurements=measurements,
-            status="PASS" if ok else "FAIL",
+            status=status,
             summary=(
                 f"opacity_mode=exomolop; {knob} ladder {rungs}; "
                 f"production is {profile[knob]}. "

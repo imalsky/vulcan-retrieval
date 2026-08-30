@@ -35,9 +35,44 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the certificate module
-from retrieval_framework.certificate import _git, _repo_states, _sha256  # noqa: F401
+from retrieval_framework.certificate import (  # noqa: F401
+    _git, _repo_states, _sha256, science_data_identity)
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def production_config():
+    """The Config the PRODUCTION case actually runs (gpu preset).
+
+    jax/chemistry are imported lazily so this module stays cheap at import.
+    """
+    import os
+    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
+    from retrieval_framework import run_smc as _R
+    cfg, preset = _R.make_config(REPO / "runs" / "w39b_smc_retrieval")
+    if preset != "gpu":
+        raise RuntimeError(
+            f"production_config needs the gpu preset, got {preset!r}; "
+            "unset SMC_RETRIEVAL_PRESET or set it to 'gpu'")
+    return cfg
+
+
+def production_profile(**overrides):
+    """The forward profile the PRODUCTION case actually runs.
+
+    A ladder must measure the model production uses, not a hand-copied
+    approximation of it. The shipped artifacts were built from
+    `forward.config.FULL` plus a few overrides; FULL carries yconv_cri=1e-3
+    while the retrieval schema default (and so production) is 1e-2, and the
+    molecule list was copied by hand -- so both ladders certified a different
+    convergence behaviour and a different opacity model than any real run.
+    Deriving from the case's own Config.profile() removes that whole class.
+
+    jax/chemistry are imported lazily so this module stays cheap at import.
+    """
+    prof = production_config().profile()
+    prof.update(overrides)
+    return prof
 RESULTS = REPO / "validation" / "results"
 
 
@@ -155,6 +190,16 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         prov["resolved_config"] = resolved_config
         prov["resolved_config_sha256"] = hashlib.sha256(
             blob.encode()).hexdigest()
+        # CONTENT identity of the opacity/CIA files this measurement read, in
+        # the same shape the run's target manifest records, so validate() can
+        # refuse an artifact measured against different data. The tree summary
+        # in prov["data"] cannot do that job -- it carries mtimes.
+        # top_pressure_ladder nests its two grids under "production"/"extended";
+        # certificate._validation_artifacts unwraps the same way, so the molecule
+        # list is found in both shapes rather than silently reading as empty.
+        _rc = resolved_config.get("production", resolved_config)
+        prov["science_data"] = science_data_identity(
+            _rc.get("molecules") or ())
     return prov
 
 
