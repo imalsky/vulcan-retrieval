@@ -847,6 +847,19 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     return pipe
 
 
+def logz_err_lower_bound(ess_hist, n_particles: int) -> float:
+    """Optimistic Monte Carlo error on logZ: Var(logZ) ~ sum_t (1/ESS_t - 1/N).
+
+    LOWER bound by construction (ignores resampling/MALA correlation between
+    stages). Module-level and jax-free so the formula is unit-testable
+    (tests/test_evidence_semantics.py), like evidence_report.
+    """
+    ess = np.asarray(ess_hist, np.float64)
+    ess = ess[np.isfinite(ess) & (ess > 0.0)]
+    return (float(np.sqrt(np.sum(1.0 / ess - 1.0 / n_particles)))
+            if ess.size else float("nan"))
+
+
 # Observations
 def evidence_report(logZ: float, init_stats: dict | None) -> dict:
     """Evidence-semantics fields from the SMC ``logZ`` and the init cull
@@ -1978,16 +1991,12 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
 
     # Monte Carlo uncertainty on logZ. Each tempering stage is an importance
     # step whose relative weight variance is approximated by (N/ESS - 1)/N; the
-    # stage increments sum, so Var(log Z) ~ sum_t (1/ESS_t - 1/N).
-    # OPTIMISTIC BY CONSTRUCTION: it ignores the correlation resampling and the
-    # MALA sweeps induce between stages, so treat it as a LOWER bound. The
-    # honest estimate is still the spread across independent seeds -- but
-    # without this there was no logZ error bar at all, and a sensitivity gate
-    # quoted in "Monte Carlo standard errors" could not be evaluated.
-    _ess = np.asarray(ess_hist, np.float64)
-    _ess = _ess[np.isfinite(_ess) & (_ess > 0.0)]
-    logZ_err_lb = (float(np.sqrt(np.sum(1.0 / _ess - 1.0 / N)))
-                   if _ess.size else float("nan"))
+    # stage increments sum. OPTIMISTIC BY CONSTRUCTION (see
+    # logz_err_lower_bound); the honest estimate is still the spread across
+    # independent seeds -- but without this there was no logZ error bar at all,
+    # and a sensitivity gate quoted in "Monte Carlo standard errors" could not
+    # be evaluated.
+    logZ_err_lb = logz_err_lower_bound(ess_hist, N)
 
     return dict(
         U=np.asarray(jax.device_get(U), np.float64), reached_beta1=reached, final_beta=beta,

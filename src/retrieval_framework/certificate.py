@@ -24,7 +24,7 @@ WHAT IT GATES. Each check answers "would a reader be misled?":
     already-implemented support-fraction uncertainties;
   * the run-health diagnostics (bad-gradient, cap, stall, rejection, ESS,
     uniqueness);
-  * the three production-fidelity artifacts from `validation/results/`;
+  * the two production-fidelity artifacts from `validation/results/`;
   * a cold replay of a small deterministic subset, which catches an
     environment or provenance mistake that every internal check would miss.
 
@@ -57,7 +57,10 @@ REPOSITORIES = {
     "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
     "vulcan-forward": ("vulcan-forward",),
     "vulcan-retrieval": ("vulcan-retrieval",),
-    "vulcan-jwst-tool": ("vulcan-jwst-tool",),
+    # vulcan-jwst-tool is deliberately NOT here: it is not a dependency of a
+    # retrieval run (pyproject), and binding its commit/src_diff into the
+    # target manifest made validate() FAIL on a dirty planner checkout and
+    # refuse legitimate chained RESUMEs after unrelated planner edits.
 }
 
 # beta must be 1 to within this; the ladder bisects, so it lands on 1 exactly
@@ -206,8 +209,7 @@ def _versions() -> dict:
             out[mod] = __import__(mod).__version__
         except Exception:
             out[mod] = None
-    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval",
-                 "vulcan-jwst-tool"):
+    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval"):
         try:
             from importlib.metadata import version
             out[dist] = version(dist)
@@ -477,7 +479,7 @@ def archived_manifest_digest(out_dir: Path) -> str | None:
 
 
 def _validation_artifacts() -> dict:
-    """Read the three production-fidelity results, if they were archived."""
+    """Read the two production-fidelity results, if they were archived."""
     results = REPO / "validation" / "results"
     out = {}
     for name in REQUIRED_VALIDATION_ARTIFACTS:
@@ -1106,10 +1108,14 @@ def render(cert: dict, problems: list[str]) -> str:
              f"{cert['resolved_config_sha256'][:16]}... |")
     dig = cert["target"].get("digest")
     L.append(f"| target digest | {dig[:16] + '...' if dig else 'MISSING'} |")
+    # CIA hashes live in the target manifest's science-data identity, not in
+    # cert["data"] (test_certificate pins their absence there).
+    _cia = ((cert.get("target") or {}).get("science_data") or {}).get(
+        "cia_sha256") or {}
     for name in CIA_TABLES:
-        c = cert["data"].get(name)
+        h = _cia.get(name)
         L.append(f"| {name} sha256 | "
-                 f"{c['sha256'][:16] + '...' if c else 'MISSING'} |")
+                 f"{h[:16] + '...' if h else 'MISSING'} |")
     diag = cert["diagnostics"]
     n = diag.get("n_particles")
     uniq = diag.get("unique_particles") or []

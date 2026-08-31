@@ -385,7 +385,7 @@ print(make_config(Path("'"${SMC_DIR}"'"))[0].smc_chem_mode)' 2>/dev/null || echo
     fi
 
     # PRODUCTION CERTIFICATE. Collects code/data identity, the resolved config,
-    # beta=1, target exactness, evidence semantics, run diagnostics, the three
+    # beta=1, target exactness, evidence semantics, run diagnostics, the two
     # production-fidelity artifacts, and a cold replay of a small deterministic
     # subset -- then says PASS or FAIL once. Until this passes, the run's
     # numbers are not certified for reporting.

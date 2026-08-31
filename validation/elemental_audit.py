@@ -29,6 +29,11 @@ import sys
 
 import numpy as np
 
+# PYTHONSAFEPATH strips the script's own directory from sys.path in some
+# sandboxes, so be explicit rather than relying on it.
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _artifact  # noqa: E402
+
 # gates (elemental mode): the projection is exact up to the fixed-iteration
 # residual; see vulcan_chem._ELEMENTAL_REPAIR_ITERS
 GATE_RATIO = 1.0e-6
@@ -46,19 +51,18 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=7)
     args = ap.parse_args()
 
-    from retrieval_framework.forward import config
     from vulcan_forward import vulcan_chem
 
-    profile = dict(config.FULL)
-    profile.update(nz=50, count_max=5000, dt_max=1.0e11,
-                   abundance_mode=args.mode, co_mode="fixed_O",
-                   reanchor_atom_ini=True)
+    # The production case IS the specification (same rule as the ladders):
+    # profile and prior box both come from it, so this audit can never
+    # measure a model production does not run.
+    cfg = _artifact.production_config()
+    profile = _artifact.production_profile(abundance_mode=args.mode)
     chem = vulcan_chem.build_chem_model(profile)
 
     rng = np.random.default_rng(args.seed)
-    # W39b production prior box for the abundance/mixing knobs (case.py::_W39B)
-    lo = np.array([-2.303, -1.70, -4.6, 0.0])
-    hi = np.array([+2.303, +0.24, +4.6, 0.0])
+    lo = np.array([cfg.prior_lnZ[0], cfg.prior_c_o[0], cfg.prior_lnKzz[0], 0.0])
+    hi = np.array([cfg.prior_lnZ[1], cfg.prior_c_o[1], cfg.prior_lnKzz[1], 0.0])
     draws = lo + (hi - lo) * rng.random((args.n, 4))
 
     worst = dict(ratio=0.0, dco=0.0, dens=0.0, atom=0.0, repair=np.inf)

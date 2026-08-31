@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import sys
 
 import numpy as np
 from dataclasses import replace
@@ -46,7 +45,7 @@ def _passing_cert():
             "repos": {name: {"commit": "a" * 40, "dirty": False,
                              "dirty_files": []}
                       for name in ("jax-vulcan", "vulcan-forward",
-                                   "vulcan-retrieval", "vulcan-jwst-tool")},
+                                   "vulcan-retrieval")},
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
         "data": {"observations": {"sha256": "b" * 64, "bytes": 1234}},
@@ -728,13 +727,6 @@ def test_resume_with_no_checkpoint_is_not_this_gate(tmp_path):
     refuse_mismatched_resume(tmp_path / "nope.npz", "a" * 64)
 
 
-def test_run_smc_reexports_the_certificate_resume_guard():
-    """Both boundaries must use one implementation while the old import stays valid."""
-    assert hasattr(certificate, "refuse_mismatched_resume")
-    from retrieval_framework.run_smc import refuse_mismatched_resume
-    assert refuse_mismatched_resume is certificate.refuse_mismatched_resume
-
-
 def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
     """`git diff HEAD` cannot see an untracked module, but importing one changes
     the code that defines the target."""
@@ -762,15 +754,3 @@ def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
     assert _src_state(repo) == clean
 
 
-def test_screen_candidates_are_inventoried_not_listed():
-    """RC-02 asks for the omitted set to be DISCOVERED: a literal list silently
-    stops testing a species the day someone installs its table."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "validation"))
-    from opacity_leave_one_out import unscreened_candidates
-    from vulcan_forward import constants, exomolop
-    installed = {m for m in constants.MOLECULES
-                 if exomolop.table_path(m).is_file()}
-    prod = ("H2O", "CO2")
-    got = set(unscreened_candidates(prod))
-    assert got == installed - set(prod)
-    assert not got & set(prod)

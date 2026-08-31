@@ -104,6 +104,10 @@ RSTAR_CM = 0.932 * R_SUN_CM
 #     step count -- forcing dt to dt_max drives the Ros2 step's forward tangent singular.
 SMOKE = {
     "use_photo": True,
+    # The published demo/figure caches were built under the legacy "masks"
+    # initialization; pinned here (in all three presets) so a fresh run
+    # reproduces them. The engine default is "elemental" (production).
+    "abundance_mode": "masks",
     "nz": 40,                  # coarse column -> cheaper warm-up + jvps
     "yconv_cri": 1.0e-3,
     "molecules": ["CO"],       # fully offline
@@ -118,6 +122,7 @@ SMOKE = {
 }
 FULL = {
     "use_photo": True,         # photo ON -> SO2 chemistry (WASP-39b story)
+    "abundance_mode": "masks",  # legacy pin, see SMOKE
     "nz": 188,                 # canonical W39b grid: 19 layers/decade over 1e-9..7.6 bar
     "yconv_cri": 1.0e-3,
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
@@ -136,6 +141,7 @@ FULL = {
 # figures.
 WIDE = {
     "use_photo": True,
+    "abundance_mode": "masks",  # legacy pin, see SMOKE
     "nz": 188,
     "yconv_cri": 1.0e-3,
     "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],

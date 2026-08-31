@@ -125,13 +125,17 @@ def main() -> int:
                 jax.ShapeDtypeStruct((w, nl), f8),
                 jax.ShapeDtypeStruct((w, nl), f8))
 
-    for w in (1, 6):
+    # the isolated rungs must include the PRODUCTION widths -- hardcoded rungs
+    # once left smc_rt_vjp_chunk=12 unprobed while the config comment claimed
+    # certification
+    for w in sorted({1, int(cfg.smc_rt_vjp_chunk)}):
         report(f"RT VJP x{w} particles", rt_vjp, _aux_sds(w),
                jax.ShapeDtypeStruct((w,), np.float64),
                jax.ShapeDtypeStruct((w, 2), np.float64))
-    report("RT PRIMAL x16 particles", rt_primal, _aux_sds(16),
-           jax.ShapeDtypeStruct((16,), np.float64),
-           jax.ShapeDtypeStruct((16, 2), np.float64))
+    rt_pw = int(cfg.smc_rt_chunk)
+    report(f"RT PRIMAL x{rt_pw} particles", rt_primal, _aux_sds(rt_pw),
+           jax.ShapeDtypeStruct((rt_pw,), np.float64),
+           jax.ShapeDtypeStruct((rt_pw, 2), np.float64))
 
     # ---- the full staged evaluators exactly as the SMC uses them ----
     report(f"FULL cold_vg (chem_chunk={cfg.smc_chem_chunk}, "

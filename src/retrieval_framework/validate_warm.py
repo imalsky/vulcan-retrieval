@@ -317,7 +317,10 @@ def main() -> None:
     r_warm, r_cold = _ratios(ck["y_state"]), _ratios(np.asarray(jax.device_get(Y_cold)))
     atom_rel = np.abs(r_warm / r_cold - 1.0)
     atom_rel_max = float(np.max(atom_rel[ok_mask])) if ok_mask.any() else float("nan")
-    abundance_mode = str(getattr(pipe.fwd.chem, "abundance_mode", "masks"))
+    # default "elemental", never "masks": if the attribute is missing the soft
+    # branch below would downgrade a real atom-conservation failure to the
+    # "documented legacy leakage" warning path (fail-open)
+    abundance_mode = str(getattr(pipe.fwd.chem, "abundance_mode", "elemental"))
     logger.info(f"elemental inventories (He,O,C,N,S per H) warm-vs-cold: max rel diff "
                 f"{atom_rel_max:.3e} (abundance_mode={abundance_mode})")
 

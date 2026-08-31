@@ -66,8 +66,8 @@ case file to `runs/<new-case>/` for another target.
 Each run writes its resolved configuration, checkpoints, posterior samples,
 diagnostics, predictions, and plots to the case data directory. Check
 `reached_beta1` before treating samples as posterior samples. Run
-`python -m retrieval_framework.certificate` before reporting a production
-result.
+`python -m retrieval_framework.certificate runs/w39b_smc_retrieval` before
+reporting a production result.
 
 ## Limits
 

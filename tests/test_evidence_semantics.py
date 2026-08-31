@@ -87,16 +87,18 @@ def test_evidence_report_fields_and_identity():
 def test_logZ_error_lower_bound_tracks_ess_collapse():
     """logZ had NO Monte Carlo error of any kind, so a sensitivity gate quoted in
     'Monte Carlo standard errors' could not be evaluated. The ESS-based bound is
-    optimistic but must at least exist and grow as the ladder degrades."""
-    import numpy as np
-    N = 144
+    optimistic but must at least exist and grow as the ladder degrades.
 
-    def lb(ess):
-        e = np.asarray(ess, float)
-        return float(np.sqrt(np.sum(1.0 / e - 1.0 / N)))
+    Exercises the PRODUCTION formula (pipeline.logz_err_lower_bound), not a
+    local restatement of it."""
+    import math
+    from retrieval_framework.pipeline import logz_err_lower_bound as lb
+    N = 144
 
     healthy = [0.9 * N] * 20
     degraded = [0.25 * N] * 20
-    assert lb(healthy) < lb(degraded)
+    assert lb(healthy, N) < lb(degraded, N)
     # a perfectly efficient ladder (ESS == N every stage) has zero variance here
-    assert lb([float(N)] * 20) == 0.0
+    assert lb([float(N)] * 20, N) == 0.0
+    # no usable stages -> NaN, never a silent 0
+    assert math.isnan(lb([], N))
