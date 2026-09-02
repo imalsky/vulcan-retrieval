@@ -12,7 +12,7 @@ __pycache__/
 # (## docs/failed_approaches.md section) and incident post-mortems: kept
 # locally, not shipped to consumers.
 # CLAUDE.md is untracked here too (2026-08-14), matching VULCAN-JAX and
-# vulcan-jwst-tool: agent instructions are not part of a collaborator bundle.
+# jwst-transit-authority: agent instructions are not part of a collaborator bundle.
 # It used to be tracked so it would version with the code it governs; if that
 # matters again, drop the line below and `git add -f CLAUDE.md`.
 CLAUDE.md

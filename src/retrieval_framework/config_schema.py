@@ -264,7 +264,7 @@ class Config:
     # forward-mode gradient through a condensing+pinned steady state is NOT
     # reliably differentiable -- the pinned S8 state's jvp disagrees with FD at
     # O(1) (0.91 relative measured; tests/test_condensation_live_tp.py), the same
-    # reason Fisher-through-condensation is refused in vulcan-jwst-tool. Condensation
+    # reason Fisher-through-condensation is refused in jwst-transit-authority. Condensation
     # FORWARD solves (run_inference=False, synthetic generation) are always allowed.
     allow_condense_inference: bool = False
     smc_num_particles: int = 48
@@ -505,7 +505,7 @@ def validate_config(cfg: Config) -> None:
             "forward solves are supported, but gradient-MALA inference through the "
             "condensing+pinned steady state is not validated (the pinned-species "
             "forward-mode tangent disagrees with FD at O(1) -- 0.91 relative; the "
-            "same reason Fisher-through-condensation is disabled in vulcan-jwst-tool). "
+            "same reason Fisher-through-condensation is disabled in jwst-transit-authority). "
             "Run condensation as a FORWARD model (run_inference=False), or set "
             "allow_condense_inference=True only if you have independently validated "
             "the gradient on your column.")

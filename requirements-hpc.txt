@@ -9,7 +9,7 @@
 # (vulcan-jax>=0.3.0, vulcan-forward>=0.12.1).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all. Its
-# commit matches vulcan-jwst-tool's deploy/pins.env, so a reproduction env and
+# commit matches jwst-transit-authority's deploy/pins.env, so a reproduction env and
 # the deployed Space run the same engine.
 # ExoJax is a plain pip dependency; it downloads HITRAN line lists / CIA tables
 # into the repo data/ caches on first use.

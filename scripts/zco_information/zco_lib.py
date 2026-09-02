@@ -22,7 +22,7 @@ The parameter vector for the reported figures is
                 in for the first group's offset: it is a physical radiative-transfer
                 derivative, generally NOT constant in wavelength, so the calibration
                 offset and lnR0 are distinct nuisance directions (the same
-                distinction vulcan-jwst-tool fisher.py documents).
+                distinction jwst-transit-authority fisher.py documents).
                 Any exact or near redundancy this introduces is the job of the
                 rank-aware whitened inversion below -- never of manually dropping a
                 column. offset_model="reference_fixed" reproduces the pre-2026-07-20
@@ -250,7 +250,7 @@ def build_design(tier_payload, wl_model, obs, use_lnR0=True, use_offsets=True,
                 keep=keep, offset_model=(offset_model if use_offsets else None))
 
 
-# Rank thresholds, ported one-to-one from vulcan-jwst-tool fisher.py
+# Rank thresholds, ported one-to-one from jwst-transit-authority fisher.py
 # (scale-invariance audit): the rank decision runs on the Jacobi-whitened
 # (unit-diagonal, correlation-form) matrix, whose eigen-spectrum is invariant
 # under per-parameter unit changes -- thresholding the raw mixed-unit matrix

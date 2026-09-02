@@ -359,7 +359,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
       measures the step size, not the tangent. Only the total sulfur reservoir
       has a derivative. This discreteness -- active-layer/cold-trap switches
       plus pin-capture jitter -- is exactly why Fisher forecasts with
-      condensation stay loudly unsupported in vulcan-jwst-tool
+      condensation stay loudly unsupported in jwst-transit-authority
       (forward.canonical_params raises).
     """
     _, jax, jnp = stack

@@ -57,7 +57,7 @@ REPOSITORIES = {
     "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
     "vulcan-forward": ("vulcan-forward",),
     "vulcan-retrieval": ("vulcan-retrieval",),
-    # vulcan-jwst-tool is deliberately NOT here: it is not a dependency of a
+    # jwst-transit-authority is deliberately NOT here: it is not a dependency of a
     # retrieval run (pyproject), and binding its commit/src_diff into the
     # target manifest made validate() FAIL on a dirty planner checkout and
     # refuse legitimate chained RESUMEs after unrelated planner edits.

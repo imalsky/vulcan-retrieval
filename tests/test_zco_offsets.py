@@ -1,6 +1,6 @@
 """Offset-model regression tests for the Z-C/O Fisher machinery (zco_lib).
 
-Pins the offset correction (propagated from vulcan-jwst-tool's audit
+Pins the offset correction (propagated from jwst-transit-authority's audit
 fix): under offset_model="all_groups" EVERY instrument
 group carries a depth-offset nuisance, the first included, because lnR0 is a
 physical radiative-transfer derivative (not spectrally constant) and cannot
@@ -10,7 +10,7 @@ absorb an absolute depth-calibration error. Three contracts:
   2. relabeling the group order does not change the science constraints
      (it does under the retained "reference_fixed" reproduction mode, which is
      exactly why that mode is not the default);
-  3. zco_lib's rank-aware marginal sigmas agree with vulcan-jwst-tool's
+  3. zco_lib's rank-aware marginal sigmas agree with jwst-transit-authority's
      fisher.mode_forecast on an equivalent synthetic design.
 
 Pure numpy; the synthetic design goes through the real build_design binning
@@ -146,12 +146,12 @@ def test_all_groups_never_tighter_than_reference_fixed():
 
 
 # --------------------------------------------------------------------------- #
-#  3. agreement with vulcan-jwst-tool's rank-aware Fisher                     #
+#  3. agreement with jwst-transit-authority's rank-aware Fisher                     #
 # --------------------------------------------------------------------------- #
 def test_matches_jwst_tool_mode_forecast():
     jf = pytest.importorskip(
         "jwst_tool.fisher",
-        reason="vulcan-jwst-tool not installed; cross-tool agreement not checkable")
+        reason="jwst-transit-authority not installed; cross-tool agreement not checkable")
     wl, pay = _payload()
     obs = _obs(groups=("A", "B"))
     des = zco_lib.build_design(pay, wl, obs, offset_model="all_groups")

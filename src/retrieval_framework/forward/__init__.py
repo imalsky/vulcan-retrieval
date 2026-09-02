@@ -2,7 +2,7 @@
 
 The forward-model ENGINE lives in the ``vulcan-forward`` distribution:
 ``vulcan_chem``, ``exojax_rt`` and ``interp_map`` are at ``vulcan_forward.*``
-and are shared with vulcan-jwst-tool, so neither application depends on the
+and are shared with jwst-transit-authority, so neither application depends on the
 other. What remains here is this repo's own:
 
 - ``config``      -- this repo's paths + WASP-39 b case constants + run

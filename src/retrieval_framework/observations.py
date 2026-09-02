@@ -211,7 +211,7 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     That is only defensible while the data bins are much coarser than the model
     band resolution (the ExoMolOP R1000 grid), so the model is already smooth
     across a bin. A product approaching the model's own R is refused rather than
-    silently modelled without its LSF -- the sibling vulcan-jwst-tool applies one
+    silently modelled without its LSF -- the sibling jwst-transit-authority applies one
     (binning.smooth_to_native_r) and the two would disagree.
     """
     wl = _validated_model_wavelengths(wl_model_um)

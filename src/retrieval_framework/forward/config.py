@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 
 # Shared physics constants -- single source of truth is the engine package
-# Re-exported (not redefined) so this repo and vulcan-jwst-tool cannot drift
+# Re-exported (not redefined) so this repo and jwst-transit-authority cannot drift
 # apart on molecule masses, opacity sources, the ART grid bounds, or the
 # composition tables. vulcan_forward.constants is stdlib-only, so importing it
 # here keeps this module import-light.
