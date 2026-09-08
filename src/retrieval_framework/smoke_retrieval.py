@@ -162,7 +162,7 @@ def main() -> int:
     Y_w, refs_w = Yb[:1], refsb[:1]
     move_vg = jax.jit(pipe.batch_eval_move_vg)
     move_l = jax.jit(pipe.batch_eval_move_l)
-    L1, G1, _, _, nbad_w, _dyw, _statsw = move_vg(U1, Y_w, refs_w)
+    _L1, G1, _, _, nbad_w, _dyw, _statsw = move_vg(U1, Y_w, refs_w)
     assert int(nbad_w) == 0, "warm move eval flagged gradient pathologies"
     g_warm = np.asarray(G1[0])
     ok_warm = True

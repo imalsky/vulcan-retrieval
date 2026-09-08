@@ -15,10 +15,6 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
   3. vulcan_jax imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
      the installed dist version matches the checkout's _version.py (a mismatch
      means the editable install predates a metadata change -- re-bootstrap);
-  3b. vulcan_jax.conden exposes the live-T(P) condensation builder
-     (make_conden_spec + build_conden_profile) -- a capability probe the
-     version floor alone cannot guarantee (both pre- and post-conden checkouts
-     once reported >=0.1.17-era versions);
   4. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
   4b. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
      engine every retrieval path imports;
@@ -142,64 +138,6 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
         )
         return
     _ok(f"{dist_name} {dist_version} editable at {mod_path.parent}")
-
-
-def _check_conden_api() -> None:
-    """The installed vulcan-jax must expose the live-T(P) condensation builder.
-
-    The dist version alone is insufficient: the pre-conden 0.1.17 and the
-    conden-capable 0.1.18 both report a version that satisfies the >=0.1.17
-    era floor if an old checkout is shadowing, so probe the actual API. _prep
-    rebuilds condensation on-graph via these two functions
-    (conden.make_conden_spec + build_conden_profile); their absence means an
-    old checkout with no live-T condensation support (re-pull VULCAN-JAX)."""
-    try:
-        from vulcan_jax import conden
-    except Exception as e:  # noqa: BLE001 - aggregate every failure loudly
-        _err(f"vulcan_jax.conden failed to import: {e!r}. Re-run the bootstrap.")
-        return
-    required = ("make_conden_spec", "build_conden_profile")
-    missing = [name for name in required if not hasattr(conden, name)]
-    if missing:
-        _err(
-            "installed vulcan-jax lacks live-T(P) condensation support "
-            f"(vulcan_jax.conden missing {', '.join(missing)}): the checkout "
-            "predates the on-graph conden builder (VULCAN-JAX 0.1.18). "
-            "Pull/update the VULCAN-JAX checkout and re-run the bootstrap.")
-    else:
-        _ok("vulcan_jax.conden exposes make_conden_spec + build_conden_profile")
-
-
-def _check_config_api() -> None:
-    """The installed vulcan-jax must expose the YAML ``load_config`` API.
-
-    ``vulcan_forward.vulcan_chem`` builds every chemistry model through
-    ``vulcan_jax.load_config(name)`` (YAML-only config, gravity from Mp/Rp).
-    A checkout predating that migration has no ``load_config`` (it still shipped
-    the deleted ``vulcan_cfg`` module), yet reports a version that can satisfy an
-    old floor, so probe the actual API instead of trusting the version alone."""
-    try:
-        import vulcan_jax
-    except Exception as e:  # noqa: BLE001 - aggregate every failure loudly
-        _err(f"vulcan_jax failed to import: {e!r}. Re-run the bootstrap.")
-        return
-    if not hasattr(vulcan_jax, "load_config"):
-        _err(
-            "installed vulcan-jax has no `load_config`: the checkout predates the "
-            "YAML-only config migration (gravity from Mp/Rp). vulcan_forward.vulcan_chem "
-            "requires it. Pull/update the VULCAN-JAX checkout and re-run the "
-            "bootstrap.")
-        return
-    try:
-        cfg = vulcan_jax.load_config("W39b")
-    except Exception as e:  # noqa: BLE001
-        _err(f"vulcan_jax.load_config('W39b') failed: {e!r}. Re-run the bootstrap.")
-        return
-    # Mp/Rp gravity is the load-bearing schema change the chemistry path assumes.
-    if not (getattr(cfg, "Mp", None) and getattr(cfg, "Rp", None)):
-        _err("vulcan_jax config 'W39b' lacks Mp/Rp (gravity schema); update VULCAN-JAX.")
-    else:
-        _ok("vulcan_jax.load_config exposes the YAML config API (W39b Mp/Rp present)")
 
 
 def _check_cross_repo_pin() -> None:
@@ -344,8 +282,6 @@ def main(argv: list[str] | None = None) -> int:
         # the shared forward engine (chemistry + RT) is its own distribution
         _check_editable("vulcan_forward", "vulcan-forward",
                         root / "vulcan-forward", "vulcan_forward")
-        _check_config_api()
-        _check_conden_api()
         _check_editable(
             "retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework"
         )

@@ -129,7 +129,7 @@ def gpu_config(**overrides: Any) -> Config:
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N=144 gives 12 exact RT-vjp chunks and reduces small-cloud SMC noise.
+        # N=144 divides into exact RT-vjp chunks and reduces small-cloud SMC noise.
         # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
         # fresh budget and the stage index continues). 40 sits right at the edge
         # of what a 10-D ladder at target_ess_frac=0.6 needs, and exhausting it
@@ -173,9 +173,12 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # PROBE_MEMORY=1 must certify this RT-vjp width for all 12 absorbers before
-        # production; the compile-only probe cannot OOM.
-        smc_rt_vjp_chunk=12,
+        # RT-vjp width. The 2026-08-28 compile-only probe (XLA:CPU buffer
+        # assignment, 12 absorbers) measured 14.8 GiB per vjp lane, linear with
+        # zero intercept: 12 lanes = 177 GiB against the ~81 GiB GH200 pool, 5 is
+        # the largest that fits, 4 leaves headroom. Chunking is numerically
+        # identical at any width; PROBE_MEMORY=1 on the GPU must still confirm.
+        smc_rt_vjp_chunk=4,
         mcmc_stage_adapt=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall

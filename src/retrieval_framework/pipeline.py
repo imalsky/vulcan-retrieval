@@ -34,10 +34,11 @@ uses STAGED batched evaluators that split the chain at the chemistry/RT boundary
     1.5 TiB);
   * offsets / noise-inflation: analytic (unchanged).
 
-The mutation kernel additionally CARRIES each particle's converged chemistry column and
-warm-starts every proposal's solve from it with incremental lnZ/C-O scaling (the
-validated continuation pattern) -- ~count_min-step re-converges instead of full cold
-two-stage solves. `smc_chem_mode="cold"` restores the published solve-from-baseline map.
+`smc_chem_mode="cold"` (the default) re-solves every proposal from the baked baseline,
+the published two-stage map, so the target is a fixed function of theta. `"warm"`
+instead carries each particle's converged column and re-converges each proposal from
+it with incremental lnZ/C-O scaling: far fewer steps, but a history-dependent target
+(CLAUDE.md).
 """
 from __future__ import annotations
 
@@ -45,6 +46,7 @@ import logging
 import math
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, NamedTuple, Optional
 
 import numpy as np
@@ -62,10 +64,7 @@ import jax.scipy.linalg
 logger = logging.getLogger("retrieval")
 
 
-# Pipeline container
-class Pipeline:
-    def __init__(self, **kw: Any) -> None:
-        self.__dict__.update(kw)
+Pipeline = SimpleNamespace   # the attribute bag build_pipeline fills
 
 
 def save_npz(path: Path, **arrays: Any) -> None:
@@ -1144,11 +1143,14 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     the draw to oversample is ~free because the slowest draw dominates regardless.
 
     Phase 2 -- gradient pass on the target_n SURVIVORS ONLY (the expensive jvp/vjp
-    lanes are never paid on a rejected draw): each survivor re-certifies from its own
-    phase-1 column and the jvp lanes ride that warm map -- the SAME map every
-    subsequent MALA proposal uses, so the carried (L, G) are consistent with the rest
-    of the run by construction. Phase 2 runs UNCAPPED (batch_eval_init_vg, cold
-    count_max, not warm_count_max): typical survivors re-certify in a few hundred
+    lanes are never paid on a rejected draw), through the SAME map every subsequent
+    MALA proposal uses, so the carried (L, G) are consistent with the rest of the run
+    by construction. Warm mode re-certifies each survivor from its own phase-1
+    column; cold mode (the default) repeats the two-stage solve with the jvp lanes
+    riding along, and its "re-certification" cull only catches a marginal column
+    whose certification flips between the primal-only and the jvp'd program.
+    Phase 2 runs UNCAPPED (batch_eval_init_vg, cold count_max, not
+    warm_count_max): typical survivors re-certify in a few hundred
     steps, but a marginal one (slow phase-1 converger / stall-fallback certification)
     can need more than the mutation cap, and it is a proven-convergent particle, not a
     disposable proposal (NAS job 64854: the cap gated 5/96 healthy survivors).

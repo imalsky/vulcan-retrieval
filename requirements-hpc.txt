@@ -6,7 +6,7 @@
 # The package metadata (vulcan-retrieval's pyproject) declares vulcan-jax>=0.3.0
 # for TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
 # pins deliberately and keep them at or above the floors pyproject declares
-# (vulcan-jax>=0.3.0, vulcan-forward>=0.12.1).
+# (vulcan-jax>=0.3.5, vulcan-forward>=0.12.1).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all. Its
 # commit matches jwst-transit-authority's deploy/pins.env, so a reproduction env and
@@ -23,6 +23,6 @@ scipy>=1.12
 matplotlib
 corner
 tqdm
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@b5b506ebdd12c201bb9f75894b6f726ed27e5be0
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@57bd776ae1a593f2ba60c02976c34d675b044a36
+vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@b3932f5db7e0cb34258bd1baa19c155edc5495bf
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@63a73dea51932a7134c926d642aa9988179694d7
 -e .

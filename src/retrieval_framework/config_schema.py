@@ -189,7 +189,6 @@ class Config:
     # ---- T-P profile (ExoJax built-ins: exojax.atm.atmprof) -------------------
     # "guillot" : atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f) -- the built-in
     #             irradiated analytic profile (uses jnp.exp, forward-mode-clean).
-    # "powerlaw": atmprof_powerlow(P, T0, alpha).
     tp_model: str = "guillot"
     tp_gravity_cgs: float = 422.0      # WASP-39b surface gravity (config.GS_CGS)
     tp_f: float = 0.25                 # 1/4 = whole-planet average (transmission terminator)
@@ -234,12 +233,6 @@ class Config:
     truth_log10kappa: float = -2.0
     prior_log10gamma: Tuple[float, float] = (-2.0, 0.7)   # kappa_v/kappa_th (log10)
     truth_log10gamma: float = -0.4
-    # Power-law T-P index in T = T0 * P^alpha (tp_model="powerlaw"). Its own
-    # prior: alpha is a dimensionless T(P) slope, not the Guillot opacity ratio
-    # it used to borrow. 0 is isothermal; ~0.1 is the radiative-region slope of
-    # an irradiated giant; negatives allow a mild inversion.
-    prior_alpha: Tuple[float, float] = (-0.10, 0.40)
-    truth_alpha: float = 0.10
     prior_lnR0: Tuple[float, float] = (-0.08, 0.08)       # reference-radius log scaling
     truth_lnR0: float = 0.0
     prior_offset_ppm: Tuple[float, float] = (-800.0, 800.0)   # per-group depth offset, ppm
@@ -277,10 +270,10 @@ class Config:
     # well-preconditioned targets). With the absolute-std preconditioner + per-stage
     # step adaptation here, 6 is the right planning number.
     smc_num_mcmc_steps: int = 6
-    # Preconditioned MALA with the staged forward-jvp(chem)+vjp(RT) gradient -- the
-    # only supported kernel. No gradient-free fallback exists ON PURPOSE: a flagged
-    # gradient pathology raises loudly instead of degrading the sampler.
-    smc_mcmc_kernel: str = "mala"
+    # The only mutation kernel is preconditioned MALA with the staged
+    # forward-jvp(chem)+vjp(RT) gradient. No gradient-free fallback exists ON
+    # PURPOSE: a flagged gradient pathology raises loudly instead of degrading
+    # the sampler.
     mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
@@ -420,18 +413,13 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     if cfg.infer_lnKzz:
         add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
 
-    # --- T-P (ExoJax Guillot or power-law) ---
-    if cfg.tp_model == "guillot":
-        add("Tirr", r"$T_{\rm irr}$ [K]", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
-        add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
-        if cfg.tp_infer_gamma:
-            add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
-    elif cfg.tp_model == "powerlaw":
-        # T0 is the 1-bar temperature, so it legitimately shares the Tirr box.
-        add("T0", r"$T_0$ [K]", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
-        add("alpha", r"$\alpha$", *cfg.prior_alpha, cfg.truth_alpha, "tp")
-    else:
+    # --- T-P (ExoJax Guillot) ---
+    if cfg.tp_model != "guillot":
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
+    add("Tirr", r"$T_{\rm irr}$ [K]", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
+    add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
+    if cfg.tp_infer_gamma:
+        add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
 
     # --- radius nuisance ---
     if cfg.infer_lnR0:
@@ -463,10 +451,6 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
 def validate_config(cfg: Config) -> None:
     if cfg.smc_num_particles <= 0:
         raise ValueError("smc_num_particles must be > 0")
-    if str(cfg.smc_mcmc_kernel).strip().lower() != "mala":
-        raise ValueError("this retrieval only supports smc_mcmc_kernel='mala' "
-                         "(staged fwd-jvp chemistry + vjp RT gradient); there is "
-                         "deliberately no gradient-free fallback kernel")
     if not (0.0 < cfg.smc_target_ess_frac <= 1.0):
         raise ValueError("smc_target_ess_frac must be in (0, 1]")
     # Counts that silently produce a broken or empty run if they reach zero: a
@@ -549,7 +533,7 @@ def validate_config(cfg: Config) -> None:
             "disabling one shifts the T-P and nuisance indices and silently "
             "reinterprets the parameter vector. Keep all three inferred (use a "
             "tight prior range if you want one effectively fixed).")
-    if cfg.tp_model not in ("guillot", "powerlaw"):
+    if cfg.tp_model != "guillot":
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
         raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "

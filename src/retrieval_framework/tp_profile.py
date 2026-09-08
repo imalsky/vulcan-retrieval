@@ -12,8 +12,6 @@ rolling our own:
         work lives in VULCAN's own ``build_atm``; we bypass it entirely by supplying
         ``Tco`` directly.)
 
-    tp_model="powerlaw" -> atmprof_powerlow(P, T0, alpha)
-
 ``build_tp_model(cfg)`` returns an object whose ``eval(tp_params, p_bar_grid)`` maps the
 *retrieved* T-P sub-vector + the fixed constants to a temperature array on ANY pressure
 grid (bar). The retrieval evaluates the SAME analytic curve on both the VULCAN grid (for
@@ -61,7 +59,7 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
         n_params : int
         model    : str
     """
-    from exojax.atm.atmprof import atmprof_Guillot, atmprof_powerlow  # lazy: after vulcan_chem
+    from exojax.atm.atmprof import atmprof_Guillot  # lazy: after vulcan_chem
 
     model = str(cfg.tp_model).strip().lower()
     g = float(cfg.tp_gravity_cgs)
@@ -86,14 +84,6 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
             # RAW profile -- no clip. Out-of-window draws are rejected upstream, not bent
             # into range (see pipeline.tp_valid).
             return atmprof_Guillot(p, g, kappa, gamma, jnp.asarray(Tint, dtype=tp.dtype), Tirr, f)
-
-    elif model == "powerlaw":
-        n_params = 2
-
-        def eval_fn(tp_params, p_bar):
-            tp = jnp.asarray(tp_params)
-            p = jnp.asarray(p_bar, dtype=tp.dtype)
-            return atmprof_powerlow(p, tp[0], tp[1])   # RAW -- no clip (see pipeline.tp_valid)
 
     else:
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")

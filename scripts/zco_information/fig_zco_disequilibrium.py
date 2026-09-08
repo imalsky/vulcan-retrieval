@@ -74,7 +74,6 @@ def main(out=Z.FIGS / "zco_disequilibrium.png", combo=Z.DEFAULT_COMBO):
     axA.plot(0, 0, "k+", ms=8)
     axA.set_xlabel(r"$\Delta\,\log_{10} Z$  [dex]")
     axA.set_ylabel(r"$\Delta\,\log_{10}(\mathrm{C/O})$  [dex]")
-    axA.set_title("(a) joint 68% error on Z and C/O, by chemistry tier", fontsize=12.5)
     axA.legend(fontsize=8.0, loc="upper left")
     axA.set_aspect("equal", adjustable="datalim")
 
@@ -91,7 +90,6 @@ def main(out=Z.FIGS / "zco_disequilibrium.png", combo=Z.DEFAULT_COMBO):
         axins.plot(0, 0, "k+", ms=5)
         axins.set_xlim(-zx, zx); axins.set_ylim(-zy, zy)
         axins.tick_params(labelsize=6.5)
-        axins.set_title("zoom: equil. vs photochem.", fontsize=7.5)
         axA.indicate_inset_zoom(axins, edgecolor="0.5", lw=0.8)
 
     # (b) where the metallicity information comes from: unique lnZ info, E vs P
@@ -106,26 +104,14 @@ def main(out=Z.FIGS / "zco_disequilibrium.png", combo=Z.DEFAULT_COMBO):
         axB.fill_between(wl_t, 0, i_t / scale, color=st["color"],
                          alpha=0.25 if t == "P" else 0.12, lw=0, zorder=1 if t != "P" else 2)
         axB.plot(wl_t, i_t / scale, color=st["color"], lw=1.8, label=st["label"], zorder=3)
-    for name, lam in Z.BANDS.items():
+    for lam in Z.BANDS.values():
         if wlP.min() <= lam <= wlP.max():
             axB.axvline(lam, color="0.8", lw=0.7, ls=":", zorder=0)
-            axB.text(lam, 1.02, name, fontsize=8.5, color="0.42", ha="center", va="bottom")
-    axB.set_xlim(wlP.min(), wlP.max()); axB.set_ylim(0, 1.14)
+    axB.set_xlim(wlP.min(), wlP.max()); axB.set_ylim(0, 1.0)
     axB.set_xlabel(r"Wavelength ($\mu$m)")
     axB.set_ylabel("unique $\\ln Z$ information\n(relative to photochem peak)")
-    axB.set_title("(b) where the metallicity information comes from", fontsize=12.5)
     axB.legend(fontsize=8.6, loc="upper left")
-    axB.annotate("SO$_2$: photochemistry\nonly", xy=(4.05, 0.98), xytext=(2.9, 0.66),
-                 fontsize=9, color="#8a1a0d", ha="left",
-                 arrowprops=dict(arrowstyle="->", color="#8a1a0d", lw=1.0))
-
-    fig.suptitle("Photochemistry doesn't just add a feature: it adds measurable "
-                 "metallicity information", fontsize=12.8, y=1.0)
-    fig.text(0.5, -0.02, "Same radiative transfer + real errors for all three; only the "
-             "VULCAN-JAX chemistry physics differs. Kzz, $T_{\\rm int}$, ln$R_0$, offsets "
-             "marginalized. Absolute $\\sigma$ are best-case (no clouds / free T-P).",
-             ha="center", fontsize=8.3, style="italic", color="0.35")
-    fig.subplots_adjust(left=0.075, right=0.975, top=0.9, bottom=0.14)
+    fig.subplots_adjust(left=0.075, right=0.975, top=0.97, bottom=0.11)
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"wrote {out}")
 
