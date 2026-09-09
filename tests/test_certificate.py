@@ -106,54 +106,6 @@ def test_a_clean_cold_run_passes():
     assert validate(_passing_cert(), _replay()) == []
 
 
-def test_tempered_cloud_is_refused():
-    """beta < 1 is a tempered intermediate, never a posterior."""
-    c = _passing_cert()
-    c["convergence"] = {"reached_beta1": False, "final_beta": 0.83,
-                        "n_stages": 19}
-    problems = validate(c, _replay())
-    assert any("TEMPERED" in p for p in problems), problems
-
-
-def test_beta_just_below_one_is_refused():
-    c = _passing_cert()
-    c["convergence"]["final_beta"] = 0.999
-    assert any("not 1 within" in p for p in validate(c, _replay()))
-
-
-def test_dirty_repo_is_refused():
-    """A run that cannot be attributed to a committed state is not evidence."""
-    c = _passing_cert()
-    c["code"]["repos"]["jax-vulcan"]["dirty"] = True
-    assert any("DIRTY" in p for p in validate(c, _replay()))
-
-
-def test_missing_validation_artifact_is_refused():
-    for name in REQUIRED_VALIDATION_ARTIFACTS:
-        c = _passing_cert()
-        c["validation_artifacts"][name] = None
-        problems = validate(c, _replay())
-        assert any(name in p and "missing" in p for p in problems), (name, problems)
-
-
-def test_an_unrecorded_or_removed_opacity_mode_is_refused():
-    """Only correlated-k runs are certifiable: no record at all, or a record
-    of the removed sampled line-by-line path, is a problem."""
-    c = _passing_cert()
-    c["resolved_config"].pop("opacity_mode")
-    assert any("opacity_mode" in p for p in validate(c, _replay()))
-    c = _passing_cert()
-    c["resolved_config"]["opacity_mode"] = "lbl"
-    assert any("removed" in p for p in validate(c, _replay()))
-
-
-def test_failed_validation_artifact_is_refused():
-    c = _passing_cert()
-    c["validation_artifacts"]["resolution_ladder"] = {
-        "status": "FAIL", "summary": "not converged", "sha256": "d"}
-    assert any("FAILED" in p for p in validate(c, _replay()))
-
-
 @pytest.mark.parametrize("key, value", [
     ("art_ptop_bar", 1e-8),          # pressure domain
     ("nz", 80),                      # chemistry grid
@@ -172,45 +124,12 @@ def test_artifact_measured_at_a_different_state_is_refused(key, value):
     assert any("different state" in p for p in validate(c, _replay()))
 
 
-def test_artifact_from_different_code_is_refused():
-    """The artifact measured what the code of its day computed."""
-    c = _passing_cert()
-    c["validation_artifacts"]["resolution_ladder"]["repos"] = {
-        "vulcan-retrieval": {"commit": "f" * 40}}
-    assert any("different state" in p for p in validate(c, _replay()))
-
-
 def test_artifact_without_a_recorded_config_is_refused():
     c = _passing_cert()
     c["validation_artifacts"]["resolution_ladder"]["resolved_config"] = {}
     assert any("nothing binds it" in p for p in validate(c, _replay()))
     assert not [p for p in validate(_passing_cert(), _replay())
                 if "different state" in p]
-
-
-def test_report_status_is_refused_for_a_gated_artifact():
-    """REPORT (a decisive test skipped) is refused for a gated artifact."""
-    c = _passing_cert()
-    c["validation_artifacts"]["top_pressure_ladder"] = {
-        "status": "REPORT", "summary": "decisive test not run", "sha256": "e"}
-    assert any("REPORT, not PASS" in p for p in validate(c, _replay()))
-
-
-def test_missing_cold_replay_is_refused():
-    problems = validate(_passing_cert(), None)
-    assert any("cold replay not run" in p for p in problems), problems
-
-
-def test_failed_cold_replay_is_refused():
-    problems = validate(_passing_cert(), _replay(passed=False))
-    assert any("cold replay MISMATCH" in p for p in problems), problems
-
-
-def test_missing_support_fraction_error_is_refused():
-    c = _passing_cert()
-    c["evidence"]["log_support_fraction_err"] = None
-    assert any("no log_support_fraction_err recorded" in p
-               for p in validate(c, _replay()))
 
 
 @pytest.mark.parametrize("key", ["smc_logZ", "smc_logZ_box",
@@ -222,25 +141,7 @@ def test_every_evidence_semantics_field_is_required(key):
     assert any(f"no {key} recorded" in p for p in validate(c, _replay()))
 
 
-def test_unknown_validation_artifact_status_is_refused():
-    c = _passing_cert()
-    c["validation_artifacts"]["resolution_ladder"]["status"] = None
-    assert any("expected PASS" in p for p in validate(c, _replay()))
-
-
 # --- run health: a diagnostic that is PRESENT is not a diagnostic that PASSED --
-
-def test_particle_degeneracy_is_refused():
-    """N rows of a handful of distinct states still draws a smooth corner plot."""
-    c = _passing_cert()
-    c["diagnostics"]["unique_particles"] = [140, 120, 9]
-    assert any("particle degeneracy" in p for p in validate(c, _replay()))
-
-
-def test_ess_collapse_is_refused():
-    c = _passing_cert()
-    c["diagnostics"]["ess"] = [110.0, 12.0, 105.0]
-    assert any("ESS collapsed" in p for p in validate(c, _replay()))
 
 
 @pytest.mark.parametrize("acc", [[0.55, 0.5, 0.01], [0.55, 0.5, 0.99]])
@@ -248,36 +149,6 @@ def test_acceptance_outside_the_band_is_refused(acc):
     c = _passing_cert()
     c["diagnostics"]["acceptance_rate"] = acc
     assert any("acceptance" in p for p in validate(c, _replay()))
-
-
-def test_late_ladder_convergence_rejections_are_refused():
-    """warmcap/stalled late in the ladder mean the posterior sits on the
-    convergence cliff, so the target is set by count_max, not by the physics."""
-    c = _passing_cert()
-    c["diagnostics"]["warm_capped"] = [12, 1, 40]
-    assert any("convergence cliff" in p for p in validate(c, _replay()))
-
-
-def test_a_prior_railed_median_is_refused():
-    c = _passing_cert()
-    c["posterior"][0]["prior_position"] = 0.995
-    problems = validate(c, _replay())
-    assert any("prior edge" in p and "lnZ" in p for p in problems), problems
-
-
-def test_a_prior_railed_TAIL_is_refused_even_with_a_central_median():
-    """A bimodal marginal can pin a mode to an edge with the median mid-box."""
-    c = _passing_cert()
-    c["posterior"][0]["prior_position"] = 0.50
-    c["posterior"][0]["q95_position"] = 0.995
-    problems = validate(c, _replay())
-    assert any("95th percentile" in p and "lnZ" in p for p in problems), problems
-
-
-def test_a_missing_posterior_summary_is_refused():
-    c = _passing_cert()
-    c["posterior"] = None
-    assert any("no posterior summary" in p for p in validate(c, _replay()))
 
 
 # --- warm runs ---------------------------------------------------------------
@@ -304,30 +175,83 @@ def test_a_validated_warm_run_passes():
     assert validate(_warm_cert(), _replay()) == []
 
 
-def test_warm_run_without_validate_warm_is_refused():
-    c = _warm_cert()
-    c["warm_validation"] = None
-    assert any("UNMEASURED" in p for p in validate(c, _replay()))
+# --- every refusal, one row each ----------------------------------------------
+# A passing certificate is mutated in one place and validate() must name the
+# gate; a row that stops refusing is a gate that silently opened.
+
+def _set(*path, value):
+    def mutate(c):
+        d = c
+        for k in path[:-1]:
+            d = d[k]
+        d[path[-1]] = value
+    return mutate
 
 
-def test_warm_run_missing_the_stamp_is_refused():
-    c = _warm_cert()
-    c["target"]["approximate_history_dependent_target"] = False
-    assert any("NOT stamped" in p for p in validate(c, _replay()))
+def _noop(c):
+    pass
 
 
-def test_cold_replay_does_not_substitute_for_mala_reversibility():
-    c = _warm_cert()
-    c["mala_reversibility"] = None
-    problems = validate(c, _replay())
-    assert any("mala_reversibility.json" in p for p in problems), problems
+_REFUSALS = [
+    # (id, certificate, mutation, replay, substrings one problem line must carry)
+    ("tempered", _passing_cert,                       # beta < 1 is an intermediate, never a posterior
+     _set("convergence", value={"reached_beta1": False, "final_beta": 0.83, "n_stages": 19}), _replay, ("TEMPERED",)),
+    ("beta_just_below_one", _passing_cert, _set("convergence", "final_beta", value=0.999), _replay, ("not 1 within",)),
+    ("dirty_repo", _passing_cert,                     # unattributable to a committed state = not evidence
+     _set("code", "repos", "jax-vulcan", "dirty", value=True), _replay, ("DIRTY",)),
+    *[(f"artifact_missing_{n}", _passing_cert, _set("validation_artifacts", n, value=None), _replay, (n, "missing"))
+      for n in REQUIRED_VALIDATION_ARTIFACTS],
+    ("artifact_failed", _passing_cert,
+     _set("validation_artifacts", "resolution_ladder", value={"status": "FAIL", "summary": "not converged", "sha256": "d"}),
+     _replay, ("FAILED",)),
+    ("artifact_report_status", _passing_cert,          # REPORT = a decisive test skipped
+     _set("validation_artifacts", "top_pressure_ladder", value={"status": "REPORT", "summary": "decisive test not run", "sha256": "e"}),
+     _replay, ("REPORT, not PASS",)),
+    ("artifact_status_unknown", _passing_cert, _set("validation_artifacts", "resolution_ladder", "status", value=None), _replay, ("expected PASS",)),
+    ("artifact_from_different_code", _passing_cert,    # it measured what the code of its day computed
+     _set("validation_artifacts", "resolution_ladder", "repos", value={"vulcan-retrieval": {"commit": "f" * 40}}),
+     _replay, ("different state",)),
+    ("artifact_different_opacity_data", _passing_cert,  # a swapped k-table leaves every config key identical
+     _set("validation_artifacts", "resolution_ladder", "science_data", "opacity_sha256", "H2O", value="9" * 64),
+     _replay, ("data:opacity_sha256:H2O",)),
+    ("artifact_opacity_data_unrecorded", _passing_cert,
+     _set("validation_artifacts", "top_pressure_ladder", "science_data", value={}), _replay, ("data:not recorded",)),
+    ("opacity_mode_unrecorded", _passing_cert, lambda c: c["resolved_config"].pop("opacity_mode"), _replay, ("opacity_mode",)),
+    ("opacity_mode_removed_lbl", _passing_cert, _set("resolved_config", "opacity_mode", value="lbl"), _replay, ("removed",)),
+    ("cold_replay_not_run", _passing_cert, _noop, lambda: None, ("cold replay not run",)),
+    ("cold_replay_failed", _passing_cert, _noop, lambda: _replay(passed=False), ("cold replay MISMATCH",)),
+    ("support_fraction_err_missing", _passing_cert, _set("evidence", "log_support_fraction_err", value=None), _replay,
+     ("no log_support_fraction_err recorded",)),
+    ("survival_fraction_missing", _passing_cert,        # the product hides WHICH cull removed prior mass (RC-06)
+     _set("evidence", "f_c2", value=None), _replay, ("survival fractions",)),
+    ("particle_degeneracy", _passing_cert,             # a handful of distinct states still draws a smooth corner plot
+     _set("diagnostics", "unique_particles", value=[140, 120, 9]), _replay, ("particle degeneracy",)),
+    ("ess_collapse", _passing_cert, _set("diagnostics", "ess", value=[110.0, 12.0, 105.0]), _replay, ("ESS collapsed",)),
+    ("convergence_cliff", _passing_cert,               # late warm-cap rejections: the target is set by count_max
+     _set("diagnostics", "warm_capped", value=[12, 1, 40]), _replay, ("convergence cliff",)),
+    ("prior_railed_median", _passing_cert, _set("posterior", 0, "prior_position", value=0.995), _replay, ("prior edge", "lnZ")),
+    ("prior_railed_tail", _passing_cert,               # a bimodal marginal pins a mode to the edge with the median mid-box
+     lambda c: c["posterior"][0].update(prior_position=0.50, q95_position=0.995), _replay, ("95th percentile", "lnZ")),
+    ("no_posterior_summary", _passing_cert, _set("posterior", value=None), _replay, ("no posterior summary",)),
+    ("unknown_chem_mode", _passing_cert, _set("target", "smc_chem_mode", value="lukewarm"), _replay, ("expected 'cold'",)),
+    ("warm_without_validate_warm", _warm_cert, _set("warm_validation", value=None), _replay, ("UNMEASURED",)),
+    ("warm_missing_stamp", _warm_cert, _set("target", "approximate_history_dependent_target", value=False), _replay, ("NOT stamped",)),
+    ("warm_no_mala_reversibility", _warm_cert,          # a cold replay does not substitute for it
+     _set("mala_reversibility", value=None), _replay, ("mala_reversibility.json",)),
+    ("warm_stale_mala_reversibility", _warm_cert, _set("mala_reversibility", "checkpoint_matches", value=False), _replay,
+     ("does not match",)),
+    ("warm_axis_unmeasured", lambda: _warm_cert(grad_rel_max_gated=float("nan")), _noop, _replay,  # NaN is not within-gate
+     ("not measured",)),
+]
 
 
-def test_stale_mala_reversibility_artifact_is_refused():
-    c = _warm_cert()
-    c["mala_reversibility"]["checkpoint_matches"] = False
-    problems = validate(c, _replay())
-    assert any("does not match" in p for p in problems), problems
+@pytest.mark.parametrize("cert, mutate, replay, expect", [r[1:] for r in _REFUSALS],
+                         ids=[r[0] for r in _REFUSALS])
+def test_the_certificate_refuses(cert, mutate, replay, expect):
+    c = cert()
+    mutate(c)
+    problems = validate(c, replay())
+    assert any(all(s in p for s in expect) for p in problems), (expect, problems)
 
 
 @pytest.mark.parametrize("key, bad", [
@@ -339,18 +263,6 @@ def test_stale_mala_reversibility_artifact_is_refused():
 def test_each_warm_axis_can_fail_the_certificate(key, bad):
     problems = validate(_warm_cert(**{key: bad}), _replay())
     assert any(key in p for p in problems), (key, problems)
-
-
-def test_unmeasured_warm_axis_is_not_a_pass():
-    """NaN means unmeasured, which must not read as within-gate."""
-    problems = validate(_warm_cert(grad_rel_max_gated=float("nan")), _replay())
-    assert any("not measured" in p for p in problems), problems
-
-
-def test_unknown_chem_mode_is_refused():
-    c = _passing_cert()
-    c["target"]["smc_chem_mode"] = "lukewarm"
-    assert any("expected 'cold'" in p for p in validate(c, _replay()))
 
 
 def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
@@ -599,25 +511,6 @@ def test_attrition_evidence_fails_closed(mutate, expect):
     c = _passing_cert()
     mutate(c["evidence"])
     assert any(expect in p for p in validate(c, _replay()))
-
-
-def test_artifact_measured_against_different_opacity_data_is_refused():
-    """A swapped k-table leaves every config key identical while changing the
-    model the ladder certified."""
-    c = _passing_cert()
-    art = c["validation_artifacts"]["resolution_ladder"]
-    art["science_data"]["opacity_sha256"]["H2O"] = "9" * 64
-    assert any("data:opacity_sha256:H2O" in p for p in validate(c, _replay()))
-    c2 = _passing_cert()
-    c2["validation_artifacts"]["top_pressure_ladder"]["science_data"] = {}
-    assert any("data:not recorded" in p for p in validate(c2, _replay()))
-
-
-def test_both_survival_fractions_must_reach_the_certificate():
-    """Their product hides WHICH cull removed the prior mass (RC-06)."""
-    c = _passing_cert()
-    c["evidence"]["f_c2"] = None
-    assert any("survival fractions" in p for p in validate(c, _replay()))
 
 
 def _repo(**over):
