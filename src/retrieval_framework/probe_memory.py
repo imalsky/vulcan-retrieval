@@ -2,16 +2,19 @@
 """probe_memory.py -- compile-only XLA memory analysis of each stage of the staged
 SMC evaluator, on the current preset/overrides.
 
-Every case is jit-lower()ed and compile()d but NEVER EXECUTED, so there is no OOM
-risk: XLA's buffer assignment (the same estimate behind the
+Every probed case is jit-lower()ed and compile()d but never executed (only the
+pipeline build and the synthetic observation run one forward), so there is no
+OOM risk from the cases themselves: XLA's buffer assignment (the same estimate behind the
 "Can't reduce memory use below ..." rematerialization warnings) is printed per
-case, at several batch widths. One job pinpoints which stage owns the peak and
-how it scales.
+case, at the widths the run actually uses. One job pinpoints which stage owns
+the peak and how it scales. Exit status is nonzero if any case failed to
+compile, so a wrapper cannot mistake a half-run probe for a certificate.
 
 Run on the GH200 via:  qsub -l walltime=02:00:00 -v PROBE_MEMORY=1 run_nas_w39b.pbs
 """
 from __future__ import annotations
 
+import math
 import sys
 import time
 from pathlib import Path
@@ -46,9 +49,14 @@ def main() -> int:
     print(f"[probe] pipeline built in {time.time()-t0:.0f}s", flush=True)
 
     N = int(cfg.smc_num_particles)
+    # init phase 1 evaluates ceil(N * init_oversample) cold draws in ONE primal
+    # batch (pipeline._init_state) -- the widest primal width in the run
+    n1 = math.ceil(N * float(cfg.init_oversample))
     key = jax.random.PRNGKey(0)
     U = pipe.sample_prior_u(key, N)
     Y0, refs0 = P._blank_state(pipe, N)
+    U1 = pipe.sample_prior_u(jax.random.PRNGKey(2), n1)
+    Y1, refs1 = P._blank_state(pipe, n1)
     fwd = pipe.fwd
     n_chem_tp = int(pipe.n_chem_tp)
     dtype = pipe.dtype
@@ -72,6 +80,7 @@ def main() -> int:
 
     Theta = jax.vmap(pipe.theta_from_u)(U)
     C_full = Theta[:, :n_chem_tp]
+    C1 = jax.vmap(pipe.theta_from_u)(U1)[:, :n_chem_tp]
     eye_c = jnp.eye(n_chem_tp, dtype=dtype)
 
     # ---- chemistry GRADIENT stage (cold two-stage solve + n_chem_tp jvp lanes) ----
@@ -89,14 +98,15 @@ def main() -> int:
         report(f"chem GRAD x{w} particles ({w*n_chem_tp} jvp lanes)",
                chem_grad, C_full[:w], Y0[:w], refs0[:w])
 
-    # ---- chemistry PRIMAL, full width (the known-fits reference) ----
+    # ---- chemistry PRIMAL at the init phase-1 width (smc_chem_chunk=0: unchunked) ----
     def chem_primal(Cc, Yc, Rc):
         def one(cc, yw, rf):
             y = fwd.chem_solve_cold(cc)
             return fwd.aux_from_y(y, cc), y
         return jax.vmap(one)(Cc, Yc, Rc)
 
-    report(f"chem PRIMAL x{N} particles", chem_primal, C_full, Y0, refs0)
+    report(f"chem PRIMAL x{n1} particles (init phase 1 = ceil(N*init_oversample))",
+           chem_primal, C1, Y1, refs1)
 
     # ---- RT stage alone (abstract inputs; vjp with unit cotangent) ----
     nl = int(cfg.art_nlayer)
@@ -132,7 +142,7 @@ def main() -> int:
         report(f"RT VJP x{w} particles", rt_vjp, _aux_sds(w),
                jax.ShapeDtypeStruct((w,), np.float64),
                jax.ShapeDtypeStruct((w, 2), np.float64))
-    rt_pw = int(cfg.smc_rt_chunk)
+    rt_pw = int(cfg.smc_rt_chunk) or n1        # 0 = unchunked = the whole phase-1 batch
     report(f"RT PRIMAL x{rt_pw} particles", rt_primal, _aux_sds(rt_pw),
            jax.ShapeDtypeStruct((rt_pw,), np.float64),
            jax.ShapeDtypeStruct((rt_pw, 2), np.float64))
@@ -148,14 +158,18 @@ def main() -> int:
     Y2, refs2 = P._blank_state(pipe, n2)
     report(f"FULL init_vg x{n2} (N+{int(cfg.init_phase2_spare)} phase-2 spares)",
            pipe.batch_eval_init_vg, U2, Y2, refs2)
-    report("FULL cold_l (primal likelihood batch)",
-           pipe.batch_eval_cold_l, U, Y0, refs0)
+    report(f"FULL cold_l x{n1} (init phase-1 primal likelihood batch)",
+           pipe.batch_eval_cold_l, U1, Y1, refs1)
 
     print("\n========== MEMORY PROBE SUMMARY ==========")
     for ln in lines:
         print(ln)
     print("(pool budget on a 96 GB GH200 at MEM_FRACTION=0.90 is ~81 GiB)", flush=True)
-    return 0
+    failed = [ln for ln in lines if " ERROR " in ln]
+    if failed:
+        print(f"PROBE FAILED: {len(failed)} case(s) did not compile -- no memory "
+              "certificate from this run", flush=True)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

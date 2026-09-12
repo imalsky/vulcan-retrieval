@@ -25,7 +25,7 @@ steady state is transport-limited -- the upper S8 reservoir drains through
 the condensation front on the Kzz timescale (~1e9 s) while dt stays capped
 at the front's condensation timescale, so every solve exhausts count_max.
 Builds two chem models (~1-2 min each, compile-dominated); every test skips
-cleanly when the chem stack is unavailable (same policy as test_warm_extrap).
+cleanly when the chem stack is unavailable (same policy as test_warm_reject).
 """
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def chem_iso(stack):
     # real TypeError -- vulcan_chem calling a VULCAN-JAX private method whose
     # signature had changed, which broke EVERY fresh forward run -- into a green
     # skip. Only three tests in the workspace build the chem model for real
-    # (this one, test_warm_reject and test_warm_extrap, which reach it through
+    # (this one, test_warm_reject and test_cold_reject, which reach it through
     # build_pipeline), so swallowing their failures hides the defect from CI.
     try:
         return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval,

@@ -54,7 +54,6 @@ def _passing_cert():
         "resolved_config_sha256": "c" * 64,
         "target": {"smc_chem_mode": "cold",
                    "approximate_history_dependent_target": False,
-                   "warm_extrapolate": False,
                    "digest": _DIGEST, "digest_samples": _DIGEST,
                    "digest_checkpoint": _DIGEST, "digest_manifest": _DIGEST,
                    "science_data": {k: dict(v) for k, v in _ART_DATA.items()}},
@@ -156,11 +155,11 @@ def test_acceptance_outside_the_band_is_refused(acc):
 def _warm_cert(**wv):
     c = _passing_cert()
     c["target"].update(smc_chem_mode="warm",
-                       approximate_history_dependent_target=True,
-                       warm_extrapolate=True)
+                       approximate_history_dependent_target=True)
     base = {"dlogl_max": 1e-3, "spectrum_dppm_max": 0.4,
             "atom_ratio_rel_max": 1e-9, "grad_rel_max_gated": 0.01,
-            "grad_zeroed_frac": 0.02}
+            "grad_zeroed_frac": 0.02, "abundance_mode": "elemental",
+            "validated_frac": 1.0, "checkpoint_matches": True}
     base.update(wv)
     c["warm_validation"] = base
     c["mala_reversibility"] = {
@@ -173,6 +172,15 @@ def _warm_cert(**wv):
 def test_a_validated_warm_run_passes():
     """Warm stays usable -- it just has to prove it."""
     assert validate(_warm_cert(), _replay()) == []
+
+
+def test_legacy_masks_mode_reports_inventory_drift_without_failing():
+    """The carve-out validate_warm already makes: under abundance_mode='masks'
+    the warm inventory is history-dependent BY CONSTRUCTION, so it is reported,
+    not gated. Gating it there would fail every legacy run for a known knob."""
+    c = _warm_cert(atom_ratio_rel_max=1.0, abundance_mode="masks")
+    assert validate(c, _replay()) == []
+    assert c["warm_validation"]["atom_ratio_rel_max"] == 1.0   # still recorded
 
 
 # --- every refusal, one row each ----------------------------------------------
@@ -242,6 +250,14 @@ _REFUSALS = [
      ("does not match",)),
     ("warm_axis_unmeasured", lambda: _warm_cert(grad_rel_max_gated=float("nan")), _noop, _replay,  # NaN is not within-gate
      ("not measured",)),
+    ("warm_inventory_drift", lambda: _warm_cert(atom_ratio_rel_max=1.0), _noop, _replay,  # collected since v2, gated since the 2026-09-11 audit
+     ("elemental inventory",)),
+    ("warm_validated_on_survivors", lambda: _warm_cert(validated_frac=0.04), _noop, _replay,  # 96 of 100 lost their cold reference
+     ("UNVALIDATED",)),
+    ("warm_coverage_unrecorded", lambda: _warm_cert(validated_frac=None), _noop, _replay,
+     ("no reference coverage",)),
+    ("warm_stale_validate_warm", lambda: _warm_cert(checkpoint_matches=False), _noop, _replay,  # same binding mala_reversibility carries
+     ("does not match the current",)),
 ]
 
 
@@ -259,6 +275,7 @@ def test_the_certificate_refuses(cert, mutate, replay, expect):
     ("spectrum_dppm_max", 50.0),
     ("grad_rel_max_gated", 0.9),
     ("grad_zeroed_frac", 0.9),
+    ("atom_ratio_rel_max", 1.0),
 ])
 def test_each_warm_axis_can_fail_the_certificate(key, bad):
     problems = validate(_warm_cert(**{key: bad}), _replay())
@@ -269,7 +286,7 @@ def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
                                                               monkeypatch):
     """An actual beta=1 output schema must not look like an empty run."""
     (tmp_path / "config.json").write_text(json.dumps({
-        "smc_chem_mode": "cold", "warm_extrapolate": False,
+        "smc_chem_mode": "cold",
         "inferred_param_names": ["lnZ", "noise_inflation"],
         "inferred_param_prior_types": ["uniform", "log10_uniform"],
         "inferred_param_prior_lo": [-2.0, 0.5],

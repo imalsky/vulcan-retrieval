@@ -156,11 +156,6 @@ def gpu_config(**overrides: Any) -> Config:
         # convergence tolerance; the resulting logZ is approximate in a way
         # diagnostics cannot repair.
         smc_chem_mode="cold",
-        # warm_extrapolate is a WARM-only optimization (validate_config raises
-        # if it is on in cold mode): it seeds each warm solve at the first-order
-        # tangent prediction of the carried column, and there is no carried
-        # column to extrapolate from in cold mode.
-        warm_extrapolate=False,
         # Four sequential cold sweeps preserve particle count but may require
         # multiple 24 h jobs. RESUME continues the absolute stage index from the
         # checkpoint; CALIBRATE_ONLY must fit the configured governor before submit.

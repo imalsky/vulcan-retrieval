@@ -82,7 +82,7 @@ def smoke():
         return jnp.asarray(cd.accept_count, jnp.int32)
 
     ACC = np.asarray(jax.vmap(_ac)(C_, Y0, refs0))
-    L_g, G, _Yn, _rn, n_bad, _dy, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
+    L_g, G, _Yn, _rn, n_bad, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
     L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]   # gated too, since this pass
     return dict(pipe=pipe, cmax=int(pipe.fwd.chem.warm_count_max), ACC=ACC,
                 L_gated=np.asarray(L_g), G=np.asarray(G), n_bad=int(n_bad),

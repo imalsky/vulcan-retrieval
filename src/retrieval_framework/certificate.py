@@ -584,6 +584,11 @@ def collect(out_dir: Path) -> dict:
     ckpt = _load_npz(out_dir / "smc_checkpoint.npz")
     vwarm = _load_npz(out_dir / "validate_warm.npz")
 
+    _ckpt_file = out_dir / "smc_checkpoint.npz"
+    _ckpt_sha = _sha256(_ckpt_file) if _ckpt_file.is_file() else None
+    _warm_n_ok = _scalar(vwarm, "n_validated")
+    _warm_n = _scalar(vwarm, "n_particles")
+
     chem_mode = str(cfg_dict.get("smc_chem_mode", "")).strip().lower() or None
     final_beta = _scalar(samples, "final_beta")
     reached = _scalar(samples, "reached_beta1")
@@ -617,7 +622,6 @@ def collect(out_dir: Path) -> dict:
             "smc_chem_mode": chem_mode,
             "approximate_history_dependent_target": bool(
                 _scalar(samples, "approximate_history_dependent_target", 0)),
-            "warm_extrapolate": cfg_dict.get("warm_extrapolate"),
         },
         "convergence": {
             "reached_beta1": (None if reached is None else bool(reached)),
@@ -662,6 +666,10 @@ def collect(out_dir: Path) -> dict:
             "n_particles": _scalar(extra, "smc_num_particles"),
             "n_mcmc_steps": _scalar(extra, "smc_num_mcmc_steps"),
         },
+        # Every metric here is a max over the SURVIVING cold references, measured
+        # against ONE checkpoint, so coverage and the checkpoint digest travel
+        # with them (mala_reversibility binds its own the same way). An npz
+        # predating the gate reads None, which validate() refuses.
         "warm_validation": (None if vwarm is None else {
             "dlogl_max": float(np.nanmax(np.abs(np.asarray(vwarm["dlogl"]))))
                          if "dlogl" in vwarm.files else None,
@@ -669,6 +677,12 @@ def collect(out_dir: Path) -> dict:
             "atom_ratio_rel_max": _scalar(vwarm, "atom_ratio_rel_max"),
             "grad_rel_max_gated": _scalar(vwarm, "grad_rel_max_gated"),
             "grad_zeroed_frac": _scalar(vwarm, "grad_zeroed_frac"),
+            "abundance_mode": _scalar(vwarm, "abundance_mode"),
+            "validated_frac": (float(_warm_n_ok) / float(_warm_n)
+                               if _warm_n_ok is not None and _warm_n else None),
+            "checkpoint_sha256": _scalar(vwarm, "checkpoint_sha256"),
+            "checkpoint_matches": bool(
+                _ckpt_sha and _scalar(vwarm, "checkpoint_sha256") == _ckpt_sha),
         }),
         "posterior": _posterior_summary(samples, cfg_dict),
         "mala_reversibility": _mala_reversibility_artifact(out_dir),
@@ -742,7 +756,11 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "bias is UNMEASURED, which is not the same as small")
         else:
             from retrieval_framework.validate_warm import (
-                DLOGL_MAX_PASS, GRAD_REL_FAIL, GRAD_ZEROED_FRAC_FAIL,
+                ATOM_REL_PASS,
+                COLD_NONCONV_WARN_FRAC,
+                DLOGL_MAX_PASS,
+                GRAD_REL_FAIL,
+                GRAD_ZEROED_FRAC_FAIL,
                 SPEC_PPM_MAX_PASS,
             )
             checks = [
@@ -751,6 +769,12 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 ("grad_rel_max_gated", GRAD_REL_FAIL, "MALA drift agreement"),
                 ("grad_zeroed_frac", GRAD_ZEROED_FRAC_FAIL, "zeroed-drift fraction"),
             ]
+            # Carve-out is validate_warm's own: under legacy
+            # abundance_mode="masks" the warm inventory IS history-dependent by
+            # construction, so there it is reported, not gated.
+            if str(wv.get("abundance_mode") or "elemental") == "elemental":
+                checks.append(
+                    ("atom_ratio_rel_max", ATOM_REL_PASS, "elemental inventory"))
             for key, limit, label in checks:
                 v = wv.get(key)
                 if v is None or (isinstance(v, float) and math.isnan(v)):
@@ -758,6 +782,25 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 elif float(v) >= limit:
                     problems.append(
                         f"warm run: {label} ({key}) {float(v):.3e} >= {limit}")
+            # Excluded particles are UNVALIDATED, not agreeing: a cloud that
+            # lost most of its cold references cannot certify on what survived.
+            frac = wv.get("validated_frac")
+            if frac is None:
+                problems.append(
+                    "warm run: validate_warm.npz records no reference coverage "
+                    "(n_validated/n_particles); rerun validate_warm")
+            elif float(frac) < 1.0 - COLD_NONCONV_WARN_FRAC:
+                problems.append(
+                    f"warm run: only {100.0 * float(frac):.1f}% of the cloud has "
+                    "a converged cold reference; the rest is UNVALIDATED (floor "
+                    f"{100.0 * (1.0 - COLD_NONCONV_WARN_FRAC):.0f}%)")
+            # Same binding mala_reversibility carries: a passing artifact left
+            # beside a replaced checkpoint would otherwise read as current.
+            if not wv.get("checkpoint_matches"):
+                problems.append(
+                    "warm run whose validate_warm.npz does not match the current "
+                    "smc_checkpoint.npz: the warm-bias evidence was measured on "
+                    "a different cloud")
         mala = cert.get("mala_reversibility")
         if mala is None:
             problems.append(

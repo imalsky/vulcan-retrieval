@@ -31,6 +31,7 @@ logger = logging.getLogger("retrieval")
 # import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config        # constants (MOLECULES, ...)
 from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
+import jax
 import jax.numpy as jnp
 
 from retrieval_framework import tp_profile   # ExoJax Guillot / power-law T-P
@@ -250,21 +251,30 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return (vmr, vmr_h2, vmr_he, T_art, mmw_art)
 
     def native_depth_aux(chem_theta, lnR0, cloud=None):
-        """Full chain -> (native depth, aux) where aux = (vmr, vmr_h2, vmr_he, T_art,
-        mmw_art) are the ART-grid primal profiles. The aux lets a caller take an
-        RT-ONLY jvp (e.g. d/dlnR0 or the cloud parameters, which do not touch the
+        """Full chain -> (native depth, aux, ok) where aux = (vmr, vmr_h2, vmr_he,
+        T_art, mmw_art) are the ART-grid primal profiles. The aux lets a caller take
+        an RT-ONLY jvp (e.g. d/dlnR0 or the cloud parameters, which do not touch the
         chemistry) without re-running or re-differentiating the VULCAN while_loop --
         the block-structured likelihood gradient in pipeline.py relies on this split.
+
+        ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
+        canonical convergence bit AND accept_count under count_max -- the same
+        predicate the staged batch evaluators apply (pipeline._proposal_converged
+        plus the cap). The scalar likelihood and the block gradient reject on it,
+        so no likelihood entry point accepts a finite spectrum from an uncertified
+        solve. Reading the diag is free: every field rides the primal carry.
 
         ``cloud`` is None (off) or a (2,) array [log10 kappac0, alphac] for the
         ExoJax powerlaw_clouds term (see exojax_rt / config.CLOUD_NUC0)."""
         chem_theta = jnp.asarray(chem_theta)
-        y = chem_solve_cold(chem_theta)                            # (nz, ni) absolute
+        y, cd = chem_solve_cold_diag(chem_theta)                   # (nz, ni) absolute
+        ok = ((jnp.asarray(cd.conv_normal) > 0.5)
+              & (cd.accept_count < int(chem.count_max))).astype(y.dtype)
         aux = aux_from_y(y, chem_theta)                            # ART-grid profiles
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         depth = rt.transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0),
                                         vmr_he=vmr_he, cloud=cloud)
-        return depth, aux
+        return depth, aux, jax.lax.stop_gradient(ok)
 
     def rt_depth(aux, lnR0, cloud=None):
         """RT-only depth at frozen chemistry/T-P profiles (for the cheap lnR0/cloud jvps)."""

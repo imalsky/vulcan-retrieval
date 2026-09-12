@@ -103,14 +103,6 @@ class Config:
     # Proposals needing more become ordinary MH rejections. Cold/two-stage solves keep
     # count_max, and validate_config requires this cap not to exceed it.
     warm_count_max: int = 1500
-    # Tangent-extrapolated warm starts (OPT-IN). Seed each MALA proposal's warm solve
-    # from Y + (dy/dtheta)·dtheta -- dy = the converged column's parameter tangents,
-    # which the gradient pass already computes per particle (and otherwise discards).
-    # It helps MALA-sized moves, not large jumps, and requires smc_chem_mode="warm".
-    # The predicted state already carries the lnZ/C-O shift, so refs are updated to
-    # avoid double scaling. Its tangents ride in checkpoints; a legacy checkpoint
-    # without them is refused.
-    warm_extrapolate: bool = False
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
     # physically meaningless large-dt Ros2 oscillations without changing the canonical
     # convergence criteria.
@@ -510,10 +502,6 @@ def validate_config(cfg: Config) -> None:
             "the warm mutation cap exists to reject doomed proposals EARLIER than the "
             "cold cap, never later (build_chem_model enforces the same against the "
             "vulcan_cfg default when count_max is inherited)")
-    if cfg.warm_extrapolate and str(cfg.smc_chem_mode).strip().lower() != "warm":
-        raise ValueError("warm_extrapolate=True requires smc_chem_mode='warm' -- the "
-                         "extrapolation seeds the warm continuation; there is nothing "
-                         "to seed on the cold map")
     # The chemistry block [lnZ, c_o, lnKzz] is LOAD-BEARING and POSITIONAL:
     # pipeline.py / retrieval_forward.py / vulcan_forward.vulcan_chem unpack the
     # parameter vector by fixed index (theta[0]=lnZ, theta[1]=c_o, theta[2]=lnKzz,
@@ -640,7 +628,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    preconditioner: full cloud covariance (Cholesky)   "
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
-        f"   warm_extrapolate={'on' if cfg.warm_extrapolate else 'off'}   "
+        "   "
         f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",
         f"    walltime governor: {cfg.walltime_seconds / 3600.0:.1f} h"
         + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),

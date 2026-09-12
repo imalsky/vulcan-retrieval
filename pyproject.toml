@@ -104,11 +104,4 @@ line-length = 100
 [tool.ruff.lint.per-file-ignores]
 # env-before-import contract: vulcan_forward.vulcan_chem sets the VULCAN_JAX_*
 # import-frozen env vars (and jax x64) BEFORE importing jax/vulcan_jax, so
-# callers import it ahead of other modules; manuscript figure scripts
-# sys.path-insert jax_paper/scripts for the shared _common house style.
-"examples/run_demo.py" = ["E402"]
-"examples/run_figs.py" = ["E402"]
-"examples/fig_exojax_sensitivity.py" = ["E402"]
-"scripts/zco_information/fig_zco_information.py" = ["E402"]
-"scripts/zco_information/fig_zco_disequilibrium.py" = ["E402"]
-"scripts/zco_information/fig_zco_geometry.py" = ["E402"]
+# callers import it ahead of other modules.

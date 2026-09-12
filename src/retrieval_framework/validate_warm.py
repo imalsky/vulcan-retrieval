@@ -53,6 +53,8 @@ from pathlib import Path
 
 import numpy as np
 
+from retrieval_framework.certificate import _sha256  # the one file-digest helper
+
 # PASS gate on max|logL_cold - logL_warm| over the cloud. 0.1 log-units is far
 # inside a 1-sigma contour shift for a ~10-D posterior (whose logL spans ~n_dim/2
 # across the cloud); the convergence tolerance (yconv_cri=0.01) predicts ~1e-2.
@@ -241,7 +243,7 @@ def main() -> None:
         cold_fn = jax.jit(pipe.batch_eval_cold_vg)
         for i0 in range(0, N, chunk):
             i1 = min(i0 + chunk, N)
-            Lc, Gc, Yc, _refs_c, _nbad, _DYc, st = cold_fn(
+            Lc, Gc, Yc, _refs_c, _nbad, st = cold_fn(
                 U[i0:i1], Y0[i0:i1], refs0[i0:i1])
             jax.block_until_ready(Lc)
             L_parts.append(np.asarray(jax.device_get(Lc)))
@@ -347,6 +349,14 @@ def main() -> None:
                spectrum_dppm_max=np.asarray(dppm_max),
                atom_ratio_rel_max=np.asarray(atom_rel_max),
                count_max=np.asarray(count_max, np.int64),
+               # Identity + coverage, for the certificate's gates: without the
+               # digest a stale npz certifies a different cloud, and without
+               # the counts a cloud validated on four surviving references
+               # reads exactly like one validated on all N.
+               checkpoint_sha256=np.asarray(_sha256(ck_path)),
+               abundance_mode=np.asarray(abundance_mode),
+               n_validated=np.asarray(s["n_ok"], np.int64),
+               n_particles=np.asarray(s["n"], np.int64),
                **({} if gs is None else dict(
                    grad_rel=gs["rel"], grad_cos=gs["cos"],
                    grad_rel_max=np.asarray(gs["rel_max"]),

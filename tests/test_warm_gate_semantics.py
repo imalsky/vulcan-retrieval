@@ -36,14 +36,6 @@ def test_default_chem_mode_is_cold():
     assert C.Config.smc_chem_mode == "cold"
 
 
-def test_warm_extrapolate_is_off_by_default_and_requires_warm():
-    """warm_extrapolate has no meaning without a carried column to extrapolate."""
-    assert C.Config.warm_extrapolate is False
-    cfg = C.Config(smc_chem_mode="cold", warm_extrapolate=True)
-    with pytest.raises(ValueError, match="warm_extrapolate"):
-        C.validate_config(cfg)
-
-
 def test_w39b_production_preset_resolves_to_cold():
     """The case the paper reports must not quietly stay on the warm target."""
     import importlib.util
@@ -56,7 +48,6 @@ def test_w39b_production_preset_resolves_to_cold():
     spec.loader.exec_module(mod)
     cfg = mod.PRESETS["gpu"]()
     assert cfg.smc_chem_mode == "cold"
-    assert cfg.warm_extrapolate is False
 
 
 # --- the gradient gate -------------------------------------------------------

@@ -8,8 +8,8 @@ synthetic observations, then:
      forward-mode gradient (they are algebraically identical; this catches wiring
      bugs in the block assembly),
   2. validates the gradient against a central finite difference of the re-converged
-     likelihood, dimension by dimension (the same check the parent smoke_test.py
-     runs for the sensitivity demo),
+     likelihood, dimension by dimension (the same check jax_paper's
+     scripts/retrieval/smoke_test.py runs for the sensitivity demo),
   3. asserts the STAGED batched evaluator (chemistry fwd-jvp lanes + ONE RT vjp,
      lax.map-chunked -- the SMC hot path) == the per-particle block gradient, and
   4. FD-checks the WARM-continuation gradient (the mutation-kernel map: re-converge
@@ -123,7 +123,7 @@ def main() -> int:
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
     U_test = jnp.stack([u0, u0 + du, u0 - du])
     Y0, refs0 = P._blank_state(pipe, int(U_test.shape[0]))
-    Lb, Gb2, Yb, refsb, nbad_b, _dy, _stats = jax.jit(pipe.batch_eval_cold_vg)(U_test, Y0, refs0)
+    Lb, Gb2, Yb, refsb, nbad_b, _stats = jax.jit(pipe.batch_eval_cold_vg)(U_test, Y0, refs0)
     assert int(nbad_b) == 0, "staged cold eval flagged gradient pathologies"
     Lb = np.asarray(Lb); Gb2 = np.asarray(Gb2)
     ok_staged = True
@@ -162,7 +162,7 @@ def main() -> int:
     Y_w, refs_w = Yb[:1], refsb[:1]
     move_vg = jax.jit(pipe.batch_eval_move_vg)
     move_l = jax.jit(pipe.batch_eval_move_l)
-    _L1, G1, _, _, nbad_w, _dyw, _statsw = move_vg(U1, Y_w, refs_w)
+    _L1, G1, _, _, nbad_w, _statsw = move_vg(U1, Y_w, refs_w)
     assert int(nbad_w) == 0, "warm move eval flagged gradient pathologies"
     g_warm = np.asarray(G1[0])
     ok_warm = True
