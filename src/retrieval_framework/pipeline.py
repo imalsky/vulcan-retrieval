@@ -563,7 +563,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # A non-finite DEPTH is a rejected proposal (-1e30 sentinel -> -inf MH accept;
         # its gradient is then irrelevant and zeroed only to keep arithmetic clean).
         # A finite depth with a NON-FINITE GRADIENT is an AD pathology: flag it so the
-        # host driver raises loudly (project rule: no silent gradient-free fallback).
+        # host driver raises loudly (project rule: no silent gradient-free fallback;
+        # smc_mcmc_kernel="rwm" is a CONFIGURED kernel, never a degradation path).
         bad_grad = finite & ~jnp.all(jnp.isfinite(g))
         val = jnp.where(finite, val, jnp.asarray(-1.0e30, dtype))
         g = jnp.where(finite & jnp.isfinite(g), g, jnp.zeros_like(g))
@@ -572,8 +573,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
                          mutation_cap: bool = True):
         """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, n_bad_grad, stats)
-        when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new)
-        [+ per-particle ConvDiag when diag]; all (N,)-batched. ``n_bad_grad``
+        when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new, stats)
+        -- or (L, Y_new, refs_new, per-particle ConvDiag) when diag; all
+        (N,)-batched. ``n_bad_grad``
         counts finite-likelihood/non-finite-gradient AD pathologies -- the host
         driver raises on it (loud-error rule; no silent random-walk degradation).
 
@@ -737,9 +739,19 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 AUX, Ynew, CDL = jax.vmap(_chem_one)(C_, Y, refs)
                 vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
                 G = None
-                usable = (valid
-                          & (CDL.accept_count < wcmax)
-                          & (CDL.conv_normal > 0.5))
+                ACC = CDL.accept_count.astype(jnp.int32)
+                conv_ok = CDL.conv_normal > 0.5
+                under_cap = ACC < wcmax
+                usable = valid & under_cap & conv_ok
+                # Same two rejection classes the gradient branch tallies above.
+                # The gradient-free (rwm) mutation kernel runs THIS branch, and
+                # the certificate's late-ladder convergence-cliff gate reads the
+                # tallies -- discarding them here would make that gate pass
+                # vacuously on a primal-only run.
+                stats = _zero_eval_stats(Theta.shape[0], dtype)._replace(
+                    n_capped=jnp.sum((valid & ~under_cap).astype(jnp.int32)),
+                    n_stalled=jnp.sum((valid & under_cap & ~conv_ok).astype(jnp.int32)),
+                    acc=ACC, longdy=CDL.longdy.astype(dtype), conv_ok=conv_ok)
             L = jnp.where(jnp.isfinite(vals) & usable, vals, jnp.asarray(-1.0e30, dtype))
             # a blown (-1e30, rejected/culled) solve -- non-finite forward, an
             # out-of-window T-P, OR a non-converged warm proposal -- must not poison the
@@ -758,7 +770,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 return L, G, Ynew, refs_new, n_bad, stats
             if diag:
                 return L, Ynew, refs_new, CDIAG
-            return L, Ynew, refs_new
+            return L, Ynew, refs_new, stats
 
         return eval_batch
 
@@ -1044,7 +1056,10 @@ def _get_batch_evals(pipe: Pipeline):
     return the 6-tuple (L, G, Y_new, refs_new, n_bad, stats); ``stats`` is an EvalStats
     (uniform across the mutation-capped, init-uncapped, cold, and stub variants:
     per-batch n_capped/n_stalled tallies + per-particle acc/longdy/conv_ok/
-    bad_grad/chem_tan_bad). Likelihood-only evaluators return (L, Y_new, refs_new).
+    bad_grad/chem_tan_bad). Likelihood-only evaluators return
+    (L, Y_new, refs_new, stats) with the same EvalStats tail minus the gradient
+    fields, so the gradient-free mutation kernel reports the SAME rejection
+    classes the certificate gates.
     Real pipelines carry the staged chemistry+RT evaluators; stub pipes (unit tests,
     no chemistry) get a stateless adapter so the SMC/MALA core is exercised through
     the exact same code path."""
@@ -1067,7 +1082,8 @@ def _get_batch_evals(pipe: Pipeline):
             return (L, G, Y, refs, jnp.sum(bad.astype(jnp.int32)), stats)
 
         def eval_l(U, Y, refs):
-            return jax.vmap(pipe.log_likelihood_u)(U), Y, refs
+            return (jax.vmap(pipe.log_likelihood_u)(U), Y, refs,
+                    _zero_eval_stats(U.shape[0], U.dtype))
 
         pipe._stub_evals = (eval_vg, eval_l)
     evg, el = pipe._stub_evals
@@ -1165,7 +1181,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     if has_diag:
         L0, Y, refs, cd0 = pipe._init_l_jit(U, Y0, refs0)
     else:
-        L0, Y, refs = pipe._init_l_jit(U, Y0, refs0)
+        L0, Y, refs, _ = pipe._init_l_jit(U, Y0, refs0)
     jax.block_until_ready(L0)
 
     # per-particle rejection (real pipes only): non-finite forward, count_max-
@@ -1350,8 +1366,12 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     detailed-balance risk the MH correction does not see -- keep both ~0 in the
     late ladder.
 
-    Runs `n_mcmc` preconditioned-MALA sweeps over the particle cloud as a HOST
-    LOOP over a single-sweep jitted kernel (RNG identical to the former
+    Runs `n_mcmc` sweeps of the configured kernel over the particle cloud.
+    ``smc_mcmc_kernel="mala"`` is preconditioned MALA on the staged
+    forward-jvp(chem)+vjp(RT) gradient; ``"rwm"`` is a primal-only
+    full-covariance random-walk Metropolis on the SAME Cholesky preconditioner
+    and the same step, whose symmetric proposal makes log q cancel. Sweeps run
+    as a HOST LOOP over a single-sweep jitted kernel (RNG identical to the former
     lax.scan: the same pre-split keys, consumed in the same order). The host
     loop is what makes the run debuggable: each sweep's health is checked as it
     completes -- every badgrad event dumps its per-particle forensics (indices,
@@ -1379,9 +1399,10 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     the offending sweep (loud-error rule -- a MALA that silently loses its
     gradient is a different sampler); callers need no separate health check."""
     log_prior_u = pipe.log_prior_u
-    _, _, move_vg, _ = _get_batch_evals(pipe)
+    _, _, move_vg, move_l = _get_batch_evals(pipe)
     theta_from_u = pipe.theta_from_u
     n_ct = int(getattr(pipe, "n_chem_tp", 0))
+    kernel = str(pipe.cfg.smc_mcmc_kernel).strip().lower()
 
     def sweep(k, U, Y, refs, L, G, beta, step, scale):
         def dlogprior(U_):
@@ -1441,7 +1462,41 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         return (U, Y, refs, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
-    sweep_jit = jax.jit(sweep)
+    def sweep_rwm(k, U, Y, refs, L, G, beta, step, scale):
+        """Gradient-free full-covariance random-walk Metropolis, same 11-tuple.
+
+        u' ~ N(u, 2*step*C) with C = scale @ scale.T -- the MALA proposal with
+        the drift dropped, so the proposal is symmetric and log q cancels from
+        the MH ratio. Key splitting is the SAME two-way split in the SAME order
+        as `sweep`, so the absolute-stage randomness contract is unchanged."""
+        kp, ka = jax.random.split(k)
+        noise = jax.random.normal(kp, U.shape, dtype=U.dtype)
+        U_new = U + jnp.sqrt(2.0 * step) * (noise @ scale.T)
+        theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; keeps the tuple shape
+        L_new, Y_new, refs_new, stats = move_l(U_new, Y, refs)
+        LP = jax.vmap(log_prior_u)(U) + beta * L
+        LP_new = jax.vmap(log_prior_u)(U_new) + beta * L_new
+        log_acc = LP_new - LP                       # symmetric proposal: log q cancels
+        # same -1e29 invalid-forward sentinel gate as the MALA sweep
+        log_acc = jnp.where(jnp.isfinite(log_acc) & (L_new > -1.0e29),
+                            log_acc, -jnp.inf)
+        accept = jnp.log(jax.random.uniform(ka, (U.shape[0],), dtype=U.dtype)) < log_acc
+        U = jnp.where(accept[:, None], U_new, U)
+        Y = jnp.where(accept[:, None, None], Y_new, Y)
+        refs = jnp.where(accept[:, None], refs_new, refs)
+        L = jnp.where(accept, L_new, L)
+        # G is carried UNTOUCHED, never zeroed: grad_u is a required checkpoint
+        # key (the checkpoint writer and validate_warm both read it), and a
+        # zeroed array there would read as a converged gradient rather than as
+        # "this kernel never computed one".
+        acc = jnp.minimum(jnp.exp(jnp.minimum(log_acc, 0.0)), 1.0)
+        n_rej = jnp.sum((L_new <= -1.0e29).astype(jnp.int32))
+        # structurally no tangent on this path, so no bad-gradient class exists
+        n_bad = jnp.zeros((), jnp.int32)
+        return (U, Y, refs, L, G, jnp.mean(acc), n_rej, n_bad, stats,
+                theta_new, L_new)
+
+    sweep_jit = jax.jit(sweep_rwm if kernel == "rwm" else sweep)
 
     max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
 
@@ -1660,6 +1715,12 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
 
     # _DRAW_KEY / _INIT_KEY sit outside the per-stage fold_in namespace below.
     step = float(cfg.mala_step_size)
+    # Both kernels share mala_step_size, its clamps and the Robbins-Monro state;
+    # only the acceptance they aim at differs (0.234 is the d->inf optimum for a
+    # random walk, 0.55 the MALA target).
+    target_acc = float(cfg.mcmc_target_accept_mala
+                       if str(cfg.smc_mcmc_kernel).strip().lower() == "mala"
+                       else cfg.mcmc_target_accept_rwm)
     log_step = math.log(min(max(step, cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
     scale = np.eye(n_dim)
     mutate = _make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
@@ -1843,7 +1904,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # (5) Robbins-Monro step-size trim toward the target acceptance (fine-tuning
         # only -- the width is carried by the absolute preconditioner above)
         if cfg.mcmc_stage_adapt and math.isfinite(acc_f):
-            log_step += float(cfg.mcmc_stage_adapt_gain) * (acc_f - float(cfg.mcmc_target_accept_mala))
+            log_step += float(cfg.mcmc_stage_adapt_gain) * (acc_f - target_acc)
             log_step = math.log(min(max(math.exp(log_step), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
 
         beta = beta_new

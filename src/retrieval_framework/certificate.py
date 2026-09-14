@@ -1271,7 +1271,7 @@ def cold_replay(run_dir: Path, cfg, out_dir: Path, n: int) -> dict:
 
         Y0, refs0 = P._blank_state(pipe, len(idx))
         cold_l = jax.jit(pipe.batch_eval_cold_l)
-        L_new, _Y, _refs = cold_l(jnp.asarray(U[idx]), Y0, refs0)
+        L_new, _Y, _refs, _stats = cold_l(jnp.asarray(U[idx]), Y0, refs0)
         L_new = np.asarray(jax.device_get(L_new), np.float64)
 
         d = np.abs(L_new - L_rec[idx])

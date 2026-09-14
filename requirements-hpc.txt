@@ -3,10 +3,10 @@
 # jax/jaxlib are PINNED here (not floored) so a standalone reproduction env matches
 # the validated combination on any interpreter -- on 3.11+ a bare floor would
 # resolve the latest untested jax instead (jax dropped Python 3.10 at 0.7.0).
-# The package metadata (vulcan-retrieval's pyproject) declares vulcan-jax>=0.3.0
-# for TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
-# pins deliberately and keep them at or above the floors pyproject declares
-# (vulcan-jax>=0.3.5, vulcan-forward>=0.12.1).
+# The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
+# TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
+# pins deliberately and keep them at or above those floors
+# (vulcan-jax>=0.10.1, vulcan-forward>=0.18.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all. Its
 # commit matches jwst-transit-authority's deploy/pins.env, so a reproduction env and
@@ -23,6 +23,6 @@ scipy>=1.12
 matplotlib
 corner
 tqdm
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@b3932f5db7e0cb34258bd1baa19c155edc5495bf
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@63a73dea51932a7134c926d642aa9988179694d7
+vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@578da7af572278d07e1dce35deae3f36b4d57af4
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@b72b0d251db50b92cc5f35df23c77498a95c3df9
 -e .

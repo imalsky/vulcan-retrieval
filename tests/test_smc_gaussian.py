@@ -63,17 +63,27 @@ def test_smc_recovers_gaussian_posterior(tmp_path):
     assert np.all(np.diff(b) > 0) and abs(b[-1] - 1.0) < 1e-8
 
 
-def test_full_covariance_preconditioner_on_a_correlated_posterior(tmp_path):
-    """The MALA preconditioner is the cloud's full Cholesky factor, so the MH
-    correction whitens with L^-1 rather than dividing by a per-dim width. A wrong
-    whitening biases the posterior SHAPE and the evidence, neither of which the
-    uncorrelated test above can see.
+@pytest.mark.parametrize("kernel, n_sweeps", [("mala", 8), ("rwm", 24)])
+def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_sweeps):
+    """Both mutation kernels share the cloud's full Cholesky factor, so the MALA MH
+    correction whitens with L^-1 rather than dividing by a per-dim width and the
+    rwm proposal draws from 2*step*C. A wrong whitening (or a preconditioner that
+    is not shared) biases the posterior SHAPE and the evidence, neither of which
+    the uncorrelated test above can see. The gates are identical across kernels;
+    only the sweep count differs, because a random walk needs more sweeps for the
+    same mixing.
 
-    Measured over 24 seeds at these settings: posterior-mean bias
+    MALA measured over 24 seeds at these settings: posterior-mean bias
     (-0.006, -0.010, -0.001) sigma with per-seed std ~0.05, recovered correlations
     (0.949, 0.316, 0.207) against the true (0.95, 0.30, 0.20), and
     lnZ -9.6450 +/- 0.0245 against the analytic -9.6279 -- unbiased on all three.
-    The gates below are ~3-5 sigma of that measured single-seed scatter."""
+    The gates below are ~3-5 sigma of that measured single-seed scatter.
+
+    rwm at 24 sweeps, ONE SEED (100) only: bias (0.067, 0.111, -0.030) sigma,
+    correlations (0.9470, 0.3157, 0.2075), lnZ -9.5629, 384/384 unique, last-stage
+    acceptance 0.272 against the 0.234 rwm target -- worst gate use 44% (the mean
+    bias), against the MALA row's 69%. 16 sweeps also passes on this seed but
+    lands at 98% of the |corr02 - 0.30| < 0.15 gate, i.e. no margin."""
     sd = np.array([0.40, 0.60, 0.25])
     corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
     sig = corr * np.outer(sd, sd)
@@ -90,8 +100,9 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(tmp_path):
         d = theta_from_u(u) - mu
         return -0.5 * (d @ sigi @ d)
 
-    cfg = C.Config(smc_num_particles=384, smc_num_mcmc_steps=8, smc_max_steps=60,
-                   smc_target_ess_frac=0.6, num_samples=384, num_chains=1)
+    cfg = C.Config(smc_num_particles=384, smc_num_mcmc_steps=n_sweeps, smc_max_steps=60,
+                   smc_target_ess_frac=0.6, num_samples=384, num_chains=1,
+                   smc_mcmc_kernel=kernel)
     pipe = P.Pipeline(cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
                       theta_from_u=theta_from_u, log_prior_u=log_prior_u,
                       sample_prior_u=sample_prior_u,

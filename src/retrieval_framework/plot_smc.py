@@ -216,10 +216,14 @@ def main() -> None:
         a.set_xlabel("stage"); a.set_ylabel("ESS"); a.set_title("effective sample size"); a.legend(fontsize=8)
         a = axs[1, 0]
         a.plot(stages, np.asarray(x["smc_acceptance_rate"], float), "o-", ms=3, label="acceptance")
-        a.axhline(float(cfgj["mcmc_target_accept_mala"]), color="r", lw=0.7, ls="--", label="target")
+        # archived configs predate smc_mcmc_kernel, so default to mala
+        _kern = str(cfgj.get("smc_mcmc_kernel", "mala")).strip().lower()
+        a.axhline(float(cfgj["mcmc_target_accept_mala"] if _kern == "mala"
+                        else cfgj["mcmc_target_accept_rwm"]),
+                  color="r", lw=0.7, ls="--", label="target")
         a2 = a.twinx(); a2.semilogy(stages, np.asarray(x["smc_step_size_history"], float),
                                     "s-", ms=2.5, color="#2ca02c", alpha=0.7, label="step size")
-        a.set_xlabel("stage"); a.set_ylabel("MALA acceptance"); a2.set_ylabel("step size")
+        a.set_xlabel("stage"); a.set_ylabel("acceptance"); a2.set_ylabel("step size")
         a.set_title("mutation kernel adaptation"); a.legend(fontsize=8, loc="upper left")
         a = axs[1, 1]
         a.plot(stages, np.asarray(x["smc_unique_particles"], float), "o-", ms=3, label="unique particles")

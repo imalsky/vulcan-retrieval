@@ -48,7 +48,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
     ``chem.conden_spec`` is the RESOLVED truth (``build_chem_model`` builds it iff
     condensation is actually active), so gating on it closes that bypass. The
     pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD
-    on pinned species) and gradient-MALA is the only mutation kernel, so an
+    on pinned species) and gradient-MALA is the default mutation kernel, so an
     inference run would sample against unreliable gradients. See
     ``../VULCAN-JAX/README.md`` (Differentiability).
     """

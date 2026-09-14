@@ -403,6 +403,7 @@ def _digest_pipe():
     ("art_ptop_bar", 1e-8),          # pressure domain
     ("prior_lnZ", (-1.0, 1.0)),      # prior definition
     ("smc_chem_mode", "warm"),       # target semantics
+    ("smc_mcmc_kernel", "rwm"),      # mutation kernel (resume must refuse a swap)
     ("seed", 999),                   # RNG identity (bit-identical resume)
     ("count_max", 4000),             # solver-defined support
 ])

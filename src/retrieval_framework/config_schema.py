@@ -245,7 +245,7 @@ class Config:
     # ---- inference: BlackJAX adaptive-tempered SMC + forward-mode-jvp MALA -----
     run_inference: bool = True
     # Expert override: allow gradient-MALA inference with condensation ON. OFF by
-    # default because the only SMC mutation kernel is gradient-based MALA and the
+    # default because the default SMC mutation kernel is gradient-based MALA and the
     # forward-mode gradient through a condensing+pinned steady state is NOT
     # reliably differentiable -- the pinned S8 state's jvp disagrees with FD at
     # O(1) (0.91 relative measured; tests/test_condensation_live_tp.py), the same
@@ -262,10 +262,14 @@ class Config:
     # well-preconditioned targets). With the absolute-std preconditioner + per-stage
     # step adaptation here, 6 is the right planning number.
     smc_num_mcmc_steps: int = 6
-    # The only mutation kernel is preconditioned MALA with the staged
-    # forward-jvp(chem)+vjp(RT) gradient. No gradient-free fallback exists ON
-    # PURPOSE: a flagged gradient pathology raises loudly instead of degrading
-    # the sampler.
+    # "mala": preconditioned MALA on the staged forward-jvp(chem)+vjp(RT)
+    #         gradient; "rwm": full-covariance random-walk Metropolis on the SAME
+    #         Cholesky preconditioner, primal-only, symmetric proposal so log q
+    #         cancels. Both read mala_step_size as the scale of the proposal
+    #         covariance 2*step*C, so the step, its clamps and the Robbins-Monro
+    #         state are shared. This is a DELIBERATE configured kernel, not a
+    #         fallback: under "mala" a flagged gradient pathology still raises.
+    smc_mcmc_kernel: str = "mala"
     mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
@@ -307,6 +311,8 @@ class Config:
     # MALA step size: the per-stage Robbins-Monro adaptation below is the only
     # tuner. mala_step_size seeds it.
     mcmc_target_accept_mala: float = 0.55
+    # 0.234 is the d->inf optimal RWM acceptance (MALA's is 0.574).
+    mcmc_target_accept_rwm: float = 0.234
     mcmc_step_size_min: float = 1.0e-3
     mcmc_step_size_max: float = 3.0
     # Per-stage adaptation: the MALA proposal is preconditioned with the ABSOLUTE
@@ -464,13 +470,17 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"need 0 < mcmc_step_size_min < mcmc_step_size_max, got "
             f"{cfg.mcmc_step_size_min!r} and {cfg.mcmc_step_size_max!r}")
+    if str(cfg.smc_mcmc_kernel).strip().lower() not in ("mala", "rwm"):
+        raise ValueError(
+            f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
+            f"{cfg.smc_mcmc_kernel!r}")
     # Condensation forward solves are supported (on-graph rebuild from the live
     # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
     # is NOT validated: the fix_species pin captures the column at the first
     # accepted step past stop_conden_time, so a T perturbation shifts the accepted
     # step sequence and the forward-mode tangent for the pinned species disagrees
     # with finite differences at O(1) (0.91 relative measured;
-    # tests/test_condensation_live_tp.py). The only mutation kernel is gradient
+    # tests/test_condensation_live_tp.py). The default mutation kernel is gradient
     # MALA, so an inference run would sample against unreliable gradients. Refuse
     # by default (loud-errors rule); allow_condense_inference=True is the explicit
     # expert opt-in for anyone who has independently validated their column.
@@ -592,6 +602,11 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     dtmax = "(master default 1e17)" if cfg.dt_max is None else f"{cfg.dt_max:g}"
     data = ("SYNTHETIC (inject-and-recover at truth_*)" if cfg.generate_synthetic_data
             else "REAL observed spectrum")
+    kern = str(cfg.smc_mcmc_kernel).strip().lower()
+    kern_label = ("forward-jvp MALA" if kern == "mala"
+                  else "gradient-free random-walk Metropolis")
+    kern_target = (cfg.mcmc_target_accept_mala if kern == "mala"
+                   else cfg.mcmc_target_accept_rwm)
 
     lines = [
         "", bar,
@@ -621,10 +636,11 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         "    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
         rule("data"),
         f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
-        rule("SMC  (adaptive-tempered + forward-jvp MALA)"),
+        rule(f"SMC  (adaptive-tempered + {kern_label})"),
         f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
         f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
-        f"target_ess_frac={cfg.smc_target_ess_frac:g}   step={cfg.mala_step_size:g}",
+        f"target_ess_frac={cfg.smc_target_ess_frac:g}",
+        f"    kernel={kern}   step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
         f"    preconditioner: full cloud covariance (Cholesky)   "
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"

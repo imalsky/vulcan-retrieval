@@ -46,7 +46,21 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from retrieval_framework import config_schema as C  # light import (no jax)
-from retrieval_framework.certificate import refuse_mismatched_resume
+from retrieval_framework.certificate import _repo_states, refuse_mismatched_resume
+
+
+def _gpu_driver_version() -> str | None:
+    """NVIDIA driver version, or None where nvidia-smi is absent. This is
+    provenance, not behavior: a laptop calibration has no driver and that is not
+    an error."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip().splitlines()[0] if out.returncode == 0 and out.stdout.strip() else None
 
 
 def load_case(run_dir: Path):
@@ -155,7 +169,7 @@ def output_truth(cfg: C.Config, pipe) -> np.ndarray:
     return np.full(pipe.n_dim, np.nan, dtype=np.float64)
 
 
-def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
+def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     """Time the cold state initialization (one batched two-stage chemistry solve per
     particle -- paid once per run) and one full mutation call (compile and warm
     steady-state separately), then project the SMC cost. Writes timing.json.
@@ -166,7 +180,17 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
     so the timing is representative and the health check exercises the real kernel.
 
     Under the staged architecture a stage costs ~one mutation call: the tempering
-    reweight uses the CARRIED likelihood, so no extra likelihood batch is paid."""
+    reweight uses the CARRIED likelihood, so no extra likelihood batch is paid.
+
+    Comparing the two kernels: ``t_state_init_s`` contains a FULL GRADIENT BATCH in
+    BOTH arms -- init phase 2 runs the gradient evaluator whatever smc_mcmc_kernel
+    says, and that is deliberate (the checkpoint's grad_u and the cold certificate
+    come from it). Only ``t_mutation_sweep_s`` is the clean primal-vs-gradient
+    kernel comparison. Consequently the ``projected_hours_*`` fields for an rwm arm
+    mix a gradient init with primal sweeps; difference the sweep times, not the
+    projections. ``timing.json`` records the kernel, XLA_FLAGS, device kind, backend,
+    GPU driver and the three repos' commit/dirty state so an XLA-flag or
+    solver-branch A/B can be attributed after the fact."""
     import jax.numpy as jnp
     log = logging.getLogger("retrieval")
     N = int(cfg.smc_num_particles)
@@ -186,13 +210,15 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
              f"| L range [{float(jnp.min(L)):.1f}, {float(jnp.max(L)):.1f}]")
 
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
-    # Stage-0 conditions, not an arbitrary proposal: the drift term of a MALA move is
+    # Stage-0 conditions, not an arbitrary proposal. Under MALA the drift term is
     # step*scale^2*beta*G, and a prior-like cloud carries |L| (hence |G|) up to ~1e6 --
     # the old hard-coded (beta=0.5, step=mala_step_size, scale=1) benchmark launched
     # proposals so far off the converged map that their tangents went non-finite, and
     # _check_mutation_health aborted the calibration on an "AD pathology" the ladder's
     # tiny adaptive first beta can never produce (NAS job 64961: 8 bad grads/sweep at
-    # accept=0.00). Reproduce run_smc_loop's stage 0 instead.
+    # accept=0.00). The rwm kernel has no drift, so that rationale does not apply to
+    # it -- but the beta still comes from the ESS bisection either way, because the
+    # point is to reproduce run_smc_loop's stage 0 rather than a synthetic one.
     L_np = np.asarray(jax.device_get(L), np.float64)
     dbeta = P._next_dbeta(L_np, 0.0, float(cfg.smc_target_ess_frac) * N)
     beta = jnp.asarray(dbeta, pipe.dtype)
@@ -226,6 +252,13 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, float]:
         "n_particles": N, "n_mcmc_steps": int(cfg.smc_num_mcmc_steps), "n_dim": int(pipe.n_dim),
         "n_chem_tp": int(pipe.n_chem_tp), "gradient_mode": pipe.gradient_mode,
         "smc_chem_mode": pipe.chem_mode,
+        # provenance for an XLA-flag / solver-branch A/B across calibration runs
+        "smc_mcmc_kernel": str(cfg.smc_mcmc_kernel),
+        "xla_flags": os.environ.get("XLA_FLAGS"),
+        "jax_device_kind": jax.devices()[0].device_kind,
+        "jax_backend": jax.default_backend(),
+        "gpu_driver_version": _gpu_driver_version(),
+        "code": _repo_states(),
         "smc_rt_chunk": int(cfg.smc_rt_chunk), "smc_rt_vjp_chunk": int(cfg.smc_rt_vjp_chunk),
         "calibration_beta_stage0": float(dbeta), "calibration_step": step_f,
         "calibration_scale_min": float(scale_w.min()), "calibration_scale_max": float(scale_w.max()),
@@ -390,11 +423,14 @@ def main() -> None:
         return
 
     # ---- inference ----
+    kernel = str(cfg.smc_mcmc_kernel).strip().lower()
+    kernel_label = ("preconditioned fwd-jvp MALA" if kernel == "mala"
+                    else "preconditioned gradient-free random-walk Metropolis")
     samples_path = cfg.out_dir / "posterior_samples.npz"
     extra_path = cfg.out_dir / "smc_extra_fields.npz"
     if cfg.run_inference:
         log.info(f"Running adaptive-tempered SMC (N={cfg.smc_num_particles}, "
-                 f"mcmc_steps={cfg.smc_num_mcmc_steps}, kernel=preconditioned fwd-jvp MALA)...")
+                 f"mcmc_steps={cfg.smc_num_mcmc_steps}, kernel={kernel_label})...")
         ckpt = ckpt_path
         if resume:
             # SMC_RESUME=1 means "continue a killed run". If the checkpoint is missing,
@@ -443,7 +479,7 @@ def main() -> None:
                    approximate_history_dependent_target=np.asarray(
                        int(str(cfg.smc_chem_mode).strip().lower() == "warm"),
                        np.int32),
-                   smc_kernel=np.asarray("mala+precond", dtype="<U16"),
+                   smc_kernel=np.asarray(f"{kernel}+precond", dtype="<U16"),
                    smc_num_particles=np.asarray(int(cfg.smc_num_particles), np.int32),
                    smc_num_mcmc_steps=np.asarray(int(cfg.smc_num_mcmc_steps), np.int32),
                    smc_betas=res["betas"], smc_ess=res["ess"],
