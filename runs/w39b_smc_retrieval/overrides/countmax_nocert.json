@@ -1,0 +1,4 @@
+{
+  "_comment": "count_max A/B: production grid, VULCAN config W39b_nocert (see configs/W39b_nocert.yaml).",
+  "vulcan_cfg_name": "W39b_nocert"
+}
