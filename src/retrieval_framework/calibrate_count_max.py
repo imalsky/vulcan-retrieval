@@ -105,6 +105,8 @@ def main() -> None:
     log.info(f"done in {dt:.1f}s ({dt / max(1, int(args.n_draws)):.3f}s/draw amortized; "
              "NOT per-draw cost -- wall time is set by the single slowest draw)")
 
+    wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
+
     # free per-draw convergence-quality read from the same solve: longdy
     # percentiles + the stall-certified count (the class the SMC gates reject)
     longdy = np.asarray(jax.device_get(cd.longdy), np.float64)
@@ -115,7 +117,27 @@ def main() -> None:
              f"{pct[2]:.3g}; stall-certified (not canonically certified) draws: "
              f"{int(np.sum(~conv_ok))}/{len(conv_ok)}")
 
-    wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
+    # Exit element-budget drift (C23) per draw, with the exit model time t beside
+    # it ON PURPOSE: the molecular-diffusion boundary rows leak the column at a
+    # fixed rate (VULCAN-JAX notes P9, ~8e-18 /s for S), so a drift that grows
+    # linearly with t and only reaches the tolerance near t ~ 1e15 s is that known
+    # term, not geometry. Vetoes at long t with a constant drift/t = the boundary
+    # rows; a short-t, element-specific drift = geometry or a real leak.
+    drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
+    atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
+    t_exit = np.asarray(jax.device_get(cd.t), np.float64)
+    names = getattr(pipe.fwd.chem, "atom_order", None)   # vulcan-forward >= 0.19.0
+    log.info(f"exit element-budget drift |X/H - 1| p50/p90/max = "
+             f"{np.nanpercentile(drift, 50):.3g}/{np.nanpercentile(drift, 90):.3g}/"
+             f"{np.nanmax(drift):.3g}")
+    for i in np.flatnonzero(~conv_ok):
+        a = (names[atom[i]] if names is not None
+             else f"atom index {int(atom[i])} in the runner's atom order")
+        log.info(f"  draw {i}: uncertified, accept_count={int(wa[i])}, "
+                 f"budget drift {drift[i]:.3g} on {a}, "
+                 f"drift/t {drift[i] / max(t_exit[i], 1.0):.3g} /s, "
+                 f"t {t_exit[i]:.3g} s, longdy {longdy[i]:.3g}")
+
     censored = wa >= int(args.count_max_probe)
     n_censored = int(censored.sum())
     if n_censored:
