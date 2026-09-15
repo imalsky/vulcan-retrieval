@@ -1,0 +1,4 @@
+{
+  "smc_num_mcmc_steps": 1,
+  "smc_mcmc_kernel": "rwm"
+}

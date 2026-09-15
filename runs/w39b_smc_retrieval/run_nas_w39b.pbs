@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N VJAX_W39B_SMC
-#PBS -q gpu_normal
+#PBS -q gpu_long
 #PBS -W group_list=s2458
 #PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
 # 24 h wall: the gpu preset's SMC governor is 20 h, leaving ~4 h for build/compile,

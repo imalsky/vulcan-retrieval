@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N VULCAN_BOOTSTRAP
-#PBS -q gpu_normal
+#PBS -q gpu_long
 #PBS -W group_list=s2458
 #PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:model=gh200
 #PBS -l walltime=00:30:00
