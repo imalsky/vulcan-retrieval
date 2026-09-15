@@ -1,0 +1,5 @@
+{
+  "_comment": "A/B for the cold-init attrition: the July 2026 chemistry grid (model top 1e-7 bar, nz 50) on today's pins. Pair with a no-override CALIBRATE_COUNT_MAX job at the production grid (1e-9 bar, nz 62).",
+  "art_ptop_bar": 1e-07,
+  "nz": 50
+}
