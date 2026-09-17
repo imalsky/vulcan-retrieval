@@ -165,13 +165,13 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     def chem_solve_cold_diag(chem_theta):
         """chem_solve_cold returning ``(y, ConvDiag)``.
 
-        ``ConvDiag.accept_count`` is the WORSE of the two stages' (max over stage 1
-        T-relax / stage 2 warm-reconverge, or just the one stage's when
-        two_stage_z=False) so a count_max-exhausted stage is detectable; the
-        convergence fields (longdy / longdydt / count_since_new_min / conv_normal)
-        describe STAGE 2 -- the state ``y`` actually is. accept_count alone is NOT
-        a convergence test (stall fallback / hybrid phase-flip exits sit well under
-        the cap); gate on ``conv_normal`` too.
+        Every ConvDiag field, ``accept_count`` included, describes the FINAL stage
+        (stage 2 of the two-stage solve) -- the state ``y`` actually is. Stage 1 is
+        a throwaway relaxation at baseline composition; its step count says nothing
+        about whether the draw's own column converged, and gating on it rejected
+        certified columns (notes §1.1, the nine-draw study). accept_count alone is
+        NOT a convergence test (stall fallback / hybrid phase-flip exits sit well
+        under the cap); gate on ``conv_normal`` too.
 
         THE cold solve on the SMC init's likelihood-only phase AND on the cold
         GRADIENT path: pipeline._make_batch_eval jvp's straight through this, so a
@@ -182,11 +182,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         if not two_stage:
             return chem.converged_y(chem_theta, return_conv_diag=True)
         th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)
-        y_relaxed, d1 = chem.converged_y(th_relax, return_conv_diag=True)
-        y, d2 = chem.converged_y(chem_theta, warm_y=y_relaxed,
-                                 lnZ_ref=0.0, c_o_ref=0.0, return_conv_diag=True)
-        return y, d2._replace(
-            accept_count=jnp.maximum(d1.accept_count, d2.accept_count))
+        y_relaxed, _d1 = chem.converged_y(th_relax, return_conv_diag=True)
+        return chem.converged_y(chem_theta, warm_y=y_relaxed,
+                                lnZ_ref=0.0, c_o_ref=0.0, return_conv_diag=True)
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a

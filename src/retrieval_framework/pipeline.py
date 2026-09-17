@@ -586,7 +586,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
         ``diag`` (only meaningful for mode="cold", want_grad=False -- the SMC init's
         likelihood-only phase) additionally threads each particle's ConvDiag
-        through (worst-stage accept_count + stage-2 longdy/conv_normal), so the
+        through (final-stage accept_count / longdy / conv_normal), so the
         caller can detect a count_max-exhausted OR stall-certified
         (not-actually-converged) cold solve instead of silently carrying it into L."""
         warm = (mode == "warm")

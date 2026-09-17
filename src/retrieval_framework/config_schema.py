@@ -93,6 +93,13 @@ class Config:
     # Starting the composition perturbation before the large T displacement can erase
     # its inventory response; the second stage preserves it.
     two_stage_z: bool = True
+    # Where a COLD solve starts: "eq" = FastChem equilibrium at the proposal's own
+    # T-P and elemental composition (host callback, one FastChem run per lane; the
+    # upstream VULCAN start); "baseline" = the build's baseline column scaled by
+    # the theta masks. The baseline start burns the whole step budget on cool,
+    # weakly mixed draws (notes §1.1). Deterministic in theta, so not the
+    # history-dependent warm start §2.6 rejects.
+    cold_seed: str = "eq"
     count_min: Optional[int] = None
     count_max: Optional[int] = None
     # Warm-continuation step cap for the MUTATION path (accepted steps). A proposal
@@ -353,6 +360,7 @@ class Config:
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
             abundance_mode=str(self.abundance_mode),
+            cold_seed=str(self.cold_seed),
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
             fastchem_met_scale=float(self.fastchem_met_scale),
             cfg_overrides=dict(self.cfg_overrides),
@@ -533,6 +541,8 @@ def validate_config(cfg: Config) -> None:
             "tight prior range if you want one effectively fixed).")
     if cfg.tp_model != "guillot":
         raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
+    if str(cfg.cold_seed) not in ("eq", "baseline"):
+        raise ValueError(f"unknown cold_seed {cfg.cold_seed!r}: expected 'eq' or 'baseline'")
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
         raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "
                          "(expected 'elemental' or 'masks')")
@@ -618,7 +628,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
-        f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}"
+        f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}   cold_seed={cfg.cold_seed}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
         f"    fastchem baseline metallicity: {cfg.fastchem_met_scale:g}x solar   "
         f"(lnZ is relative to this)",
