@@ -189,7 +189,8 @@ def main() -> None:
         if frac > fail_frac:
             verdict = f"RAISE -- oversample x{over:g} cannot fill N (need reject <= {fail_frac:.0%})"
         elif frac > warn:
-            verdict = "reject+cull OK, but WARN (prior hits many corners)"
+            verdict = (f"RAISE -- exceeds the declared init_max_nonconverged_frac "
+                       f"{warn:.0%} (pipeline._init_state raises)")
         else:
             verdict = "reject+cull OK"
         tag = "   <- this preset" if preset_count_max and cand == int(preset_count_max) else ""
@@ -212,6 +213,11 @@ def main() -> None:
         "init_max_nonconverged_frac": warn, "init_oversample": over,
         "n_censored": n_censored, "accept_count": wa.tolist(), "percentiles": pct,
         "param_names": names, "theta": Theta.tolist(),
+        # per-draw likelihood and certificate: the attrition justification
+        # compares the censored draws' L against the certified bulk
+        "log_l": np.asarray(jax.device_get(L), np.float64).tolist(),
+        "conv_normal": conv_ok.tolist(), "longdy": longdy.tolist(),
+        "budget_drift_max": drift.tolist(), "t_exit_s": t_exit.tolist(),
     }
     suffix = "" if int(args.seed_offset) == 0 else f"_seed{int(args.seed_offset)}"
     out_path = cfg.out_dir / f"count_max_calibration{suffix}.json"
