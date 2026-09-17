@@ -66,3 +66,7 @@ data/jwst_tool/noise_cache/
 # Generated outputs (example/validation/zco npz caches) -- config.OUTPUTS
 output/*
 !output/.gitkeep
+
+# Local production-ladder overrides stay out of the repo (the running job's config is
+# recorded in notes §5); calibration overrides are tracked so a pull brings the chain's inputs.
+runs/w39b_smc_retrieval/overrides/prod_*.json

@@ -47,6 +47,12 @@
 #                           docstring). RESUME=1 composes with it.
 #   SYNTH=1                 inject-and-recover instead of fitting real data
 #   CALIBRATE_ONLY=1        time 1 likelihood + 1 mutation sweep, project, exit
+#   CALIBRATE_CHAIN=<file>  run several bounded arms (memory probes, calibrations) in
+#                           ONE job, in order, each in its own subshell; a failing arm
+#                           is recorded and the chain goes on. Path relative to this
+#                           dir; format in overrides/calibration_chain.txt. Per-arm
+#                           table: logs/chain_<jobid>.tsv, summary at the end of the log.
+#     qsub -v CALIBRATE_CHAIN=overrides/calibration_chain.txt run_nas_w39b.pbs
 #   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
 #                           CALIBRATE_N_DRAWS (default 48), CALIBRATE_COUNT_MAX_PROBE (default
 #                           20000), CALIBRATE_SEED_OFFSET (default 0)
@@ -244,6 +250,10 @@ echo "GPU monitor: ${GPU_MON_LOG}"
 #   nvidia-smi monitor above already logs util/power/clocks every 60 s for the whole run.
 # Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
 # or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
+# build_nsys_wrap reads NSYS* from the CURRENT environment, so a chain arm can rebuild
+# it after exporting its own knobs; NSYS_TAG suffixes the .nsys-rep name so two
+# profiled arms in one job do not overwrite each other.
+build_nsys_wrap() {
 NSYS_WRAP=()
 if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   command -v nsys >/dev/null 2>&1 || module load cuda 2>/dev/null || true
@@ -251,7 +261,7 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
     echo "ERROR: NSYS/NSYS_FULL set but nsys is not in PATH (and 'module load cuda' did not provide it)."
     exit 1
   fi
-  NSYS_OUT="${LOG_DIR}/nsys_${_jobid%%.*}"
+  NSYS_OUT="${LOG_DIR}/nsys_${_jobid%%.*}${NSYS_TAG:-}"
   NSYS_WRAP=(nsys profile -o "${NSYS_OUT}" --force-overwrite=true
              -t cuda,nvtx -s none --cpuctxsw=none)
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
@@ -277,6 +287,8 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   fi
   nsys --version | head -1 || true
 fi
+}
+build_nsys_wrap
 
 # --- retrieval configuration ---------------------------------------------------
 export SMC_RETRIEVAL_PRESET="${SMC_RETRIEVAL_PRESET:-gpu}"
@@ -308,6 +320,54 @@ if [ "${PROBE_MEMORY:-0}" = "1" ]; then
   # executes on the GPU, so this cannot OOM (see retrieval_framework/probe_memory.py)
   echo "========== MEMORY PROBE (compile-only) =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}" || rc=$?
+elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
+  # One job, several bounded arms. Each non-comment line of the chain file:
+  #   name|probe or calibrate|overrides file|out dir|KEY=VAL;KEY=VAL   (last field optional)
+  # Every override file is checked BEFORE the first arm runs (a missing one cost job 78648).
+  # Arms run in order, each in a subshell that exports its own env; the chain file is read
+  # on fd 3 so an arm's process cannot swallow the remaining lines.
+  CHAIN_FILE="${SMC_DIR}/${CALIBRATE_CHAIN}"
+  [ -f "${CHAIN_FILE}" ] || { echo "ERROR: chain file not found: ${CHAIN_FILE}"; exit 1; }
+  CHAIN_TSV="${LOG_DIR}/chain_${_jobid%%.*}.tsv"
+  echo "========== CALIBRATION CHAIN ${CHAIN_FILE} =========="
+  while IFS='|' read -r -u 3 name mode ovf outd envs; do
+    case "${name}" in ''|'#'*) continue ;; esac
+    [ -f "${SMC_DIR}/${ovf}" ] || { echo "ERROR: arm ${name}: missing override file ${SMC_DIR}/${ovf}"; exit 1; }
+    case "${mode}" in probe|calibrate) ;; *) echo "ERROR: arm ${name}: mode must be probe or calibrate, got '${mode}'"; exit 1 ;; esac
+  done 3< "${CHAIN_FILE}"
+  printf 'arm\tmode\trc\tseconds\tout_dir\n' > "${CHAIN_TSV}"
+  while IFS='|' read -r -u 3 name mode ovf outd envs; do
+    case "${name}" in ''|'#'*) continue ;; esac
+    echo "---------- arm ${name} (${mode}) started $(date) ----------"
+    t0="$(date +%s)"; arm_rc=0
+    (
+      export SMC_RETRIEVAL_OVERRIDES_FILE="${ovf}" SMC_RETRIEVAL_OUT_DIR="${outd}" NSYS_TAG="_${name}"
+      if [ -n "${envs}" ]; then
+        IFS=';' read -r -a kvs <<< "${envs}"
+        for kv in "${kvs[@]}"; do [ -n "${kv}" ] && export "${kv?}"; done
+      fi
+      build_nsys_wrap
+      echo "arm env: overrides=${ovf} out=${outd} XLA_FLAGS=${XLA_FLAGS} NSYS=${NSYS:-0}"
+      if [ "${mode}" = "probe" ]; then
+        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
+      else
+        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
+      fi
+    ) || arm_rc=$?
+    printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${mode}" "${arm_rc}" "$(( $(date +%s) - t0 ))" "${outd}" | tee -a "${CHAIN_TSV}"
+    if [ "${arm_rc}" -ne 0 ]; then rc="${arm_rc}"; fi
+  done 3< "${CHAIN_FILE}"
+  echo "========== CHAIN SUMMARY =========="
+  python - "${SMC_DIR}" "${CHAIN_TSV}" <<'PYEOF' || true
+import csv, json, pathlib, sys
+smc, tsv = pathlib.Path(sys.argv[1]), sys.argv[2]
+for row in csv.DictReader(open(tsv), delimiter="\t"):
+    tj = smc / row["out_dir"] / "timing.json"
+    t = json.load(open(tj)) if tj.exists() else {}
+    print(f"{row['arm']:<20} rc={row['rc']:<3} {int(row['seconds'])/3600:5.2f} h"
+          f"  N={t.get('n_particles','-')} kernel={t.get('smc_mcmc_kernel','-')}"
+          f"  t_state_init_s={t.get('t_state_init_s','-')}  t_mutation_sweep_s={t.get('t_mutation_sweep_s','-')}")
+PYEOF
 elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
   echo "========== CALIBRATION ONLY =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
