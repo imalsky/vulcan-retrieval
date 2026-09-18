@@ -18,6 +18,13 @@ truncated at the production cap and you'd never see how far past it they needed.
 Draws that still hit the PROBE cap are reported as right-censored (>= probe cap) --
 if too many are censored, rerun with a higher --count-max-probe.
 
+``--fixed-steps K`` instead turns this into a step-cost BENCHMARK: count_min =
+count_max = K pins every lane at exactly K accepted steps per stage (two stages, no
+lane certifies), so the reported ms/step times the batched cold chemistry step at the
+production shape with convergence taken out of the measurement. ``--grad`` benchmarks
+the production cold gradient evaluator ``batch_eval_cold_vg`` instead of the primal
+``batch_eval_cold_l_diag``.
+
 Usage (mirrors run_smc.py's preset/override mechanism exactly)
 ----------------------------------------------------------------
     SMC_RETRIEVAL_PRESET=gpu \\
@@ -38,7 +45,7 @@ from pathlib import Path
 
 import numpy as np
 
-from retrieval_framework.run_smc import make_config   # the exact preset/override logic
+from retrieval_framework.run_smc import _cuda_profiler, make_config   # the exact preset/override logic
 
 
 def main() -> None:
@@ -56,7 +63,17 @@ def main() -> None:
     ap.add_argument("--seed-offset", type=int, default=0,
                      help="added to cfg.seed before splitting, so repeated calibration "
                           "runs sample different prior corners")
+    ap.add_argument("--fixed-steps", type=int, default=0,
+                     help="run every lane for exactly this many accepted steps per "
+                          "stage, count_min = count_max, no lane certifies; a step-cost "
+                          "benchmark, not a calibration")
+    ap.add_argument("--grad", action="store_true",
+                     help="benchmark the production cold GRADIENT evaluator "
+                          "batch_eval_cold_vg instead of the primal "
+                          "batch_eval_cold_l_diag; requires --fixed-steps")
     args = ap.parse_args()
+    if args.grad and int(args.fixed_steps) <= 0:
+        ap.error("--grad requires --fixed-steps")
 
     logging.basicConfig(level=logging.INFO,
                          format="%(asctime)s | %(levelname)s | %(message)s")
@@ -64,7 +81,14 @@ def main() -> None:
 
     cfg, _preset = make_config(Path(args.run_dir))
     preset_count_max = cfg.count_max   # the cap the production run would use (None -> library default)
-    cfg = replace(cfg, count_max=int(args.count_max_probe))
+    K = int(args.fixed_steps)
+    # count_min = count_max = K: the runner may only certify above count_min, so every
+    # lane runs exactly K accepted steps per stage and none certifies -- convergence is
+    # out of the timing. warm_count_max comes along only because validate_config
+    # refuses warm_count_max > count_max; the bench runs cold evaluators, which are
+    # never warm-capped.
+    cfg = replace(cfg, count_min=K, count_max=K, warm_count_max=K) if K > 0 else replace(
+        cfg, count_max=int(args.count_max_probe))
 
     # accept_count depends only on the chemistry (nz, molecules, priors), not on
     # the RT; the correlated-k band grid is fixed by the tables, so the RT runs at
@@ -93,6 +117,52 @@ def main() -> None:
     key, sub = jax.random.split(key)
     U = pipe.sample_prior_u(sub, int(args.n_draws))
     Y0, refs0, _S1 = P._blank_state(pipe, int(args.n_draws))
+
+    if K > 0:
+        fn = jax.jit(pipe.batch_eval_cold_vg if args.grad else pipe.batch_eval_cold_l_diag)
+        t0 = time.perf_counter()
+        out = fn(U, Y0, refs0)
+        jax.block_until_ready(out[0])
+        t_first = time.perf_counter() - t0
+        _cuda_profiler(True)     # no-op unless NSYS_CAPTURE_API=1
+        t0 = time.perf_counter()
+        out = fn(U, Y0, refs0)
+        jax.block_until_ready(out[0])
+        t_steady = time.perf_counter() - t0
+        _cuda_profiler(False)
+
+        Lb = np.asarray(jax.device_get(out[0]), np.float64)
+        Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)
+        # The runner's exit test is accept_count > count_max (VULCAN-JAX
+        # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
+        n_acc = K + 1
+        n_step = 2 * n_acc
+        log.info(f"fixed-step bench ({'GRADIENT batch_eval_cold_vg' if args.grad else 'primal batch_eval_cold_l_diag'}): "
+                 f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} (2 stages x K+1)")
+        log.info(f"  t_first  = {t_first:.3f} s (compile + run)")
+        log.info(f"  t_steady = {t_steady:.3f} s")
+        log.info(f"  ms_per_step = {1000.0 * t_steady / n_step:.3f} ms -- wall per "
+                 "batched accepted step of the SLOWEST lane, two stages")
+        log.info(f"  n_finite(L) = {int(np.sum(np.isfinite(Lb)))}/{Lb.size}  "
+                 f"max|Y| = {np.nanmax(np.abs(Yb)):.6g}")
+        save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb}
+        if args.grad:
+            Gb = np.asarray(jax.device_get(out[1]), np.float64)
+            save["G"] = Gb
+            log.info(f"  n_bad_grad = {int(jax.device_get(out[5]))}  "
+                     f"finite(G) = {float(np.mean(np.isfinite(Gb))):.3f}")
+        else:
+            wa = np.asarray(jax.device_get(out[3].accept_count), np.int64)
+            log.info(f"  accept_count min/max over lanes = {int(wa.min())}/{int(wa.max())}")
+            if int(wa.min()) != n_acc or int(wa.max()) != n_acc:
+                log.warning(f"accept_count is not exactly K+1={n_acc} on every lane -- "
+                            "the fixed-step mechanism is broken and the ms/step above "
+                            "is not a per-step cost")
+        cfg.out_dir.mkdir(parents=True, exist_ok=True)
+        bench_path = cfg.out_dir / f"bench_fixed_steps{'_grad' if args.grad else ''}.npz"
+        np.savez(bench_path, **save)
+        log.info(f"wrote {bench_path}")
+        return
 
     log.info("Running batched cold two-stage init at the probe count_max "
              "(single lockstep while_loop bounded by the SLOWEST draw -- this can "
