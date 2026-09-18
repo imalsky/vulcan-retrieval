@@ -12,6 +12,8 @@
 # Resubmit after every change to the kernel. From the speed tree's
 # vulcan-retrieval root (or its tools/ dir):
 #   qsub -v VULCAN_SCRATCH=/nobackup/$USER/.vulcan-speed tools/gpu_kernel_test.pbs
+# Bench jobs that need the refreshed metadata chain on it with
+# `-W depend=afterany:<jobid>` (afterok deletes them if a GPU test fails).
 set -euo pipefail
 
 # --- locate the project root (PBS spools the script; rely on PBS_O_WORKDIR) ---
@@ -57,6 +59,8 @@ for d in VULCAN-JAX vulcan-forward vulcan-retrieval; do
   echo "${d}: $(git -C "${PROJECT_ROOT}/${d}" log --oneline -1)"
 done
 python -m pip install --user --no-deps --no-build-isolation -q -e "$PROJECT_ROOT/VULCAN-JAX" -e "$PROJECT_ROOT/vulcan-forward" -e "$REPO_DIR"
+# The conda env ships no pytest; the user site (proxy above) gets it once.
+python -c "import pytest" 2>/dev/null || python -m pip install --user -q pytest
 python -m vulcan_jax.solver_fast --cuda
 cd "${PROJECT_ROOT}/VULCAN-JAX"
 JAX_PLATFORMS=cuda python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
