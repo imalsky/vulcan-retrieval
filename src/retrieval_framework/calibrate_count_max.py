@@ -102,34 +102,50 @@ def main() -> None:
     from retrieval_framework import pipeline as P
     import jax
 
-    t0 = time.perf_counter()
-    pipe = P.build_pipeline(cfg)
-    log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}")
+    def _setup(cfg_):
+        t0 = time.perf_counter()
+        pipe = P.build_pipeline(cfg_)
+        log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}")
+        # Observations are required before any jitted likelihood call (L is a
+        # byproduct here, not the point, but batch_eval_cold_l_diag computes it
+        # regardless).
+        if cfg_.generate_synthetic_data:
+            P.generate_observations(pipe, seed=int(cfg_.seed))
+        else:
+            P.load_real_into_pipe(pipe)
+        key = jax.random.PRNGKey(int(cfg_.seed) + int(args.seed_offset))
+        key, sub = jax.random.split(key)
+        U = pipe.sample_prior_u(sub, int(args.n_draws))
+        Y0, refs0, _S1 = P._blank_state(pipe, int(args.n_draws))
+        return pipe, U, Y0, refs0
 
-    # Observations are required before any jitted likelihood call (L is a byproduct
-    # here, not the point, but batch_eval_cold_l_diag computes it regardless).
-    if cfg.generate_synthetic_data:
-        P.generate_observations(pipe, seed=int(cfg.seed))
-    else:
-        P.load_real_into_pipe(pipe)
-
-    key = jax.random.PRNGKey(int(cfg.seed) + int(args.seed_offset))
-    key, sub = jax.random.split(key)
-    U = pipe.sample_prior_u(sub, int(args.n_draws))
-    Y0, refs0, _S1 = P._blank_state(pipe, int(args.n_draws))
-
-    if K > 0:
+    def _timed(cfg_, capture):
+        """Compile pass, then one timed pass (inside the nsys capture range if
+        `capture`). Returns (t_first, t_steady, out, U)."""
+        pipe, U, Y0, refs0 = _setup(cfg_)
         fn = jax.jit(pipe.batch_eval_cold_vg if args.grad else pipe.batch_eval_cold_l_diag)
         t0 = time.perf_counter()
         out = fn(U, Y0, refs0)
         jax.block_until_ready(out[0])
         t_first = time.perf_counter() - t0
-        _cuda_profiler(True)     # no-op unless NSYS_CAPTURE_API=1
+        if capture:
+            _cuda_profiler(True)     # no-op unless NSYS_CAPTURE_API=1
         t0 = time.perf_counter()
         out = fn(U, Y0, refs0)
         jax.block_until_ready(out[0])
         t_steady = time.perf_counter() - t0
-        _cuda_profiler(False)
+        if capture:
+            _cuda_profiler(False)
+        return t_first, t_steady, out, U
+
+    if K > 0:
+        # Baseline at K=1 (the floor validate_config allows): the same seeds, RT and
+        # likelihood with one accepted step per stage. Its wall is everything that
+        # is NOT the solver loop (the sequential FastChem seeds above all), so the
+        # loop's cost is the difference between the two timed passes.
+        _t1_first, t1_steady, _o1, _u1 = _timed(
+            replace(cfg, count_min=1, count_max=1, warm_count_max=1), capture=False)
+        t_first, t_steady, out, U = _timed(cfg, capture=True)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
         # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
         n_acc = K + 1
@@ -139,33 +155,45 @@ def main() -> None:
         log.info(f"fixed-step bench ({'GRADIENT batch_eval_cold_vg' if args.grad else 'primal batch_eval_cold_l_diag'}): "
                  f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} (2 stages x K+1)")
         log.info(f"  t_first  = {t_first:.3f} s (compile + run)")
-        log.info(f"  t_steady = {t_steady:.3f} s")
-        log.info(f"  ms_per_step = {1000.0 * t_steady / n_step:.3f} ms -- wall per "
-                 "batched accepted step of the SLOWEST lane, two stages")
+        log.info(f"  t_steady = {t_steady:.3f} s  (K={K}, inside the nsys capture range)")
+        log.info(f"  t_steady = {t1_steady:.3f} s  (K=1 baseline: seeds + RT + likelihood + 2 steps)")
+        loop = t_steady - t1_steady
+        log.info(f"  loop     = {loop:.3f} s for the extra 2(K-1)={2 * (K - 1)} accepted steps "
+                 f"of the slowest lane; {1000.0 * loop / max(1, 2 * (K - 1)):.3f} ms per accepted "
+                 "step. Per loop ITERATION (accepted + rejected) divide `loop` by the "
+                 "factorisation count in the capture: nsys getrf_panel or bt_factor_kernel "
+                 "instances / nz.")
 
         Lb = np.asarray(jax.device_get(out[0]), np.float64)
         Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)
         log.info(f"  n_finite(L) = {int(np.sum(np.isfinite(Lb)))}/{Lb.size}  "
                  f"max|Y| = {np.nanmax(np.abs(Yb)):.6g}")
-        save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb}
+        save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb,
+                "t_steady": t_steady, "t1_steady": t1_steady, "K": K}
         if args.grad:
             Gb = np.asarray(jax.device_get(out[1]), np.float64)
             save["G"] = Gb
             log.info(f"  n_bad_grad = {int(jax.device_get(out[5]))}  "
                      f"finite(G) = {float(np.mean(np.isfinite(Gb))):.3f}")
         else:
-            wa = np.asarray(jax.device_get(out[3].accept_count), np.int64)
-            log.info(f"  accept_count min/max over lanes = {int(wa.min())}/{int(wa.max())}")
+            cd = out[3]
+            wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
+            save["accept_count"] = wa
+            vals, cnts = np.unique(wa, return_counts=True)
+            log.info("  accept_count histogram (value: lanes) = "
+                     + ", ".join(f"{int(v)}: {int(c)}" for v, c in zip(vals, cnts))
+                     + f"; conv_normal lanes = {int(np.sum(np.asarray(jax.device_get(cd.conv_normal))))}")
             if int(wa.min()) != n_acc or int(wa.max()) != n_acc:
                 log.warning(f"accept_count is not exactly K+1={n_acc} on every lane -- "
-                            "the fixed-step mechanism is broken and the ms/step above "
-                            "is not a per-step cost")
+                            "lanes below it stopped early (reason 2 runtime / 5 non-finite); "
+                            "the slowest lane still sets the wall")
         cfg.out_dir.mkdir(parents=True, exist_ok=True)
         bench_path = cfg.out_dir / f"bench_fixed_steps{'_grad' if args.grad else ''}.npz"
         np.savez(bench_path, **save)
         log.info(f"wrote {bench_path}")
         return
 
+    pipe, U, Y0, refs0 = _setup(cfg)
     log.info("Running batched cold two-stage init at the probe count_max "
              "(single lockstep while_loop bounded by the SLOWEST draw -- this can "
              "legitimately take a while if the probe cap is high and a corner is hard)...")

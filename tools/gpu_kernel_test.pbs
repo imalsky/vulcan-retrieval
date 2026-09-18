@@ -61,6 +61,7 @@ python -c "import pytest" 2>/dev/null || python -m pip install --user -q pytest
 # the environment it hid the pip CUDA plugin from JAX (job 78981: "Backend 'cuda'
 # is not in the list of known backends"); the kernel links cudart statically.
 (
+  export JAX_PLATFORMS=cpu   # the build imports jax for its include dir only
   module load gcc 2>/dev/null || true
   module load cuda 2>/dev/null || true
   command -v nvcc >/dev/null || { echo "ERROR: no nvcc. Pick a toolkit: module avail cuda"; exit 1; }
@@ -80,4 +81,6 @@ python -c "import jax; d = jax.devices(); print(jax.__version__, d); assert d[0]
   echo "ERROR: JAX sees no GPU. Diagnostics:"; env | grep -iE "^(LD_LIBRARY_PATH|CUDA|JAX|XLA)" || true
   python -m pip list 2>/dev/null | grep -iE "^(jax|nvidia)" || true; exit 1; }
 cd "${PROJECT_ROOT}/VULCAN-JAX"
-python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
+# The suite's oracle gate (tests/conftest.py) wants fixtures this tree does not
+# carry; this job runs one file, so accept the reduced coverage explicitly.
+VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
