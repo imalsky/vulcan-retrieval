@@ -60,6 +60,7 @@
 #                           step-cost bench, primal or gradient; pair with NSYS=1
 #                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
+#   XLA_CMDBUF=1            appends the command-buffer flags to XLA_FLAGS (commas can't cross -v)
 #   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
 #                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
 #                           NSYS_DURATION (default 120 s); job runs on past the window.
@@ -87,7 +88,7 @@
 # so the solver is launch-bound and per-step overhead, not arithmetic, is the speed lever).
 # Judge purely by t_mutation_sweep_s in timing.json vs a baseline calibration:
 #   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs
-#   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE' run_nas_w39b.pbs
+#   qsub -v CALIBRATE_ONLY=1,XLA_CMDBUF=1 run_nas_w39b.pbs
 #
 # Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_SMC_<jobid>.log
 # =============================================================================
@@ -161,6 +162,9 @@ export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
+if [ "${XLA_CMDBUF:-0}" = "1" ]; then
+  export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
+fi
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
