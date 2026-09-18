@@ -169,6 +169,35 @@ def output_truth(cfg: C.Config, pipe) -> np.ndarray:
     return np.full(pipe.n_dim, np.nan, dtype=np.float64)
 
 
+
+def _cuda_profiler(on: bool) -> None:
+    """cudaProfilerStart / cudaProfilerStop around the timed mutation sweep when
+    NSYS_CAPTURE_API=1, so an ``nsys profile --capture-range=cudaProfilerApi``
+    wrapper records exactly that sweep. A fixed ``--delay`` window is blind to
+    where the sweep falls (job 78814's 3600 s window landed inside a 62-min
+    init). No-op unless the variable is set; a missing libcudart is logged."""
+    if os.environ.get("NSYS_CAPTURE_API") != "1":
+        return
+    import ctypes
+    import ctypes.util
+    import glob
+    import site
+    names = ["libcudart.so.12", "libcudart.so", ctypes.util.find_library("cudart")]
+    for d in list(site.getsitepackages()) + [site.getusersitepackages()]:
+        names += sorted(glob.glob(os.path.join(d, "nvidia", "cuda_runtime", "lib", "libcudart.so*")))
+    for name in names:
+        if not name:
+            continue
+        try:
+            lib = ctypes.CDLL(name)
+            fn = lib.cudaProfilerStart if on else lib.cudaProfilerStop
+            rc = int(fn())
+            log.info(f"cudaProfiler{'Start' if on else 'Stop'} via {name}: rc={rc}")
+            return
+        except OSError:
+            continue
+    log.warning("NSYS_CAPTURE_API=1 but no libcudart could be loaded; nsys capture range not marked")
+
 def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     """Time the cold state initialization (one batched two-stage chemistry solve per
     particle -- paid once per run) and one full mutation call (compile and warm
@@ -243,11 +272,13 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
     U2, Y2, refs2, S12, L2, G2 = out[:6]
+    _cuda_profiler(True)
     t0 = time.perf_counter()
     out = mutate(key, U2, Y2, refs2, S12, L2, G2, beta, step, scale,
                  where="calibration mutation (steady-state pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut = time.perf_counter() - t0
+    _cuda_profiler(False)
 
     per_stage = t_mut
     proj = {
