@@ -277,6 +277,10 @@ class Config:
     #         state are shared. This is a DELIBERATE configured kernel, not a
     #         fallback: under "mala" a flagged gradient pathology still raises.
     smc_mcmc_kernel: str = "mala"
+    # Per-sweep pattern cycled over smc_num_mcmc_steps; 'f' = full-theta move
+    # (today's kernel), 'z' = stage-1-cached block move on every dim except
+    # lnKzz + T-P. "fzz" = 1 full : 2 block.
+    smc_block_schedule: str = "f"
     mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
@@ -490,6 +494,34 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
             f"{cfg.smc_mcmc_kernel!r}")
+    sched = str(cfg.smc_block_schedule).strip().lower()
+    if not sched or any(ch not in "fz" for ch in sched):
+        raise ValueError(
+            "smc_block_schedule must be a non-empty string over {'f', 'z'}, got "
+            f"{cfg.smc_block_schedule!r}")
+    if "f" not in sched:
+        raise ValueError(
+            f"smc_block_schedule={cfg.smc_block_schedule!r} has no 'f' sweep: the "
+            "block move never updates lnKzz or the T-P dims, so a schedule "
+            "without a full-theta sweep samples a lower-dimensional target")
+    if "z" in sched:
+        # the block move reuses the cold two-stage map's stage-1 result and its
+        # forward-mode tangents; neither exists on the other paths
+        if str(cfg.smc_chem_mode).strip().lower() != "cold":
+            raise ValueError(
+                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
+                f"smc_chem_mode='cold', got {cfg.smc_chem_mode!r}: the cached "
+                "stage-1 column is the cold two-stage map's")
+        if not bool(cfg.two_stage_z):
+            raise ValueError(
+                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
+                "two_stage_z=True: a single-stage solve has no stage-1 result "
+                "to cache")
+        if str(cfg.smc_mcmc_kernel).strip().lower() != "mala":
+            raise ValueError(
+                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
+                f"smc_mcmc_kernel='mala', got {cfg.smc_mcmc_kernel!r}: the block "
+                "move is a preconditioned Langevin proposal on the gradient")
     # Condensation forward solves are supported (on-graph rebuild from the live
     # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
     # is NOT validated: the fix_species pin captures the column at the first
@@ -658,7 +690,8 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
         f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
         f"target_ess_frac={cfg.smc_target_ess_frac:g}",
-        f"    kernel={kern}   step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
+        f"    kernel={kern}   block_schedule={cfg.smc_block_schedule}   "
+        f"step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
         f"    preconditioner: full cloud covariance (Cholesky)   "
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"

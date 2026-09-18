@@ -34,6 +34,7 @@ def _stub_pipe(cfg):
         cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
         theta_from_u=theta_from_u, log_prior_u=log_prior_u, sample_prior_u=sample_prior_u,
         log_likelihood_u=log_likelihood_u, loglik_fwd=log_likelihood_u,
+        h_idx=[2],   # the block move's fixed dim (stands in for lnKzz + T-P)
     )
 
 
@@ -63,8 +64,10 @@ def test_smc_recovers_gaussian_posterior(tmp_path):
     assert np.all(np.diff(b) > 0) and abs(b[-1] - 1.0) < 1e-8
 
 
-@pytest.mark.parametrize("kernel, n_sweeps", [("mala", 8), ("rwm", 24)])
-def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_sweeps):
+@pytest.mark.parametrize("kernel, n_sweeps, schedule",
+                         [("mala", 8, "f"), ("rwm", 24, "f"), ("mala", 12, "fzz")])
+def test_full_covariance_preconditioner_on_a_correlated_posterior(
+        kernel, n_sweeps, schedule):
     """Both mutation kernels share the cloud's full Cholesky factor, so the MALA MH
     correction whitens with L^-1 rather than dividing by a per-dim width and the
     rwm proposal draws from 2*step*C. A wrong whitening (or a preconditioner that
@@ -83,7 +86,12 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
     correlations (0.9470, 0.3157, 0.2075), lnZ -9.5629, 384/384 unique, last-stage
     acceptance 0.272 against the 0.234 rwm target -- worst gate use 44% (the mean
     bias), against the MALA row's 69%. 16 sweeps also passes on this seed but
-    lands at 98% of the |corr02 - 0.30| < 0.15 gate, i.e. no margin."""
+    lands at 98% of the |corr02 - 0.30| < 0.15 gate, i.e. no margin.
+
+    The "fzz" row runs the SAME gates through the block schedule: 1 full sweep
+    then 2 Metropolis-within-Gibbs moves on dims {0, 1} (h_idx=[2] here), which
+    is where a wrong block whitening, a wrong C_BB or a leaked h dim shows up as
+    a biased posterior SHAPE rather than as an error."""
     sd = np.array([0.40, 0.60, 0.25])
     corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
     sig = corr * np.outer(sd, sd)
@@ -102,11 +110,12 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
 
     cfg = C.Config(smc_num_particles=384, smc_num_mcmc_steps=n_sweeps, smc_max_steps=60,
                    smc_target_ess_frac=0.6, num_samples=384, num_chains=1,
-                   smc_mcmc_kernel=kernel)
+                   smc_mcmc_kernel=kernel, smc_block_schedule=schedule)
     pipe = P.Pipeline(cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
                       theta_from_u=theta_from_u, log_prior_u=log_prior_u,
                       sample_prior_u=sample_prior_u,
-                      log_likelihood_u=loglik, loglik_fwd=loglik)
+                      log_likelihood_u=loglik, loglik_fwd=loglik,
+                      h_idx=[2])
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(100), progress=False)
     assert res["reached_beta1"]
 
@@ -145,7 +154,8 @@ def test_walltime_governor_stops_cleanly(tmp_path):
     assert res["theta_draws"].shape == (1, 32, 3)
 
 
-def test_resume_reproduces_an_uninterrupted_run(tmp_path):
+@pytest.mark.parametrize("schedule", ["f", "fzz"])
+def test_resume_reproduces_an_uninterrupted_run(tmp_path, schedule):
     """A killed-and-resumed ladder must be BIT-IDENTICAL to an uninterrupted one.
 
     Production always seeds with PRNGKey(cfg.seed) and the stage loop restarts at
@@ -160,7 +170,8 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     statistical claim is covered by test_smc_recovers_gaussian_posterior and by
     tests/test_smc_blackjax_oracle.py)."""
     cfg = C.Config(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, num_samples=128, num_chains=1)
+                   smc_target_ess_frac=0.6, num_samples=128, num_chains=1,
+                   smc_block_schedule=schedule)
     key = jax.random.PRNGKey(11)              # the SAME seed on both legs
     full = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                           checkpoint_path=tmp_path / "a.npz")
