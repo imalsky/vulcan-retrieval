@@ -1,0 +1,62 @@
+#!/bin/bash
+#PBS -N VJAX_KERNEL_TEST
+#PBS -q gpu_long
+#PBS -W group_list=s2458
+#PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
+#PBS -l walltime=00:30:00
+#PBS -j oe
+#PBS -m abe
+# ~10 min GH200 check of VULCAN-JAX's CUDA block-Thomas kernel: refresh the three
+# editable installs (a version bump leaves validate_env stale until pip re-runs),
+# build the kernel with nvcc, then run tests/test_solver_fast.py on the GPU.
+# Resubmit after every change to the kernel. From the speed tree's
+# vulcan-retrieval root (or its tools/ dir):
+#   qsub -v VULCAN_SCRATCH=/nobackup/$USER/.vulcan-speed tools/gpu_kernel_test.pbs
+set -euo pipefail
+
+# --- locate the project root (PBS spools the script; rely on PBS_O_WORKDIR) ---
+if [ -n "${PBS_O_WORKDIR:-}" ] && [ "$(basename "${PBS_O_WORKDIR}")" = "vulcan-retrieval" ]; then
+  PROJECT_ROOT="$(cd -- "${PBS_O_WORKDIR}/.." && pwd -P)"
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ "$(basename "${PBS_O_WORKDIR}")" = "tools" ]; then
+  PROJECT_ROOT="$(cd -- "${PBS_O_WORKDIR}/../.." && pwd -P)"
+else
+  echo "ERROR: submit from the vulcan-retrieval repo root or its tools/ dir."
+  exit 1
+fi
+REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"
+if [ ! -d "${PROJECT_ROOT}/VULCAN-JAX" ] || [ ! -d "${PROJECT_ROOT}/vulcan-forward" ]; then
+  echo "ERROR: VULCAN-JAX / vulcan-forward are not siblings of ${REPO_DIR}; submit from a checkout whose parent holds all three trees."
+  exit 1
+fi
+export PROJECT_ROOT VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"
+echo "Job ${PBS_JOBID:-manual_$$} started $(date) on $(hostname) ($(uname -m)); PROJECT_ROOT=${PROJECT_ROOT}"
+
+# --- NAS proxy (pip needs it on compute nodes) ---------------------------------
+export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
+export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
+# --- caches off $HOME + conda env (kept identical to bootstrap_nas_env.pbs) ----
+: "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
+export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
+export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
+export TMPDIR="${VULCAN_SCRATCH}/tmp"
+mkdir -p "${PIP_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TMPDIR}"
+module purge 2>/dev/null || true
+module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
+module load miniconda3/gh2 2>/dev/null || true
+CONDA_BASE="$(conda info --base)"
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${CONDA_ENV:-pyt2_8_gh}"
+PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
+unset PYTHONNOUSERSITE
+# --- nvcc (the kernel build needs a CUDA toolkit, not just the driver) ---------
+module load cuda 2>/dev/null || true
+command -v nvcc >/dev/null || { echo "ERROR: no nvcc. Pick a toolkit: module avail cuda"; exit 1; }
+which nvcc; nvcc --version | tail -1
+for d in VULCAN-JAX vulcan-forward vulcan-retrieval; do
+  echo "${d}: $(git -C "${PROJECT_ROOT}/${d}" log --oneline -1)"
+done
+python -m pip install --user --no-deps --no-build-isolation -q -e "$PROJECT_ROOT/VULCAN-JAX" -e "$PROJECT_ROOT/vulcan-forward" -e "$REPO_DIR"
+python -m vulcan_jax.solver_fast --cuda
+cd "${PROJECT_ROOT}/VULCAN-JAX"
+JAX_PLATFORMS=cuda python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
