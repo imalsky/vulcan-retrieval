@@ -103,6 +103,22 @@ class EvalStats(NamedTuple):
     chem_tan_bad: jnp.ndarray
 
 
+class Stage1Cache(NamedTuple):
+    """Per-particle stage-1 result of the cold two-stage chemistry map.
+
+    y1   (nz, ni)        the converged baseline-composition column
+    dy1  (n_h, nz, ni)   its tangents along the lnKzz + T-P directions
+    h    (n_h,)          the theta[2:n_chem_tp] the column was solved at
+
+    Stage 1 depends on theta[2:] only, so a proposal sharing ``h`` shares y1/dy1
+    bit for bit.
+    """
+
+    y1: jnp.ndarray
+    dy1: jnp.ndarray
+    h: jnp.ndarray
+
+
 def _zero_eval_stats(n: int, dtype) -> EvalStats:
     """All-healthy EvalStats for stub pipelines / cold gradient maps."""
     return EvalStats(
@@ -571,9 +587,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return val, g, bad_grad
 
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
-                         mutation_cap: bool = True):
-        """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, n_bad_grad, stats)
-        when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new, stats)
+                         mutation_cap: bool = True, split_stage1: bool = True):
+        """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, S1, n_bad_grad, stats)
+        when want_grad (``stats`` an EvalStats, ``S1`` a Stage1Cache or None),
+        else (L, Y_new, refs_new, stats)
         -- or (L, Y_new, refs_new, per-particle ConvDiag) when diag; all
         (N,)-batched. ``n_bad_grad``
         counts finite-likelihood/non-finite-gradient AD pathologies -- the host
@@ -588,7 +605,12 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         likelihood-only phase) additionally threads each particle's ConvDiag
         through (final-stage accept_count / longdy / conv_normal), so the
         caller can detect a count_max-exhausted OR stall-certified
-        (not-actually-converged) cold solve instead of silently carrying it into L."""
+        (not-actually-converged) cold solve instead of silently carrying it into L.
+
+        ``split_stage1`` (cold two-stage gradient path only) runs the two stages as
+        two explicit jvps so the stage-1 result and its tangents become values;
+        False restores the single-chain jvp and returns S1=None. It exists for the
+        A/B test that pins the two routes together -- not a physics knob."""
         warm = (mode == "warm")
         assert not (diag and (warm or want_grad)), "diag is cold+no-grad only"
         # Convergence gate for the warm grad. mutation_cap=True (the MALA proposal
@@ -643,14 +665,47 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     jnp.asarray(cd.count_since_new_min, dtype),
                     jnp.asarray(cd.conv_normal, dtype)]))
 
-            def _chem_one(cc, yw, rf):
-                def _chain(c):
-                    y, cd = _solve_cd(c, yw, rf)
+            if not warm and bool(fwd.two_stage) and split_stage1:
+                eye_h = eye_c[2:]                          # lnKzz + T-P directions
+
+                def _stage2_chain(c, y1):
+                    y, cd = fwd.chem_stage2_diag(c, y1)
                     return fwd.aux_from_y(y, c), y, _pack_cd(cd)
-                (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
-                    lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
-                aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)  # primal (lane 0)
-                return aux, daux_l, y_l[0], cd_l[0]
+
+                def _pad_dy1(dy1):
+                    # lanes 0,1 (lnZ, c_o): no y_relaxed tangent
+                    return jnp.zeros((n_chem_tp,) + dy1.shape[1:],
+                                     dy1.dtype).at[2:].set(dy1)
+
+                def _chem_one(cc, yw, rf):
+                    """Cold two-stage chemistry lanes with the stages SPLIT.
+
+                    Lanes 0 and 1 carry a zero stage-1 tangent (their theta tangent
+                    is killed by the .at[0].set(0).at[1].set(0) inside stage 1);
+                    lanes 2..n_chem_tp-1 carry the stage-1 tangent that flows
+                    inline into stage 2's warm_y in the single-chain route. The
+                    split feeds the same (e_i, dy1) pair explicitly, so the primal
+                    is bit-identical and the tangents differ at most by XLA fusion.
+                    yw/rf are unused on the cold path (as in the single-chain route).
+                    """
+                    y1_l, dy1 = jax.vmap(
+                        lambda v: jax.jvp(fwd.chem_stage1, (cc,), (v,)))(eye_h)
+                    y1 = y1_l[0]                           # the primal is lane-independent
+                    (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
+                        lambda v, dy: jax.jvp(_stage2_chain, (cc, y1), (v, dy))
+                    )(eye_c, _pad_dy1(dy1))
+                    aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)
+                    return (aux, daux_l, y_l[0], cd_l[0],
+                            Stage1Cache(y1=y1, dy1=dy1, h=cc[2:n_chem_tp]))
+            else:
+                def _chem_one(cc, yw, rf):
+                    def _chain(c):
+                        y, cd = _solve_cd(c, yw, rf)
+                        return fwd.aux_from_y(y, c), y, _pack_cd(cd)
+                    (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
+                        lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
+                    aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)  # primal (lane 0)
+                    return aux, daux_l, y_l[0], cd_l[0], None
         elif diag:
             def _chem_one(cc, yw, rf):
                 y, cd = fwd.chem_solve_cold_diag(cc)
@@ -691,8 +746,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # architecture's PreMODIT tangents (the 390 GiB OOM), misattributed
                 # to photo temporaries. The RT VJP below is the real memory wall
                 # (18.4 GiB first lane, ~9.4 GiB per additional at nu_pts=5000).
-                AUX, DAUX, Ynew, CD = _map_chunked(lambda a: _chem_one(*a),
-                                                   (C_, Y, refs), chem_chunk)
+                # S1 is a Stage1Cache pytree on the split cold path, None
+                # otherwise -- a None leaf is an EMPTY pytree node, so it rides
+                # _map_chunked's tree_map/lax.map padding untouched.
+                AUX, DAUX, Ynew, CD, S1 = _map_chunked(lambda a: _chem_one(*a),
+                                                       (C_, Y, refs), chem_chunk)
                 vals, g_th, bads = _map_chunked(_rt_val_grad, (AUX, DAUX, Theta),
                                                 rt_vjp_chunk)
                 G = g_th * dTh                                       # chain to u-space
@@ -767,7 +825,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # re-certification failure (cull) from a true RT/AD blow-up (raise);
                 # the mutation kernel reads .n_capped/.n_stalled and the per-particle
                 # vectors for the bad-gradient forensics dump.
-                return L, G, Ynew, refs_new, n_bad, stats
+                return L, G, Ynew, refs_new, S1, n_bad, stats
             if diag:
                 return L, Ynew, refs_new, CDIAG
             return L, Ynew, refs_new, stats
@@ -797,6 +855,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         value_and_grad_naive=_value_and_grad_naive, value_and_grad_block=_value_and_grad_block,
         # staged batched evaluators (the SMC hot path)
         has_chem_state=True, chem_mode=chem_mode, y_baseline=y_baseline,
+        # exposed for the split-vs-legacy A/B only (split_stage1=False)
+        _make_batch_eval=_make_batch_eval,
         batch_eval_cold_vg=_make_batch_eval("cold", True),
         batch_eval_cold_l=_make_batch_eval("cold", False),
         batch_eval_cold_l_diag=_make_batch_eval("cold", False, diag=True),
@@ -1053,7 +1113,9 @@ def _proposal_scale(particles: np.ndarray, cap: float,
 
 def _get_batch_evals(pipe: Pipeline):
     """(cold_vg, cold_l, move_vg, move_l) batched evaluators. Gradient evaluators
-    return the 6-tuple (L, G, Y_new, refs_new, n_bad, stats); ``stats`` is an EvalStats
+    return the 7-tuple (L, G, Y_new, refs_new, S1, n_bad, stats); ``S1`` is a
+    Stage1Cache on the split cold two-stage path and None everywhere else;
+    ``stats`` is an EvalStats
     (uniform across the mutation-capped, init-uncapped, cold, and stub variants:
     per-batch n_capped/n_stalled tallies + per-particle acc/longdy/conv_ok/
     bad_grad/chem_tan_bad). Likelihood-only evaluators return
@@ -1079,7 +1141,7 @@ def _get_batch_evals(pipe: Pipeline):
             # all-healthy EvalStats (stubs have no warm cap or stall class) except
             # bad_grad -- keeps the 7-tuple contract uniform
             stats = _zero_eval_stats(U.shape[0], U.dtype)._replace(bad_grad=bad)
-            return (L, G, Y, refs, jnp.sum(bad.astype(jnp.int32)), stats)
+            return (L, G, Y, refs, None, jnp.sum(bad.astype(jnp.int32)), stats)
 
         def eval_l(U, Y, refs):
             return (jax.vmap(pipe.log_likelihood_u)(U), Y, refs,
@@ -1091,15 +1153,16 @@ def _get_batch_evals(pipe: Pipeline):
 
 
 def _blank_state(pipe: Pipeline, N: int):
-    """(Y0, refs0) placeholders for a fresh particle cloud: the baked baseline column
-    for real pipelines (matching refs (lnZ, c_o) = (0, 0)), inert zeros for stubs."""
+    """(Y0, refs0, S1_0) placeholders for a fresh particle cloud: the baked baseline
+    column for real pipelines (matching refs (lnZ, c_o) = (0, 0)), inert zeros for
+    stubs. S1_0 is None -- a fresh cloud has no stage-1 result yet."""
     dtype = pipe.dtype
     if getattr(pipe, "has_chem_state", False):
         Y0 = jnp.broadcast_to(pipe.y_baseline[None],
                               (N,) + tuple(pipe.y_baseline.shape)).astype(dtype)
     else:
         Y0 = jnp.zeros((N, 1, 1), dtype)
-    return Y0, jnp.zeros((N, 2), dtype)
+    return Y0, jnp.zeros((N, 2), dtype), None
 
 
 def _init_draw_count(pipe: Pipeline, n_target: int) -> int:
@@ -1114,8 +1177,9 @@ def _init_draw_count(pipe: Pipeline, n_target: int) -> int:
 
 
 def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
-    """Initialize the SMC particle state, returning (U_kept, L, G, Y, refs) for
-    exactly ``target_n`` healthy particles (default: all of U).
+    """Initialize the SMC particle state, returning (U_kept, L, G, Y, refs, S1) for
+    exactly ``target_n`` healthy particles (default: all of U). ``S1`` is the
+    phase-2 Stage1Cache (cold two-stage path) or None.
 
     ``U`` is an OVERSAMPLED prior cloud (len(U) = ceil(target_n * init_oversample) for
     real pipelines; see _init_draw_count). The two phases:
@@ -1157,7 +1221,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     if M < target_n:
         raise RuntimeError(f"_init_state got {M} draw(s) but target_n={target_n}: the "
                            "oversampled draw must be at least the target particle count")
-    Y0, refs0 = _blank_state(pipe, M)
+    Y0, refs0, _S1_0 = _blank_state(pipe, M)
     _, cold_l, move_vg, _ = _get_batch_evals(pipe)
     # Real (chem-backed) pipelines get the diag-threading cold evaluator so phase 1 can
     # detect a count_max-exhausted (not-actually-converged) particle and REJECT it; stub
@@ -1257,7 +1321,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
                 "UNCAPPED -- bounded by the cold count_max)")
     out = pipe._init_mv_jit(U_keep, Y, refs)
     jax.block_until_ready(out[0])
-    L, G, Y, refs, n_bad, stats2 = out
+    L, G, Y, refs, S1, n_bad, stats2 = out
     if has_diag:      # real pipelines: EvalStats threads per-particle ACC + conv bit
         acc2_np = np.asarray(jax.device_get(stats2.acc), np.int64)
         conv2_np = np.asarray(jax.device_get(stats2.conv_ok), bool)
@@ -1329,6 +1393,8 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             "cannot re-certify warm.")
     sel2 = jnp.asarray(alive2[:target_n])
     U_keep, L, G, Y, refs = U_keep[sel2], L[sel2], G[sel2], Y[sel2], refs[sel2]
+    if S1 is not None:
+        S1 = jax.tree_util.tree_map(lambda x: x[sel2], S1)
     if not np.all(np.isfinite(np.asarray(jax.device_get(G)))):
         raise RuntimeError("non-finite gradient entries at initialization")
     logger.info(f"init 2/2 done in {time.perf_counter() - t0:.1f}s "
@@ -1346,16 +1412,19 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         n_phase2=int(n_phase2),
         n_recert_fail=int(np.asarray(recert_fail).sum()),
     )
-    return U_keep, L, G, Y, refs, init_stats
+    return U_keep, L, G, Y, refs, S1, init_stats
 
 
 def _make_mutation(pipe: Pipeline, n_mcmc: int):
     """Build the state-carrying mutation:
 
-        mutate(key, U, Y, refs, L, G, beta, step, scale,
+        mutate(key, U, Y, refs, S1, L, G, beta, step, scale,
                where="mutation", dump_dir=None, dump_tag="")
-            -> (U, Y, refs, L, G, mean_acceptance, n_bad_grad,
+            -> (U, Y, refs, S1, L, G, mean_acceptance, n_bad_grad,
                 n_warm_capped, n_stalled)
+
+    ``S1`` is the per-particle Stage1Cache (cold two-stage gradient path) or
+    None; it rides the accept mask exactly like Y and is otherwise untouched.
 
     ``n_warm_capped`` totals the proposals rejected specifically because their warm
     solve hit warm_count_max; ``n_stalled`` those rejected because the solve exited
@@ -1404,7 +1473,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     n_ct = int(getattr(pipe, "n_chem_tp", 0))
     kernel = str(pipe.cfg.smc_mcmc_kernel).strip().lower()
 
-    def sweep(k, U, Y, refs, L, G, beta, step, scale):
+    def sweep(k, U, Y, refs, S1, L, G, beta, step, scale):
         def dlogprior(U_):
             return 1.0 - 2.0 * jax.nn.sigmoid(U_)
 
@@ -1416,7 +1485,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         cov = scale @ scale.T
         U_new = U + step * (GT @ cov) + jnp.sqrt(2.0 * step) * (noise @ scale.T)
         theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; negligible next to the solves
-        L_new, G_new, Y_new, refs_new, n_bad, stats = move_vg(U_new, Y, refs)
+        L_new, G_new, Y_new, refs_new, S1_new, n_bad, stats = move_vg(U_new, Y, refs)
         # Tangent-blown proposals (finite certified primal, non-finite
         # forward-mode tangent) are handled as ZERO-DRIFT MALA moves, never
         # rejections: the eval zeroed the non-finite gradient entries, and
@@ -1455,15 +1524,23 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         U = jnp.where(accept[:, None], U_new, U)
         Y = jnp.where(accept[:, None, None], Y_new, Y)
         refs = jnp.where(accept[:, None], refs_new, refs)
+        # S1 rides the accept mask exactly like Y. A resume from a pre-S1
+        # checkpoint enters with no carried cache and adopts the proposal's --
+        # every entry carries the h it was solved at, so a stale one can only
+        # miss, never be mistaken for the particle's own.
+        if S1_new is not None:
+            S1 = (jax.tree_util.tree_map(
+                lambda a, b: jnp.where(accept[(...,) + (None,) * (a.ndim - 1)], a, b),
+                S1_new, S1) if S1 is not None else S1_new)
         L = jnp.where(accept, L_new, L)
         G = jnp.where(accept[:, None], G_new, G)
         acc = jnp.minimum(jnp.exp(jnp.minimum(log_acc, 0.0)), 1.0)
         n_rej = jnp.sum((L_new <= -1.0e29).astype(jnp.int32))
-        return (U, Y, refs, L, G, jnp.mean(acc), n_rej, n_bad, stats,
+        return (U, Y, refs, S1, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
-    def sweep_rwm(k, U, Y, refs, L, G, beta, step, scale):
-        """Gradient-free full-covariance random-walk Metropolis, same 11-tuple.
+    def sweep_rwm(k, U, Y, refs, S1, L, G, beta, step, scale):
+        """Gradient-free full-covariance random-walk Metropolis, same 12-tuple.
 
         u' ~ N(u, 2*step*C) with C = scale @ scale.T -- the MALA proposal with
         the drift dropped, so the proposal is symmetric and log q cancels from
@@ -1493,22 +1570,23 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         n_rej = jnp.sum((L_new <= -1.0e29).astype(jnp.int32))
         # structurally no tangent on this path, so no bad-gradient class exists
         n_bad = jnp.zeros((), jnp.int32)
-        return (U, Y, refs, L, G, jnp.mean(acc), n_rej, n_bad, stats,
+        # S1 is carried untouched: this kernel computes no tangents.
+        return (U, Y, refs, S1, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
     sweep_jit = jax.jit(sweep_rwm if kernel == "rwm" else sweep)
 
     max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
 
-    def mutate(key, U, Y, refs, L, G, beta, step, scale,
+    def mutate(key, U, Y, refs, S1, L, G, beta, step, scale,
                where: str = "mutation", dump_dir=None, dump_tag: str = ""):
         keys = jax.random.split(key, n_mcmc)   # same stream the lax.scan consumed
         n_prop = int(U.shape[0])
         accs: List[float] = []
         n_bad_tot = n_cap_tot = n_stall_tot = 0
         for j in range(n_mcmc):
-            (U, Y, refs, L, G, acc, n_rej, n_bad, stats, theta_new,
-             L_new) = sweep_jit(keys[j], U, Y, refs, L, G, beta, step, scale)
+            (U, Y, refs, S1, L, G, acc, n_rej, n_bad, stats, theta_new,
+             L_new) = sweep_jit(keys[j], U, Y, refs, S1, L, G, beta, step, scale)
             n_bad_j = int(jax.device_get(n_bad))
             n_cap_j = int(jax.device_get(stats.n_capped))
             n_stall_j = int(jax.device_get(stats.n_stalled))
@@ -1537,7 +1615,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             n_bad_tot += n_bad_j
             n_cap_tot += n_cap_j
             n_stall_tot += n_stall_j
-        return (U, Y, refs, L, G, float(np.mean(accs)), n_bad_tot,
+        return (U, Y, refs, S1, L, G, float(np.mean(accs)), n_bad_tot,
                 n_cap_tot, n_stall_tot)
 
     return mutate
@@ -1599,7 +1677,7 @@ _DRAW_KEY = 2_000_000
 _INIT_KEY = 3_000_000
 
 
-def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G,
+def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, S1, L, G,
                       betas, ess_hist, acc_hist, logz_inc_hist, step_hist,
                       uniq_hist, capped_hist, stalled_hist, badgrad_hist, scale,
                       last_step, logZ, init_stats, log_step) -> None:
@@ -1659,7 +1737,13 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G,
              y_state=np.asarray(jax.device_get(Y), np.float64),
              chem_refs=np.asarray(jax.device_get(refs), np.float64),
              loglik=np.asarray(jax.device_get(L), np.float64),
-             grad_u=np.asarray(jax.device_get(G), np.float64))
+             grad_u=np.asarray(jax.device_get(G), np.float64),
+             # carried stage-1 cache (cold two-stage gradient path only); absent
+             # on every other path and on pre-S1 checkpoints, which resume with None
+             **({"s1_y1": np.asarray(jax.device_get(S1.y1), np.float64),
+                 "s1_dy1": np.asarray(jax.device_get(S1.dy1), np.float64),
+                 "s1_h": np.asarray(jax.device_get(S1.h), np.float64)}
+                if S1 is not None else {}))
     tmp.replace(checkpoint_path)
 
 
@@ -1735,6 +1819,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     init_stats: Optional[Dict[str, int]] = None
 
     state_loaded = False
+    S1 = None
     if resume_from is not None and not Path(resume_from).exists():
         raise FileNotFoundError(
             f"resume_from={resume_from} was requested but does not exist. Refusing to "
@@ -1791,6 +1876,10 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
             refs = jnp.asarray(ck["chem_refs"], dtype)
             L = jnp.asarray(ck["loglik"], dtype)
             G = jnp.asarray(ck["grad_u"], dtype)
+            if all(k in ck.files for k in ("s1_y1", "s1_dy1", "s1_h")):
+                S1 = Stage1Cache(y1=jnp.asarray(ck["s1_y1"], dtype),
+                                 dy1=jnp.asarray(ck["s1_dy1"], dtype),
+                                 h=jnp.asarray(ck["s1_h"], dtype))
             state_loaded = True
         else:
             logger.warning("checkpoint predates the carried chemistry state; "
@@ -1807,7 +1896,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # one batched cold two-stage solve per particle: the ONLY solve-from-baseline
         # work in the whole run (every mutation proposal warm-continues from here)
         t0 = time.perf_counter()
-        U, L, G, Y, refs, init_stats = _init_state(pipe, U, target_n=N)
+        U, L, G, Y, refs, S1, init_stats = _init_state(pipe, U, target_n=N)
         jax.block_until_ready(L)
         # fold the T-P-window rejection tally in so init_stats fully describes the
         # operational prior p(theta | window valid AND chemistry converges)
@@ -1820,7 +1909,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
             # init-level checkpoint (last_step=-1): a stage-0 death -- bad-gradient
             # raise, OOM, preemption -- must not throw away the hours-scale init;
             # RESUME=1 recovers it and enters the ladder at beta=0.
-            _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs, L=L, G=G,
+            _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs, S1=S1,
+                              L=L, G=G,
                               betas=betas, ess_hist=ess_hist,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,
@@ -1877,6 +1967,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # (3) systematic resample (the carried state travels with its particle)
         idx = _systematic_resample_idx(k_res, jnp.asarray(w_norm, dtype), N)
         U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
+        if S1 is not None:
+            S1 = Stage1Cache(y1=S1.y1[idx], dy1=S1.dy1[idx], h=S1.h[idx])
         # (3.5) preconditioner from the freshly RESAMPLED cloud (absolute per-dim
         # width: the proposal tracks the tempered posterior as it narrows)
         if cfg.mcmc_stage_adapt:
@@ -1885,8 +1977,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # zero-drift moves and warn+dump per-particle forensics next to the
         # checkpoint; a sweep beyond the systematic-breakage backstop raises
         # INSIDE mutate at the offending sweep
-        U, Y, refs, L, G, acc, n_bad, n_capped, n_stalled = mutate(
-            k_mut, U, Y, refs, L, G,
+        U, Y, refs, S1, L, G, acc, n_bad, n_capped, n_stalled = mutate(
+            k_mut, U, Y, refs, S1, L, G,
             jnp.asarray(beta_new, dtype),
             jnp.asarray(math.exp(log_step), dtype),
             jnp.asarray(scale, dtype),
@@ -1922,7 +2014,8 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                     f"elapsed={elapsed/60:.1f}min")
 
         if checkpoint_path is not None:
-            _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs, L=L, G=G,
+            _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs, S1=S1,
+                              L=L, G=G,
                               betas=betas, ess_hist=ess_hist,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,

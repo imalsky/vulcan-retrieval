@@ -74,7 +74,7 @@ def smoke():
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
 
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)
-    Y0, refs0 = P._blank_state(pipe, N)
+    Y0, refs0, _S1 = P._blank_state(pipe, N)
     C_ = jax.vmap(pipe.theta_from_u)(U)[:, : pipe.n_chem_tp]
 
     def _ac(cc, yw, rf):
@@ -82,7 +82,7 @@ def smoke():
         return jnp.asarray(cd.accept_count, jnp.int32)
 
     ACC = np.asarray(jax.vmap(_ac)(C_, Y0, refs0))
-    L_g, G, _Yn, _rn, n_bad, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
+    L_g, G, _Yn, _rn, _s1, n_bad, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
     L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]   # gated too, since this pass
     return dict(pipe=pipe, cmax=int(pipe.fwd.chem.warm_count_max), ACC=ACC,
                 L_gated=np.asarray(L_g), G=np.asarray(G), n_bad=int(n_bad),
@@ -122,7 +122,7 @@ def test_init_eval_is_uncapped(smoke):
     assert pipe.batch_eval_init_vg is not pipe.batch_eval_move_vg
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 1)
     C_ = jax.vmap(pipe.theta_from_u)(U)[:, : pipe.n_chem_tp]
-    Y0, refs0 = P._blank_state(pipe, 1)
+    Y0, refs0, _S1 = P._blank_state(pipe, 1)
     _y, cd_cap = pipe.fwd.chem_solve_warm_diag(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
     _y, cd_full = pipe.fwd.chem_solve_warm_diag_full(C_[0], Y0[0], refs0[0, 0], refs0[0, 1])
     assert int(cd_cap.accept_count) <= WARM_CMAX + 1
@@ -144,7 +144,7 @@ def test_gate_is_load_bearing(smoke):
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)
     Theta = jax.vmap(pipe.theta_from_u)(U)
     C_ = Theta[:, : pipe.n_chem_tp]
-    Y0, refs0 = P._blank_state(pipe, N)
+    Y0, refs0, _S1 = P._blank_state(pipe, N)
 
     def _raw_depth(cc, th, yw, rf):
         y = pipe.fwd.chem_solve_warm(cc, yw, rf[0], rf[1])   # ungated, non-converged

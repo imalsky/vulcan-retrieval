@@ -122,8 +122,9 @@ def main() -> int:
     t0 = time.time()
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
     U_test = jnp.stack([u0, u0 + du, u0 - du])
-    Y0, refs0 = P._blank_state(pipe, int(U_test.shape[0]))
-    Lb, Gb2, Yb, refsb, nbad_b, _stats = jax.jit(pipe.batch_eval_cold_vg)(U_test, Y0, refs0)
+    Y0, refs0, _S1 = P._blank_state(pipe, int(U_test.shape[0]))
+    Lb, Gb2, Yb, refsb, S1b, nbad_b, _stats = jax.jit(pipe.batch_eval_cold_vg)(
+        U_test, Y0, refs0)
     assert int(nbad_b) == 0, "staged cold eval flagged gradient pathologies"
     Lb = np.asarray(Lb); Gb2 = np.asarray(Gb2)
     ok_staged = True
@@ -151,6 +152,29 @@ def main() -> int:
           f"-> {'OK' if ok_staged else 'FAIL'}", flush=True)
     assert np.all(np.isfinite(Yb)) and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)
 
+    # ---- stage-split vs legacy single-chain cold jvp ----
+    # The cold two-stage gradient path runs its two stages as two explicit jvps
+    # and carries the stage-1 result as a value (pipeline.Stage1Cache). That is
+    # the SAME program regrouped, so the primal must be bit-identical and the
+    # gradient may differ only by XLA fusion: the two routes batch the stage-1
+    # tangent at different widths, measured 1.1e-10 norm-relative on these three
+    # points, and the gate sits ~90x above that.
+    t0 = time.time()
+    legacy = jax.jit(pipe._make_batch_eval("cold", True, split_stage1=False))
+    Ll, Gl, Yl, _rl, S1l, nbad_l, _sl = legacy(U_test, Y0, refs0)
+    assert int(nbad_l) == 0 and S1l is None
+    Ll = np.asarray(Ll); Gl = np.asarray(Gl)
+    same_y = bool(np.array_equal(np.asarray(Yb), np.asarray(Yl)))
+    same_l = bool(np.array_equal(Lb, Ll))
+    dg_split = float(np.max(np.abs(Gb2 - Gl)) / max(float(np.max(np.abs(Gl))), 1e-300))
+    ok_split = same_y and same_l and (dg_split < 1e-8)
+    print(f"[smoke] split-vs-legacy: Y bit-equal={same_y} L bit-equal={same_l} "
+          f"dgrad={dg_split:.2e} [{time.time()-t0:.0f}s] "
+          f"-> {'OK' if ok_split else 'FAIL'}", flush=True)
+    if S1b is not None:
+        print(f"[smoke] stage-1 cache: y1{tuple(S1b.y1.shape)} dy1{tuple(S1b.dy1.shape)} "
+              f"h{tuple(S1b.h.shape)}", flush=True)
+
     # ---- warm-continuation gradient (the mutation-kernel map) vs FD of the same map ----
     # State = the converged columns from the cold batch above; evaluate the move
     # gradient at a DIFFERENT point (a realistic MCMC proposal) and FD the identical
@@ -162,7 +186,7 @@ def main() -> int:
     Y_w, refs_w = Yb[:1], refsb[:1]
     move_vg = jax.jit(pipe.batch_eval_move_vg)
     move_l = jax.jit(pipe.batch_eval_move_l)
-    _L1, G1, _, _, nbad_w, _statsw = move_vg(U1, Y_w, refs_w)
+    _L1, G1, _, _, _s1w, nbad_w, _statsw = move_vg(U1, Y_w, refs_w)
     assert int(nbad_w) == 0, "warm move eval flagged gradient pathologies"
     g_warm = np.asarray(G1[0])
     ok_warm = True
@@ -194,7 +218,7 @@ def main() -> int:
                   f"{'OK' if alive else 'FAIL (inventory response dead -- check two_stage_z)'}",
                   flush=True)
 
-    ok = ok_bn and ok_fd and ok_staged and ok_warm and ok_live
+    ok = ok_bn and ok_fd and ok_staged and ok_split and ok_warm and ok_live
     print(f"[smoke] TOTAL {time.time()-t_all:.0f}s  ->  {'ALL CHECKS PASSED' if ok else 'FAILURES'}",
           flush=True)
     return 0 if ok else 1

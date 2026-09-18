@@ -54,9 +54,9 @@ def main() -> int:
     n1 = math.ceil(N * float(cfg.init_oversample))
     key = jax.random.PRNGKey(0)
     U = pipe.sample_prior_u(key, N)
-    Y0, refs0 = P._blank_state(pipe, N)
+    Y0, refs0, _S1 = P._blank_state(pipe, N)
     U1 = pipe.sample_prior_u(jax.random.PRNGKey(2), n1)
-    Y1, refs1 = P._blank_state(pipe, n1)
+    Y1, refs1, _S1a = P._blank_state(pipe, n1)
     fwd = pipe.fwd
     n_chem_tp = int(pipe.n_chem_tp)
     dtype = pipe.dtype
@@ -155,7 +155,7 @@ def main() -> int:
     # in the run (the mutation kernel matches cold_vg at width N)
     n2 = N + int(cfg.init_phase2_spare)
     U2 = pipe.sample_prior_u(jax.random.PRNGKey(1), n2)
-    Y2, refs2 = P._blank_state(pipe, n2)
+    Y2, refs2, _S1b = P._blank_state(pipe, n2)
     report(f"FULL init_vg x{n2} (N+{int(cfg.init_phase2_spare)} phase-2 spares)",
            pipe.batch_eval_init_vg, U2, Y2, refs2)
     report(f"FULL cold_l x{n1} (init phase-1 primal likelihood batch)",

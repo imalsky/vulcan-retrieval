@@ -92,7 +92,7 @@ def main() -> None:
     key = jax.random.PRNGKey(int(cfg.seed) + int(args.seed_offset))
     key, sub = jax.random.split(key)
     U = pipe.sample_prior_u(sub, int(args.n_draws))
-    Y0, refs0 = P._blank_state(pipe, int(args.n_draws))
+    Y0, refs0, _S1 = P._blank_state(pipe, int(args.n_draws))
 
     log.info("Running batched cold two-stage init at the probe count_max "
              "(single lockstep while_loop bounded by the SLOWEST draw -- this can "

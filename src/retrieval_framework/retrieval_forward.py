@@ -162,6 +162,20 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return chem.converged_y(chem_theta, warm_y=y_relaxed,
                                 lnZ_ref=0.0, c_o_ref=0.0)          # stage 2 (warm)
 
+    def chem_stage1(chem_theta):
+        """Stage 1 of the cold two-stage map: the converged column at the
+        retrieved (lnKzz, T-P) with baseline composition. A function of
+        chem_theta[2:] only (theta[0:2] are overwritten with 0), so two proposals
+        sharing theta[2:] share this subproblem bit for bit. No ConvDiag: stage 1
+        is not gated (notes §2.12)."""
+        return chem.converged_y(chem_theta.at[0].set(0.0).at[1].set(0.0))
+
+    def chem_stage2_diag(chem_theta, y_relaxed):
+        """Stage 2: warm re-convergence of y_relaxed at the proposal's own
+        (lnZ, c_o); returns (y, ConvDiag), the ConvDiag that certifies the draw."""
+        return chem.converged_y(chem_theta, warm_y=y_relaxed, lnZ_ref=0.0,
+                                c_o_ref=0.0, return_conv_diag=True)
+
     def chem_solve_cold_diag(chem_theta):
         """chem_solve_cold returning ``(y, ConvDiag)``.
 
@@ -181,10 +195,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         jvp chain."""
         if not two_stage:
             return chem.converged_y(chem_theta, return_conv_diag=True)
-        th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)
-        y_relaxed, _d1 = chem.converged_y(th_relax, return_conv_diag=True)
-        return chem.converged_y(chem_theta, warm_y=y_relaxed,
-                                lnZ_ref=0.0, c_o_ref=0.0, return_conv_diag=True)
+        return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a
@@ -290,6 +301,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         rt_depth=rt_depth,
         chem_solve_cold=chem_solve_cold,
         chem_solve_cold_diag=chem_solve_cold_diag,
+        chem_stage1=chem_stage1,
+        chem_stage2_diag=chem_stage2_diag,
+        two_stage=two_stage,
         chem_solve_warm=chem_solve_warm,
         chem_solve_warm_diag=chem_solve_warm_diag,
         chem_solve_warm_diag_full=chem_solve_warm_diag_full,
