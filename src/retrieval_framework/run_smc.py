@@ -170,6 +170,9 @@ def output_truth(cfg: C.Config, pipe) -> np.ndarray:
 
 
 
+log = logging.getLogger("retrieval")
+
+
 def _cuda_profiler(on: bool) -> None:
     """cudaProfilerStart / cudaProfilerStop around the timed mutation sweep when
     NSYS_CAPTURE_API=1, so an ``nsys profile --capture-range=cudaProfilerApi``
@@ -221,7 +224,6 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     GPU driver and the three repos' commit/dirty state so an XLA-flag or
     solver-branch A/B can be attributed after the fact."""
     import jax.numpy as jnp
-    log = logging.getLogger("retrieval")
     N = int(cfg.smc_num_particles)
     # Derive U exactly as run_smc_loop does, from the run's own seed, so the timing
     # gate exercises the same prior corners the production init will hit (a PRNGKey(0)
@@ -374,7 +376,6 @@ def main() -> None:
                   logging.FileHandler(cfg.out_dir / "run.log", mode="w" if cfg.overwrite else "a")],
         force=True,
     )
-    log = logging.getLogger("retrieval")
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={cfg.out_dir}")
     # loud, up-front dump of the RESOLVED config so nothing (band, count_max, priors,
     # ...) is a surprise; shown BEFORE the ~minutes-long forward build.

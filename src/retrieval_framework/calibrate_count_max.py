@@ -130,19 +130,21 @@ def main() -> None:
         jax.block_until_ready(out[0])
         t_steady = time.perf_counter() - t0
         _cuda_profiler(False)
-
-        Lb = np.asarray(jax.device_get(out[0]), np.float64)
-        Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
         # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
         n_acc = K + 1
         n_step = 2 * n_acc
+        # Timing first: it is the point of the job and must land in the log even if
+        # the output handling below trips.
         log.info(f"fixed-step bench ({'GRADIENT batch_eval_cold_vg' if args.grad else 'primal batch_eval_cold_l_diag'}): "
                  f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} (2 stages x K+1)")
         log.info(f"  t_first  = {t_first:.3f} s (compile + run)")
         log.info(f"  t_steady = {t_steady:.3f} s")
         log.info(f"  ms_per_step = {1000.0 * t_steady / n_step:.3f} ms -- wall per "
                  "batched accepted step of the SLOWEST lane, two stages")
+
+        Lb = np.asarray(jax.device_get(out[0]), np.float64)
+        Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)
         log.info(f"  n_finite(L) = {int(np.sum(np.isfinite(Lb)))}/{Lb.size}  "
                  f"max|Y| = {np.nanmax(np.abs(Yb)):.6g}")
         save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb}
