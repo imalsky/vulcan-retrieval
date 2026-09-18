@@ -60,6 +60,9 @@
 #   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
 #                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
 #                           NSYS_DURATION (default 120 s); job runs on past the window.
+#   NSYS_CAPTURE_API=1      with NSYS=1: capture the range the app marks with
+#                           cudaProfilerStart/Stop (run_smc --calibrate marks its timed
+#                           mutation sweep) instead of a fixed delay window.
 #   NSYS_FULL=1             FULL whole-process Nsight Systems trace (for a BOUNDED job:
 #                           the count_max calibration or PROBE_MEMORY). Keep that job
 #                           short or the .nsys-rep gets large.
@@ -281,6 +284,12 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   fi
   if [ "${NSYS_FULL:-0}" = "1" ]; then
     echo "nsys: FULL whole-process capture (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
+  elif [ "${NSYS_CAPTURE_API:-0}" = "1" ]; then
+    # The app marks the range: run_smc --calibrate calls cudaProfilerStart/Stop
+    # around its timed mutation sweep, so the capture lands on the sweep wherever
+    # it falls (job 78814's fixed 3600 s window landed inside a 62-min init).
+    NSYS_WRAP+=(--capture-range=cudaProfilerApi --capture-range-end=stop --kill=none)
+    echo "nsys: CAPTURE-RANGE cudaProfilerApi (the timed sweep; gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
   else
     NSYS_WRAP+=(--delay="${NSYS_DELAY:-900}" --duration="${NSYS_DURATION:-120}" --kill=none)
     echo "nsys: WINDOWED delay=${NSYS_DELAY:-900}s duration=${NSYS_DURATION:-120}s (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
@@ -353,6 +362,18 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
       else
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
+      wrc=$?
+      # A windowed nsys returns when its window closes and leaves the app running
+      # (job 78814: rc=0 after 3694 s, no timing.json, and the orphan's 90% GPU
+      # preallocation made every later arm die at gpusolverDnCreate). Wait for
+      # this tree's python to finish before the next arm touches the GPU.
+      while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|probe_memory) ${SMC_DIR}" >/dev/null; do
+        sleep 30
+      done
+      if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
+        echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1
+      fi
+      exit "${wrc}"
     ) || arm_rc=$?
     printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${mode}" "${arm_rc}" "$(( $(date +%s) - t0 ))" "${outd}" | tee -a "${CHAIN_TSV}"
     if [ "${arm_rc}" -ne 0 ]; then rc="${arm_rc}"; fi
