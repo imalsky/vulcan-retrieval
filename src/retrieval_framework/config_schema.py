@@ -314,6 +314,12 @@ class Config:
     # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
     # chemistry memory is independent of the spectral grid.
     smc_chem_chunk: int = 0
+    # Contiguous band tiles the engine folds the correlated-k mixture in
+    # (profile key rt_band_tiles). 1 = the whole grid in one fold. The depth is
+    # bitwise identical at any count (overlap resorts within a band) and the
+    # VJP agrees to rounding, so it trades extra launches for the peak fold
+    # memory of one tile instead of the whole grid.
+    smc_rt_band_tiles: int = 1
 
     # MALA step size: the per-stage Robbins-Monro adaptation below is the only
     # tuner. mala_step_size seeds it.
@@ -364,6 +370,7 @@ class Config:
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
             fastchem_met_scale=float(self.fastchem_met_scale),
             cfg_overrides=dict(self.cfg_overrides),
+            rt_band_tiles=int(self.smc_rt_band_tiles),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
             p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
         )
@@ -462,7 +469,8 @@ def validate_config(cfg: Config) -> None:
     # Counts that silently produce a broken or empty run if they reach zero: a
     # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
     # empty envelope. Chunk sizes are batch splits where 0 means "one batch".
-    for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws", "ppc_chunk_size"):
+    for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws",
+                 "ppc_chunk_size", "smc_rt_band_tiles"):
         if int(getattr(cfg, name)) < 1:
             raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
     for name in ("smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk"):
@@ -655,7 +663,8 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
         "   "
-        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",
+        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}"
+        f"   rt_band_tiles={cfg.smc_rt_band_tiles}",
         f"    walltime governor: {cfg.walltime_seconds / 3600.0:.1f} h"
         + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
         rule(f"parameters ({len(specs)})   [prior : truth]"),

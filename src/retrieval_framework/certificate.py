@@ -120,7 +120,8 @@ REQUIRED_VALIDATION_ARTIFACTS = (
 # only spelled differently. test_certificate pins that this map covers every
 # profile key with no Config counterpart -- add one and the test fails loudly
 # rather than every artifact being silently rejected.
-_PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs"}
+_PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs",
+                    "rt_band_tiles": "smc_rt_band_tiles"}
 
 
 def _sha256(path: Path) -> str:
