@@ -81,6 +81,9 @@ python -c "import jax; d = jax.devices(); print(jax.__version__, d); assert d[0]
   echo "ERROR: JAX sees no GPU. Diagnostics:"; env | grep -iE "^(LD_LIBRARY_PATH|CUDA|JAX|XLA)" || true
   python -m pip list 2>/dev/null | grep -iE "^(jax|nvidia)" || true; exit 1; }
 cd "${PROJECT_ROOT}/VULCAN-JAX"
+# The real-block solver test needs the converged HD189 fixture, which the tree
+# does not carry; one HD189 run makes it (a few minutes), once.
+[ -f tests/data/adj_state_hd189.npz ] || python tests/_gen_adj_state.py hd189
 # The suite's oracle gate (tests/conftest.py) wants fixtures this tree does not
 # carry; this job runs one file, so accept the reduced coverage explicitly.
 VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
