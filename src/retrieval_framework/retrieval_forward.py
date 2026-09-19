@@ -197,6 +197,26 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             return chem.converged_y(chem_theta, return_conv_diag=True)
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
+    def chem_solve_cold_diag_batch(C):
+        """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
+        ``(y, ConvDiag)`` with a leading particle axis on every field.
+
+        Same map, run through the solver's BATCHED runner
+        (``vulcan_chem.converged_y_batch``): the while loop sits above the lane
+        vmap, so photolysis and the geometry refresh fire once per cadence for
+        the whole batch instead of on every lane every iteration. Each lane
+        freezes at its own exit, so a particle's column does not depend on the
+        others, but it is NOT bit-identical to its solo solve: the cadence rides
+        the loop's iteration tick (agreement at the convergence scale, 5.4e-5
+        over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). PRIMAL
+        only -- every gradient path stays on the per-particle
+        ``chem_solve_cold_diag``."""
+        if not two_stage:
+            return chem.converged_y_batch(C, return_conv_diag=True)
+        Y1 = chem.converged_y_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+        return chem.converged_y_batch(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0,
+                                      return_conv_diag=True)
+
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a
         previously-converged column ``y_warm`` whose inventory corresponds to
@@ -301,6 +321,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         rt_depth=rt_depth,
         chem_solve_cold=chem_solve_cold,
         chem_solve_cold_diag=chem_solve_cold_diag,
+        chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_stage1=chem_stage1,
         chem_stage2_diag=chem_stage2_diag,
         two_stage=two_stage,

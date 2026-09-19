@@ -766,6 +766,24 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 y, cd = _solve_l(cc, yw, rf)
                 return fwd.aux_from_y(y, cc), y, cd
 
+        if not want_grad:
+            def _chem_primal(C_, Y, refs):
+                """Chemistry for the WHOLE particle batch -> (AUX, Y_new, ConvDiag).
+
+                Cold: ONE ``chem_solve_cold_diag_batch`` call, i.e. the solver's
+                batched runner, whose while loop sits ABOVE the lane vmap -- the
+                per-lane map vmapped here runs photolysis and the geometry refresh
+                on every lane every iteration (lax.cond lowers to a select under
+                vmap). Lanes freeze at their own exits, so each particle's column
+                is its own solve, agreeing with the per-lane map at the
+                convergence scale rather than bitwise (vulcan-jax notes 2.9).
+                Warm continuation keeps the per-particle map: the
+                warm-capped twin runner has no batched entry point."""
+                if warm:
+                    return jax.vmap(_chem_one)(C_, Y, refs)
+                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
+                return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
+
         def eval_batch(U, Y, refs, S1_in=None):
             U = jnp.asarray(U, dtype)
             Theta = jax.vmap(theta_from_u)(U)                        # (N, n_dim)
@@ -841,11 +859,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     acc=ACC, longdy=CD[:, 1], conv_ok=conv_ok,
                     bad_grad=bads & usable, chem_tan_bad=chem_bad, s1_hit=s1_hit)
             elif diag:
-                AUX, Ynew, CDIAG = jax.vmap(_chem_one)(C_, Y, refs)
+                AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs)
                 vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
                 G = None
             else:
-                AUX, Ynew, CDL = jax.vmap(_chem_one)(C_, Y, refs)
+                AUX, Ynew, CDL = _chem_primal(C_, Y, refs)
                 vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
                 G = None
                 ACC = CDL.accept_count.astype(jnp.int32)
