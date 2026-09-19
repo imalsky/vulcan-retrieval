@@ -63,5 +63,17 @@ def test_main_fails_loudly_without_checkouts(tmp_path: Path, capsys):
     assert "bootstrap_nas_env.pbs" in err
 
 
-def test_fastchem_probe_rejects_missing_binary(tmp_path: Path):
-    assert V._fastchem_runnable(tmp_path) is False
+def test_exogibbs_floor_rejects_an_old_release(monkeypatch):
+    """The equilibrium cold seed needs exogibbs >= EXOGIBBS_MIN; an older one
+    imports fine and then returns a seed the solver cannot use, so the preflight
+    must fail on the VERSION, not only on the import."""
+    _reset()
+    import exogibbs
+    monkeypatch.setattr(exogibbs, "__version__", "0.5.9", raising=False)
+    V._check_exogibbs()
+    assert len(V._ERRORS) == 1 and V.EXOGIBBS_MIN in V._ERRORS[0]
+
+    _reset()
+    monkeypatch.setattr(exogibbs, "__version__", V.EXOGIBBS_MIN, raising=False)
+    V._check_exogibbs()
+    assert V._ERRORS == [] and V._WARNINGS == []

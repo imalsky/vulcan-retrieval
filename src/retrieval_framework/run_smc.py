@@ -460,8 +460,6 @@ def main() -> None:
     kernel = str(cfg.smc_mcmc_kernel).strip().lower()
     kernel_label = ("preconditioned fwd-jvp MALA" if kernel == "mala"
                     else "preconditioned gradient-free random-walk Metropolis")
-    if "z" in str(cfg.smc_block_schedule).strip().lower():
-        kernel_label += f", block schedule {cfg.smc_block_schedule}"
     samples_path = cfg.out_dir / "posterior_samples.npz"
     extra_path = cfg.out_dir / "smc_extra_fields.npz"
     if cfg.run_inference:

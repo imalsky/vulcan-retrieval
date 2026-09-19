@@ -24,8 +24,7 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
   7. required data files under <PROJECT_ROOT>/vulcan-retrieval/data/ (real
      spectrum CSVs, cached CO ExoMol dir, H2-H2 + H2-He CIA; missing HITRAN
      line-list caches are a warning -- they re-download via the NAS proxy);
-  8. a runnable FastChem binary for this node's architecture (exec-probed;
-     $VULCAN_JAX_FASTCHEM_DIR first, then the checkout tree).
+  8. exogibbs imports and meets the floor the equilibrium cold seed needs.
 
 Usage:
     python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
@@ -36,14 +35,13 @@ vulcan-retrieval checkouts (same meaning as $VULCAN_PROJECT_ROOT).
 from __future__ import annotations
 
 import argparse
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 SUPPORTED_PYTHON = (3, 10)
 EXOJAX_PIN = "2.2.3"  # keep in lockstep with pyproject.toml dependencies
+EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan_jax.ini_abun.eq_seed
 
 _ERRORS: list[str] = []
 _WARNINGS: list[str] = []
@@ -228,36 +226,22 @@ def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
             )
 
 
-def _fastchem_runnable(tree: Path) -> bool:
-    """Exec-probe <tree>/fastchem; an OSError means wrong architecture/missing."""
-    binary = tree / "fastchem"
-    if not binary.exists():
-        return False
+def _check_exogibbs() -> None:
+    """The EQ cold seed minimizes the Gibbs energy through exogibbs: pure JAX,
+    nothing to build per architecture, but a hard import of every cold solve."""
+    remedy = f'pip install --user --no-deps "exogibbs=={EXOGIBBS_MIN}"'
     try:
-        subprocess.run([str(binary)], cwd=str(tree), timeout=15, capture_output=True)
-    except OSError:
-        return False
-    except Exception:  # noqa: BLE001 - ran but complained (no args): executable is fine
-        pass
-    return True
-
-
-def _check_fastchem(root: Path) -> None:
-    cands: list[Path] = []
-    env_dir = os.environ.get("VULCAN_JAX_FASTCHEM_DIR")
-    if env_dir:
-        cands.append(Path(env_dir))
-    cands.append(root / "VULCAN-JAX" / "src" / "vulcan_jax" / "fastchem_vulcan")
-    for c in cands:
-        if _fastchem_runnable(c):
-            _ok(f"FastChem binary runnable at {c}")
-            return
-    _err(
-        "no runnable FastChem binary for this architecture (probed: "
-        + ", ".join(str(c) for c in cands)
-        + "). The bootstrap builds it (`make` in VULCAN-JAX/src/vulcan_jax/"
-        "fastchem_vulcan on the target node type)."
-    )
+        import exogibbs
+    except Exception as e:  # noqa: BLE001
+        _err(f"exogibbs failed to import: {e!r}. Install it: {remedy}")
+        return
+    got = str(getattr(exogibbs, "__version__", ""))
+    parts = tuple(int(n) for n in re.findall(r"\d+", got)[:3])
+    if parts < tuple(int(n) for n in EXOGIBBS_MIN.split(".")):
+        _err(f"exogibbs {got or '?'} is below the {EXOGIBBS_MIN} floor the "
+             f"equilibrium seed needs. Upgrade it: {remedy}")
+    else:
+        _ok(f"exogibbs {got}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -288,13 +272,13 @@ def main(argv: list[str] | None = None) -> int:
         _check_cross_repo_pin()
         _check_exojax()
         _check_data_tree(root, production_molecules(root))
-        _check_fastchem(root)
+        _check_exogibbs()
 
     print()
     if _ERRORS:
         print(
             f"validate_env: FAIL ({len(_ERRORS)} error(s), {len(_WARNINGS)} warning(s)).\n"
-            "Remedy: one-time bootstrap (installs + FastChem build), then resubmit:\n"
+            "Remedy: one-time bootstrap (the editable installs), then resubmit:\n"
             f"  cd {root / 'vulcan-retrieval'}\n"
             "  qsub tools/bootstrap_nas_env.pbs",
             file=sys.stderr,

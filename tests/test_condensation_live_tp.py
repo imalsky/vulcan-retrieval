@@ -18,7 +18,7 @@ Validates the on-graph condensation rebuild end-to-end:
 
 Setup mirrors VULCAN-JAX's condensation runtime test: a small synthetic
 column on the production SNCHO network (its one condensation reaction is
-S8 -> S8_l_s), const_mix init (offline, no FastChem), photochemistry off.
+S8 -> S8_l_s), const_mix init (no equilibrium seed), photochemistry off.
 Convergence uses the upstream conden-window + whole-column fix_species pin
 (same methodology jwst_tool.forward.CONDEN_CFG ships): without the pin the
 steady state is transport-limited -- the upper S8 reservoir drains through
@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 
 # SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
-# line lists, FastChem, chemistry converged to steady state), so it costs
+# line lists, chemistry converged to steady state), so it costs
 # minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
 # is the opt-in fast inner loop.
 pytestmark = [pytest.mark.slow,

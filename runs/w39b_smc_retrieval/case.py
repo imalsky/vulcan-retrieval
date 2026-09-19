@@ -25,7 +25,6 @@ _W39B = dict(
     tp_gravity_cgs=422.0,                       # cm/s^2 (also the RT g_btm)
     rp_cm=1.279 * 7.1492e9,                     # planet radius at P_btm
     rstar_cm=0.932 * R_SUN_CM,
-    fastchem_met_scale=10.0,                    # baseline 10x solar; lnZ relative to it
     # Cap physically meaningless large-dt Ros2 oscillations on high-Kzz columns.
     # This is not a convergence criterion: yconv_cri/slope_cri remain the canonical
     # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected at init.

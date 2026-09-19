@@ -60,7 +60,9 @@
 #                           step-cost bench, primal or gradient; pair with NSYS=1
 #                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
-#   XLA_CMDBUF=1            appends the command-buffer flags to XLA_FLAGS (commas can't cross -v)
+#   XLA_CMDBUF=0            drop the command-buffer flags (ON by default: 132 ms vs 255 ms per
+#                           accepted primal step, jobs 78995 vs 78991). Opt-OUT, so an A/B is
+#                           one -v variable; the commas stay inside the script
 #   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
 #                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
 #                           NSYS_DURATION (default 120 s); job runs on past the window.
@@ -88,7 +90,7 @@
 # so the solver is launch-bound and per-step overhead, not arithmetic, is the speed lever).
 # Judge purely by t_mutation_sweep_s in timing.json vs a baseline calibration:
 #   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs
-#   qsub -v CALIBRATE_ONLY=1,XLA_CMDBUF=1 run_nas_w39b.pbs
+#   qsub -v CALIBRATE_ONLY=1,XLA_CMDBUF=0 run_nas_w39b.pbs
 #
 # Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_SMC_<jobid>.log
 # =============================================================================
@@ -162,7 +164,9 @@ export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
-if [ "${XLA_CMDBUF:-0}" = "1" ]; then
+# Command buffers are the production default (they cut the primal loop from
+# ~255 to 132 ms per accepted step); XLA_CMDBUF=0 takes them back out for an A/B.
+if [ "${XLA_CMDBUF:-1}" != "0" ]; then
   export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
 fi
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
@@ -176,7 +180,7 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 # NO installs here (the pre-2026-07 per-job pip installs raced across concurrent
 # jobs on the shared userbase and crashed mid-uninstall). Validate-only: every
 # check the old inline preflight ran (packages editable + current, jax on GPU,
-# data seeds, FastChem) now lives in retrieval_framework.validate_env, shared
+# data seeds, exogibbs) now lives in retrieval_framework.validate_env, shared
 # verbatim with the bootstrap and runnable by hand on a front end.
 python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu || {
   echo "ERROR: environment validation failed (or retrieval_framework is not installed)."
@@ -185,47 +189,6 @@ python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu ||
   echo "  qsub tools/bootstrap_nas_env.pbs"
   exit 1
 }
-
-# --- FastChem binary (the EQ init runs it once at build time) -----------------
-# Probe candidates by EXECUTING them (an exec-format error means wrong
-# architecture); tools/bootstrap_nas_env.pbs builds the binary in the checkout
-# tree on a GH200 node. Must be exported before the first `import vulcan_jax`.
-if [ -z "${VULCAN_JAX_FASTCHEM_DIR:-}" ]; then
-  _fc_line="$(python - <<'PY'
-import os, pathlib, subprocess
-cands = []
-try:
-    import vulcan_jax
-    cands.append(pathlib.Path(vulcan_jax.__file__).parent / "fastchem_vulcan")
-except Exception:
-    pass
-root = pathlib.Path(os.environ["VULCAN_PROJECT_ROOT"])
-cands.append(root / "VULCAN-JAX" / "src" / "vulcan_jax" / "fastchem_vulcan")
-for c in cands:
-    b = c / "fastchem"
-    if b.exists():
-        try:
-            subprocess.run([str(b)], cwd=str(c), timeout=15, capture_output=True)
-        except OSError:
-            continue        # exec-format error -> wrong architecture
-        except Exception:
-            pass            # ran but complained (no args) -> executable is fine
-        print(f"FASTCHEM_DIR={c}")
-        break
-PY
-)"
-  case "${_fc_line}" in
-    FASTCHEM_DIR=*)
-      export VULCAN_JAX_FASTCHEM_DIR="${_fc_line#FASTCHEM_DIR=}"
-      echo "FastChem tree: ${VULCAN_JAX_FASTCHEM_DIR}" ;;
-    *)
-      echo "ERROR: no runnable FastChem binary found for this node's architecture."
-      echo "       The bootstrap builds it; run once and resubmit:"
-      echo "  cd ${REPO_DIR}"
-      echo "  qsub tools/bootstrap_nas_env.pbs"
-      exit 1 ;;
-  esac
-fi
 
 # --- GPU utilization monitor ---------------------------------------------------
 GPU_MON_LOG="${LOG_DIR}/gpu_monitor_${_jobid%%.*}.log"

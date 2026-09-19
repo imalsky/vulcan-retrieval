@@ -93,12 +93,12 @@ class Config:
     # Starting the composition perturbation before the large T displacement can erase
     # its inventory response; the second stage preserves it.
     two_stage_z: bool = True
-    # Where a COLD solve starts: "eq" = FastChem equilibrium at the proposal's own
-    # T-P and elemental composition (host callback, one FastChem run per lane; the
-    # upstream VULCAN start); "baseline" = the build's baseline column scaled by
-    # the theta masks. The baseline start burns the whole step budget on cool,
-    # weakly mixed draws (notes §1.1). Deterministic in theta, so not the
-    # history-dependent warm start §2.6 rejects.
+    # Where a COLD solve starts: "eq" = the network's own Gibbs equilibrium at
+    # the proposal's own T-P and elemental composition (end-to-end JAX, no host
+    # callback; the upstream VULCAN start); "baseline" = the build's baseline
+    # column scaled by the theta masks. The baseline start burns the whole step
+    # budget on cool, weakly mixed draws (notes §1.1). Deterministic in theta,
+    # so not the history-dependent warm start §2.6 rejects.
     cold_seed: str = "eq"
     count_min: Optional[int] = None
     count_max: Optional[int] = None
@@ -143,7 +143,6 @@ class Config:
     # cannot re-certify within count_max, and backfills from the spares. A true RT/AD
     # failure still raises.
     init_phase2_spare: int = 8
-    fastchem_met_scale: float = 10.0   # BASELINE metallicity (x solar); lnZ is relative to this
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
 
     # ---- planet identity (every case MUST set these; unset is a hard error) ----
@@ -212,7 +211,8 @@ class Config:
 
     # ---- priors (all bounded; uniform unless noted). Truth = synthetic-injection
     #      value, ignored for real-data runs -----------------------------------
-    # lnZ is relative to the fastchem_met_scale baseline: lnZ=0 -> 10x solar here.
+    # lnZ is relative to the case's BASELINE composition (the vulcan cfg's <X>_H,
+    # 10x solar here): lnZ=0 -> that baseline.
     prior_lnZ: Tuple[float, float] = (-2.303, 2.303)     # ~1x .. ~100x solar
     truth_lnZ: float = 0.0
     # dln(C/O) about the fixed-O baseline. UPPER BOUND CONSTRAINT: the fixed-O knob's
@@ -277,10 +277,6 @@ class Config:
     #         state are shared. This is a DELIBERATE configured kernel, not a
     #         fallback: under "mala" a flagged gradient pathology still raises.
     smc_mcmc_kernel: str = "mala"
-    # Per-sweep pattern cycled over smc_num_mcmc_steps; 'f' = full-theta move
-    # (today's kernel), 'z' = stage-1-cached block move on every dim except
-    # lnKzz + T-P. "fzz" = 1 full : 2 block.
-    smc_block_schedule: str = "f"
     mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
@@ -372,7 +368,6 @@ class Config:
             abundance_mode=str(self.abundance_mode),
             cold_seed=str(self.cold_seed),
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
-            fastchem_met_scale=float(self.fastchem_met_scale),
             cfg_overrides=dict(self.cfg_overrides),
             rt_band_tiles=int(self.smc_rt_band_tiles),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
@@ -494,34 +489,6 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
             f"{cfg.smc_mcmc_kernel!r}")
-    sched = str(cfg.smc_block_schedule).strip().lower()
-    if not sched or any(ch not in "fz" for ch in sched):
-        raise ValueError(
-            "smc_block_schedule must be a non-empty string over {'f', 'z'}, got "
-            f"{cfg.smc_block_schedule!r}")
-    if "f" not in sched:
-        raise ValueError(
-            f"smc_block_schedule={cfg.smc_block_schedule!r} has no 'f' sweep: the "
-            "block move never updates lnKzz or the T-P dims, so a schedule "
-            "without a full-theta sweep samples a lower-dimensional target")
-    if "z" in sched:
-        # the block move reuses the cold two-stage map's stage-1 result and its
-        # forward-mode tangents; neither exists on the other paths
-        if str(cfg.smc_chem_mode).strip().lower() != "cold":
-            raise ValueError(
-                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
-                f"smc_chem_mode='cold', got {cfg.smc_chem_mode!r}: the cached "
-                "stage-1 column is the cold two-stage map's")
-        if not bool(cfg.two_stage_z):
-            raise ValueError(
-                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
-                "two_stage_z=True: a single-stage solve has no stage-1 result "
-                "to cache")
-        if str(cfg.smc_mcmc_kernel).strip().lower() != "mala":
-            raise ValueError(
-                f"smc_block_schedule={cfg.smc_block_schedule!r} needs "
-                f"smc_mcmc_kernel='mala', got {cfg.smc_mcmc_kernel!r}: the block "
-                "move is a preconditioned Langevin proposal on the gradient")
     # Condensation forward solves are supported (on-graph rebuild from the live
     # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
     # is NOT validated: the fix_species pin captures the column at the first
@@ -670,8 +637,6 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}   cold_seed={cfg.cold_seed}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
-        f"    fastchem baseline metallicity: {cfg.fastchem_met_scale:g}x solar   "
-        f"(lnZ is relative to this)",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}   "
         f"warm_count_max={int(cfg.warm_count_max)} (mutation-proposal cap)",
@@ -690,8 +655,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
         f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
         f"target_ess_frac={cfg.smc_target_ess_frac:g}",
-        f"    kernel={kern}   block_schedule={cfg.smc_block_schedule}   "
-        f"step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
+        f"    kernel={kern}   step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
         f"    preconditioner: full cloud covariance (Cholesky)   "
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
         f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
@@ -705,10 +669,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     for s in specs:
         pt = "log10U" if s.prior_type == "log10_uniform" else "U"
         note = ""
-        if s.name == "lnZ":
-            note = (f"  [{math.exp(s.lo) * cfg.fastchem_met_scale:.2g}-"
-                    f"{math.exp(s.hi) * cfg.fastchem_met_scale:.2g}x solar]")
-        elif s.name == "c_o":
+        if s.name == "c_o":
             note = f"  [C/O {math.exp(s.lo) * 0.549:.2g}-{math.exp(s.hi) * 0.549:.2g}]"
         elif s.name == "log10gamma":
             note = f"  [gamma {10 ** s.lo:.2g}-{10 ** s.hi:.2g}]"

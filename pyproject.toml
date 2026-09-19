@@ -45,7 +45,7 @@ dependencies = [
     # opacity_mode other than 'exomolop'); this schema no longer emits them.
     # (0.4.0 was the p_ref_bar floor: config_schema pins p_ref_bar explicitly,
     # and an older engine would silently anchor the radius at the grid bottom.)
-    "vulcan-forward>=0.21.4",
+    "vulcan-forward>=0.22.0",
     # >=0.3.5: finite forward tangents under vmap -- this sampler's chemistry
     # gradient IS a vmap over jvp lanes, and <=0.3.4 could return NaN tangents on
     # columns with sub-atol densities. (0.3.0 enforced the condensation-not-
@@ -85,7 +85,7 @@ testpaths = ["tests"]
 addopts = "-ra --tb=short"
 markers = [
     # Integration tests that build a REAL chemistry + RT pipeline (ExoJAX RT
-    # model, line lists, FastChem, chemistry converged to steady state). Three
+    # model, line lists, chemistry converged to steady state). Three
     # files carry it and are ~98% of the suite's wall time: test_warm_extrap
     # (~285 s), test_condensation_live_tp (~232 s), test_warm_reject (~78 s).
     #

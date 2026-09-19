@@ -92,10 +92,6 @@ class EvalStats(NamedTuple):
     chem_tan_bad (N,) bool  non-finite chemistry tangent (the jvp DAUX side);
                             bad_grad & ~chem_tan_bad localizes the pathology to
                             the RT vjp instead
-    s1_hit       (N,) bool  block (stage-1-cached) evaluator only: the proposal's
-                            theta[2:n_chem_tp] equals the cached column's EXACTLY.
-                            All-True everywhere else -- the block sweep's
-                            invariant check, never a tolerance.
     """
 
     n_capped: jnp.ndarray
@@ -105,7 +101,6 @@ class EvalStats(NamedTuple):
     conv_ok: jnp.ndarray
     bad_grad: jnp.ndarray
     chem_tan_bad: jnp.ndarray
-    s1_hit: jnp.ndarray
 
 
 class Stage1Cache(NamedTuple):
@@ -134,7 +129,6 @@ def _zero_eval_stats(n: int, dtype) -> EvalStats:
         conv_ok=jnp.ones((n,), bool),
         bad_grad=jnp.zeros((n,), bool),
         chem_tan_bad=jnp.zeros((n,), bool),
-        s1_hit=jnp.ones((n,), bool),
     )
 
 
@@ -303,11 +297,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             f"+ {fwd.n_tp} T-P dims; got names={names[:n_chem_tp]} "
             f"kinds={kinds[:n_chem_tp]} (n_dim={n_dim}). The chem block is "
             "positional and load-bearing -- do not drop infer_lnZ/c_o/lnKzz.")
-    # Dims stage 1 depends on (lnKzz + T-P): a move that leaves these fixed
-    # reuses the cached stage-1 column. Everything else (lnZ, c_o, RT-only,
-    # noise) is the block move's, since the block evaluator re-runs stage 2 + RT
-    # anyway.
-    h_idx = list(range(2, n_chem_tp))
     lnR0_idx = names.index("lnR0") if "lnR0" in names else None
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
     off_idx = [i for i, k in enumerate(kinds) if k == "offset"]
@@ -598,8 +587,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return val, g, bad_grad
 
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
-                         mutation_cap: bool = True, split_stage1: bool = True,
-                         stage2_only: bool = False):
+                         mutation_cap: bool = True, split_stage1: bool = True):
         """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, S1, n_bad_grad, stats)
         when want_grad (``stats`` an EvalStats, ``S1`` a Stage1Cache or None),
         else (L, Y_new, refs_new, stats)
@@ -622,22 +610,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         ``split_stage1`` (cold two-stage gradient path only) runs the two stages as
         two explicit jvps so the stage-1 result and its tangents become values;
         False restores the single-chain jvp and returns S1=None. It exists for the
-        A/B test that pins the two routes together -- not a physics knob.
-
-        ``stage2_only`` (cold two-stage gradient path only) builds the BLOCK
-        evaluator ``eval(U, S1) -> (..., S1, ...)``: stage 1 is not run at all,
-        its cached result and tangents are read from ``S1``, and the returned S1
-        is the input unchanged. There is no hit/miss branch -- a per-lane
-        ``lax.cond`` under vmap would run both sides -- so validity is the
-        SAMPLER's invariant (the block sweep never moves theta[2:n_chem_tp]) and
-        ``stats.s1_hit`` is the per-particle exact-equality check of it."""
+        A/B test that pins the two routes together -- not a physics knob."""
         warm = (mode == "warm")
-        if stage2_only and not (want_grad and not diag and mode == "cold"
-                                and bool(fwd.two_stage) and split_stage1):
-            raise ValueError(
-                "stage2_only is the cold two-stage GRADIENT path's block evaluator "
-                f"only; got mode={mode!r} want_grad={want_grad} diag={diag} "
-                f"two_stage={bool(fwd.two_stage)} split_stage1={split_stage1}")
         assert not (diag and (warm or want_grad)), "diag is cold+no-grad only"
         # Convergence gate for the warm grad. mutation_cap=True (the MALA proposal
         # path): the warm solver is capped at warm_count_max -- a proposal that hasn't
@@ -723,20 +697,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)
                     return (aux, daux_l, y_l[0], cd_l[0],
                             Stage1Cache(y1=y1, dy1=dy1, h=cc[2:n_chem_tp]))
-
-                def _chem_one_z(cc, s1):
-                    """Stage 2 only, seeded from the cached stage-1 result.
-
-                    Exactly `_chem_one`'s second jvp with (y1, dy1) read from the
-                    cache instead of re-solved, so a proposal that shares
-                    theta[2:n_chem_tp] with the cached column runs the SAME
-                    program on the SAME inputs.
-                    """
-                    (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
-                        lambda v, dy: jax.jvp(_stage2_chain, (cc, s1.y1), (v, dy))
-                    )(eye_c, _pad_dy1(s1.dy1))
-                    aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)
-                    return aux, daux_l, y_l[0], cd_l[0], s1
             else:
                 def _chem_one(cc, yw, rf):
                     def _chain(c):
@@ -784,7 +744,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
-        def eval_batch(U, Y, refs, S1_in=None):
+        def eval_batch(U, Y, refs):
             U = jnp.asarray(U, dtype)
             Theta = jax.vmap(theta_from_u)(U)                        # (N, n_dim)
             _, dTh = jax.vmap(
@@ -807,12 +767,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # S1 is a Stage1Cache pytree on the split cold path, None
                 # otherwise -- a None leaf is an EMPTY pytree node, so it rides
                 # _map_chunked's tree_map/lax.map padding untouched.
-                if stage2_only:
-                    AUX, DAUX, Ynew, CD, S1 = _map_chunked(
-                        lambda a: _chem_one_z(*a), (C_, S1_in), chem_chunk)
-                else:
-                    AUX, DAUX, Ynew, CD, S1 = _map_chunked(
-                        lambda a: _chem_one(*a), (C_, Y, refs), chem_chunk)
+                AUX, DAUX, Ynew, CD, S1 = _map_chunked(lambda a: _chem_one(*a),
+                                                       (C_, Y, refs), chem_chunk)
                 vals, g_th, bads = _map_chunked(_rt_val_grad, (AUX, DAUX, Theta),
                                                 rt_vjp_chunk)
                 G = g_th * dTh                                       # chain to u-space
@@ -847,17 +803,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 for _leaf in jax.tree_util.tree_leaves(DAUX):
                     chem_bad = chem_bad | ~jnp.all(
                         jnp.isfinite(_leaf), axis=tuple(range(1, _leaf.ndim)))
-                # EXACT equality, never rounded: the block evaluator is only
-                # correct where the proposal's stage-1 dims are bit-identical to
-                # the cached column's, and the sampler -- not a branch -- is what
-                # guarantees it. mutate raises on a False.
-                s1_hit = (jnp.all(C_[:, 2:n_chem_tp] == S1_in.h, axis=1)
-                          if stage2_only
-                          else jnp.ones((Theta.shape[0],), bool))
                 stats = EvalStats(
                     n_capped=n_capped, n_stalled=n_stalled,
                     acc=ACC, longdy=CD[:, 1], conv_ok=conv_ok,
-                    bad_grad=bads & usable, chem_tan_bad=chem_bad, s1_hit=s1_hit)
+                    bad_grad=bads & usable, chem_tan_bad=chem_bad)
             elif diag:
                 AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs)
                 vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
@@ -899,11 +848,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 return L, Ynew, refs_new, CDIAG
             return L, Ynew, refs_new, stats
 
-        if stage2_only:
-            def eval_z(U, S1):
-                """Block evaluator: no carried column, no stage-1 solve."""
-                return eval_batch(U, None, None, S1)
-            return eval_z
         return eval_batch
 
     # ---- assemble ----
@@ -912,8 +856,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         fwd=fwd, obs=obs, real_bins=real_bins, groups=groups,
         B=B, O=O, n_bin=n_bin,
         specs=specs, names=names, kinds=kinds, labels=labels, n_dim=n_dim,
-        n_chem_tp=n_chem_tp, h_idx=h_idx,
-        lnR0_idx=lnR0_idx, off_idx=off_idx, noise_idx=noise_idx,
+        n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx, off_idx=off_idx, noise_idx=noise_idx,
         cloud_idx=cloud_idx, n_cloud=n_cloud,
         param_prior_lo=np.asarray([s.lo for s in specs], npdtype),
         param_prior_hi=np.asarray([s.hi for s in specs], npdtype),
@@ -940,12 +883,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # under the cold count_max; see _make_batch_eval's mutation_cap note)
         batch_eval_init_vg=_make_batch_eval(chem_mode, True, mutation_cap=False),
         batch_eval_move_l=_make_batch_eval(chem_mode, False),
-        # block (stage-1-cached) gradient evaluator; None unless the cold
-        # two-stage split path is live, which is what config validation demands
-        # of any schedule containing 'z'
-        batch_eval_move_z_vg=(
-            _make_batch_eval(chem_mode, True, stage2_only=True)
-            if (chem_mode == "cold" and bool(fwd.two_stage)) else None),
         # observations injected by set_observations
         obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None, flux_true=None,
     ))
@@ -1521,13 +1458,6 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     forward-jvp(chem)+vjp(RT) gradient; ``"rwm"`` is a primal-only
     full-covariance random-walk Metropolis on the SAME Cholesky preconditioner
     and the same step, whose symmetric proposal makes log q cancel. Sweeps run
-    ``smc_block_schedule`` cycles a per-sweep pattern over the n_mcmc sweeps:
-    'f' is the full-theta kernel above, 'z' the stage-1-cached block move
-    (`sweep_z`) that leaves lnKzz + T-P fixed and skips the stage-1 solve. The
-    key stream and each sweep's own split are pattern-independent, so "f" is the
-    pre-schedule kernel bit for bit. The returned mean acceptance -- what
-    Robbins-Monro trims the ONE shared step from -- averages the FULL sweeps only.
-
     Sweeps run
     as a HOST LOOP over a single-sweep jitted kernel (RNG identical to the former
     lax.scan: the same pre-split keys, consumed in the same order). The host
@@ -1561,23 +1491,6 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     theta_from_u = pipe.theta_from_u
     n_ct = int(getattr(pipe, "n_chem_tp", 0))
     kernel = str(pipe.cfg.smc_mcmc_kernel).strip().lower()
-    pattern = str(getattr(pipe.cfg, "smc_block_schedule", "f")).strip().lower()
-    # the block move's dims: everything stage 1 does NOT depend on
-    h_idx = list(getattr(pipe, "h_idx", []))
-    B = np.asarray([i for i in range(int(pipe.n_dim)) if i not in h_idx], dtype=int)
-    move_z_vg = getattr(pipe, "batch_eval_move_z_vg", None)
-    if move_z_vg is None and not getattr(pipe, "has_chem_state", False):
-        # stub pipes (unit tests, no chemistry): no stage-1 result to cache, so
-        # the block move re-runs the same stateless evaluator
-        def move_z_vg(U_, S1_):
-            L_, G_, Y_, r_, _s1, nb_, st_ = move_vg(U_, None, None)
-            return L_, G_, Y_, r_, S1_, nb_, st_
-    if "z" in pattern and (move_z_vg is None or B.size == 0):
-        raise RuntimeError(
-            f"smc_block_schedule={pattern!r} asks for a stage-1-cached block "
-            "sweep, but this pipeline has no block evaluator (the cold two-stage "
-            f"gradient path only) or no free dims (n_dim={int(pipe.n_dim)}, "
-            f"h_idx={h_idx})")
 
     def sweep(k, U, Y, refs, S1, L, G, beta, step, scale):
         def dlogprior(U_):
@@ -1645,65 +1558,6 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         return (U, Y, refs, S1, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
-    def sweep_z(k, U, Y, refs, S1, L, G, beta, step, scale):
-        """`sweep` restricted to the stage-1-independent block B (= pipe.h_idx's
-        complement), reusing the carried Stage1Cache instead of re-solving stage 1.
-
-        Metropolis-within-Gibbs on pi_u(u_B | u_Bc) with the same preconditioned
-        Langevin proposal: the conditional's gradient is the B-slice of the full
-        gradient, C_BB = cov[B, B] is a valid preconditioner for it, and the Bc
-        prior terms cancel from the MH ratio. u[h_idx] is copied bit for bit, so
-        theta[2:n_chem_tp] -- everything stage 1 depends on -- is unchanged and
-        the cache is exact (stats.s1_hit checks it per particle; mutate raises).
-        A fixed deterministic cycle of invariant kernels is invariant, which is
-        all an SMC mutation needs (no reversibility requirement).
-        """
-        def dlogprior(U_):
-            return 1.0 - 2.0 * jax.nn.sigmoid(U_)
-
-        def lp_block(U_):        # log_prior_u summed over the MOVED dims only
-            return jnp.sum(
-                (jax.nn.log_sigmoid(U_) + jax.nn.log_sigmoid(-U_))[:, B], axis=1)
-
-        kp, ka = jax.random.split(k)   # same two-way split, same order, as `sweep`
-        noise = jax.random.normal(kp, U.shape, dtype=U.dtype)[:, B]
-        cov = scale @ scale.T
-        C_BB = cov[np.ix_(B, B)]
-        L_B = jnp.linalg.cholesky(C_BB)
-        GT_B = (dlogprior(U) + beta * G)[:, B]
-        U_new = U.at[:, B].set(U[:, B] + step * (GT_B @ C_BB)
-                               + jnp.sqrt(2.0 * step) * (noise @ L_B.T))
-        theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; keeps the tuple shape
-        L_new, G_new, Y_new, refs_new, _S1, n_bad, stats = move_z_vg(U_new, S1)
-        if Y_new is None:            # stub pipes carry no chemistry state
-            Y_new, refs_new = Y, refs
-        # zero-drift badgrad handling is the eval's, exactly as in `sweep`: the
-        # non-finite gradient entries are zeroed there and that same zeroed drift
-        # enters GT_new_B below and the carried G on acceptance.
-        GT_new_B = (dlogprior(U_new) + beta * G_new)[:, B]
-
-        def _whiten(r):
-            return jax.scipy.linalg.solve_triangular(L_B, r.T, lower=True).T
-        df = _whiten(U_new[:, B] - U[:, B] - step * (GT_B @ C_BB))
-        dr = _whiten(U[:, B] - U_new[:, B] - step * (GT_new_B @ C_BB))
-        log_acc = ((lp_block(U_new) - lp_block(U)) + beta * (L_new - L)
-                   - 0.25 / step * (jnp.sum(dr * dr, axis=1)
-                                    - jnp.sum(df * df, axis=1)))
-        # same -1e29 invalid-forward sentinel gate as the full MALA sweep
-        log_acc = jnp.where(jnp.isfinite(log_acc) & (L_new > -1.0e29),
-                            log_acc, -jnp.inf)
-        accept = jnp.log(jax.random.uniform(ka, (U.shape[0],), dtype=U.dtype)) < log_acc
-        U = jnp.where(accept[:, None], U_new, U)
-        Y = jnp.where(accept[:, None, None], Y_new, Y)
-        refs = jnp.where(accept[:, None], refs_new, refs)
-        # S1 is carried UNTOUCHED: the block move cannot invalidate it.
-        L = jnp.where(accept, L_new, L)
-        G = jnp.where(accept[:, None], G_new, G)
-        acc = jnp.minimum(jnp.exp(jnp.minimum(log_acc, 0.0)), 1.0)
-        n_rej = jnp.sum((L_new <= -1.0e29).astype(jnp.int32))
-        return (U, Y, refs, S1, L, G, jnp.mean(acc), n_rej, n_bad, stats,
-                theta_new, L_new)
-
     def sweep_rwm(k, U, Y, refs, S1, L, G, beta, step, scale):
         """Gradient-free full-covariance random-walk Metropolis, same 12-tuple.
 
@@ -1739,8 +1593,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         return (U, Y, refs, S1, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
-    sweep_f_jit = jax.jit(sweep_rwm if kernel == "rwm" else sweep)
-    sweep_z_jit = jax.jit(sweep_z) if "z" in pattern else None
+    sweep_jit = jax.jit(sweep_rwm if kernel == "rwm" else sweep)
 
     max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
 
@@ -1751,21 +1604,8 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         accs: List[float] = []
         n_bad_tot = n_cap_tot = n_stall_tot = 0
         for j in range(n_mcmc):
-            # deterministic per-sweep cycle of the configured pattern; the key
-            # stream and each sweep's own (kp, ka) split are pattern-independent,
-            # so schedule "f" is bit-identical to the pre-schedule kernel
-            is_z = pattern[j % len(pattern)] == "z"
-            if is_z and S1 is None and getattr(pipe, "has_chem_state", False):
-                raise RuntimeError(
-                    "block sweep requested with no carried Stage1Cache (a resume "
-                    "from a pre-cache checkpoint): run a full 'f' sweep first")
             (U, Y, refs, S1, L, G, acc, n_rej, n_bad, stats, theta_new,
-             L_new) = (sweep_z_jit if is_z else sweep_f_jit)(
-                keys[j], U, Y, refs, S1, L, G, beta, step, scale)
-            if is_z and not bool(jnp.all(stats.s1_hit)):
-                raise RuntimeError(
-                    "stage-1 cache miss on a block sweep: theta[2:] changed -- "
-                    "invariant violation")
+             L_new) = sweep_jit(keys[j], U, Y, refs, S1, L, G, beta, step, scale)
             n_bad_j = int(jax.device_get(n_bad))
             n_cap_j = int(jax.device_get(stats.n_capped))
             n_stall_j = int(jax.device_get(stats.n_stalled))
@@ -1773,8 +1613,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             # warmcap/stalled/badgrad = state-dependent rejection classes the MH
             # correction cannot see -- all must stay near zero in the
             # converged-ladder stages.
-            logger.info(f"    sweep {j + 1}/{n_mcmc}"
-                        f"{' (block z)' if is_z else ''}: accept={acc_j:.2f} "
+            logger.info(f"    sweep {j + 1}/{n_mcmc}: accept={acc_j:.2f} "
                         f"rejected={int(jax.device_get(n_rej))}/{n_prop} "
                         f"warmcap={n_cap_j} stalled={n_stall_j} "
                         f"badgrad={n_bad_j}")
@@ -1791,14 +1630,11 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
                         theta_proposal=theta_new, loglik_proposal=L_new),
                     dump_path=dump_path,
                     n_particles=n_prop, max_frac=max_frac)
-            # Robbins-Monro tunes ONE shared step from the full sweeps only
-            if not is_z:
-                accs.append(acc_j)
+            accs.append(acc_j)
             n_bad_tot += n_bad_j
             n_cap_tot += n_cap_j
             n_stall_tot += n_stall_j
-        return (U, Y, refs, S1, L, G,
-                float(np.mean(accs)) if accs else float("nan"), n_bad_tot,
+        return (U, Y, refs, S1, L, G, float(np.mean(accs)), n_bad_tot,
                 n_cap_tot, n_stall_tot)
 
     return mutate

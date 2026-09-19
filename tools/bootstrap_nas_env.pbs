@@ -19,8 +19,8 @@
 # per-job pip installs that corrupted the old shared userbase (the
 # "OSError: .../userbase/bin/vulcan-jax" uninstall crash).
 #
-# Runs on a GH200 node (not the x86 front end) because the FastChem build and
-# the jax-GPU check need the target architecture.
+# Runs on a GH200 node (not the x86 front end) because the jax-GPU check needs
+# the target architecture.
 #
 # Submit (from the vulcan-retrieval repo root, tools/, or the project root):
 #   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval
@@ -125,22 +125,11 @@ python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
 python -m pip install --user --no-deps -e "${PROJECT_ROOT}/vulcan-forward"
 python -m pip install --user --no-deps -e "${REPO_DIR}"
 
-# --- FastChem binary for this architecture (EQ init runs it at build time) ------
-FC_DIR="${PROJECT_ROOT}/VULCAN-JAX/src/vulcan_jax/fastchem_vulcan"
-fc_runnable() {
-  [ -x "${FC_DIR}/fastchem" ] || return 1
-  ( cd "${FC_DIR}" && timeout 15 ./fastchem >/dev/null 2>&1 ) || rc=$?
-  # rc 126 = exec-format error (wrong arch); a plain nonzero exit (no args) is fine
-  [ "${rc:-0}" != "126" ]
-}
-if ! fc_runnable; then
-  echo "Building FastChem in ${FC_DIR} ..."
-  module load gcc 2>/dev/null || true
-  make -C "${FC_DIR}" clean >/dev/null 2>&1 || true
-  make -C "${FC_DIR}"
-  fc_runnable || { echo "ERROR: FastChem built but is not runnable on $(uname -m)."; exit 1; }
-fi
-echo "FastChem runnable at ${FC_DIR}"
+# --- the equilibrium cold seed's solver (pure JAX, nothing to build) ------------
+# --no-deps: exogibbs declares pyfastchem, which this stack neither imports nor
+# has a wheel for on aarch64; the gas path needs jax/numpy/pandas only.
+python -m pip install --user --no-deps "exogibbs==0.6.0"
+python -c "import pandas" 2>/dev/null || python -m pip install --user pandas
 
 # --- stamp + definitive validation ----------------------------------------------
 python - <<PY
