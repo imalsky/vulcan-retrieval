@@ -37,6 +37,7 @@ jobs:
           # pyyaml: vulcan-jax is installed --no-deps below but its
           # config loader imports yaml at collection time
           pip install "jax>=0.6" numpy scipy pytest pyyaml
+          pip install --no-deps "exogibbs==0.6.0" pandas   # vulcan-jax 0.15.0 seeds through exogibbs; its declared deps (pyfastchem...) are not needed
           pip install --no-deps "vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@speed"
           pip install --no-deps "vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@speed"
           pip install --no-deps -e .
