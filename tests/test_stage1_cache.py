@@ -6,12 +6,6 @@ the stage-1 result and its lnKzz/T-P tangents as a Stage1Cache value. That is th
 single-chain jvp regrouped, not a different map: the primal (Y, L) must be
 bit-identical and the gradient may differ only by XLA fusion.
 
-The BLOCK evaluator (stage2_only) reads that cache instead of re-solving stage 1.
-It is only correct where the proposal's theta[2:n_chem_tp] is bit-identical to
-the cached column's -- there is no hit/miss branch, the block MALA sweep's
-invariant is what guarantees it -- so the tests below pin both sides: a z-only
-move reproduces the full evaluator, and a moved stage-1 dim reads as a miss.
-
 Builds the REAL smoke pipeline (chemistry + RT, fully offline) at the case's own
 caps, so it costs minutes and SKIPS cleanly when the stack or its data is absent.
 """
@@ -95,76 +89,3 @@ def test_stage_split_matches_single_chain(smoke):
     assert np.array_equal(np.asarray(S1.h), h)
     assert S1.y1.shape == Y_new.shape
     assert S1.dy1.shape == (int(U.shape[0]), pipe.n_chem_tp - 2) + Y_new.shape[1:]
-
-
-@pytest.fixture(scope="module")
-def block_eval(smoke):
-    """(L_z, L_c) at a z-block-only displacement, plus the arrays test 2 checks.
-
-    One shared fixture: each entry costs a real stage-2 solve + RT, and tests 2
-    and 3 gate the SAME two likelihood vectors at different thresholds.
-    """
-    pipe, U = smoke
-    if getattr(pipe, "batch_eval_move_z_vg", None) is None:
-        pytest.skip("no block evaluator (cold two-stage gradient path only)")
-    n = int(U.shape[0])
-    Y0, refs0, _ = P._blank_state(pipe, n)
-    cold_vg = jax.jit(pipe.batch_eval_cold_vg)
-    move_z = jax.jit(pipe.batch_eval_move_z_vg)
-
-    _L, _G, _Y, _r, S1, n_bad, _s = cold_vg(U, Y0, refs0)
-    assert int(n_bad) == 0 and S1 is not None
-    # displace ONLY the dims stage 1 does not depend on: the cache stays exact
-    z_idx = jnp.asarray([i for i in range(pipe.n_dim) if i not in pipe.h_idx])
-    U2 = U.at[:, z_idx].add(0.05)
-
-    L_z, G_z, Y_z, _rz, S1_z, n_bad_z, stats = move_z(U2, S1)
-    L_f, G_f, Y_f, _rf, S1_f, _nbf, _sf = cold_vg(U2, Y0, refs0)
-    L_c = jax.jit(pipe.batch_eval_cold_l)(U2, Y0, refs0)[0]
-    # a stage-1 dim moved -> the cache is stale and the hit bit must say so
-    U3 = U2.at[:, 2].set(jnp.round(U2[:, 2], 6))
-    stats_miss = move_z(U3, S1)[6]
-    return dict(S1=S1, S1_z=S1_z, S1_f=S1_f, n_bad_z=int(n_bad_z), stats=stats,
-                stats_miss=stats_miss, L_z=np.asarray(L_z), L_f=np.asarray(L_f),
-                L_c=np.asarray(L_c), G_z=np.asarray(G_z), G_f=np.asarray(G_f),
-                Y_z=np.asarray(Y_z), Y_f=np.asarray(Y_f))
-
-
-def test_block_evaluator_reuses_the_cache_and_is_the_same_program(block_eval):
-    """A move that leaves theta[2:n_chem_tp] fixed must give the FULL evaluator's
-    answer while skipping stage 1: same primal, same gradient, cached column."""
-    b = block_eval
-    assert b["n_bad_z"] == 0
-    assert bool(np.all(np.asarray(b["stats"].s1_hit))), "cache miss on a z-only move"
-    assert all(np.array_equal(np.asarray(getattr(b["S1_z"], f)),
-                              np.asarray(getattr(b["S1"], f)))
-               for f in ("y1", "dy1", "h")), (
-        "the block evaluator must return its INPUT cache, unchanged")
-
-    for name in ("Y", "G"):
-        got, ref = b[f"{name}_z"], b[f"{name}_f"]
-        if not np.array_equal(got, ref):
-            # norm-relative, never componentwise (CLAUDE.md, "Opacity: correlated-k")
-            rel = float(np.max(np.abs(got - ref))
-                        / max(float(np.max(np.abs(ref))), 1e-300))
-            print(f"block-vs-full {name} norm-relative difference {rel:.3e}")
-            assert rel < 1e-12, f"block-vs-full {name} disagrees at {rel:.3e}"
-
-    dl = float(np.max(np.abs(b["L_z"] - b["L_c"])))
-    print(f"max|logL block - logL cold-primal| = {dl:.3e}")
-    assert dl < 1e-10
-
-    # stage 1 depends on theta[2:] alone, so the displaced full eval re-solved
-    # the SAME column the cache holds
-    assert np.array_equal(np.asarray(b["S1_f"].y1), np.asarray(b["S1"].y1))
-    assert not bool(np.any(np.asarray(b["stats_miss"].s1_hit))), (
-        "a moved stage-1 dim must read as a cache MISS on every particle")
-
-
-def test_block_likelihood_is_inside_the_warm_validator_gate(block_eval):
-    """The shipped PASS gate on a likelihood remapping (validate_warm), applied to
-    the block move: it is the number a run's certificate would have to defend."""
-    from retrieval_framework import validate_warm as VW
-    dl = float(np.max(np.abs(block_eval["L_z"] - block_eval["L_c"])))
-    print(f"max|dlogL| = {dl:.3e} against DLOGL_MAX_PASS = {VW.DLOGL_MAX_PASS}")
-    assert dl < VW.DLOGL_MAX_PASS

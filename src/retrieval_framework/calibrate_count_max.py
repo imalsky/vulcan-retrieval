@@ -141,7 +141,7 @@ def main() -> None:
     if K > 0:
         # Baseline at K=1 (the floor validate_config allows): the same seeds, RT and
         # likelihood with one accepted step per stage. Its wall is everything that
-        # is NOT the solver loop (the sequential FastChem seeds above all), so the
+        # is NOT the solver loop (the equilibrium seed and the RT above all), so the
         # loop's cost is the difference between the two timed passes.
         _t1_first, t1_steady, _o1, _u1 = _timed(
             replace(cfg, count_min=1, count_max=1, warm_count_max=1), capture=False)

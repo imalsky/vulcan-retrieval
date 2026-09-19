@@ -57,6 +57,9 @@ done
 python -m pip install --user --no-deps --no-build-isolation -q -e "$PROJECT_ROOT/VULCAN-JAX" -e "$PROJECT_ROOT/vulcan-forward" -e "$REPO_DIR"
 # The conda env ships no pytest; the user site (proxy above) gets it once.
 python -c "import pytest" 2>/dev/null || python -m pip install --user -q pytest
+# The equilibrium cold seed's solver (see tools/bootstrap_nas_env.pbs); idempotent.
+python -m pip install --user --no-deps -q "exogibbs==0.6.0"
+python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
 # --- nvcc build in a subshell: the cuda module is for the toolkit only. Left in
 # the environment it hid the pip CUDA plugin from JAX (job 78981: "Backend 'cuda'
 # is not in the list of known backends"); the kernel links cudart statically.
