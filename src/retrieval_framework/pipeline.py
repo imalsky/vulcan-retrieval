@@ -706,10 +706,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                         lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
                     aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)  # primal (lane 0)
                     return aux, daux_l, y_l[0], cd_l[0], None
-        elif diag:
-            def _chem_one(cc, yw, rf):
-                y, cd = fwd.chem_solve_cold_diag(cc)
-                return fwd.aux_from_y(y, cc), y, cd
         else:
             # Primal-only, but gated the SAME way as the gradient path: the
             # likelihood of a given map must be ONE function. This evaluator is

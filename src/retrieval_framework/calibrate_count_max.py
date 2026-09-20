@@ -148,18 +148,24 @@ def main() -> None:
         t_first, t_steady, out, U = _timed(cfg, capture=True)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
         # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
+        # A cold solve runs one such loop per stage: two with two_stage_z (the default),
+        # one under overrides/onestage.json.
         n_acc = K + 1
-        n_step = 2 * n_acc
+        n_stages = 2 if cfg.two_stage_z else 1
+        n_step = n_stages * n_acc
+        n_extra = n_stages * (K - 1)   # accepted steps this bench adds over the K=1 baseline
         # Timing first: it is the point of the job and must land in the log even if
         # the output handling below trips.
         log.info(f"fixed-step bench ({'GRADIENT batch_eval_cold_vg' if args.grad else 'primal batch_eval_cold_l_diag'}): "
-                 f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} (2 stages x K+1)")
+                 f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} "
+                 f"({n_stages} stage(s) x K+1)")
         log.info(f"  t_first  = {t_first:.3f} s (compile + run)")
         log.info(f"  t_steady = {t_steady:.3f} s  (K={K}, inside the nsys capture range)")
-        log.info(f"  t_steady = {t1_steady:.3f} s  (K=1 baseline: seeds + RT + likelihood + 2 steps)")
+        log.info(f"  t_steady = {t1_steady:.3f} s  (K=1 baseline: seeds + RT + likelihood + "
+                 f"{n_stages * 2} accepted steps, {n_stages} stage(s) x 2)")
         loop = t_steady - t1_steady
-        log.info(f"  loop     = {loop:.3f} s for the extra 2(K-1)={2 * (K - 1)} accepted steps "
-                 f"of the slowest lane; {1000.0 * loop / max(1, 2 * (K - 1)):.3f} ms per accepted "
+        log.info(f"  loop     = {loop:.3f} s for the extra {n_stages}(K-1)={n_extra} accepted steps "
+                 f"of the slowest lane; {1000.0 * loop / max(1, n_extra):.3f} ms per accepted "
                  "step. Per loop ITERATION (accepted + rejected) divide `loop` by the "
                  "factorisation count in the capture: nsys getrf_panel or bt_factor_kernel "
                  "instances / nz.")
@@ -206,6 +212,7 @@ def main() -> None:
              "NOT per-draw cost -- wall time is set by the single slowest draw)")
 
     wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
+    Lnp = np.asarray(jax.device_get(L), np.float64)
 
     # free per-draw convergence-quality read from the same solve: longdy
     # percentiles + the stall-certified count (the class the SMC gates reject)
@@ -279,13 +286,25 @@ def main() -> None:
     log.info(f"=== production cold-init gate (reject+oversample: init_oversample={over:g} "
              f"tolerates reject frac up to {fail_frac:.0%}, RAISES above {warn:.0%}; "
              f"this preset's count_max={preset_count_max}) ===")
+    # _init_state rejects THREE classes (pipeline.py: exhausted | stalled | nonfinite),
+    # so a verdict built on the cap alone understates the attrition. A NaN equilibrium
+    # seed is the sharpest case: the runner exits at reason 5 with zero accepted steps,
+    # which reads as the cheapest possible success on accept_count and as a -1e30
+    # likelihood here.
+    nonfinite = ~np.isfinite(Lnp) | (Lnp <= -1.0e29)
+    ex_probe = wa >= int(args.count_max_probe)
+    log.info(f"  rejection classes at the probe cap: {int(ex_probe.sum())} exhausted, "
+             f"{int((~conv_ok & ~ex_probe & ~nonfinite).sum())} stall-certified, "
+             f"{int(nonfinite.sum())} non-finite / <= -1e29 likelihood, of {len(wa)} draws")
     cands = sorted({int(c) for c in (preset_count_max, 5000, 10000,
                                      int(args.count_max_probe)) if c})
     for cand in cands:
         if cand > int(args.count_max_probe):
             log.info(f"  at count_max={cand:>6d}: unknown (above the probe cap)")
             continue
-        frac = float(np.mean(wa >= cand))
+        exhausted = wa >= cand
+        stalled = ~conv_ok & ~exhausted & ~nonfinite
+        frac = float(np.mean(nonfinite | exhausted | stalled))
         if frac > fail_frac:
             verdict = f"RAISE -- oversample x{over:g} cannot fill N (need reject <= {fail_frac:.0%})"
         elif frac > warn:
@@ -294,7 +313,8 @@ def main() -> None:
         else:
             verdict = "reject+cull OK"
         tag = "   <- this preset" if preset_count_max and cand == int(preset_count_max) else ""
-        log.info(f"  at count_max={cand:>6d}: {frac:>5.1%} non-converged -> {verdict}{tag}")
+        log.info(f"  at count_max={cand:>6d}: {frac:>5.1%} rejected "
+                 f"(exhausted+stall-certified+non-finite) -> {verdict}{tag}")
 
     # Map the slow draws to prior corners: without the parameter values a censored
     # draw is unactionable (can't tell "tighten the prior" from "raise count_max").
@@ -315,7 +335,7 @@ def main() -> None:
         "param_names": names, "theta": Theta.tolist(),
         # per-draw likelihood and certificate: the attrition justification
         # compares the censored draws' L against the certified bulk
-        "log_l": np.asarray(jax.device_get(L), np.float64).tolist(),
+        "log_l": Lnp.tolist(),
         "conv_normal": conv_ok.tolist(), "longdy": longdy.tolist(),
         "budget_drift_max": drift.tolist(), "t_exit_s": t_exit.tolist(),
     }

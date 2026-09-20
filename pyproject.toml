@@ -46,11 +46,11 @@ dependencies = [
     # (0.4.0 was the p_ref_bar floor: config_schema pins p_ref_bar explicitly,
     # and an older engine would silently anchor the radius at the grid bottom.)
     "vulcan-forward>=0.22.0",
-    # >=0.3.5: finite forward tangents under vmap -- this sampler's chemistry
-    # gradient IS a vmap over jvp lanes, and <=0.3.4 could return NaN tangents on
-    # columns with sub-atol densities. (0.3.0 enforced the condensation-not-
-    # differentiable contract at the AD entry points.)
-    "vulcan-jax>=0.12.0",
+    # >=0.15.0: the cold equilibrium seed is in-graph (ini_abun.eq_seed, ExoGibbs
+    # on VULCAN's NASA-9 data), which vulcan-forward 0.22.0 calls directly -- an
+    # older engine has no such entry point. (>=0.3.5 was the first with finite
+    # forward tangents under vmap, which this sampler's chemistry gradient needs.)
+    "vulcan-jax>=0.15.0",
 ]
 
 [project.urls]

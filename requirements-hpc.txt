@@ -15,6 +15,10 @@
 # into the repo data/ caches on first use.
 # NOTE the PBS preflight installs the SYNCED trees editable instead (git pull is
 # the code-deploy mechanism); use this file for a standalone reproduction env.
+# NOT INSTALLABLE AS WRITTEN on linux-aarch64 (the GH200): the pinned vulcan-jax
+# declares exogibbs, whose declared dependency pyfastchem has no aarch64 wheel and
+# would be built from source. tools/bootstrap_nas_env.pbs installs exogibbs with
+# --no-deps and is the supported route on the node.
 jax==0.6.2
 jaxlib==0.6.2
 exojax==2.2.3
