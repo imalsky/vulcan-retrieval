@@ -70,7 +70,8 @@ def main() -> None:
     ap.add_argument("--lanes", type=int, default=None,
                      help="lanes the cold chemistry batch runs on (cfg.cold_lanes); "
                           "0 = every draw in one lockstep batch, k > 0 = k lanes "
-                          "refilled from the draw queue. Default: the config's value")
+                          "refilled from the draw queue; k > 0 is refused with "
+                          "--fixed-steps. Default: the config's value")
     ap.add_argument("--grad", action="store_true",
                      help="benchmark the production cold GRADIENT evaluator "
                           "batch_eval_cold_vg instead of the primal "
@@ -78,6 +79,14 @@ def main() -> None:
     args = ap.parse_args()
     if args.grad and int(args.fixed_steps) <= 0:
         ap.error("--grad requires --fixed-steps")
+    if args.lanes is not None and int(args.lanes) > 0 and int(args.fixed_steps) > 0:
+        # A capped lane is is_done, so the queue writes it out and refills it
+        # with the next draw: the fixed-step bench would time queue throughput
+        # over the whole draw list, not the per-step cost it reports.
+        ap.error("--lanes > 0 cannot be combined with --fixed-steps: a capped "
+                 "lane is is_done and gets refilled, so the bench would measure "
+                 "queue throughput, not the cost of one accepted step. Bench "
+                 "the step cost with --lanes 0 (or without --lanes)")
 
     logging.basicConfig(level=logging.INFO,
                          format="%(asctime)s | %(levelname)s | %(message)s")
@@ -184,7 +193,11 @@ def main() -> None:
         log.info(f"  n_finite(L) = {int(np.sum(np.isfinite(Lb)))}/{Lb.size}  "
                  f"max|Y| = {np.nanmax(np.abs(Yb)):.6g}")
         save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb,
-                "t_steady": t_steady, "t1_steady": t1_steady, "K": K}
+                "t_steady": t_steady, "t1_steady": t1_steady, "K": K,
+                # the lane knobs in effect (--lanes > 0 is refused above, so
+                # these record the config's own values)
+                "cold_lanes": int(cfg.cold_lanes),
+                "cold_refill_chunk": int(cfg.cold_refill_chunk)}
         if args.grad:
             Gb = np.asarray(jax.device_get(out[1]), np.float64)
             save["G"] = Gb
@@ -340,6 +353,9 @@ def main() -> None:
         "seed_offset": int(args.seed_offset),
         "preset_count_max": None if preset_count_max is None else int(preset_count_max),
         "init_max_nonconverged_frac": warn, "init_oversample": over,
+        # the cold-batch route this calibration ran on (0 = one lockstep batch)
+        "cold_lanes": int(cfg.cold_lanes),
+        "cold_refill_chunk": int(cfg.cold_refill_chunk),
         "n_censored": n_censored, "accept_count": wa.tolist(), "percentiles": pct,
         "param_names": names, "theta": Theta.tolist(),
         # per-draw likelihood and certificate: the attrition justification
@@ -348,7 +364,12 @@ def main() -> None:
         "conv_normal": conv_ok.tolist(), "longdy": longdy.tolist(),
         "budget_drift_max": drift.tolist(), "t_exit_s": t_exit.tolist(),
     }
+    # The lane count goes in the name: a multi-arm bench (cal_all / cal_l48 /
+    # cal_l16) runs several lane counts into ONE out_dir and would otherwise
+    # overwrite its own results.
     suffix = "" if int(args.seed_offset) == 0 else f"_seed{int(args.seed_offset)}"
+    if int(cfg.cold_lanes) > 0:
+        suffix += f"_lanes{int(cfg.cold_lanes)}"
     out_path = cfg.out_dir / f"count_max_calibration{suffix}.json"
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))

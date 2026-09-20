@@ -198,12 +198,17 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
     def _cold_batch(C, **kw):
-        """One batched cold stage -> ``(y, ConvDiag)``. ``cfg.cold_lanes`` picks
-        the runner: 0 (or a count at/above the draws) is the lockstep batch
-        this repo has always run, otherwise the lane queue with refill."""
+        """One batched cold stage -> ``(y, ConvDiag)``. ONE route per config:
+        ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
+        ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
+        draw count ``run_queue`` refills nothing and runs the plain batch's
+        ticks. A narrow call (the certificate's 4-particle replay, a
+        validate_warm chunk) therefore takes the same route as the production
+        run instead of silently switching to the lockstep batch.
+        ``cold_lanes = 0`` is the lockstep batch, call for call."""
         lanes = int(cfg.cold_lanes)
-        if 0 < lanes < int(C.shape[0]):
-            return chem.converged_y_queue(C, lanes,
+        if lanes > 0:
+            return chem.converged_y_queue(C, min(lanes, int(C.shape[0])),
                                           chunk=int(cfg.cold_refill_chunk), **kw)
         return chem.converged_y_batch(C, return_conv_diag=True, **kw)
 
@@ -222,11 +227,13 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         only -- every gradient path stays on the per-particle
         ``chem_solve_cold_diag``.
 
-        With ``cfg.cold_lanes`` above 0 and below the draw count, both stages
-        run on that many lanes with refill (``vulcan_chem.converged_y_queue``):
-        a lane that certifies takes the next draw inside the same while loop,
-        so wall time follows total work / lanes instead of the slowest draw.
-        The default 0 keeps the single lockstep batch, call for call."""
+        With ``cfg.cold_lanes`` above 0 EVERY cold batch -- both stages, any
+        width -- runs on ``min(cold_lanes, draws)`` lanes with refill
+        (``vulcan_chem.converged_y_queue``): a lane that certifies takes the
+        next draw inside the same while loop, so wall time follows total work /
+        lanes instead of the slowest draw. One route per config, so a narrow
+        replay agrees with the run. The default 0 keeps the single lockstep
+        batch, call for call."""
         if not two_stage:
             return _cold_batch(C)
         Y1, _ = _cold_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))

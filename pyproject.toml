@@ -48,11 +48,12 @@ dependencies = [
     # >=0.23.0: converged_y_queue, the cold batch on a fixed number of lanes
     # with refill, which cfg.cold_lanes routes to.
     "vulcan-forward>=0.23.0",
-    # >=0.15.0: the cold equilibrium seed is in-graph (ini_abun.eq_seed, ExoGibbs
-    # on VULCAN's NASA-9 data), which vulcan-forward 0.22.0 calls directly -- an
-    # older engine has no such entry point. (>=0.3.5 was the first with finite
-    # forward tangents under vmap, which this sampler's chemistry gradient needs.)
-    "vulcan-jax>=0.15.0",
+    # >=0.16.0: OuterLoop.run_queue, which vulcan-forward 0.23.0's
+    # converged_y_queue calls. (>=0.15.0 was the in-graph cold equilibrium seed,
+    # ini_abun.eq_seed, ExoGibbs on VULCAN's NASA-9 data, called directly by
+    # vulcan-forward 0.22.0; >=0.3.5 the first with finite forward tangents
+    # under vmap, which this sampler's chemistry gradient needs.)
+    "vulcan-jax>=0.16.0",
 ]
 
 [project.urls]
