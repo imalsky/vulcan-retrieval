@@ -314,6 +314,15 @@ class Config:
     # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
     # chemistry memory is independent of the spectral grid.
     smc_chem_chunk: int = 0
+    # Lanes the COLD chemistry batch runs on. 0 = every draw in one lockstep
+    # batch, where the call waits for the slowest draw; k > 0 runs k lanes and
+    # refills a lane that certifies with the next draw inside the same while
+    # loop (vulcan_forward.converged_y_queue), so wall time follows total work
+    # / k. Set it from the GPU lane-count bench, not by guess.
+    cold_lanes: int = 0
+    # Lanes refilled per refill pass. Bigger amortizes the refill over more
+    # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
+    cold_refill_chunk: int = 8
     # Contiguous band tiles the engine folds the correlated-k mixture in
     # (profile key rt_band_tiles). 1 = the whole grid in one fold. The depth is
     # bitwise identical at any count (overlap resorts within a band) and the
@@ -469,13 +478,16 @@ def validate_config(cfg: Config) -> None:
     # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
     # empty envelope. Chunk sizes are batch splits where 0 means "one batch".
     for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws",
-                 "ppc_chunk_size", "smc_rt_band_tiles"):
+                 "ppc_chunk_size", "smc_rt_band_tiles", "cold_refill_chunk"):
         if int(getattr(cfg, name)) < 1:
             raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
     for name in ("smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk"):
         if int(getattr(cfg, name)) < 0:
             raise ValueError(f"{name} must be >= 0 (0 = no chunking), "
                              f"got {getattr(cfg, name)!r}")
+    if int(cfg.cold_lanes) < 0:
+        raise ValueError("cold_lanes must be >= 0 (0 = the whole cold batch in "
+                         f"one lockstep call), got {cfg.cold_lanes!r}")
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
     if not (0.0 < cfg.smc_tangent_bad_max_frac <= 1.0):
@@ -619,6 +631,8 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     dtmax = "(master default 1e17)" if cfg.dt_max is None else f"{cfg.dt_max:g}"
     data = ("SYNTHETIC (inject-and-recover at truth_*)" if cfg.generate_synthetic_data
             else "REAL observed spectrum")
+    lanes = (f"{int(cfg.cold_lanes)} lanes, refill {int(cfg.cold_refill_chunk)}"
+             if int(cfg.cold_lanes) > 0 else "one lockstep batch")
     kern = str(cfg.smc_mcmc_kernel).strip().lower()
     kern_label = ("forward-jvp MALA" if kern == "mala"
                   else "gradient-free random-walk Metropolis")
@@ -636,6 +650,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}   cold_seed={cfg.cold_seed}"
+        f"   cold batch: {lanes}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}   "

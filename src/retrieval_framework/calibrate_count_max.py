@@ -67,6 +67,10 @@ def main() -> None:
                      help="run every lane for exactly this many accepted steps per "
                           "stage, count_min = count_max, no lane certifies; a step-cost "
                           "benchmark, not a calibration")
+    ap.add_argument("--lanes", type=int, default=None,
+                     help="lanes the cold chemistry batch runs on (cfg.cold_lanes); "
+                          "0 = every draw in one lockstep batch, k > 0 = k lanes "
+                          "refilled from the draw queue. Default: the config's value")
     ap.add_argument("--grad", action="store_true",
                      help="benchmark the production cold GRADIENT evaluator "
                           "batch_eval_cold_vg instead of the primal "
@@ -89,6 +93,10 @@ def main() -> None:
     # never warm-capped.
     cfg = replace(cfg, count_min=K, count_max=K, warm_count_max=K) if K > 0 else replace(
         cfg, count_max=int(args.count_max_probe))
+    # The lane-count arm of the bench: how much of the wall time is the slowest
+    # draw holding a full-width lockstep batch open.
+    if args.lanes is not None:
+        cfg = replace(cfg, cold_lanes=int(args.lanes))
 
     # accept_count depends only on the chemistry (nz, molecules, priors), not on
     # the RT; the correlated-k band grid is fixed by the tables, so the RT runs at
@@ -97,7 +105,8 @@ def main() -> None:
     from retrieval_framework import config_schema as C
     log.info(C.describe_config(cfg, f"{_preset}+CALIBRATE"))
     log.info(f"calibration: nz={cfg.nz} art_nlayer={cfg.art_nlayer} "
-             f"count_max(probe)={cfg.count_max} n_draws={args.n_draws}")
+             f"count_max(probe)={cfg.count_max} n_draws={args.n_draws} "
+             f"cold_lanes={cfg.cold_lanes} (0 = one lockstep batch)")
 
     from retrieval_framework import pipeline as P
     import jax

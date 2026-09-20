@@ -197,6 +197,16 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             return chem.converged_y(chem_theta, return_conv_diag=True)
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
+    def _cold_batch(C, **kw):
+        """One batched cold stage -> ``(y, ConvDiag)``. ``cfg.cold_lanes`` picks
+        the runner: 0 (or a count at/above the draws) is the lockstep batch
+        this repo has always run, otherwise the lane queue with refill."""
+        lanes = int(cfg.cold_lanes)
+        if 0 < lanes < int(C.shape[0]):
+            return chem.converged_y_queue(C, lanes,
+                                          chunk=int(cfg.cold_refill_chunk), **kw)
+        return chem.converged_y_batch(C, return_conv_diag=True, **kw)
+
     def chem_solve_cold_diag_batch(C):
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
         ``(y, ConvDiag)`` with a leading particle axis on every field.
@@ -210,12 +220,17 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         the loop's iteration tick (agreement at the convergence scale, 5.4e-5
         over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). PRIMAL
         only -- every gradient path stays on the per-particle
-        ``chem_solve_cold_diag``."""
+        ``chem_solve_cold_diag``.
+
+        With ``cfg.cold_lanes`` above 0 and below the draw count, both stages
+        run on that many lanes with refill (``vulcan_chem.converged_y_queue``):
+        a lane that certifies takes the next draw inside the same while loop,
+        so wall time follows total work / lanes instead of the slowest draw.
+        The default 0 keeps the single lockstep batch, call for call."""
         if not two_stage:
-            return chem.converged_y_batch(C, return_conv_diag=True)
-        Y1 = chem.converged_y_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
-        return chem.converged_y_batch(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0,
-                                      return_conv_diag=True)
+            return _cold_batch(C)
+        Y1, _ = _cold_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+        return _cold_batch(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a

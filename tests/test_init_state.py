@@ -190,3 +190,12 @@ def test_init_phase2_spares_exhausted_raises():
     a[1, 1] = 1.0
     with pytest.raises(RuntimeError, match="Spares exhausted"):
         P._init_state(pipe, jnp.asarray(a), target_n=8)
+
+
+@pytest.mark.parametrize("knob,bad", [("cold_lanes", -1), ("cold_refill_chunk", 0)])
+def test_validate_config_refuses_broken_cold_lane_knobs(knob, bad):
+    """The cold-batch lane knobs are validated with the other batch widths: a
+    negative lane count or a zero refill chunk is a broken run, not a default
+    (cold_lanes=0 IS the default -- the single lockstep batch)."""
+    with pytest.raises(ValueError, match=knob):
+        C.validate_config(C.Config(**{knob: bad}))

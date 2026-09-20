@@ -45,7 +45,9 @@ dependencies = [
     # opacity_mode other than 'exomolop'); this schema no longer emits them.
     # (0.4.0 was the p_ref_bar floor: config_schema pins p_ref_bar explicitly,
     # and an older engine would silently anchor the radius at the grid bottom.)
-    "vulcan-forward>=0.22.0",
+    # >=0.23.0: converged_y_queue, the cold batch on a fixed number of lanes
+    # with refill, which cfg.cold_lanes routes to.
+    "vulcan-forward>=0.23.0",
     # >=0.15.0: the cold equilibrium seed is in-graph (ini_abun.eq_seed, ExoGibbs
     # on VULCAN's NASA-9 data), which vulcan-forward 0.22.0 calls directly -- an
     # older engine has no such entry point. (>=0.3.5 was the first with finite
