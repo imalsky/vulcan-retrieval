@@ -673,12 +673,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # state or the ladder samples a target whose support is wider than the
             # initial cloud's (and the convergence counters would read 0 because
             # they were disabled, not because they were clean).
-            if warm and mutation_cap:
-                def _solve_cd(c, yw, rf):
-                    return fwd.chem_solve_warm_diag(c, yw, rf[0], rf[1])
-            elif warm:
-                def _solve_cd(c, yw, rf):
-                    return fwd.chem_solve_warm_diag_full(c, yw, rf[0], rf[1])
+            if warm:
+                _solve_cd_batch = (fwd.chem_solve_warm_diag_batch if mutation_cap
+                                   else fwd.chem_solve_warm_diag_full_batch)
 
             def _pack_cd(cd):
                 # [accept_count, longdy, longdydt, count_since_new_min, conv_normal]
@@ -689,48 +686,48 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     jnp.asarray(cd.count_since_new_min, dtype),
                     jnp.asarray(cd.conv_normal, dtype)]))
 
+            # BOTH chem modes run the jvp through the BATCHED runner
+            # (retrieval_forward's batch twins -> vulcan_chem.converged_y_batch,
+            # or the lane queue with cfg.cold_lanes), ONE solve for the whole
+            # chunk per direction instead of a vmap of per-particle solves.
+            # Under a particle vmap every lane-dependent lax.cond (photolysis,
+            # geometry refresh) lowers to a select, so both branches run for
+            # every lane every iteration, tangents included; the batched runner
+            # hoists the while loop above the lane vmap and keys those conds to
+            # one shared tick. The stopping rule is UNCHANGED: the loop
+            # predicate reads the primal only, so a jvp through it stops where
+            # the primal certifies, exactly as the per-particle jvp did (a
+            # tangent-certified stop is converged_y_jvp, a different contract).
+            # The chemistry lanes are independent, so broadcasting ONE direction
+            # over the chunk gives each particle its own directional derivative.
+            def _pack_cd_batch(cd):
+                return jax.vmap(_pack_cd)(cd)
+
+            def _aux_batch(Y, C_):
+                return jax.vmap(fwd.aux_from_y)(Y, C_)
+
+            def _bcast(v, C_):
+                return jnp.broadcast_to(v, C_.shape)
+
             if warm:
-                # The warm continuation has NO batched entry point (the
-                # warm-capped twin runner is per lane), so it keeps the
-                # per-particle map: one jvp per particle, vmapped over the
-                # chemistry directions.
-                def _chem_one(cc, yw, rf):
-                    def _chain(c):
-                        y, cd = _solve_cd(c, yw, rf)
-                        return fwd.aux_from_y(y, c), y, _pack_cd(cd)
-                    (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
-                        lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
-                    aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)  # primal (lane 0)
-                    return aux, daux_l, y_l[0], cd_l[0], None
+                # WARM continuation: each particle re-converges from its OWN
+                # carried column at its OWN reference composition, so the
+                # carried state and the (N,) reference arrays ride into the
+                # batch as constants -- only theta carries a tangent. The
+                # mutation cap is per lane on the runner carry (warm_cap).
+                def _warm_chain(C_, Y, refs):
+                    Y_new, cd = _solve_cd_batch(C_, Y, refs[:, 0], refs[:, 1])
+                    return _aux_batch(Y_new, C_), Y_new, _pack_cd_batch(cd)
 
-                def _chem_map(C_, Y, refs):
-                    return _map_chunked(lambda a: _chem_one(*a),
-                                        (C_, Y, refs), chem_chunk)
+                def _chem_batch(C_, Y, refs):
+                    (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
+                        lambda v: jax.jvp(lambda C: _warm_chain(C, Y, refs),
+                                          (C_,), (_bcast(v, C_),)))(eye_c)
+                    AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
+                    DAUX = jax.tree_util.tree_map(
+                        lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
+                    return AUX, DAUX, Y_l[0], CD_l[0], None
             else:
-                # COLD: the jvp runs through the BATCHED runner (retrieval_forward's
-                # stage twins -> vulcan_chem.converged_y_batch, or the lane queue
-                # with cfg.cold_lanes), ONE solve for the whole chunk per direction
-                # instead of a vmap of per-particle solves. Under a particle vmap
-                # every lane-dependent lax.cond (photolysis, geometry refresh)
-                # lowers to a select, so both branches run for every lane every
-                # iteration, tangents included; the batched runner hoists the while
-                # loop above the lane vmap and keys those conds to one shared tick.
-                # The stopping rule is UNCHANGED: the loop predicate reads the
-                # primal only, so a jvp through it stops where the primal
-                # certifies, exactly as the per-particle jvp did (a tangent-
-                # certified stop is converged_y_jvp, a different contract).
-                # The chemistry lanes are independent, so broadcasting ONE
-                # direction over the chunk gives each particle its own directional
-                # derivative.
-                def _pack_cd_batch(cd):
-                    return jax.vmap(_pack_cd)(cd)
-
-                def _aux_batch(Y, C_):
-                    return jax.vmap(fwd.aux_from_y)(Y, C_)
-
-                def _bcast(v, C_):
-                    return jnp.broadcast_to(v, C_.shape)
-
                 if bool(fwd.two_stage) and split_stage1:
                     eye_h = eye_c[2:]                      # lnKzz + T-P directions
 
@@ -783,9 +780,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                             lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
                         return AUX, DAUX, Y_l[0], CD_l[0], None
 
-                def _chem_map(C_, Y, refs):
-                    return _map_chunks(lambda a: _chem_batch(*a),
-                                       (C_, Y, refs), chem_chunk)
+            def _chem_map(C_, Y, refs):
+                return _map_chunks(lambda a: _chem_batch(*a),
+                                   (C_, Y, refs), chem_chunk)
         else:
             # Primal-only, but gated the SAME way as the gradient path: the
             # likelihood of a given map must be ONE function. This evaluator is
@@ -794,30 +791,25 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # comparison arm -- if it kept a state the gradient path rejects, all
             # three would be measuring a different likelihood than the sampler
             # targets. The diag rides the primal carry, so this costs nothing.
-            def _solve_l(c, yw, rf):
-                return (fwd.chem_solve_warm_diag(c, yw, rf[0], rf[1]) if warm
-                        else fwd.chem_solve_cold_diag(c))
-
-            def _chem_one(cc, yw, rf):
-                y, cd = _solve_l(cc, yw, rf)
-                return fwd.aux_from_y(y, cc), y, cd
-
-        if not want_grad:
             def _chem_primal(C_, Y, refs):
                 """Chemistry for the WHOLE particle batch -> (AUX, Y_new, ConvDiag).
 
-                Cold: ONE ``chem_solve_cold_diag_batch`` call, i.e. the solver's
-                batched runner, whose while loop sits ABOVE the lane vmap -- the
-                per-lane map vmapped here runs photolysis and the geometry refresh
-                on every lane every iteration (lax.cond lowers to a select under
-                vmap). Lanes freeze at their own exits, so each particle's column
-                is its own solve, agreeing with the per-lane map at the
-                convergence scale rather than bitwise (vulcan-jax notes 2.9).
-                Warm continuation keeps the per-particle map: the
-                warm-capped twin runner has no batched entry point."""
+                ONE batched call in either chem mode -- the cold two-stage map,
+                or the warm continuation of every particle's carried column at
+                its own reference composition under the mutation cap -- so the
+                solver's while loop sits ABOVE the lane vmap, where the
+                photolysis and geometry-refresh cadences follow the loop tick
+                instead of firing on every lane every iteration (a lax.cond
+                lowers to a select under a particle vmap). Lanes freeze at their
+                own exits, so each particle's column is its own solve, agreeing
+                with the per-lane map at the convergence scale rather than
+                bitwise (vulcan-jax notes 2.9). Same map as the gradient
+                path's, which is what makes this the FD reference for it."""
                 if warm:
-                    return jax.vmap(_chem_one)(C_, Y, refs)
-                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
+                    Y_new, CD = fwd.chem_solve_warm_diag_batch(
+                        C_, Y, refs[:, 0], refs[:, 1])
+                else:
+                    Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
         def eval_batch(U, Y, refs):
@@ -834,8 +826,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             usable = valid   # narrowed to (valid & certified) on the warm gradient path
             if want_grad:
                 # Chemistry jvp directions, optionally lax.map-chunked over
-                # particles: a chunk is one batched solve on the cold path and a
-                # vmap of per-particle solves on the warm one.
+                # particles: a chunk is ONE batched solve in either chem mode,
+                # so its lanes share the chunk's loop ticks (and, with
+                # cold_lanes > 0, its own queue) -- chunking moves the answer at
+                # the convergence scale, it is not the single wide call.
                 # Probe 2026-07-07: staged chem tangent lanes cost ~20 MB per
                 # lane-pair (0.78 GiB at 36 lanes), so full width (chem_chunk=0)
                 # is the default -- the old ~1.3 GB/lane figure was the all-in-one

@@ -47,7 +47,9 @@ dependencies = [
     # and an older engine would silently anchor the radius at the grid bottom.)
     # >=0.23.0: converged_y_queue, the cold batch on a fixed number of lanes
     # with refill, which cfg.cold_lanes routes to.
-    "vulcan-forward>=0.23.0",
+    # >=0.24.0: warm_cap + per-lane lnZ_ref/c_o_ref on converged_y_batch and
+    # converged_y_queue, which the batched WARM mutation solve needs.
+    "vulcan-forward>=0.24.0",
     # >=0.16.0: OuterLoop.run_queue, which vulcan-forward 0.23.0's
     # converged_y_queue calls. (>=0.15.0 was the in-graph cold equilibrium seed,
     # ini_abun.eq_seed, ExoGibbs on VULCAN's NASA-9 data, called directly by

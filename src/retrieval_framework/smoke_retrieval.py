@@ -17,7 +17,9 @@ synthetic observations, then:
      lane queue and the two become different maps; the regime is printed, and
   4. FD-checks the WARM-continuation gradient (the mutation-kernel map: re-converge
      from a carried column with incremental lnZ/C-O) against central differences of
-     the same warm map.
+     the same warm map. That pair is built explicitly for chem_mode "warm":
+     `smc_chem_mode` defaults to "cold", so the pipeline's own move evaluators
+     would be the cold ones and this check would never touch the warm map.
 
 Run it in the vulcan env before trusting any retrieval output (uses the case's
 "smoke" preset unless SMC_RETRIEVAL_PRESET says otherwise):
@@ -124,9 +126,13 @@ def main() -> int:
     # reverse-mode RT vjp, RT lax.map-chunked). TWO regimes, and which one is in
     # force is printed:
     #
-    #   cold_lanes == 0 (production default): the two routes are the same map, so
-    #     they must agree to fp precision -- dval < 1e-6 relative (floor 1),
-    #     dgrad < 1e-5 norm-relative. Tolerances CALIBRATED, not assumed: the two
+    #   cold_lanes == 0 (production default): the two routes are the same runner
+    #     CADENCE CLASS, but the block reference is the scalar runner, so the tight
+    #     gate -- dval < 1e-6 relative (floor 1), dgrad < 1e-5 norm-relative -- is
+    #     EMPIRICAL on these probe draws, not an identity: a lockstep lane keys
+    #     photolysis and the geometry refresh to the loop tick instead of its own
+    #     accept count, which on a harder case can move the column at the
+    #     convergence scale. Tolerances CALIBRATED, not assumed: the two
     #     routes batch and fuse differently, so the correlated-k RT's resort-rebin
     #     (a 256-wide cumsum + interp per fold) accumulates visibly more floating
     #     point than the sampled path did. Measured over the three probe points:
@@ -153,8 +159,10 @@ def main() -> int:
             f"reference is the per-particle solo solve, so the gate is the "
             f"convergence-scale standard |dlogL| < {DLOGL_MAX_PASS} absolute and "
             f"max|dG|/max(max|G|,1) < {DLOGL_MAX_PASS}" if queued else
-            "cold_lanes=0: same map both sides, gate dval < 1e-6 (relative, floor "
-            "1) and dgrad < 1e-5 (norm-relative)")
+            "cold_lanes=0: same runner cadence class, but the block reference is "
+            "the SCALAR runner, so the tight pair is empirical on these probe "
+            "draws: gate dval < 1e-6 (relative, floor 1) and dgrad < 1e-5 "
+            "(norm-relative)")
     print(f"[smoke] staged-vs-block regime -- {rule}", flush=True)
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
     U_test = jnp.stack([u0, u0 + du, u0 - du])
@@ -213,21 +221,36 @@ def main() -> int:
     # gradient at a DIFFERENT point (a realistic MCMC proposal) and FD the identical
     # warm map (fixed carried state) -- validates that the tangent relaxes through
     # the warm-started while_loop (the continuation-jvp pattern).
+    #
+    # The WHOLE 3-particle cloud goes in, and each particle carries its own
+    # column AND its own reference composition (the refsb rows differ), so this
+    # also exercises the per-lane reference threading of the batched warm solve;
+    # with cold_lanes = 2 the three particles on two lanes make it refill. The
+    # evaluators are built for chem_mode "warm" explicitly: the pipeline's
+    # batch_eval_move_* follow cfg.smc_chem_mode, which defaults to "cold".
+    # Only row 0 is perturbed, so its own solve history is the same in both FD
+    # arms.
     t0 = time.time()
-    u1 = U_test[0] + 0.5 * du
-    U1 = u1[None, :]
-    Y_w, refs_w = Yb[:1], refsb[:1]
-    move_vg = jax.jit(pipe.batch_eval_move_vg)
-    move_l = jax.jit(pipe.batch_eval_move_l)
-    _L1, G1, _, _, _s1w, nbad_w, _statsw = move_vg(U1, Y_w, refs_w)
+    U1 = U_test + 0.5 * du
+    Y_w, refs_w = Yb, refsb
+    move_vg = jax.jit(pipe._make_batch_eval("warm", True))
+    move_l = jax.jit(pipe._make_batch_eval("warm", False))
+    L1, G1, _, _, _s1w, nbad_w, statsw = move_vg(U1, Y_w, refs_w)
     assert int(nbad_w) == 0, "warm move eval flagged gradient pathologies"
+    print(f"[smoke] warm move eval: L={np.asarray(L1).tolist()} accept="
+          f"{np.asarray(statsw.acc).tolist()} conv_ok="
+          f"{np.asarray(statsw.conv_ok).astype(int).tolist()} refs="
+          f"{np.asarray(refs_w).round(4).tolist()}", flush=True)
+    assert float(np.asarray(L1)[0]) > -1.0e29, (
+        "the warm proposal was REJECTED (capped / uncertified): the FD check "
+        "below would compare two rejections")
     g_warm = np.asarray(G1[0])
     ok_warm = True
     gmax_w = np.max(np.abs(g_warm))
     for i in range(pipe.n_dim):
-        e = np.zeros(pipe.n_dim); e[i] = h
-        Lp = float(move_l(U1 + jnp.asarray(e)[None, :], Y_w, refs_w)[0][0])
-        Lm = float(move_l(U1 - jnp.asarray(e)[None, :], Y_w, refs_w)[0][0])
+        E = np.zeros_like(np.asarray(U1)); E[0, i] = h      # row 0 only
+        Lp = float(move_l(U1 + jnp.asarray(E), Y_w, refs_w)[0][0])
+        Lm = float(move_l(U1 - jnp.asarray(E), Y_w, refs_w)[0][0])
         fd = (Lp - Lm) / (2 * h)
         ad = g_warm[i]
         rel = abs(ad - fd) / max(abs(fd), 1e-12)

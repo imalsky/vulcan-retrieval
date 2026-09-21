@@ -197,8 +197,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             return chem.converged_y(chem_theta, return_conv_diag=True)
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
-    def _cold_batch(C, **kw):
-        """One batched cold stage -> ``(y, ConvDiag)``. ONE route per config:
+    def _chem_batch_route(C, **kw):
+        """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
+        point for every batched solve, cold stage or warm continuation (the
+        knob keeps its ``cold_lanes`` name; ``kw`` carries ``warm_y`` /
+        ``lnZ_ref`` / ``c_o_ref`` / ``warm_cap``). ONE route per config:
         ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
         ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
         draw count ``run_queue`` refills nothing and runs the plain batch's
@@ -236,17 +239,17 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         replay agrees with the run. The default 0 keeps the single lockstep
         batch, call for call."""
         if not two_stage:
-            return _cold_batch(C)
+            return _chem_batch_route(C)
         return chem_stage2_diag_batch(C, chem_stage1_batch(C))
 
     def chem_stage1_batch(C):
         """``chem_stage1`` for a STACK of chem_thetas ``C`` (N, n_chem_tp) ->
-        Y1 (N, nz, ni), through ``_cold_batch``. The batched twin the cold
+        Y1 (N, nz, ni), through ``_chem_batch_route``. The batched twin the cold
         GRADIENT path jvp's through: one solve for the whole cloud instead of
         a per-particle vmap of solves, so the photolysis and geometry
         cadences follow the loop tick shared by the cloud. Not gated (stage 1
         carries no certificate)."""
-        Y1, _cd = _cold_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+        Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
         return Y1
 
     def chem_stage2_diag_batch(C, Y1):
@@ -254,7 +257,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         particle's own stage-1 column ``Y1`` (N, nz, ni) at its (lnZ, c_o) ->
         ``(y (N, nz, ni), ConvDiag with a leading particle axis)``, the
         ConvDiag that certifies each draw."""
-        return _cold_batch(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
+        return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """Converged ABSOLUTE column y (nz, ni) by warm continuation from a
@@ -303,6 +306,28 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return chem.converged_y(chem_theta, warm_y=y_warm,
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=False)
+
+    def chem_solve_warm_diag_batch(C, Y, lnZ_ref, c_o_ref):
+        """``chem_solve_warm_diag`` for a STACK: every particle's own carried
+        column ``Y`` (N, nz, ni) re-converged at its own proposal ``C``
+        (N, n_chem_tp) with its own reference composition ``lnZ_ref`` /
+        ``c_o_ref`` ((N,) arrays, one per carried column) ->
+        ``(y (N, nz, ni), ConvDiag with a leading particle axis)``.
+
+        Runs under the mutation cap (``warm_cap=True``), which rides the runner
+        carry per lane, and through ``_chem_batch_route``: the batched runner,
+        or the lane queue when ``cfg.cold_lanes > 0``. THE warm solve on the
+        SMC mutation path, primal and gradient (pipeline._make_batch_eval jvps
+        through this for the whole cloud at once)."""
+        return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
+                                 warm_cap=True)
+
+    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref):
+        """``chem_solve_warm_diag_batch`` WITHOUT the mutation cap (the cold
+        count_max): the INIT phase-2 pass, whose inputs are phase-1 survivors
+        re-certifying from their own converged columns."""
+        return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
+                                 warm_cap=False)
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)
@@ -369,6 +394,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_warm=chem_solve_warm,
         chem_solve_warm_diag=chem_solve_warm_diag,
         chem_solve_warm_diag_full=chem_solve_warm_diag_full,
+        chem_solve_warm_diag_batch=chem_solve_warm_diag_batch,
+        chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
         aux_from_y=aux_from_y,
         y_baseline=np.asarray(chem.y0, dtype=np.float64),
         nz=int(chem.nz), ni=int(chem.ni),

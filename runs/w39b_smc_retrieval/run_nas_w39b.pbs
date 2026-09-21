@@ -56,7 +56,8 @@
 #   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
 #                           CALIBRATE_N_DRAWS (default 48), CALIBRATE_COUNT_MAX_PROBE (default
 #                           20000), CALIBRATE_SEED_OFFSET (default 0)
-#                           CALIBRATE_FIXED_STEPS=<K> (+ CALIBRATE_GRAD=1): fixed-step
+#                           CALIBRATE_FIXED_STEPS=<K> (+ CALIBRATE_GRAD=1, and only
+#                           the value 1 enables it): fixed-step
 #                           step-cost bench, primal or gradient; pair with NSYS=1
 #                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step
 #                           CALIBRATE_LANES=<k>: run the cold batch on k lanes with
@@ -371,12 +372,16 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # CALIBRATE_COUNT_MAX_PROBE cap so the true tail isn't truncated -- see
   # retrieval_framework/calibrate_count_max.py's docstring. No SMC run happens.
   echo "========== CALIBRATE COUNT_MAX (accept_count distribution only) =========="
+  # CALIBRATE_GRAD is a BOOLEAN, tested like the other 0/1 knobs: `:+` would have
+  # enabled the gradient bench for CALIBRATE_GRAD=0 too.
+  GRAD_ARG=""
+  if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
     --n-draws "${CALIBRATE_N_DRAWS:-48}" \
     --count-max-probe "${CALIBRATE_COUNT_MAX_PROBE:-20000}" \
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
-    ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${CALIBRATE_GRAD:+--grad} || rc=$?
+    ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?
 else
   echo "========== SMC RETRIEVAL =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
