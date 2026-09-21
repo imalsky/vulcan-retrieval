@@ -70,8 +70,9 @@ def main() -> None:
     ap.add_argument("--lanes", type=int, default=None,
                      help="lanes the cold chemistry batch runs on (cfg.cold_lanes); "
                           "0 = every draw in one lockstep batch, k > 0 = k lanes "
-                          "refilled from the draw queue; k > 0 is refused with "
-                          "--fixed-steps. Default: the config's value")
+                          "refilled from the draw queue; any k > 0 (here or in "
+                          "the config) is refused with --fixed-steps. Default: "
+                          "the config's value")
     ap.add_argument("--grad", action="store_true",
                      help="benchmark the production cold GRADIENT evaluator "
                           "batch_eval_cold_vg instead of the primal "
@@ -82,7 +83,9 @@ def main() -> None:
     if args.lanes is not None and int(args.lanes) > 0 and int(args.fixed_steps) > 0:
         # A capped lane is is_done, so the queue writes it out and refills it
         # with the next draw: the fixed-step bench would time queue throughput
-        # over the whole draw list, not the per-step cost it reports.
+        # over the whole draw list, not the per-step cost it reports. The same
+        # refusal is repeated below on the RESOLVED cold_lanes, which catches a
+        # config that sets the knob without --lanes.
         ap.error("--lanes > 0 cannot be combined with --fixed-steps: a capped "
                  "lane is is_done and gets refilled, so the bench would measure "
                  "queue throughput, not the cost of one accepted step. Bench "
@@ -106,6 +109,14 @@ def main() -> None:
     # draw holding a full-width lockstep batch open.
     if args.lanes is not None:
         cfg = replace(cfg, cold_lanes=int(args.lanes))
+    if K > 0 and int(cfg.cold_lanes) > 0:
+        # The RESOLVED value, not just --lanes: a config that sets the knob
+        # itself would otherwise queue silently under the bench.
+        raise SystemExit(
+            f"--fixed-steps cannot run with cold_lanes={int(cfg.cold_lanes)} "
+            "(resolved from the config): a capped lane is is_done and gets "
+            "refilled, so the bench would measure queue throughput, not the "
+            "cost of one accepted step. Bench the step cost with --lanes 0.")
 
     # accept_count depends only on the chemistry (nz, molecules, priors), not on
     # the RT; the correlated-k band grid is fixed by the tables, so the RT runs at
@@ -185,8 +196,10 @@ def main() -> None:
         log.info(f"  loop     = {loop:.3f} s for the extra {n_stages}(K-1)={n_extra} accepted steps "
                  f"of the slowest lane; {1000.0 * loop / max(1, n_extra):.3f} ms per accepted "
                  "step. Per loop ITERATION (accepted + rejected) divide `loop` by the "
-                 "factorisation count in the capture: nsys getrf_panel or bt_factor_kernel "
-                 "instances / nz.")
+                 "factorisation count in the capture: the LU path runs one getrf_panel "
+                 "per layer, so nsys instances / nz, while the FFI block-Thomas kernel "
+                 "traverses every layer AND every lane in ONE launch, so its "
+                 "bt_factor instances ARE the iterations.")
 
         Lb = np.asarray(jax.device_get(out[0]), np.float64)
         Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)
@@ -194,8 +207,8 @@ def main() -> None:
                  f"max|Y| = {np.nanmax(np.abs(Yb)):.6g}")
         save = {"U": np.asarray(jax.device_get(U), np.float64), "Y": Yb, "L": Lb,
                 "t_steady": t_steady, "t1_steady": t1_steady, "K": K,
-                # the lane knobs in effect (--lanes > 0 is refused above, so
-                # these record the config's own values)
+                # the lane knobs in effect (a fixed-step bench is refused with
+                # lanes, so these record the lockstep batch)
                 "cold_lanes": int(cfg.cold_lanes),
                 "cold_refill_chunk": int(cfg.cold_refill_chunk)}
         if args.grad:

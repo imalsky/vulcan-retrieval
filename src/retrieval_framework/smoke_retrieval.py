@@ -11,7 +11,10 @@ synthetic observations, then:
      likelihood, dimension by dimension (the same check jax_paper's
      scripts/retrieval/smoke_test.py runs for the sensitivity demo),
   3. asserts the STAGED batched evaluator (chemistry fwd-jvp lanes + ONE RT vjp,
-     lax.map-chunked -- the SMC hot path) == the per-particle block gradient, and
+     lax.map-chunked -- the SMC hot path) == the per-particle block gradient, to
+     fp precision at cold_lanes=0 and to the convergence-scale standard
+     (validate_warm.DLOGL_MAX_PASS) when cold_lanes>0 puts the staged side on the
+     lane queue and the two become different maps; the regime is printed, and
   4. FD-checks the WARM-continuation gradient (the mutation-kernel map: re-converge
      from a carried column with incremental lnZ/C-O) against central differences of
      the same warm map.
@@ -118,8 +121,41 @@ def main() -> int:
 
     # ---- staged batched evaluator (SMC hot path) vs per-particle block gradient ----
     # Same chain rule, regrouped (fwd-jvp chemistry lanes contracted against ONE
-    # reverse-mode RT vjp, RT lax.map-chunked); must agree to fp precision.
+    # reverse-mode RT vjp, RT lax.map-chunked). TWO regimes, and which one is in
+    # force is printed:
+    #
+    #   cold_lanes == 0 (production default): the two routes are the same map, so
+    #     they must agree to fp precision -- dval < 1e-6 relative (floor 1),
+    #     dgrad < 1e-5 norm-relative. Tolerances CALIBRATED, not assumed: the two
+    #     routes batch and fuse differently, so the correlated-k RT's resort-rebin
+    #     (a 256-wide cumsum + interp per fold) accumulates visibly more floating
+    #     point than the sampled path did. Measured over the three probe points:
+    #     dval 4.8e-12 / 8.2e-11 / 3.8e-08, dgrad 1.7e-09 / 1.9e-08 / 5.4e-07, so
+    #     the gates sit ~20x above the worst and still leave five orders of margin
+    #     against the wiring bug this check exists to catch.
+    #
+    #   cold_lanes > 0: the staged evaluator runs the lane QUEUE while
+    #     value_and_grad_block is the per-particle SOLO solve, so a refilled draw
+    #     enters the loop at the tick its lane was freed at and the two are
+    #     DIFFERENT MAPS by design -- they can only agree at the convergence
+    #     scale. The gate is then the repo's own convergence-scale standard:
+    #     |logL_staged - logL_block| < DLOGL_MAX_PASS (0.1 ABSOLUTE, validate_warm's
+    #     warm-vs-cold likelihood gate) and max|dG| / max(max|G_block|, 1) <
+    #     DLOGL_MAX_PASS (the same 0.1, norm-relative with an absolute-1 scale
+    #     floor -- what validate_warm holds the re-solved u-space gradient to).
+    #     The measured sizes at cold_lanes = 2 are in notes 2.13; a lane count is
+    #     a config change, so this regime is the bench's, never production's.
+    from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
+    lanes = int(getattr(cfg, "cold_lanes", 0) or 0)
+    queued = lanes > 0
+    rule = (f"cold_lanes={lanes}: the staged evaluator QUEUES and the block "
+            f"reference is the per-particle solo solve, so the gate is the "
+            f"convergence-scale standard |dlogL| < {DLOGL_MAX_PASS} absolute and "
+            f"max|dG|/max(max|G|,1) < {DLOGL_MAX_PASS}" if queued else
+            "cold_lanes=0: same map both sides, gate dval < 1e-6 (relative, floor "
+            "1) and dgrad < 1e-5 (norm-relative)")
+    print(f"[smoke] staged-vs-block regime -- {rule}", flush=True)
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
     U_test = jnp.stack([u0, u0 + du, u0 - du])
     Y0, refs0, _S1 = P._blank_state(pipe, int(U_test.shape[0]))
@@ -131,23 +167,20 @@ def main() -> int:
     for r in range(int(U_test.shape[0])):
         vr, gr = pipe.value_and_grad_block(U_test[r])
         vr = float(vr); gr = np.asarray(gr)
-        dv = abs(Lb[r] - vr) / max(1.0, abs(vr))
+        dv_abs = abs(Lb[r] - vr)
+        dv = dv_abs / max(1.0, abs(vr))
         # same norm-relative yardstick as the block-vs-naive check above
-        dg = float(np.max(np.abs(Gb2[r] - gr)) / max(float(np.max(np.abs(gr))), 1e-300))
-        # Tolerances CALIBRATED, not assumed. These two routes are the same chain
-        # rule regrouped, but they batch and fuse differently, so the correlated-k
-        # RT's resort-rebin (a 256-wide cumsum + interp per fold) accumulates
-        # visibly more floating point than the sampled path did. Measured over the
-        # three probe points: dval 4.8e-12 / 8.2e-11 / 3.8e-08, dgrad 1.7e-09 /
-        # 1.9e-08 / 5.4e-07. The gates sit ~20x above the worst of those, which
-        # still leaves five orders of margin against the wiring bug this check
-        # exists to catch. For scale, the repo's own likelihood-agreement standard
-        # elsewhere (validate_warm.DLOGL_MAX_PASS) is 0.1 ABSOLUTE; dval=1e-6 here
-        # is ~4e-4 absolute on this likelihood.
-        ok_r = (dv < 1e-6) and (dg < 1e-5)
+        gmax = float(np.max(np.abs(gr)))
+        dgmax = float(np.max(np.abs(Gb2[r] - gr)))
+        dg = dgmax / max(gmax, 1e-300)
+        if queued:
+            ok_r = ((dv_abs < DLOGL_MAX_PASS)
+                    and (dgmax / max(gmax, 1.0) < DLOGL_MAX_PASS))
+        else:
+            ok_r = (dv < 1e-6) and (dg < 1e-5)
         ok_staged &= ok_r
         print(f"[smoke] staged-vs-block row {r}: dval={dv:.2e} dgrad={dg:.2e} "
-              f"{'OK' if ok_r else 'FAIL'}", flush=True)
+              f"(|dlogL|={dv_abs:.2e}) {'OK' if ok_r else 'FAIL'}", flush=True)
     print(f"[smoke] staged batched evaluator check done [{time.time()-t0:.0f}s] "
           f"-> {'OK' if ok_staged else 'FAIL'}", flush=True)
     assert np.all(np.isfinite(Yb)) and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)

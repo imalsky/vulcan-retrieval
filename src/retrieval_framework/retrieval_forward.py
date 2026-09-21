@@ -223,9 +223,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         freezes at its own exit, so a particle's column does not depend on the
         others, but it is NOT bit-identical to its solo solve: the cadence rides
         the loop's iteration tick (agreement at the convergence scale, 5.4e-5
-        over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). PRIMAL
-        only -- every gradient path stays on the per-particle
-        ``chem_solve_cold_diag``.
+        over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). The cold
+        GRADIENT path takes the same route, one ``jax.jvp`` per direction
+        through the stage twins below; only the WARM continuation still runs
+        per particle.
 
         With ``cfg.cold_lanes`` above 0 EVERY cold batch -- both stages, any
         width -- runs on ``min(cold_lanes, draws)`` lanes with refill
@@ -236,7 +237,23 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         batch, call for call."""
         if not two_stage:
             return _cold_batch(C)
-        Y1, _ = _cold_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+        return chem_stage2_diag_batch(C, chem_stage1_batch(C))
+
+    def chem_stage1_batch(C):
+        """``chem_stage1`` for a STACK of chem_thetas ``C`` (N, n_chem_tp) ->
+        Y1 (N, nz, ni), through ``_cold_batch``. The batched twin the cold
+        GRADIENT path jvp's through: one solve for the whole cloud instead of
+        a per-particle vmap of solves, so the photolysis and geometry
+        cadences follow the loop tick shared by the cloud. Not gated (stage 1
+        carries no certificate)."""
+        Y1, _cd = _cold_batch(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+        return Y1
+
+    def chem_stage2_diag_batch(C, Y1):
+        """``chem_stage2_diag`` for a STACK: warm re-convergence of each
+        particle's own stage-1 column ``Y1`` (N, nz, ni) at its (lnZ, c_o) ->
+        ``(y (N, nz, ni), ConvDiag with a leading particle axis)``, the
+        ConvDiag that certifies each draw."""
         return _cold_batch(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
     def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
@@ -346,6 +363,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_stage1=chem_stage1,
         chem_stage2_diag=chem_stage2_diag,
+        chem_stage1_batch=chem_stage1_batch,
+        chem_stage2_diag_batch=chem_stage2_diag_batch,
         two_stage=two_stage,
         chem_solve_warm=chem_solve_warm,
         chem_solve_warm_diag=chem_solve_warm_diag,

@@ -217,6 +217,33 @@ def _map_chunked(fn, args, chunk):
         lambda x: x.reshape((-1,) + x.shape[2:])[:n], out)
 
 
+def _map_chunks(fn, args, chunk):
+    """Apply a BATCH function ``fn`` -- one that already takes the whole stacked
+    pytree ``args`` -- to padded chunks of ``chunk`` particles under ``lax.map``,
+    to bound peak memory. The sibling of ``_map_chunked`` for a function that is
+    batched itself, so there is no inner vmap. ``chunk<=0`` (or >= n) is ONE call
+    on the whole batch. Padding rows are dropped.
+
+    A chunk is its own batch on the solver's batched runner, so its lanes share
+    the chunk's loop ticks, not the whole cloud's: chunking moves the answer at
+    the convergence scale the way the batch already moves against the solo solve
+    (vulcan-forward's converged_y_batch contract), it is not exactly the single
+    call."""
+    leaves = jax.tree_util.tree_leaves(args)
+    n = int(leaves[0].shape[0])
+    if chunk <= 0 or chunk >= n:
+        return fn(args)
+    n_pad = (-n) % chunk
+    if n_pad:
+        args = jax.tree_util.tree_map(
+            lambda x: jnp.concatenate([x, x[:n_pad]], axis=0), args)
+    args = jax.tree_util.tree_map(
+        lambda x: x.reshape((-1, chunk) + x.shape[1:]), args)
+    out = jax.lax.map(fn, args)
+    return jax.tree_util.tree_map(
+        lambda x: x.reshape((-1,) + x.shape[2:])[:n], out)
+
+
 def build_pipeline(cfg: C.Config) -> Pipeline:
     """Build the forward, observation operators, u-space prior/likelihood, and the
     forward-mode-gradient likelihood wrapper. No inference, no file IO.
@@ -640,7 +667,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # pytree all-float (longdy/longdydt DO carry tangents otherwise).
             # eval_batch rejects an exhausted OR non-certified proposal (-inf L, MH
             # rejection) and drops it from the gradient-health tally. The COLD
-            # gradient path reads the same diag off chem_solve_cold_diag, so the
+            # gradient path reads the same diag off its batched stage 2, so the
             # gate is identical in both chem modes: the init rejects a
             # non-converged draw, and the mutation kernel must reject the same
             # state or the ladder samples a target whose support is wider than the
@@ -652,9 +679,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             elif warm:
                 def _solve_cd(c, yw, rf):
                     return fwd.chem_solve_warm_diag_full(c, yw, rf[0], rf[1])
-            else:
-                def _solve_cd(c, yw, rf):
-                    return fwd.chem_solve_cold_diag(c)
 
             def _pack_cd(cd):
                 # [accept_count, longdy, longdydt, count_since_new_min, conv_normal]
@@ -665,39 +689,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     jnp.asarray(cd.count_since_new_min, dtype),
                     jnp.asarray(cd.conv_normal, dtype)]))
 
-            if not warm and bool(fwd.two_stage) and split_stage1:
-                eye_h = eye_c[2:]                          # lnKzz + T-P directions
-
-                def _stage2_chain(c, y1):
-                    y, cd = fwd.chem_stage2_diag(c, y1)
-                    return fwd.aux_from_y(y, c), y, _pack_cd(cd)
-
-                def _pad_dy1(dy1):
-                    # lanes 0,1 (lnZ, c_o): no y_relaxed tangent
-                    return jnp.zeros((n_chem_tp,) + dy1.shape[1:],
-                                     dy1.dtype).at[2:].set(dy1)
-
-                def _chem_one(cc, yw, rf):
-                    """Cold two-stage chemistry lanes with the stages SPLIT.
-
-                    Lanes 0 and 1 carry a zero stage-1 tangent (their theta tangent
-                    is killed by the .at[0].set(0).at[1].set(0) inside stage 1);
-                    lanes 2..n_chem_tp-1 carry the stage-1 tangent that flows
-                    inline into stage 2's warm_y in the single-chain route. The
-                    split feeds the same (e_i, dy1) pair explicitly, so the primal
-                    is bit-identical and the tangents differ at most by XLA fusion.
-                    yw/rf are unused on the cold path (as in the single-chain route).
-                    """
-                    y1_l, dy1 = jax.vmap(
-                        lambda v: jax.jvp(fwd.chem_stage1, (cc,), (v,)))(eye_h)
-                    y1 = y1_l[0]                           # the primal is lane-independent
-                    (aux_l, y_l, cd_l), (daux_l, _dy, _dcd) = jax.vmap(
-                        lambda v, dy: jax.jvp(_stage2_chain, (cc, y1), (v, dy))
-                    )(eye_c, _pad_dy1(dy1))
-                    aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)
-                    return (aux, daux_l, y_l[0], cd_l[0],
-                            Stage1Cache(y1=y1, dy1=dy1, h=cc[2:n_chem_tp]))
-            else:
+            if warm:
+                # The warm continuation has NO batched entry point (the
+                # warm-capped twin runner is per lane), so it keeps the
+                # per-particle map: one jvp per particle, vmapped over the
+                # chemistry directions.
                 def _chem_one(cc, yw, rf):
                     def _chain(c):
                         y, cd = _solve_cd(c, yw, rf)
@@ -706,6 +702,90 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                         lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
                     aux = jax.tree_util.tree_map(lambda x: x[0], aux_l)  # primal (lane 0)
                     return aux, daux_l, y_l[0], cd_l[0], None
+
+                def _chem_map(C_, Y, refs):
+                    return _map_chunked(lambda a: _chem_one(*a),
+                                        (C_, Y, refs), chem_chunk)
+            else:
+                # COLD: the jvp runs through the BATCHED runner (retrieval_forward's
+                # stage twins -> vulcan_chem.converged_y_batch, or the lane queue
+                # with cfg.cold_lanes), ONE solve for the whole chunk per direction
+                # instead of a vmap of per-particle solves. Under a particle vmap
+                # every lane-dependent lax.cond (photolysis, geometry refresh)
+                # lowers to a select, so both branches run for every lane every
+                # iteration, tangents included; the batched runner hoists the while
+                # loop above the lane vmap and keys those conds to one shared tick.
+                # The stopping rule is UNCHANGED: the loop predicate reads the
+                # primal only, so a jvp through it stops where the primal
+                # certifies, exactly as the per-particle jvp did (a tangent-
+                # certified stop is converged_y_jvp, a different contract).
+                # The chemistry lanes are independent, so broadcasting ONE
+                # direction over the chunk gives each particle its own directional
+                # derivative.
+                def _pack_cd_batch(cd):
+                    return jax.vmap(_pack_cd)(cd)
+
+                def _aux_batch(Y, C_):
+                    return jax.vmap(fwd.aux_from_y)(Y, C_)
+
+                def _bcast(v, C_):
+                    return jnp.broadcast_to(v, C_.shape)
+
+                if bool(fwd.two_stage) and split_stage1:
+                    eye_h = eye_c[2:]                      # lnKzz + T-P directions
+
+                    def _stage2_chain(C_, Y1):
+                        Y, cd = fwd.chem_stage2_diag_batch(C_, Y1)
+                        return _aux_batch(Y, C_), Y, _pack_cd_batch(cd)
+
+                    def _pad_dy1(dy1):
+                        # directions 0,1 (lnZ, c_o): no y_relaxed tangent
+                        return jnp.zeros((n_chem_tp,) + dy1.shape[1:],
+                                         dy1.dtype).at[2:].set(dy1)
+
+                    def _chem_batch(C_, Y, refs):
+                        """Cold two-stage chemistry for a whole chunk, stages SPLIT.
+
+                        Directions 0 and 1 carry a zero stage-1 tangent (their theta
+                        tangent is killed by the .at[:, 0].set(0).at[:, 1].set(0)
+                        inside stage 1); directions 2..n_chem_tp-1 carry the stage-1
+                        tangent that flows inline into stage 2's warm_y in the
+                        single-chain route. The split feeds the same (e_i, dy1) pair
+                        explicitly, so the primal is the same program and the
+                        tangents differ at most by XLA fusion. Y/refs are unused on
+                        the cold path (as in the single-chain route).
+                        """
+                        Y1_l, dY1 = jax.vmap(lambda v: jax.jvp(
+                            fwd.chem_stage1_batch, (C_,), (_bcast(v, C_),)))(eye_h)
+                        Y1 = Y1_l[0]                       # direction-independent primal
+                        (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
+                            lambda v, dY: jax.jvp(_stage2_chain, (C_, Y1),
+                                                  (_bcast(v, C_), dY))
+                        )(eye_c, _pad_dy1(dY1))
+                        AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
+                        # (D, N, ...) -> the (N, D, ...) per-particle layout the RT
+                        # stage and the Stage1Cache consumers read
+                        DAUX = jax.tree_util.tree_map(
+                            lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
+                        return (AUX, DAUX, Y_l[0], CD_l[0],
+                                Stage1Cache(y1=Y1, dy1=jnp.swapaxes(dY1, 0, 1),
+                                            h=C_[:, 2:n_chem_tp]))
+                else:
+                    def _chain(C_):
+                        Y, cd = fwd.chem_solve_cold_diag_batch(C_)
+                        return _aux_batch(Y, C_), Y, _pack_cd_batch(cd)
+
+                    def _chem_batch(C_, Y, refs):
+                        (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
+                            lambda v: jax.jvp(_chain, (C_,), (_bcast(v, C_),)))(eye_c)
+                        AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
+                        DAUX = jax.tree_util.tree_map(
+                            lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
+                        return AUX, DAUX, Y_l[0], CD_l[0], None
+
+                def _chem_map(C_, Y, refs):
+                    return _map_chunks(lambda a: _chem_batch(*a),
+                                       (C_, Y, refs), chem_chunk)
         else:
             # Primal-only, but gated the SAME way as the gradient path: the
             # likelihood of a given map must be ONE function. This evaluator is
@@ -753,7 +833,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                      else jnp.ones((Theta.shape[0],), bool))
             usable = valid   # narrowed to (valid & certified) on the warm gradient path
             if want_grad:
-                # Chemistry jvp lanes, optionally lax.map-chunked over particles.
+                # Chemistry jvp directions, optionally lax.map-chunked over
+                # particles: a chunk is one batched solve on the cold path and a
+                # vmap of per-particle solves on the warm one.
                 # Probe 2026-07-07: staged chem tangent lanes cost ~20 MB per
                 # lane-pair (0.78 GiB at 36 lanes), so full width (chem_chunk=0)
                 # is the default -- the old ~1.3 GB/lane figure was the all-in-one
@@ -762,9 +844,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # (18.4 GiB first lane, ~9.4 GiB per additional at nu_pts=5000).
                 # S1 is a Stage1Cache pytree on the split cold path, None
                 # otherwise -- a None leaf is an EMPTY pytree node, so it rides
-                # _map_chunked's tree_map/lax.map padding untouched.
-                AUX, DAUX, Ynew, CD, S1 = _map_chunked(lambda a: _chem_one(*a),
-                                                       (C_, Y, refs), chem_chunk)
+                # the chunker's tree_map/lax.map padding untouched.
+                AUX, DAUX, Ynew, CD, S1 = _chem_map(C_, Y, refs)
                 vals, g_th, bads = _map_chunked(_rt_val_grad, (AUX, DAUX, Theta),
                                                 rt_vjp_chunk)
                 G = g_th * dTh                                       # chain to u-space
@@ -1253,9 +1334,13 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
 
     # ---- phase 1: cold likelihood over the full (oversampled) draw ----
     t0 = time.perf_counter()
-    logger.info(f"init 1/2: batched cold two-stage chemistry over {M} draw(s) "
-                f"(likelihood only; reject non-converged, keep {target_n}; wall time = "
-                "the slowest draw, count_max-bounded)")
+    lanes = int(getattr(pipe.cfg, "cold_lanes", 0) or 0)
+    width = (f"{min(lanes, M)} lanes refilled from the draw queue (wall time = "
+             "total work / lanes)" if lanes > 0 else
+             "one lockstep batch (wall time = the slowest draw)")
+    logger.info(f"init 1/2: batched cold two-stage chemistry over {M} draw(s) on "
+                f"{width}; likelihood only, reject non-converged, keep {target_n}, "
+                "count_max-bounded")
     if has_diag:
         L0, Y, refs, cd0 = pipe._init_l_jit(U, Y0, refs0)
     else:
@@ -1330,8 +1415,11 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
 
     # ---- phase 2: gradient on the survivors (+spares) ----
     t0 = time.perf_counter()
-    logger.info("init 2/2: move-map gradient at the kept cloud (jvp lanes on warm "
-                "re-certifications from each survivor's own converged column; "
+    what = ("the production cold two-stage solve per draw, batched, with the "
+            "jvp directions on top" if str(getattr(pipe, "chem_mode", "warm")) == "cold"
+            else "jvp directions on a warm re-certification from each survivor's "
+                 "own converged column")
+    logger.info(f"init 2/2: move-map gradient at the kept cloud ({what}; "
                 "UNCAPPED -- bounded by the cold count_max)")
     out = pipe._init_mv_jit(U_keep, Y, refs)
     jax.block_until_ready(out[0])
