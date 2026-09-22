@@ -67,6 +67,9 @@
 #   XLA_CMDBUF=0            drop the command-buffer flags (ON by default: 132 ms vs 255 ms per
 #                           accepted primal step, jobs 78995 vs 78991). Opt-OUT, so an A/B is
 #                           one -v variable; the commas stay inside the script
+#   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
+#                           one-command minimum graph size: the arm that shows whether
+#                           the whole step loop is captured as one graph
 #   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
 #                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
 #                           NSYS_DURATION (default 120 s); job runs on past the window.
@@ -87,8 +90,9 @@
 #   qsub -v SEED=2,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 300.0}' run_nas_w39b.pbs
 # Report how far lnKzz and lnZ move against their own statistical widths.
 #
-# On a successful run, plots + the warm-vs-cold validation (validate_warm; PASS gate
-# max|dlogL| < 0.1) run automatically; the verdict lands in the log + validate_warm.npz.
+# On a successful run the plots run automatically. Under smc_chem_mode="warm" so do the
+# warm-vs-cold validation (validate_warm; PASS gate max|dlogL| < 0.1; the verdict lands
+# in the log + validate_warm.npz) and mala_reversibility; the cold default needs neither.
 #
 # XLA A/B experiments (launch-overhead reduction; the GPU sits at ~300-390 W of 700 W,
 # so the solver is launch-bound and per-step overhead, not arithmetic, is the speed lever).
@@ -170,9 +174,14 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
 # Command buffers are the production default (they cut the primal loop from
 # ~255 to 132 ms per accepted step); XLA_CMDBUF=0 takes them back out for an A/B.
-if [ "${XLA_CMDBUF:-1}" != "0" ]; then
-  export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
-fi
+# The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
+# while loop becomes one graph only if every op in its body is capturable.
+case "${XLA_CMDBUF:-1}" in
+  0) ;;
+  1) export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE" ;;
+  2) export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" ;;
+  *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0, 1 or 2"; exit 1 ;;
+esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------

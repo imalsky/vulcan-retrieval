@@ -8,7 +8,8 @@
 #PBS -m abe
 # ~10 min GH200 check of VULCAN-JAX's CUDA block-Thomas kernel: refresh the three
 # editable installs (a version bump leaves validate_env stale until pip re-runs),
-# build the kernel with nvcc, run tests/test_solver_fast.py on the GPU, then the
+# build the kernel with nvcc, run tests/test_solver_fast.py on the GPU twice (plain,
+# then under run_nas_w39b.pbs's XLA_CMDBUF=2 command-buffer flags), then the
 # cold-seed method bench.
 # Resubmit after every change to the kernel. From the speed tree's
 # vulcan-retrieval root (or its tools/ dir):
@@ -91,6 +92,10 @@ cd "${PROJECT_ROOT}/VULCAN-JAX"
 # The suite's oracle gate (tests/conftest.py) wants fixtures this tree does not
 # carry; this job runs one file, so accept the reduced coverage explicitly.
 VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
+# Again under XLA_CMDBUF=2's flags: the kernels are marked command-buffer
+# compatible, so capture must meet them here first, not inside a bench.
+XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" \
+  VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
 # --- cold-seed method bench: which exogibbs solve_profile method is cheapest on
 # this GPU at the production lane width. Fails the job if it fails (no || true).
 cd "${REPO_DIR}"
