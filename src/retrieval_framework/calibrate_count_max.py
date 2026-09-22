@@ -145,7 +145,7 @@ def main() -> None:
         key = jax.random.PRNGKey(int(cfg_.seed) + int(args.seed_offset))
         key, sub = jax.random.split(key)
         U = pipe.sample_prior_u(sub, int(args.n_draws))
-        Y0, refs0, _S1 = P._blank_state(pipe, int(args.n_draws))
+        Y0, refs0 = P._blank_state(pipe, int(args.n_draws))
         return pipe, U, Y0, refs0
 
     def _timed(cfg_, capture):
@@ -214,7 +214,7 @@ def main() -> None:
         if args.grad:
             Gb = np.asarray(jax.device_get(out[1]), np.float64)
             save["G"] = Gb
-            log.info(f"  n_bad_grad = {int(jax.device_get(out[5]))}  "
+            log.info(f"  n_bad_grad = {int(jax.device_get(out[4]))}  "
                      f"finite(G) = {float(np.mean(np.isfinite(Gb))):.3f}")
         else:
             cd = out[3]
@@ -253,10 +253,10 @@ def main() -> None:
     # percentiles + the stall-certified count (the class the SMC gates reject)
     longdy = np.asarray(jax.device_get(cd.longdy), np.float64)
     conv_ok = np.asarray(jax.device_get(cd.conv_normal), bool)
-    pct = np.percentile(longdy[np.isfinite(longdy)], [50, 90, 99]) if np.any(
+    longdy_pct = np.percentile(longdy[np.isfinite(longdy)], [50, 90, 99]) if np.any(
         np.isfinite(longdy)) else [float("nan")] * 3
-    log.info(f"exit longdy percentiles p50/p90/p99 = {pct[0]:.3g}/{pct[1]:.3g}/"
-             f"{pct[2]:.3g}; stall-certified (not canonically certified) draws: "
+    log.info(f"exit longdy percentiles p50/p90/p99 = {longdy_pct[0]:.3g}/{longdy_pct[1]:.3g}/"
+             f"{longdy_pct[2]:.3g}; stall-certified (not canonically certified) draws: "
              f"{int(np.sum(~conv_ok))}/{len(conv_ok)}")
 
     # Exit element-budget drift (C23) per draw, with the exit model time t beside
@@ -268,12 +268,12 @@ def main() -> None:
     drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
     atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
     t_exit = np.asarray(jax.device_get(cd.t), np.float64)
-    names = getattr(pipe.fwd.chem, "atom_order", None)   # vulcan-forward >= 0.19.0
+    atom_names = getattr(pipe.fwd.chem, "atom_order", None)   # vulcan-forward >= 0.19.0
     log.info(f"exit element-budget drift |X/H - 1| p50/p90/max = "
              f"{np.nanpercentile(drift, 50):.3g}/{np.nanpercentile(drift, 90):.3g}/"
              f"{np.nanmax(drift):.3g}")
     for i in np.flatnonzero(~conv_ok):
-        a = (names[atom[i]] if names is not None
+        a = (atom_names[atom[i]] if atom_names is not None
              else f"atom index {int(atom[i])} in the runner's atom order")
         log.info(f"  draw {i}: uncertified, accept_count={int(wa[i])}, "
                  f"budget drift {drift[i]:.3g} on {a}, "
@@ -326,7 +326,7 @@ def main() -> None:
     # seed is the sharpest case: the runner exits at reason 5 with zero accepted steps,
     # which reads as the cheapest possible success on accept_count and as a -1e30
     # likelihood here.
-    nonfinite = ~np.isfinite(Lnp) | (Lnp <= -1.0e29)
+    nonfinite = ~np.isfinite(Lnp) | (Lnp <= P.REJECT_BELOW)
     ex_probe = wa >= int(args.count_max_probe)
     log.info(f"  rejection classes at the probe cap: {int(ex_probe.sum())} exhausted, "
              f"{int((~conv_ok & ~ex_probe & ~nonfinite).sum())} stall-certified, "

@@ -57,10 +57,10 @@ def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
         L = -0.5 * jnp.sum(U ** 2, axis=1)
         G = -U
         stats = P._zero_eval_stats(U.shape[0], jnp.float64)
-        return L, G, Y, refs, None, jnp.int32(0), stats    # survivors: no AD pathology
+        return L, G, Y, refs, jnp.int32(0), stats    # survivors: no AD pathology
 
     def init_vg(U, Y, refs):
-        """Phase-2 stub (7-tuple with an EvalStats tail, like a real pipeline's
+        """Phase-2 stub (6-tuple with an EvalStats tail, like a real pipeline's
         batch_eval_init_vg). Second coordinate > 0 -> cannot RE-certify warm
         (dead, ACC=count_max: cull); third coordinate > 0 -> RT/AD death (dead,
         certified + finite ACC: must raise)."""
@@ -71,7 +71,7 @@ def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
         L = jnp.where(recert | rtdead, -1.0e30, L)
         ACC = jnp.where(recert, count_max, 1).astype(jnp.int32)
         stats = P._zero_eval_stats(U.shape[0], jnp.float64)._replace(acc=ACC)
-        return L, G, Y, refs, None, jnp.int32(0), stats
+        return L, G, Y, refs, jnp.int32(0), stats
 
     def _unused(*a, **k):                                        # never called on this path
         raise AssertionError("unexpected evaluator call")
@@ -111,7 +111,7 @@ def test_init_state_rejects_nonconverged_and_keeps_target_n():
     pipe = _chem_like_pipe(count_max=100)
     # 12 draws: first 4 exhausted (>=0), last 8 healthy (<0). Ask for 8.
     U = _U([+1, +1, +1, +1, -1, -2, -3, -4, -5, -6, -7, -8])
-    U_keep, L, G, Y, refs, _S1, stats = P._init_state(pipe, U, target_n=8)
+    U_keep, L, G, Y, refs, stats = P._init_state(pipe, U, target_n=8)
 
     assert U_keep.shape[0] == 8 and L.shape[0] == 8 and G.shape[0] == 8
     assert np.all(np.isfinite(np.asarray(L)))
@@ -126,7 +126,7 @@ def test_init_state_culls_extra_survivors_to_exactly_target_n():
     pipe = _chem_like_pipe(count_max=100)
     # 10 healthy draws but only 6 requested -> keep the first 6, no rejection needed
     U = _U([-1, -2, -3, -4, -5, -6, -7, -8, -9, -10])
-    U_keep, L, G, Y, refs, _S1, stats = P._init_state(pipe, U, target_n=6)
+    U_keep, L, G, Y, refs, stats = P._init_state(pipe, U, target_n=6)
     assert U_keep.shape[0] == 6
     assert np.allclose(np.asarray(U_keep)[:, 0], [-1, -2, -3, -4, -5, -6])
 
@@ -139,7 +139,7 @@ def test_init_state_rejects_stall_certified_draws():
     pipe = _chem_like_pipe(count_max=100)
     # 10 draws: draws 0 and 3 stall-certify (first coord == 0.5), rest healthy
     U = _U([0.5, -1, -2, 0.5, -3, -4, -5, -6, -7, -8])
-    U_keep, L, G, Y, refs, _S1, stats = P._init_state(pipe, U, target_n=8)
+    U_keep, L, G, Y, refs, stats = P._init_state(pipe, U, target_n=8)
     kept0 = np.asarray(U_keep)[:, 0]
     assert np.all(kept0 < 0)                       # stall-certified draws rejected
     assert stats["n_stalled_init"] == 2
@@ -157,7 +157,7 @@ def test_init_state_raises_when_too_few_survivors():
 def test_init_state_all_healthy_default_target_is_len_u():
     pipe = _chem_like_pipe(count_max=100)
     U = _U([-1, -2, -3, -4])
-    U_keep, L, G, Y, refs, _S1, stats = P._init_state(pipe, U)   # target_n=None -> len(U)
+    U_keep, L, G, Y, refs, stats = P._init_state(pipe, U)   # target_n=None -> len(U)
     assert U_keep.shape[0] == 4
     assert np.all(np.isfinite(np.asarray(L)))
 
@@ -168,7 +168,7 @@ def test_init_phase2_culls_recert_failures_and_backfills():
     a = np.column_stack([-np.arange(1.0, 13.0), np.zeros(12), np.zeros(12)])
     a[2, 1] = 1.0
     a[5, 1] = 1.0
-    U_keep, L, G, Y, refs, _S1, stats = P._init_state(pipe, jnp.asarray(a), target_n=8)
+    U_keep, L, G, Y, refs, stats = P._init_state(pipe, jnp.asarray(a), target_n=8)
     assert U_keep.shape[0] == 8 and L.shape[0] == 8
     # culled draws (first coords -3, -6) replaced by the next spares, order preserved
     assert np.allclose(np.asarray(U_keep)[:, 0], [-1, -2, -4, -5, -7, -8, -9, -10])

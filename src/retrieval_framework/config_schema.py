@@ -287,12 +287,6 @@ class Config:
     # per-particle forensics dumped. A sweep exceeding ceil(this * N) indicates
     # systematic AD breakage rather than the known theta-corner class and raises.
     smc_tangent_bad_max_frac: float = 0.25
-    # "block": only chem+T-P dims take tangents through the VULCAN while_loop; lnR0 is
-    #          one RT-only jvp; offsets/noise are analytic (exact, ~25-35% cheaper).
-    # "naive": every u-dimension through the full chain (the SWAMPE pattern; cross-check).
-    # (These per-particle paths remain for validation; the SMC hot path is the staged
-    # batched evaluator -- see smc_chem_mode / smc_rt_chunk below.)
-    gradient_mode: str = "block"
     # "cold": the published solve-from-baseline (two-stage) map for EVERY
     #         evaluation. The likelihood is then a FIXED, DETERMINISTIC function
     #         of theta -- the target MALA, SMC tempering, and a quoted Bayesian
@@ -323,12 +317,6 @@ class Config:
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
-    # Contiguous band tiles the engine folds the correlated-k mixture in
-    # (profile key rt_band_tiles). 1 = the whole grid in one fold. The depth is
-    # bitwise identical at any count (overlap resorts within a band) and the
-    # VJP agrees to rounding, so it trades extra launches for the peak fold
-    # memory of one tile instead of the whole grid.
-    smc_rt_band_tiles: int = 1
 
     # MALA step size: the per-stage Robbins-Monro adaptation below is the only
     # tuner. mala_step_size seeds it.
@@ -378,7 +366,6 @@ class Config:
             cold_seed=str(self.cold_seed),
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
             cfg_overrides=dict(self.cfg_overrides),
-            rt_band_tiles=int(self.smc_rt_band_tiles),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
             p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
         )
@@ -478,7 +465,7 @@ def validate_config(cfg: Config) -> None:
     # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
     # empty envelope. Chunk sizes are batch splits where 0 means "one batch".
     for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws",
-                 "ppc_chunk_size", "smc_rt_band_tiles", "cold_refill_chunk"):
+                 "ppc_chunk_size", "cold_refill_chunk"):
         if int(getattr(cfg, name)) < 1:
             raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
     for name in ("smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk"):
@@ -673,10 +660,8 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    kernel={kern}   step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
         f"    preconditioner: full cloud covariance (Cholesky)   "
         f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
-        f"    gradient_mode={cfg.gradient_mode}   chem_mode={cfg.smc_chem_mode}"
-        "   "
-        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}"
-        f"   rt_band_tiles={cfg.smc_rt_band_tiles}",
+        f"    chem_mode={cfg.smc_chem_mode}   "
+        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",
         f"    walltime governor: {cfg.walltime_seconds / 3600.0:.1f} h"
         + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
         rule(f"parameters ({len(specs)})   [prior : truth]"),

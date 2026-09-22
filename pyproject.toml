@@ -92,7 +92,7 @@ markers = [
     # Integration tests that build a REAL chemistry + RT pipeline (ExoJAX RT
     # model, line lists, chemistry converged to steady state). Five files
     # carry it (test_cold_reject, test_condensation_live_tp,
-    # test_set_observations, test_stage1_cache, test_warm_reject) and are
+    # test_set_observations, test_stage_split, test_warm_reject) and are
     # most of the suite's wall time.
     #
     # `pytest tests` STILL RUNS THEM -- the marker deselects nothing by

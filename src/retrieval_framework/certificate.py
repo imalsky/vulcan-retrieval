@@ -120,8 +120,7 @@ REQUIRED_VALIDATION_ARTIFACTS = (
 # only spelled differently. test_certificate pins that this map covers every
 # profile key with no Config counterpart -- add one and the test fails loudly
 # rather than every artifact being silently rejected.
-_PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs",
-                    "rt_band_tiles": "smc_rt_band_tiles"}
+_PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs"}
 
 
 def _sha256(path: Path) -> str:
@@ -1276,7 +1275,7 @@ def cold_replay(run_dir: Path, cfg, out_dir: Path, n: int) -> dict:
         # does not depend on RNG state or on file ordering. Take the healthiest
         # particles: a posterior-edge particle sitting on the convergence cliff
         # would make this test about count_max, not about the environment.
-        finite = np.isfinite(L_rec) & (L_rec > -1.0e29)
+        finite = np.isfinite(L_rec) & (L_rec > P.REJECT_BELOW)
         if not finite.any():
             return {"ran": False, "reason": "no finite likelihoods in checkpoint"}
         idx = np.argsort(-np.where(finite, L_rec, -np.inf))[:max(1, int(n))]
@@ -1286,7 +1285,7 @@ def cold_replay(run_dir: Path, cfg, out_dir: Path, n: int) -> dict:
         o = np.load(obs_path, allow_pickle=False)
         pipe.set_observations(o["depth"], o["sigma"])   # the run's OWN obs
 
-        Y0, refs0, _S1 = P._blank_state(pipe, len(idx))
+        Y0, refs0 = P._blank_state(pipe, len(idx))
         cold_l = jax.jit(pipe.batch_eval_cold_l)
         L_new, _Y, _refs, _stats = cold_l(jnp.asarray(U[idx]), Y0, refs0)
         L_new = np.asarray(jax.device_get(L_new), np.float64)

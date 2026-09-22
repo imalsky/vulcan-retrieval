@@ -143,7 +143,6 @@ def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
         n_obs_bins=int(pipe.n_bin),
         real_bins=bool(pipe.real_bins),
         n_chem_tp=int(pipe.n_chem_tp),
-        gradient_mode=pipe.gradient_mode,
     ))
     (cfg.out_dir / "config.json").write_text(json.dumps(d, indent=2, default=str))
 
@@ -234,7 +233,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
                             P._init_draw_count(pipe, N))
 
     t0 = time.perf_counter()
-    U, L, G, Y, refs, S1, _init_stats = P._init_state(pipe, U, target_n=N)
+    U, L, G, Y, refs, _init_stats = P._init_state(pipe, U, target_n=N)
     jax.block_until_ready(L)
     t_init = time.perf_counter() - t0
     log.info(f"state init (cold likelihood + move-map gradient): {t_init:.1f}s "
@@ -257,8 +256,6 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     key, sub = jax.random.split(key)
     idx = P._systematic_resample_idx(sub, jnp.asarray(w / w.sum(), pipe.dtype), N)
     U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
-    if S1 is not None:
-        S1 = jax.tree_util.tree_map(lambda x: x[idx], S1)
     scale_np = (P._proposal_scale(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
                 if cfg.mcmc_stage_adapt else np.eye(pipe.n_dim))
     scale = jnp.asarray(scale_np, pipe.dtype)
@@ -269,14 +266,14 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
              f"step={step_f:.3g} width=[{float(scale_w.min()):.3g}, {float(scale_w.max()):.3g}]")
     # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
     t0 = time.perf_counter()
-    out = mutate(key, U, Y, refs, S1, L, G, beta, step, scale,
+    out = mutate(key, U, Y, refs, L, G, beta, step, scale,
                  where="calibration mutation (compile pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
-    U2, Y2, refs2, S12, L2, G2 = out[:6]
+    U2, Y2, refs2, L2, G2 = out[:5]
     _cuda_profiler(True)
     t0 = time.perf_counter()
-    out = mutate(key, U2, Y2, refs2, S12, L2, G2, beta, step, scale,
+    out = mutate(key, U2, Y2, refs2, L2, G2, beta, step, scale,
                  where="calibration mutation (steady-state pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut = time.perf_counter() - t0
@@ -285,8 +282,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     per_stage = t_mut
     proj = {
         "n_particles": N, "n_mcmc_steps": int(cfg.smc_num_mcmc_steps), "n_dim": int(pipe.n_dim),
-        "n_chem_tp": int(pipe.n_chem_tp), "gradient_mode": pipe.gradient_mode,
-        "smc_chem_mode": pipe.chem_mode,
+        "n_chem_tp": int(pipe.n_chem_tp), "smc_chem_mode": pipe.chem_mode,
         # provenance for an XLA-flag / solver-branch A/B across calibration runs
         "smc_mcmc_kernel": str(cfg.smc_mcmc_kernel),
         "xla_flags": os.environ.get("XLA_FLAGS"),
@@ -299,7 +295,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
         "calibration_scale_min": float(scale_w.min()), "calibration_scale_max": float(scale_w.max()),
         "t_state_init_s": t_init,
         "t_mutation_compile_s": t_mut_compile, "t_mutation_sweep_s": t_mut,
-        "mutation_accept_frac": float(jax.device_get(out[6])),
+        "mutation_accept_frac": float(jax.device_get(out[5])),
         "t_per_stage_s": per_stage,
         "projected_hours_15_stages": (t_init + t_mut_compile + 15 * per_stage) / 3600.0,
         "projected_hours_40_stages": (t_init + t_mut_compile + 40 * per_stage) / 3600.0,
@@ -389,7 +385,7 @@ def main() -> None:
     t0 = time.perf_counter()
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter()-t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names} "
-             f"| {pipe.n_bin} bins | groups={pipe.groups} | gradient_mode={pipe.gradient_mode} "
+             f"| {pipe.n_bin} bins | groups={pipe.groups} "
              f"| dtype={pipe.dtype.__name__} two_stage_z={cfg.two_stage_z}")
 
     # ---- observations (set exactly once, BEFORE any jitted likelihood call) ----

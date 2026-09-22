@@ -1,10 +1,10 @@
 """The cold two-stage gradient path with its stages SPLIT must be the same program.
 
 pipeline._make_batch_eval runs the cold two-stage chemistry as two explicit jvps
-(stage 1 at baseline composition, then stage 2 warm-started from it) and returns
-the stage-1 result and its lnKzz/T-P tangents as a Stage1Cache value. That is the
-single-chain jvp regrouped, not a different map: the primal (Y, L) must be
-bit-identical and the gradient may differ only by XLA fusion.
+(stage 1 at baseline composition on the lnKzz/T-P directions only, then stage 2
+warm-started from it). That is the single-chain jvp regrouped, not a different
+map: the primal (Y, L) must be bit-identical and the gradient may differ only by
+XLA fusion.
 
 Builds the REAL smoke pipeline (chemistry + RT, fully offline) at the case's own
 caps, so it costs minutes and SKIPS cleanly when the stack or its data is absent.
@@ -54,14 +54,13 @@ def smoke():
 
 def test_stage_split_matches_single_chain(smoke):
     pipe, U = smoke
-    Y0, refs0, _S1 = P._blank_state(pipe, int(U.shape[0]))
+    Y0, refs0 = P._blank_state(pipe, int(U.shape[0]))
     legacy = jax.jit(pipe._make_batch_eval("cold", True, split_stage1=False))
-    L_new, G_new, Y_new, _r, S1, n_bad, _s = jax.jit(pipe.batch_eval_cold_vg)(
+    L_new, G_new, Y_new, _r, n_bad, _s = jax.jit(pipe.batch_eval_cold_vg)(
         U, Y0, refs0)
-    L_ref, G_ref, Y_ref, _rr, S1_ref, _nb, _sr = legacy(U, Y0, refs0)
+    L_ref, G_ref, Y_ref, _rr, _nb, _sr = legacy(U, Y0, refs0)
 
     assert int(n_bad) == 0
-    assert S1_ref is None and S1 is not None
 
     Y_new, Y_ref = np.asarray(Y_new), np.asarray(Y_ref)
     if not np.array_equal(Y_new, Y_ref):
@@ -81,11 +80,3 @@ def test_stage_split_matches_single_chain(smoke):
     G_new, G_ref = np.asarray(G_new), np.asarray(G_ref)
     dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), 1e-300))
     assert dg < 1e-8, f"split-vs-legacy gradient disagrees at {dg:.3e}"
-
-    # The cache records the theta[2:n_chem_tp] each stage-1 column was solved at.
-    # Reference it through jit: the pipeline computes theta inside a jit, and an
-    # EAGER vmap of the same theta_from_u lands up to 4 ulp away.
-    h = np.asarray(jax.jit(jax.vmap(pipe.theta_from_u))(U))[:, 2:pipe.n_chem_tp]
-    assert np.array_equal(np.asarray(S1.h), h)
-    assert S1.y1.shape == Y_new.shape
-    assert S1.dy1.shape == (int(U.shape[0]), pipe.n_chem_tp - 2) + Y_new.shape[1:]

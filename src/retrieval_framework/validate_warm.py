@@ -107,13 +107,14 @@ logger = logging.getLogger("retrieval")
 
 def compare(L_warm, L_cold, worst_accept, count_max: int) -> dict:
     """Pure-numpy warm-vs-cold comparison (unit-tested). Excludes cold-nonconverged
-    particles (count_max-exhausted or -1e30 forward) and any dead warm entries from
-    the bias statistics; returns them as separate counts."""
+    particles (count_max-exhausted or rejected forward) and any dead warm entries
+    from the bias statistics; returns them as separate counts."""
+    from retrieval_framework.pipeline import REJECT_BELOW
     L_warm = np.asarray(L_warm, np.float64)
     L_cold = np.asarray(L_cold, np.float64)
     wa = np.asarray(worst_accept, np.int64)
-    dead_warm = ~np.isfinite(L_warm) | (L_warm <= -1.0e29)
-    cold_nonconv = ~np.isfinite(L_cold) | (L_cold <= -1.0e29) | (wa >= int(count_max))
+    dead_warm = ~np.isfinite(L_warm) | (L_warm <= REJECT_BELOW)
+    cold_nonconv = ~np.isfinite(L_cold) | (L_cold <= REJECT_BELOW) | (wa >= int(count_max))
     ok = ~dead_warm & ~cold_nonconv
     d = np.where(ok, L_cold - L_warm, np.nan)
     dd = d[ok]
@@ -215,7 +216,7 @@ def main() -> None:
 
     U = jnp.asarray(ck["u_particles"], pipe.dtype)
     N = int(U.shape[0])
-    Y0, refs0, _S1 = P._blank_state(pipe, N)        # cold map: no history enters
+    Y0, refs0 = P._blank_state(pipe, N)        # cold map: no history enters
     # Re-solve the cloud COLD in host-side sub-batches. The cold chemistry solve is
     # a full-width vmap over all N particles (batch_eval_cold_l_diag; only its RT
     # sub-step is chunked internally) -- the single largest allocation in this tool.
@@ -247,7 +248,7 @@ def main() -> None:
         cold_fn = jax.jit(pipe.batch_eval_cold_vg)
         for i0 in range(0, N, chunk):
             i1 = min(i0 + chunk, N)
-            Lc, Gc, Yc, _refs_c, _s1c, _nbad, st = cold_fn(
+            Lc, Gc, Yc, _refs_c, _nbad, st = cold_fn(
                 U[i0:i1], Y0[i0:i1], refs0[i0:i1])
             jax.block_until_ready(Lc)
             L_parts.append(np.asarray(jax.device_get(Lc)))
@@ -280,9 +281,9 @@ def main() -> None:
     count_max = int(pipe.fwd.chem.count_max)
     s = compare(ck["loglik"], np.asarray(jax.device_get(L_cold)),
                 np.asarray(jax.device_get(worst)), count_max)
-    ok_mask = (np.isfinite(np.asarray(ck["loglik"])) & (np.asarray(ck["loglik"]) > -1e29)
+    ok_mask = (np.isfinite(np.asarray(ck["loglik"])) & (np.asarray(ck["loglik"]) > P.REJECT_BELOW)
                & np.isfinite(np.asarray(jax.device_get(L_cold)))
-               & (np.asarray(jax.device_get(L_cold)) > -1e29)
+               & (np.asarray(jax.device_get(L_cold)) > P.REJECT_BELOW)
                & (np.asarray(jax.device_get(worst)) < count_max))
 
     # ---- binned-SPECTRUM comparison (offset nuisances cancel: compare B @ native

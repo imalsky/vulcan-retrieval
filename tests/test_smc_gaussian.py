@@ -307,14 +307,14 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
     evg, el, _, _ = P._get_batch_evals(pipe)
 
     def bad_evg(U, Y, refs):
-        L, G, Y_, refs_, s1, n_bad, stats = evg(U, Y, refs)
+        L, G, Y_, refs_, n_bad, stats = evg(U, Y, refs)
         G = G.at[0, 0].set(jnp.nan)
         bad = jnp.isfinite(L) & ~jnp.all(jnp.isfinite(G), axis=1)
         # mirror the real evaluators: flag, then zero the non-finite entries
         # (the zeroed drift is what the MH correction sees on both sides)
         G = jnp.where(jnp.isfinite(G), G, 0.0)
         stats = stats._replace(bad_grad=bad)
-        return L, G, Y_, refs_, s1, jnp.sum(bad.astype(jnp.int32)), stats
+        return L, G, Y_, refs_, jnp.sum(bad.astype(jnp.int32)), stats
 
     pipe._stub_evals = (bad_evg, el)
     return pipe, ck
@@ -381,7 +381,6 @@ def test_calibrate_benchmarks_stage0_conditions(tmp_path):
                    num_samples=64, num_chains=1, out_dir=tmp_path)
     pipe = _stub_pipe(cfg)
     pipe.n_chem_tp = 0
-    pipe.gradient_mode = "stub"
     pipe.chem_mode = "stub"
     proj = run_smc.calibrate(cfg, pipe, P, jax)
 

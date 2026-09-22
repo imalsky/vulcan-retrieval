@@ -48,6 +48,6 @@ def test_every_entry_point_rejects_uncertified_finite_spectrum(pipe):
         L, G = vg(u0)
         assert float(L) <= -1e29 and np.all(np.asarray(G) == 0.0)
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 2)
-    Y0, refs0, _S1 = P._blank_state(pipe, 2)
+    Y0, refs0 = P._blank_state(pipe, 2)
     L = pipe.batch_eval_cold_l(U, Y0, refs0)[0]
     assert np.all(np.asarray(L) <= -1e29)

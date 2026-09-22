@@ -61,7 +61,7 @@ def main() -> int:
     Y = np.asarray(ck["y_state"], np.float64)
     refs = np.asarray(ck["chem_refs"], np.float64)
     L = np.asarray(ck["loglik"], np.float64)
-    healthy = np.isfinite(L) & (L > -1e29)
+    healthy = np.isfinite(L) & (L > P.REJECT_BELOW)
 
     # nearest-neighbor pairs among healthy particles (unique, closest first)
     idx = np.flatnonzero(healthy)

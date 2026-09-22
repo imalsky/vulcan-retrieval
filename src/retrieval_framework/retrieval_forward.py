@@ -1,7 +1,7 @@
 """The differentiable retrieval forward: (chemistry+T-P params, lnR0) -> native transit
 spectrum, composing the *live* VULCAN-JAX chemistry with the ExoJax RT.
 
-    native_depth(chem_theta, lnR0) = transmission_depth_r(
+    depth(chem_theta, lnR0) = transmission_depth_r(
         bridge( VULCAN.converged_ymix(chem_theta) ),           # VMR(nz, ni) -> ART grid
         T_art = Guillot(chem_theta[3:]),                        # same T-P on the ART grid
         lnR0 )                                                  # reference-radius nuisance
@@ -74,7 +74,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     """Build the theta-space forward model for a Config.
 
     Returns SimpleNamespace with:
-        native_depth(chem_theta, lnR0) -> (n_nu,) transit depth on the native nu grid
+        native_depth_aux(chem_theta, lnR0) -> ((n_nu,) native transit depth, aux, ok)
         wl_um     : (n_nu,) native wavelengths (um)
         n_tp      : number of T-P parameters
         tp_model  : the tp_profile object (eval/unpack)
@@ -375,12 +375,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return rt.transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0),
                                        vmr_he=vmr_he, cloud=cloud)
 
-    def native_depth(chem_theta, lnR0, cloud=None):
-        """(chem+T-P vector, lnR0 scalar, optional cloud) -> native transit depth."""
-        return native_depth_aux(chem_theta, lnR0, cloud)[0]
-
     return SimpleNamespace(
-        native_depth=native_depth,
         native_depth_aux=native_depth_aux,
         rt_depth=rt_depth,
         chem_solve_cold=chem_solve_cold,

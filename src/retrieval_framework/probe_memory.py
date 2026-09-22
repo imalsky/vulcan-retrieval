@@ -54,12 +54,10 @@ def main() -> int:
     n1 = math.ceil(N * float(cfg.init_oversample))
     key = jax.random.PRNGKey(0)
     U = pipe.sample_prior_u(key, N)
-    Y0, refs0, _S1 = P._blank_state(pipe, N)
+    Y0, refs0 = P._blank_state(pipe, N)
     U1 = pipe.sample_prior_u(jax.random.PRNGKey(2), n1)
-    Y1, refs1, _S1a = P._blank_state(pipe, n1)
+    Y1, refs1 = P._blank_state(pipe, n1)
     fwd = pipe.fwd
-    n_chem_tp = int(pipe.n_chem_tp)
-    dtype = pipe.dtype
     header = f"{'case':<44s} {'temp GiB':>9s} {'args GiB':>9s} {'out GiB':>9s}"
     lines = [header, "-" * len(header)]
     print(header, flush=True)
@@ -77,36 +75,6 @@ def main() -> int:
             line = f"{name:<44s} ERROR {type(e).__name__}: {e}"
         print(line, flush=True)
         lines.append(line)
-
-    Theta = jax.vmap(pipe.theta_from_u)(U)
-    C_full = Theta[:, :n_chem_tp]
-    C1 = jax.vmap(pipe.theta_from_u)(U1)[:, :n_chem_tp]
-    eye_c = jnp.eye(n_chem_tp, dtype=dtype)
-
-    # ---- chemistry GRADIENT stage (cold two-stage solve + n_chem_tp jvp lanes) ----
-    def chem_grad(Cc, Yc, Rc):
-        def one(cc, yw, rf):
-            def _chain(c):
-                y = fwd.chem_solve_cold(c)
-                return fwd.aux_from_y(y, c), y
-            (aux_l, y_l), (daux_l, _dy) = jax.vmap(
-                lambda v: jax.jvp(_chain, (cc,), (v,)))(eye_c)
-            return jax.tree_util.tree_map(lambda x: x[0], aux_l), daux_l, y_l[0]
-        return jax.vmap(one)(Cc, Yc, Rc)
-
-    for w in (1, 2, 6):
-        report(f"chem GRAD x{w} particles ({w*n_chem_tp} jvp lanes)",
-               chem_grad, C_full[:w], Y0[:w], refs0[:w])
-
-    # ---- chemistry PRIMAL at the init phase-1 width (smc_chem_chunk=0: unchunked) ----
-    def chem_primal(Cc, Yc, Rc):
-        def one(cc, yw, rf):
-            y = fwd.chem_solve_cold(cc)
-            return fwd.aux_from_y(y, cc), y
-        return jax.vmap(one)(Cc, Yc, Rc)
-
-    report(f"chem PRIMAL x{n1} particles (init phase 1 = ceil(N*init_oversample))",
-           chem_primal, C1, Y1, refs1)
 
     # ---- RT stage alone (abstract inputs; vjp with unit cotangent) ----
     nl = int(cfg.art_nlayer)
@@ -155,7 +123,7 @@ def main() -> int:
     # in the run (the mutation kernel matches cold_vg at width N)
     n2 = N + int(cfg.init_phase2_spare)
     U2 = pipe.sample_prior_u(jax.random.PRNGKey(1), n2)
-    Y2, refs2, _S1b = P._blank_state(pipe, n2)
+    Y2, refs2 = P._blank_state(pipe, n2)
     report(f"FULL init_vg x{n2} (N+{int(cfg.init_phase2_spare)} phase-2 spares)",
            pipe.batch_eval_init_vg, U2, Y2, refs2)
     report(f"FULL cold_l x{n1} (init phase-1 primal likelihood batch)",
