@@ -1,0 +1,18 @@
+# Speed bench for run_nas_w39b.pbs (CALIBRATE_CHAIN=overrides/speed_bench_chain.txt):
+# every production speed setting on ONE GPU in ONE job, so the arms share a node.
+# name|bench||out dir|KEY=VAL;KEY=VAL   (no overrides file: the gpu preset as shipped)
+# Each arm is the fixed-step bench (K=150 accepted steps per stage, 144 lanes unless
+# set): its log block and the chain summary give ms per accepted step of the slowest
+# lane. Submit after tools/gpu_kernel_test.pbs (it rebuilds the kernel the ffi arms
+# load). Most important first, in case the wall runs out; no nsys (first runs).
+# Reference points: primal fast 132 ms (78995), gradient fast 530 / ffi 372 ms (78993 / 78994).
+g_fast_cb1|bench||data/sb_g_fast_cb1|VULCAN_JAX_SOLVER=fast;XLA_CMDBUF=1;CALIBRATE_GRAD=1
+g_ffi_cb1|bench||data/sb_g_ffi_cb1|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1
+p_fast_cb1|bench||data/sb_p_fast_cb1|VULCAN_JAX_SOLVER=fast;XLA_CMDBUF=1;CALIBRATE_GRAD=0
+p_ffi_cb1|bench||data/sb_p_ffi_cb1|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=0
+g_ffi_cb2|bench||data/sb_g_ffi_cb2|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=2;CALIBRATE_GRAD=1
+g_fast_cb2|bench||data/sb_g_fast_cb2|VULCAN_JAX_SOLVER=fast;XLA_CMDBUF=2;CALIBRATE_GRAD=1
+p_ffi_cb2|bench||data/sb_p_ffi_cb2|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=2;CALIBRATE_GRAD=0
+p_fast_cb2|bench||data/sb_p_fast_cb2|VULCAN_JAX_SOLVER=fast;XLA_CMDBUF=2;CALIBRATE_GRAD=0
+g_ffi_cb1_n132|bench||data/sb_g_ffi_cb1_n132|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1;CALIBRATE_N_DRAWS=132
+g_ffi_cb1_n264|bench||data/sb_g_ffi_cb1_n264|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1;CALIBRATE_N_DRAWS=264

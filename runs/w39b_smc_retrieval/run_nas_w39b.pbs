@@ -47,8 +47,9 @@
 #                           docstring). RESUME=1 composes with it.
 #   SYNTH=1                 inject-and-recover instead of fitting real data
 #   CALIBRATE_ONLY=1        time 1 likelihood + 1 mutation sweep, project, exit
-#   CALIBRATE_CHAIN=<file>  run several bounded arms (memory probes, calibrations) in
-#                           ONE job, in order, each in its own subshell; a failing arm
+#   CALIBRATE_CHAIN=<file>  run several bounded arms (memory probes, calibrations,
+#                           fixed-step benches) in ONE job, in order, each in its own
+#                           subshell; a failing arm
 #                           is recorded and the chain goes on. Path relative to this
 #                           dir; format in overrides/calibration_chain.txt. Per-arm
 #                           table: logs/chain_<jobid>.tsv, summary at the end of the log.
@@ -171,17 +172,21 @@ unset JAX_PLATFORMS
 export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
-export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
+XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
 # Command buffers are the production default (they cut the primal loop from
 # ~255 to 132 ms per accepted step); XLA_CMDBUF=0 takes them back out for an A/B.
 # The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
 # while loop becomes one graph only if every op in its body is capturable.
-case "${XLA_CMDBUF:-1}" in
-  0) ;;
-  1) export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE" ;;
-  2) export XLA_FLAGS="${XLA_FLAGS} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" ;;
-  *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0, 1 or 2"; exit 1 ;;
-esac
+# A function, so a chain arm that sets its own XLA_CMDBUF gets its own flags.
+set_xla_flags() {
+  case "${XLA_CMDBUF:-1}" in
+    0) export XLA_FLAGS="${XLA_BASE_FLAGS}" ;;
+    1) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE" ;;
+    2) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" ;;
+    *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0, 1 or 2"; return 1 ;;
+  esac
+}
+set_xla_flags || exit 1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
@@ -325,7 +330,11 @@ if [ "${PROBE_MEMORY:-0}" = "1" ]; then
   wait_for_tree_python
 elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # One job, several bounded arms. Each non-comment line of the chain file:
-  #   name|probe or calibrate|overrides file|out dir|KEY=VAL;KEY=VAL   (last field optional)
+  #   name|probe, calibrate or bench|overrides file|out dir|KEY=VAL;KEY=VAL
+  # (the overrides file may be empty; the last field is optional). A bench arm is
+  # the fixed-step step-cost bench (calibrate_count_max --fixed-steps), sized by
+  # its CALIBRATE_N_DRAWS (144), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
+  # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN_JAX_SOLVER passes through.
   # Every override file is checked BEFORE the first arm runs (a missing one cost job 78648).
   # Arms run in order, each in a subshell that exports its own env; the chain file is read
   # on fd 3 so an arm's process cannot swallow the remaining lines.
@@ -335,8 +344,10 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   echo "========== CALIBRATION CHAIN ${CHAIN_FILE} =========="
   while IFS='|' read -r -u 3 name mode ovf outd envs; do
     case "${name}" in ''|'#'*) continue ;; esac
-    [ -f "${SMC_DIR}/${ovf}" ] || { echo "ERROR: arm ${name}: missing override file ${SMC_DIR}/${ovf}"; exit 1; }
-    case "${mode}" in probe|calibrate) ;; *) echo "ERROR: arm ${name}: mode must be probe or calibrate, got '${mode}'"; exit 1 ;; esac
+    if [ -n "${ovf}" ] && [ ! -f "${SMC_DIR}/${ovf}" ]; then
+      echo "ERROR: arm ${name}: missing override file ${SMC_DIR}/${ovf}"; exit 1
+    fi
+    case "${mode}" in probe|calibrate|bench) ;; *) echo "ERROR: arm ${name}: mode must be probe, calibrate or bench, got '${mode}'"; exit 1 ;; esac
   done 3< "${CHAIN_FILE}"
   printf 'arm\tmode\trc\tseconds\tout_dir\n' > "${CHAIN_TSV}"
   while IFS='|' read -r -u 3 name mode ovf outd envs; do
@@ -344,15 +355,22 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
     echo "---------- arm ${name} (${mode}) started $(date) ----------"
     t0="$(date +%s)"; arm_rc=0
     (
-      export SMC_RETRIEVAL_OVERRIDES_FILE="${ovf}" SMC_RETRIEVAL_OUT_DIR="${outd}" NSYS_TAG="_${name}"
+      export SMC_RETRIEVAL_OUT_DIR="${outd}" NSYS_TAG="_${name}"
+      if [ -n "${ovf}" ]; then export SMC_RETRIEVAL_OVERRIDES_FILE="${ovf}"; fi
       if [ -n "${envs}" ]; then
         IFS=';' read -r -a kvs <<< "${envs}"
         for kv in "${kvs[@]}"; do [ -n "${kv}" ] && export "${kv?}"; done
       fi
+      case ";${envs};" in *";XLA_CMDBUF="*) set_xla_flags || exit 1 ;; esac
       build_nsys_wrap
-      echo "arm env: overrides=${ovf} out=${outd} XLA_FLAGS=${XLA_FLAGS} NSYS=${NSYS:-0}"
+      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN_JAX_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS} NSYS=${NSYS:-0}"
       if [ "${mode}" = "probe" ]; then
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
+      elif [ "${mode}" = "bench" ]; then
+        GRAD_ARG=""
+        if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
+        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
+          --n-draws "${CALIBRATE_N_DRAWS:-144}" --fixed-steps "${CALIBRATE_FIXED_STEPS:-150}" ${GRAD_ARG}
       else
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
@@ -364,6 +382,9 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
       if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
         echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1
       fi
+      if [ "${mode}" = "bench" ] && ! ls "${SMC_DIR}/${outd}"/bench_fixed_steps*.npz >/dev/null 2>&1; then
+        echo "arm ${name}: no bench_fixed_steps npz in ${outd} -> failed"; exit 1
+      fi
       exit "${wrc}"
     ) || arm_rc=$?
     printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${mode}" "${arm_rc}" "$(( $(date +%s) - t0 ))" "${outd}" | tee -a "${CHAIN_TSV}"
@@ -372,12 +393,22 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   echo "========== CHAIN SUMMARY =========="
   python - "${SMC_DIR}" "${CHAIN_TSV}" <<'PYEOF' || true
 import csv, json, pathlib, sys
+import numpy as np
 smc, tsv = pathlib.Path(sys.argv[1]), sys.argv[2]
 for row in csv.DictReader(open(tsv), delimiter="\t"):
+    head = f"{row['arm']:<20} rc={row['rc']:<3} {int(row['seconds'])/3600:5.2f} h"
+    if row["mode"] == "bench":
+        # per accepted step of the slowest lane over the two stages' extra K-1
+        # steps each (the gpu preset's two-stage solve), as the bench logs it
+        for f in sorted((smc / row["out_dir"]).glob("bench_fixed_steps*.npz")):
+            b = np.load(f)
+            ms = 1e3 * (float(b["t_steady"]) - float(b["t1_steady"])) / (2 * (int(b["K"]) - 1))
+            print(f"{head}  {f.stem}: lanes={b['U'].shape[0]} K={int(b['K'])}"
+                  f"  {ms:.1f} ms per accepted step  (K=1 pass {float(b['t1_steady']):.1f} s)")
+        continue
     tj = smc / row["out_dir"] / "timing.json"
     t = json.load(open(tj)) if tj.exists() else {}
-    print(f"{row['arm']:<20} rc={row['rc']:<3} {int(row['seconds'])/3600:5.2f} h"
-          f"  N={t.get('n_particles','-')} kernel={t.get('smc_mcmc_kernel','-')}"
+    print(f"{head}  N={t.get('n_particles','-')} kernel={t.get('smc_mcmc_kernel','-')}"
           f"  t_state_init_s={t.get('t_state_init_s','-')}  t_mutation_sweep_s={t.get('t_mutation_sweep_s','-')}")
 PYEOF
 elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
