@@ -94,22 +94,19 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # gate). See VULCAN-JAX README.md (Differentiability).
     _refuse_condense_inference(chem, cfg)
 
-    # Surface an uncertified warm-up baseline LOUDLY.
-    # NOT a refusal: an uncertified baseline is a warm-start seed / elemental-map
-    # anchor whose descendants are all individually certified downstream (init
-    # rejects non-certified draws; warm proposals re-certify at exit), and the
-    # offline smoke preset deliberately builds on a cap-exit baseline
-    # (longdy~0.11 at nz=30) yet passes its FD gradient checks. The exported
-    # ``chem.baseline_conv_normal`` flag lets any stricter consumer gate on it.
+    # Surface a failed warm-up check. NOT a refusal: nothing consumes the
+    # warm-up column (y_baseline is the pre-loop column, and cold solves start
+    # from the equilibrium seed), and every draw certifies itself; the offline
+    # smoke preset builds on a cap-exit warm-up (longdy~0.11 at nz=30) and
+    # passes its gradient checks. A failure only flags a configuration that
+    # may not converge (vulcan-forward notes §2).
     if bool(getattr(cfg, "run_inference", False)) and not bool(
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
-            "chemistry warm-up (baseline) solve exited WITHOUT canonical "
-            "certification (see the [chem] WARNING above for the exit "
-            "longdy/longdydt/aflux_change). Warm starts will seed from a "
-            "non-steady baseline; every draw is still individually certified "
-            "downstream, but init may pay extra steps. If this is a production "
-            "case, check the T-P window / Kzz / dt_max / count_max settings.")
+            "the chemistry warm-up solve failed its check (see the [chem] "
+            "WARNING above for longdy/longdydt/aflux_change). Its column is not "
+            "used and every draw certifies itself, but this configuration may "
+            "not converge: check the T-P window / Kzz / dt_max settings.")
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns

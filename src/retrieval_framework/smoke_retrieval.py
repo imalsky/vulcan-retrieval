@@ -83,14 +83,14 @@ def main() -> int:
     # direction: measured on the correlated-k path, every component agrees to
     # <= 2.3e-6 ABSOLUTE while the dominant ones are ~1e3, yet dL/dc_o (|g| =
     # 0.38, 2500x smaller) turns its 1.3e-6 into a 3.3e-6 "relative error" that
-    # says nothing about the wiring. Gate on the norm-relative figure -- 1e-8
-    # there is a TIGHTER absolute requirement on the components that matter than
-    # the old componentwise 1e-6 was -- and report both.
+    # says nothing about the wiring. Gate on the norm-relative figure and report
+    # both. It has read 1.9e-9 to 3e-8 as the converged column and the
+    # environment changed (notes §1.8); a dropped c_o block would read ~4e-4.
     scale_g = float(np.max(np.abs(gn)))
     rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, 1e-300))
     rel_cw = float(np.max(np.abs(gb - gn)
                           / np.maximum(np.abs(gn), 1e-12 * scale_g + 1e-30)))
-    ok_bn = bool(rel_bn < 1e-8) and ok_val
+    ok_bn = bool(rel_bn < 1e-7) and ok_val
     print(f"[smoke] block-vs-naive max|d| / max|g| = {rel_bn:.2e} "
           f"(componentwise {rel_cw:.2e})  -> {'OK' if ok_bn else 'FAIL'}", flush=True)
     for i, nm in enumerate(pipe.names):
