@@ -6,11 +6,9 @@
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
 # TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
 # pins deliberately and keep them at or above those floors
-# (vulcan-jax>=0.16.0, vulcan-forward>=0.23.0).
+# (vulcan-jax>=0.16.0, vulcan-forward>=0.25.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
-# is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all. Its
-# commit matches jwst-transit-authority's deploy/pins.env, so a reproduction env and
-# the deployed Space run the same engine.
+# is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
 # ExoJax is a plain pip dependency; it downloads HITRAN line lists / CIA tables
 # into the repo data/ caches on first use.
 # NOTE the PBS preflight installs the SYNCED trees editable instead (git pull is
@@ -27,6 +25,6 @@ scipy>=1.12
 matplotlib
 corner
 tqdm
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@6df1cd9f61c076a1ad3158eedc66d32c2040fc34
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@eb1c25644e6a2e9d5dd84ee45c1c5f7379acdbe4
+vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@d91cc1224b71da34fc5cd21dc23197c10dfcaeed
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@f7671cb67e634a0706142960089d2bd2791bd4cc
 -e .
