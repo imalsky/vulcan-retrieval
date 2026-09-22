@@ -558,6 +558,19 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         finite = jnp.all(jnp.isfinite(depth))
         return jnp.where(finite, val, _REJECT)
 
+    def _mu_from_column(args):
+        """Per-particle binned model depth from a converged column: the RT half of
+        observed_depth_model, with no chemistry solve. UNGATED like it; the
+        posterior predictive runs it on the final particles' carried columns."""
+        y, theta = args
+        r0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
+        cp = theta[cloud_lo:cloud_lo + n_cloud] if have_cloud else jnp.zeros((0,), dtype)
+        aux = fwd.aux_from_y(y, theta[:n_chem_tp])
+        return _mu_from_depth(_rt_wrap(aux, r0, cp), theta)
+
+    observed_depth_from_y_jit = jax.jit(
+        lambda Y, Theta: _map_chunked(_mu_from_column, (Y, Theta), rt_chunk))
+
     def _rt_val_grad(args):
         """Per-particle RT stage WITH gradient: primal depth + ONE reverse-mode vjp.
         ``daux`` is the (n_chem_tp,)-stacked aux tangent pytree from the chemistry
@@ -917,6 +930,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         tp_prior_stats=tp_prior_stats,
         theta_truth=theta_truth,
         observed_depth_model=observed_depth_model, observed_depth_model_jit=observed_depth_model_jit,
+        observed_depth_from_y_jit=observed_depth_from_y_jit,
         log_likelihood_u=log_likelihood_u,
         value_and_grad_naive=_value_and_grad_naive, value_and_grad_block=_value_and_grad_block,
         # staged batched evaluators (the SMC hot path)

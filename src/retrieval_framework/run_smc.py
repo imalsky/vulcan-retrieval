@@ -576,11 +576,25 @@ def main() -> None:
         rng = np.random.default_rng(cfg.seed + 1)
         n_take = min(int(cfg.ppc_draws), theta_all.shape[0])
         sel = theta_all[rng.choice(theta_all.shape[0], size=n_take, replace=False)]
+        # Every draw is a copy of one final particle's theta, and that particle
+        # carries the converged column its likelihood came from, so a draw's
+        # spectrum is RT only. The final checkpoint holds the columns; it must
+        # hold the samples file's own cloud.
+        ck = np.load(ckpt_path)
+        if not np.array_equal(ck["u_particles"], s["u_particles"]):
+            raise RuntimeError(f"{ckpt_path} does not hold the final cloud of "
+                               f"{samples_path}: no carried columns for the PPC")
+        match = np.all(sel[:, None, :] == ck["theta_particles"][None], axis=2)
+        if not match.any(axis=1).all():
+            raise RuntimeError(f"{int((~match.any(axis=1)).sum())} PPC draw(s) match "
+                               f"no final particle in {ckpt_path}")
+        Y_sel = ck["y_state"][match.argmax(axis=1)]
         preds = []
         for i0 in range(0, n_take, int(cfg.ppc_chunk_size)):
-            batch = jnp.asarray(sel[i0:i0 + int(cfg.ppc_chunk_size)], pipe.dtype)
-            preds.append(np.asarray(jax.vmap(pipe.observed_depth_model_jit)(batch)))
-            log.info(f"  ppc {min(i0+int(cfg.ppc_chunk_size), n_take)}/{n_take}")
+            i1 = i0 + int(cfg.ppc_chunk_size)
+            preds.append(np.asarray(pipe.observed_depth_from_y_jit(
+                jnp.asarray(Y_sel[i0:i1], pipe.dtype), jnp.asarray(sel[i0:i1], pipe.dtype))))
+            log.info(f"  ppc {min(i1, n_take)}/{n_take}")
         mu_draws = np.concatenate(preds, axis=0)     # LATENT model curves, no noise
 
         # The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
