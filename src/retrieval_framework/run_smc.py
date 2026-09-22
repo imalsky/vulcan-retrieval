@@ -313,7 +313,6 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
                                        - t_mut_compile) // max(per_stage, 1e-9)))),
         "walltime_budget_hours": float(cfg.walltime_seconds) / 3600.0,
     }
-    (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
     log.info("=== CALIBRATION ===")
     for k, v in proj.items():
         log.info(f"  {k:32s} {v}")

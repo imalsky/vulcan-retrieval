@@ -276,26 +276,36 @@ build_nsys_wrap
 # --- retrieval configuration ---------------------------------------------------
 export SMC_RETRIEVAL_PRESET="${SMC_RETRIEVAL_PRESET:-gpu}"
 if [ "${RESUME:-0}" = "1" ]; then export SMC_RESUME=1; fi
-if [ "${SYNTH:-0}" = "1" ]; then
-  # gpu-fidelity synthetic injection/recovery run (do this once before trusting
-  # the real-data posterior)
-  export SMC_RETRIEVAL_OVERRIDES="${SMC_RETRIEVAL_OVERRIDES:-{\"generate_synthetic_data\": true}}"
-  export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/gpu_synth}"
-fi
-if [ -n "${SEED:-}" ]; then
-  # merge into whatever overrides are already set (SYNTH sets its own), and give
-  # the run its own output directory so seeds never overwrite each other
+if [ "${SYNTH:-0}" = "1" ] || [ -n "${SEED:-}" ]; then
+  # SYNTH: gpu-fidelity synthetic injection/recovery run (do this once before
+  # trusting the real-data posterior). SEED: a reproducible draw. Both MERGE
+  # into whatever overrides are already set (a bash default cannot hold JSON:
+  # its closing brace ends the expansion), and the output directory carries
+  # both so synthetic seeds never overwrite each other.
   SMC_RETRIEVAL_OVERRIDES="$(python -c '
 import json, os
 d = json.loads(os.environ.get("SMC_RETRIEVAL_OVERRIDES") or "{}")
-d["seed"] = int(os.environ["SEED"])
+if os.environ.get("SYNTH", "0") == "1":
+    d["generate_synthetic_data"] = True
+if os.environ.get("SEED"):
+    d["seed"] = int(os.environ["SEED"])
 print(json.dumps(d))')"
   export SMC_RETRIEVAL_OVERRIDES
-  export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}_seed${SEED}}"
+  if [ "${SYNTH:-0}" = "1" ]; then _od="${SMC_DIR}/data/gpu_synth"; else _od="${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}"; fi
+  export SMC_RETRIEVAL_OUT_DIR="${SMC_RETRIEVAL_OUT_DIR:-${_od}${SEED:+_seed${SEED}}}"
 fi
 echo "preset=${SMC_RETRIEVAL_PRESET} overrides=${SMC_RETRIEVAL_OVERRIDES:-<none>}"
 
 cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
+
+# A windowed nsys (--kill=none) returns when its window closes and leaves the
+# app running (job 78814); every path that may run under the wrapper waits for
+# this tree's python before the next step touches the GPU or the job exits.
+wait_for_tree_python() {
+  while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|probe_memory|calibrate_count_max) ${SMC_DIR}" >/dev/null; do
+    sleep 30
+  done
+}
 
 rc=0
 if [ "${PROBE_MEMORY:-0}" = "1" ]; then
@@ -303,6 +313,7 @@ if [ "${PROBE_MEMORY:-0}" = "1" ]; then
   # executes on the GPU, so this cannot OOM (see retrieval_framework/probe_memory.py)
   echo "========== MEMORY PROBE (compile-only) =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}" || rc=$?
+  wait_for_tree_python
 elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # One job, several bounded arms. Each non-comment line of the chain file:
   #   name|probe or calibrate|overrides file|out dir|KEY=VAL;KEY=VAL   (last field optional)
@@ -337,13 +348,10 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
       wrc=$?
-      # A windowed nsys returns when its window closes and leaves the app running
-      # (job 78814: rc=0 after 3694 s, no timing.json, and the orphan's 90% GPU
-      # preallocation made every later arm die at gpusolverDnCreate). Wait for
-      # this tree's python to finish before the next arm touches the GPU.
-      while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|probe_memory) ${SMC_DIR}" >/dev/null; do
-        sleep 30
-      done
+      # job 78814: a windowed nsys returned rc=0 after 3694 s with no timing.json
+      # and the orphan's 90% GPU preallocation made every later arm die at
+      # gpusolverDnCreate; wait before the next arm touches the GPU.
+      wait_for_tree_python
       if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
         echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1
       fi
@@ -366,6 +374,7 @@ PYEOF
 elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
   echo "========== CALIBRATION ONLY =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
+  wait_for_tree_python
 elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # measures the REAL accept_count distribution over CALIBRATE_N_DRAWS prior draws at
   # whatever nz/prior SMC_RETRIEVAL_OVERRIDES_FILE resolves to, at a generous
@@ -382,9 +391,11 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
     ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?
+  wait_for_tree_python
 else
   echo "========== SMC RETRIEVAL =========="
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
+  wait_for_tree_python
   if [ "${rc}" -eq 0 ]; then
     echo "========== PLOTS =========="
     python -u -m retrieval_framework.plot_smc "${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}}" \

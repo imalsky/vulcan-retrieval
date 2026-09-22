@@ -25,9 +25,10 @@ Module map (the import chain is heavy-import-safe top to bottom):
     pipeline           u-space posterior, staged batched evaluators, SMC core, MALA kernel
     run_smc            case-directory driver (presets, overrides, outputs, PPC)
     plot_smc           post-run figures from the .npz bundles (numpy+matplotlib only)
-    forward/           the shared forward-model engine (config, vulcan_chem, exojax_rt,
-                       interp_map, sensitivity) -- import order is load-bearing there:
-                       vulcan_forward.vulcan_chem before anything exojax (guard-enforced)
+    forward/           this repo's case constants and data paths (config.py only); the
+                       engine lives in the vulcan-forward distribution -- import order is
+                       load-bearing there: vulcan_forward.vulcan_chem before anything
+                       exojax (guard-enforced)
 
 This ``__init__`` stays import-light (no jax): run_smc and config_schema must be
 importable without pulling the chemistry/RT stack.

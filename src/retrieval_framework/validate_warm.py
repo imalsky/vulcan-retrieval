@@ -221,11 +221,15 @@ def main() -> None:
     # sub-step is chunked internally) -- the single largest allocation in this tool.
     # A full-N call OOMed on a partially-occupied GPU (NAS job 66291) even though
     # init phase 1 batches MORE draws on a fresh, fully-free pool. Chunking bounds
-    # the peak with identical results (sub-batches are concatenated -- no vmap
-    # padding). VALIDATE_WARM_CHUNK overrides the size; <=0 restores a full-N solve.
-    chunk = int(os.environ.get("VALIDATE_WARM_CHUNK", "0") or 0)
+    # the peak; results are identical at cold_lanes = 0 (sub-batches are
+    # concatenated, no vmap padding) and at the convergence scale when the
+    # cold batch queues (a refilled lane's history follows the batch it is in).
+    # Default 48; VALIDATE_WARM_CHUNK overrides the size, and an
+    # explicit value <= 0 (or above N) restores a full-N solve.
+    _raw = os.environ.get("VALIDATE_WARM_CHUNK", "").strip()
+    chunk = int(_raw) if _raw else min(N, 48)
     if chunk <= 0 or chunk > N:
-        chunk = min(N, 48)
+        chunk = N
     # Gradient comparison (likelihood/spectrum gates alone do not validate a
     # MALA kernel -- the drift is the gradient). Default ON: the
     # cold VALUE-AND-GRAD evaluator returns L, G, and Y in one pass, so the

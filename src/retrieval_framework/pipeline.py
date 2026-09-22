@@ -144,7 +144,7 @@ def _proposal_converged(cd_vec):
     exit reads False even when longdy sits under yconv_min -- the class that
     passed the old accept-count-only gate on NAS job 65200 (16/864 warm
     proposals: primal certified, tangent never settled -> non-finite gradient).
-    Measurement backing the choice: validation/diag_warm_stall_tangent.py.
+    Measurement backing the choice: notes.md §2.4 (job 65200).
     """
     return cd_vec[:, 4] > 0.5
 
@@ -1176,8 +1176,8 @@ def _proposal_scale(particles: np.ndarray, cap: float,
     ``shrink`` blends toward the diagonal (Ledoit-Wolf style, fixed intensity),
     which keeps L well-conditioned when the cloud is small relative to n_dim or a
     direction has collapsed. With shrink=1 this reduces exactly to the previous
-    diagonal preconditioner. Falls back to the identity if the cloud is
-    degenerate enough that the factorization fails."""
+    diagonal preconditioner. Falls back to the diagonal preconditioner if the
+    cloud is degenerate enough that the factorization fails."""
     p = np.asarray(particles, np.float64)
     n_dim = p.shape[1]
     sd = np.clip(p.std(axis=0), 1e-3, float(cap))
@@ -1567,7 +1567,6 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     log_prior_u = pipe.log_prior_u
     _, _, move_vg, move_l = _get_batch_evals(pipe)
     theta_from_u = pipe.theta_from_u
-    n_ct = int(getattr(pipe, "n_chem_tp", 0))
     kernel = str(pipe.cfg.smc_mcmc_kernel).strip().lower()
 
     def sweep(k, U, Y, refs, S1, L, G, beta, step, scale):
@@ -1796,11 +1795,10 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, S1, L, G,
              unique_particles=np.asarray(uniq_hist, np.int64),
              warm_capped=np.asarray(capped_hist, np.int64),
              warm_stalled=np.asarray(stalled_hist, np.int64),
-             # key name predates the zero-drift rework (badgrad events are no
-             # longer rejections); kept so pre-rework checkpoints resume
+             # key name from before the zero-drift rework (badgrad events are
+             # counted, not rejected); renaming it would change every checkpoint
              tangent_rejected=np.asarray(badgrad_hist, np.int64),
-             # lower-triangular Cholesky factor of the proposal covariance; the
-             # pre-2026-08-18 key held a per-dim vector and is still read below
+             # lower-triangular Cholesky factor of the proposal covariance
              scale_chol=np.asarray(scale),
              # the RM state itself, so resume restores it WITHOUT the
              # exp(log(.)) roundtrip through step_size_history (not bit-exact
@@ -1950,38 +1948,27 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         step_hist = [float(x) for x in ck["step_size_history"]]
         uniq_hist = [int(x) for x in ck["unique_particles"]]
         logZ = float(ck["logZ"])
-        scale = np.asarray(
-            ck["scale_chol"] if "scale_chol" in ck.files else ck["scale_diag"],
-            np.float64)
-        if scale.ndim == 1:      # checkpoint from the diagonal-preconditioner era
-            scale = np.diag(scale)
-        if "warm_capped" in ck.files:
-            capped_hist = [int(x) for x in ck["warm_capped"]]
-        if "warm_stalled" in ck.files:
-            stalled_hist = [int(x) for x in ck["warm_stalled"]]
-        if "tangent_rejected" in ck.files:
-            badgrad_hist = [int(x) for x in ck["tangent_rejected"]]
-        if "init_stats_keys" in ck.files:
+        # Every key below is written unconditionally by the checkpoint writer
+        # above since before `target_digest` existed, and refuse_mismatched_resume
+        # has already refused any checkpoint without a digest, so no older layout
+        # can reach this point.
+        scale = np.asarray(ck["scale_chol"], np.float64)
+        capped_hist = [int(x) for x in ck["warm_capped"]]
+        stalled_hist = [int(x) for x in ck["warm_stalled"]]
+        badgrad_hist = [int(x) for x in ck["tangent_rejected"]]
+        if "init_stats_keys" in ck.files:   # written only when init produced stats
             init_stats = {str(k): int(v) for k, v in
                           zip(ck["init_stats_keys"], ck["init_stats_vals"])}
-        if "mala_log_step" in ck.files:
-            log_step = float(ck["mala_log_step"])
-        elif step_hist:      # pre-mala_log_step checkpoint: exp/log roundtrip
-            log_step = math.log(min(max(step_hist[-1], cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
-        if all(k in ck.files for k in ("y_state", "chem_refs", "loglik", "grad_u")):
-            Y = jnp.asarray(ck["y_state"], dtype)
-            refs = jnp.asarray(ck["chem_refs"], dtype)
-            L = jnp.asarray(ck["loglik"], dtype)
-            G = jnp.asarray(ck["grad_u"], dtype)
-            if all(k in ck.files for k in ("s1_y1", "s1_dy1", "s1_h")):
-                S1 = Stage1Cache(y1=jnp.asarray(ck["s1_y1"], dtype),
-                                 dy1=jnp.asarray(ck["s1_dy1"], dtype),
-                                 h=jnp.asarray(ck["s1_h"], dtype))
-            state_loaded = True
-        else:
-            logger.warning("checkpoint predates the carried chemistry state; "
-                           "cold re-initializing at the resumed cloud (warm history "
-                           "is NOT recovered -- likelihoods re-anchor to the cold map)")
+        log_step = float(ck["mala_log_step"])
+        Y = jnp.asarray(ck["y_state"], dtype)
+        refs = jnp.asarray(ck["chem_refs"], dtype)
+        L = jnp.asarray(ck["loglik"], dtype)
+        G = jnp.asarray(ck["grad_u"], dtype)
+        if all(k in ck.files for k in ("s1_y1", "s1_dy1", "s1_h")):   # cold two-stage path only
+            S1 = Stage1Cache(y1=jnp.asarray(ck["s1_y1"], dtype),
+                             dy1=jnp.asarray(ck["s1_dy1"], dtype),
+                             h=jnp.asarray(ck["s1_h"], dtype))
+        state_loaded = True
         if beta == 0.0:
             logger.info(f"RESUMED from {resume_from}: INIT-LEVEL checkpoint "
                         "(two-phase init recovered; ladder starts at stage 0, beta=0)")

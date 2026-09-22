@@ -2,12 +2,15 @@
 # name|mode|overrides file|out dir|KEY=VAL;KEY=VAL   mode = probe (compile-only, cannot OOM) or calibrate
 # Paths are relative to this case dir. Arms run in order; a failing arm is recorded, the rest run.
 # The two probes report the peak buffer size at 576 particles; if either exceeds the card,
-# the matching width arm below will OOM (only that arm fails). One arm costs the ~1 h cold
-# init plus one sweep; the whole chain is about 10 h of a 24 h wall.
+# the matching width arm below will OOM (only that arm fails). A MALA calibrate arm costs
+# ~11 h (4.3 h init + two ~3 h sweeps at N=144; chains 78865/78867), so the full chain does
+# NOT fit a 24 h wall: submit a subset, or use the fixed-step bench for profiling.
 # nsys arms run LAST and capture the range the app marks around its timed sweep
 # (NSYS_CAPTURE_API=1; a fixed window landed in the init on job 78814, and a windowed nsys
 # orphaned its app and blocked every later arm). Read-outs: kernel count per step in the
-# capture (LuPivotsToPermutation must be 0) and the command-buffer arm's launch count.
+# capture (LuPivotsToPermutation is 1:1 with getrf, the correct reading) and the
+# no-command-buffer arm (an EMPTY --xla_gpu_enable_command_buffer= list; dropping the flag
+# would only restore XLA's own default set) against the default (command buffers ON).
 probe_mala_w576|probe|overrides/cal_mala_w576.json|data/probe_mala_w576|
 probe_rwm_w576|probe|overrides/cal_rwm_w576.json|data/probe_rwm_w576|
 cal_mala|calibrate|overrides/cal_mala.json|data/cal_mala|
@@ -15,4 +18,4 @@ cal_rwm_w288|calibrate|overrides/cal_rwm_w288.json|data/cal_rwm_w288|
 cal_rwm_w576|calibrate|overrides/cal_rwm_w576.json|data/cal_rwm_w576|
 cal_mala_w288|calibrate|overrides/cal_mala_w288.json|data/cal_mala_w288|
 cal_rwm|calibrate|overrides/cal_rwm.json|data/cal_rwm|NSYS=1;NSYS_CAPTURE_API=1
-cal_rwm_cmdbuf|calibrate|overrides/cal_rwm.json|data/cal_rwm_cmdbuf|XLA_FLAGS=--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE;NSYS=1;NSYS_CAPTURE_API=1
+cal_rwm_nocmdbuf|calibrate|overrides/cal_rwm.json|data/cal_rwm_nocmdbuf|XLA_FLAGS=--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=;NSYS=1;NSYS_CAPTURE_API=1

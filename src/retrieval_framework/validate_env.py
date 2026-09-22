@@ -22,8 +22,7 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      declared requirement (skipped with a warning if `packaging` is absent);
   6. exojax imports and matches the pyproject pin;
   7. required data files under <PROJECT_ROOT>/vulcan-retrieval/data/ (real
-     spectrum CSVs, cached CO ExoMol dir, H2-H2 + H2-He CIA; missing HITRAN
-     line-list caches are a warning -- they re-download via the NAS proxy);
+     spectrum CSVs, the ExoMolOP k-tables, H2-H2 + H2-He CIA);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs.
 
 Usage:

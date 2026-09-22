@@ -17,14 +17,14 @@ from typing import Any
 from retrieval_framework.config_schema import Config      # light import, no jax
 from retrieval_framework.forward import config as fwd_config  # pure constants + repo paths
 
-# Planet + data identity (WASP-39b, Carter & May 2024 combined JWST spectrum)
-R_SUN_CM = 6.957e10
+# Planet + data identity (WASP-39b, Carter & May 2024 combined JWST spectrum);
+# the geometry is fwd_config's, never re-typed here (one planet, one place).
 _W39B = dict(
     run_label="WASP-39b",
     vulcan_cfg_name="W39b",
-    tp_gravity_cgs=422.0,                       # cm/s^2 (also the RT g_btm)
-    rp_cm=1.279 * 7.1492e9,                     # planet radius at P_btm
-    rstar_cm=0.932 * R_SUN_CM,
+    tp_gravity_cgs=fwd_config.GS_CGS,           # cm/s^2 (also the RT g_btm)
+    rp_cm=fwd_config.RP_CM,                     # planet radius at P_btm
+    rstar_cm=fwd_config.RSTAR_CM,
     # Cap physically meaningless large-dt Ros2 oscillations on high-Kzz columns.
     # This is not a convergence criterion: yconv_cri/slope_cri remain the canonical
     # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected at init.

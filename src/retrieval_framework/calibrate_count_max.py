@@ -240,7 +240,7 @@ def main() -> None:
              "legitimately take a while if the probe cap is high and a corner is hard)...")
     t0 = time.perf_counter()
     fn = jax.jit(pipe.batch_eval_cold_l_diag)
-    L, Y, refs, cd = fn(U, Y0, refs0)
+    L, _Y, _refs, cd = fn(U, Y0, refs0)
     jax.block_until_ready(L)
     dt = time.perf_counter() - t0
     log.info(f"done in {dt:.1f}s ({dt / max(1, int(args.n_draws)):.3f}s/draw amortized; "

@@ -90,9 +90,10 @@ testpaths = ["tests"]
 addopts = "-ra --tb=short"
 markers = [
     # Integration tests that build a REAL chemistry + RT pipeline (ExoJAX RT
-    # model, line lists, chemistry converged to steady state). Three
-    # files carry it and are ~98% of the suite's wall time: test_warm_extrap
-    # (~285 s), test_condensation_live_tp (~232 s), test_warm_reject (~78 s).
+    # model, line lists, chemistry converged to steady state). Five files
+    # carry it (test_cold_reject, test_condensation_live_tp,
+    # test_set_observations, test_stage1_cache, test_warm_reject) and are
+    # most of the suite's wall time.
     #
     # `pytest tests` STILL RUNS THEM -- the marker deselects nothing by
     # default, deliberately: this repo treats a silently skipped test as a

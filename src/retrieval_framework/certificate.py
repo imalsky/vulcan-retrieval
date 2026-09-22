@@ -367,14 +367,17 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
 # --- target identity ---------------------------------------------------------
 # Keys a CHAINED job may legitimately differ in: none of them changes the target
 # density or the numbers a resume carries. Per-JOB caps (smc_max_steps, the
-# walltime governor) are documented as such; the chunk sizes are batch splits
-# that are numerically identical at any width; the rest is bookkeeping or
-# post-processing that runs after sampling. Everything NOT listed here is bound.
+# walltime governor) are documented as such; the RT chunk sizes are batch
+# splits that are numerically identical at any width; the rest is bookkeeping
+# or post-processing that runs after sampling. `smc_chem_chunk` is NOT free: a
+# chemistry chunk is one batched solve whose lanes share loop ticks (and its
+# own queue under cold_lanes > 0), so it moves the map at the convergence
+# scale (pipeline._make_batch_eval). Everything NOT listed here is bound.
 TARGET_FREE_KEYS = frozenset({
     "out_dir", "run_label", "log_level", "overwrite",
     "attrition_justification",
     "smc_max_steps", "walltime_seconds",
-    "smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk",
+    "smc_rt_chunk", "smc_rt_vjp_chunk",
     "run_inference", "do_ppc", "ppc_draws", "ppc_chunk_size",
     "num_samples", "num_chains",
 })
@@ -824,8 +827,11 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
     ev = cert["evidence"]
     for key in ("smc_logZ", "smc_logZ_box", "log_support_fraction",
                 "log_support_fraction_err"):
-        if ev.get(key) is None:
+        v = ev.get(key)
+        if v is None:
             problems.append(f"no {key} recorded")
+        elif not math.isfinite(float(v)):
+            problems.append(f"{key} is not finite ({v!r})")
 
     # --- run health ---------------------------------------------------------
     diag = cert["diagnostics"]
@@ -994,9 +1000,16 @@ def health_problems(diag: dict) -> list[str]:
     testable without a run)."""
     out: list[str] = []
     n = int(diag.get("n_particles") or 0)
+    sweeps = int(diag.get("n_mcmc_steps") or 0)
 
     # Structure before values: a ragged or non-finite series cannot be gated, and
     # skipping a gate because its inputs are malformed reads exactly like passing.
+    if n <= 0:
+        out.append("n_particles missing or non-positive: the degeneracy, ESS and "
+                   "late-ladder rejection gates cannot run (skipped, not passed)")
+    if sweeps <= 0:
+        out.append("n_mcmc_steps missing or non-positive: the late-ladder "
+                   "rejection gate cannot run (skipped, not passed)")
     lens = {k: len(diag.get(k) or []) for k in _PER_STAGE_KEYS if diag.get(k)}
     if len(set(lens.values())) > 1:
         out.append(
@@ -1039,7 +1052,6 @@ def health_problems(diag: dict) -> list[str]:
                 "mixing at beta=1")
     cap = list(diag.get("warm_capped") or [])
     stall = list(diag.get("warm_stalled") or [])
-    sweeps = int(diag.get("n_mcmc_steps") or 0)
     if n and sweeps and cap and stall and len(cap) == len(stall):
         k = max(1, int(round(LATE_LADDER_FRAC * len(cap))))
         late = sum(cap[-k:]) + sum(stall[-k:])
@@ -1081,6 +1093,10 @@ def rail_problems(post: list | None) -> list[str]:
                            ("95th percentile", "q95_position")):
             f = row.get(key)
             if f is None:
+                continue
+            if not math.isfinite(float(f)):
+                out.append(f"{row['name']}: posterior {label} position is not "
+                           f"finite ({f!r}); the rail gate cannot read it")
                 continue
             if f < PRIOR_RAIL_FRAC or f > 1.0 - PRIOR_RAIL_FRAC:
                 out.append(
