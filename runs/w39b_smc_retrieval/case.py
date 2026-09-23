@@ -167,11 +167,12 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # RT-vjp width. The 2026-08-28 compile-only probe (XLA:CPU buffer
-        # assignment, 12 absorbers) measured 14.8 GiB per vjp lane, linear with
-        # zero intercept: 12 lanes = 177 GiB against the ~81 GiB GH200 pool, 5 is
-        # the largest that fits, 4 leaves headroom. Chunking is numerically
-        # identical at any width; PROBE_MEMORY=1 on the GPU must still confirm.
+        # RT-vjp width. Since the scan fold (vulcan-forward 0.25.0) the GH200
+        # probe (job 79500, 12 absorbers) reads 3.20 GiB per vjp lane, 12.57 at
+        # 4, against the ~81 GiB pool. A wider chunk fits but buys no time: the
+        # RT vjp costs at most ~1.5 s of a gradient evaluation (notes §1.4).
+        # Chunking is numerically identical at any width; PROBE_MEMORY=1 on the
+        # GPU before changing it.
         smc_rt_vjp_chunk=4,
         mcmc_stage_adapt=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
