@@ -91,11 +91,13 @@ cd "${PROJECT_ROOT}/VULCAN-JAX"
 [ -f tests/data/adj_state_hd189.npz ] || python tests/_gen_adj_state.py hd189
 # The suite's oracle gate (tests/conftest.py) wants fixtures this tree does not
 # carry; this job runs one file, so accept the reduced coverage explicitly.
-VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
+# -rA: a passing test's captured output too, so the matrix-free check's per-case
+# primal and tangent readings reach the log (the bars are set from them).
+VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
 # Again under XLA_CMDBUF=2's flags: the kernels are marked command-buffer
 # compatible, so capture must meet them here first, not inside a bench.
 XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" \
-  VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -ra
+  VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
 # --- cold-seed method bench: which exogibbs solve_profile method is cheapest on
 # this GPU at the production lane width. Fails the job if it fails (no || true).
 cd "${REPO_DIR}"
