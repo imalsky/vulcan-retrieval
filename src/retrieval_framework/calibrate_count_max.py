@@ -52,10 +52,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", nargs="?", default=".",
                      help="retrieval case directory containing case.py (default: cwd)")
-    ap.add_argument("--n-draws", type=int, default=200,
+    ap.add_argument("--n-draws", type=int, default=None,
                      help="prior draws to sample (chemistry is full-width batched, so "
                           "this is nearly free up to GPU width -- more draws = a "
-                          "tighter percentile estimate, not much more wall time)")
+                          "tighter percentile estimate, not much more wall time); "
+                          "default 200, or the preset's smc_num_particles under "
+                          "--fixed-steps (the production width)")
     ap.add_argument("--count-max-probe", type=int, default=20000,
                      help="count_max used ONLY for this measurement (kept generous so "
                           "the real tail is visible instead of truncated at whatever "
@@ -98,6 +100,8 @@ def main() -> None:
     cfg, _preset = make_config(Path(args.run_dir))
     preset_count_max = cfg.count_max   # the cap the production run would use (None -> library default)
     K = int(args.fixed_steps)
+    if args.n_draws is None:
+        args.n_draws = int(cfg.smc_num_particles) if K > 0 else 200
     # count_min = count_max = K: the runner may only certify above count_min, so every
     # lane runs exactly K accepted steps per stage and none certifies -- convergence is
     # out of the timing. warm_count_max comes along only because validate_config

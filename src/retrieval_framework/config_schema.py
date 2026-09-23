@@ -312,11 +312,13 @@ class Config:
     # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
     # and refills a lane that certifies with the next draw inside the same
     # while loop (vulcan_forward.converged_y_queue), so wall time follows total
-    # work / k. Default 144 = the production particle count (maintainer's
-    # decision, notes 2.13): the init phase's oversampled draws queue through
-    # 144 lanes, a sweep's 144 particles all start at once. Keep it at or above
-    # smc_num_particles: with fewer lanes a sweep's late starters begin only
-    # when a lane frees and push the batch past the step cap.
+    # work / k. The gpu preset sets it AND smc_num_particles to
+    # `device_lane_count()`, one kernel wave of the card (132 on the GH200;
+    # maintainer's decision, notes 2.13): the init phase's oversampled draws
+    # queue through that many lanes, a sweep's particles all start at once.
+    # Keep it at or above smc_num_particles: with fewer lanes a sweep's late
+    # starters begin only when a lane frees and push the batch past the step
+    # cap. The schema default is the width the presets used before 0.24.0.
     cold_lanes: int = 144
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
@@ -458,6 +460,27 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     if not specs:
         raise ValueError("no parameters enabled for inference")
     return specs
+
+
+def device_lane_count(fallback: int = 144) -> int:
+    """Lanes for one kernel wave: the CUDA device's streaming-multiprocessor
+    count (132 on a GH200 / H100 SXM, 108 on an A100), read from the PJRT
+    device description's `core_count`. Both VULCAN-JAX block kernels take
+    ~125 KB of shared memory and run one block per SM, so a width above the
+    SM count runs a second, mostly empty wave (144 lanes on 132 SMs: the
+    plain step 1.69x slower than at 132, VULCAN-JAX notes 2.9). Off the GPU
+    the width is a statistics knob only: `fallback`."""
+    import jax
+
+    if jax.default_backend() not in ("gpu", "cuda", "rocm"):
+        return int(fallback)
+    dev = jax.devices()[0]
+    n = getattr(dev, "core_count", None)
+    if not isinstance(n, int) or n <= 0:
+        raise RuntimeError(
+            f"device {dev} ({dev.device_kind}) reports no core_count; set "
+            "cold_lanes and smc_num_particles explicitly in the preset")
+    return int(n)
 
 
 def validate_config(cfg: Config) -> None:

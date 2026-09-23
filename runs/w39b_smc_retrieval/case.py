@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from retrieval_framework.config_schema import Config      # light import, no jax
+from retrieval_framework.config_schema import Config, device_lane_count  # light import; jax only inside gpu_config
 from retrieval_framework.forward import config as fwd_config  # pure constants + repo paths
 
 # Planet + data identity (WASP-39b, Carter & May 2024 combined JWST spectrum);
@@ -106,6 +106,7 @@ def gpu_config(**overrides: Any) -> Config:
     convergence gate, not a reason to extend failed draws. Run PROBE_MEMORY after
     any band/chunk/N change and CALIBRATE_ONLY before a full submission.
     """
+    lanes = device_lane_count()
     base = dict(
         _W39B,
         nz=62,
@@ -128,13 +129,16 @@ def gpu_config(**overrides: Any) -> Config:
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N=144 divides into exact RT-vjp chunks and reduces small-cloud SMC noise.
+        # N = the lane count = one kernel wave of the card (132 on the GH200;
+        # 144, the pre-0.24.0 width, off the GPU): every particle's chemistry
+        # runs in one wave and the queue never waits on a late starter. Both
+        # divide into exact RT-vjp chunks of 4.
         # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
         # fresh budget and the stage index continues). 40 sits right at the edge
         # of what a 10-D ladder at target_ess_frac=0.6 needs, and exhausting it
         # yields a TEMPERED cloud the certificate refuses; an unused stage costs
         # nothing, so the governor is left as the real limit.
-        smc_num_particles=144, smc_max_steps=80,
+        smc_num_particles=lanes, cold_lanes=lanes, smc_max_steps=80,
         # Draw 360 cold candidates and reserve 48 phase-2 spares. The 192-column
         # phase-2 pool can cull 25% and still return N=144; peak memory remains set
         # by the fixed RT-vjp chunk, not the number of serialized chunks.

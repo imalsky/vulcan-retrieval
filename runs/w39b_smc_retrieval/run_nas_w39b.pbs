@@ -341,7 +341,8 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   #   name|probe, calibrate or bench|overrides file|out dir|KEY=VAL;KEY=VAL
   # (the overrides file may be empty; the last field is optional). A bench arm is
   # the fixed-step step-cost bench (calibrate_count_max --fixed-steps), sized by
-  # its CALIBRATE_N_DRAWS (144), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
+  # its CALIBRATE_N_DRAWS (default: the preset's particle count, the GPU's SM
+  # count), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
   # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN_JAX_SOLVER passes through.
   # Every override file is checked BEFORE the first arm runs (a missing one cost job 78648).
   # Arms run in order, each in a subshell that exports its own env; the chain file is read
@@ -378,7 +379,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
         GRAD_ARG=""
         if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
-          --n-draws "${CALIBRATE_N_DRAWS:-144}" --fixed-steps "${CALIBRATE_FIXED_STEPS:-150}" ${GRAD_ARG}
+          ${CALIBRATE_N_DRAWS:+--n-draws ${CALIBRATE_N_DRAWS}} --fixed-steps "${CALIBRATE_FIXED_STEPS:-150}" ${GRAD_ARG}
       else
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
