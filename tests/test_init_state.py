@@ -196,8 +196,9 @@ def test_init_phase2_spares_exhausted_raises():
 @pytest.mark.parametrize("knob,bad", [("cold_lanes", -1), ("cold_refill_chunk", 0)])
 def test_validate_config_refuses_broken_cold_lane_knobs(knob, bad):
     """The cold-batch lane knobs are validated with the other batch widths: a
-    negative lane count or a zero refill chunk is a broken run, not a default
-    (cold_lanes=0 IS the default -- the single lockstep batch)."""
+    negative lane count or a zero refill chunk is a broken run, not a setting
+    (cold_lanes=0 is the single lockstep batch; the default is the production
+    lane count)."""
     with pytest.raises(ValueError, match=knob):
         C.validate_config(C.Config(**{knob: bad}))
 

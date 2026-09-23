@@ -70,9 +70,9 @@ def main() -> None:
     ap.add_argument("--lanes", type=int, default=None,
                      help="lanes the cold chemistry batch runs on (cfg.cold_lanes); "
                           "0 = every draw in one lockstep batch, k > 0 = k lanes "
-                          "refilled from the draw queue; any k > 0 (here or in "
-                          "the config) is refused with --fixed-steps. Default: "
-                          "the config's value")
+                          "refilled from the draw queue; k > 0 is refused with "
+                          "--fixed-steps, which runs lockstep (0) unless told "
+                          "otherwise. Default: the config's value")
     ap.add_argument("--grad", action="store_true",
                      help="benchmark the production cold GRADIENT evaluator "
                           "batch_eval_cold_vg instead of the primal "
@@ -109,14 +109,18 @@ def main() -> None:
     # draw holding a full-width lockstep batch open.
     if args.lanes is not None:
         cfg = replace(cfg, cold_lanes=int(args.lanes))
+    elif K > 0:
+        # The fixed-step bench times one accepted step of a lockstep batch; the
+        # config's lane queue (on by default) would refill every capped lane and
+        # time queue throughput instead, so the bench runs lockstep unless
+        # --lanes asks for something else (which is refused above).
+        cfg = replace(cfg, cold_lanes=0)
     if K > 0 and int(cfg.cold_lanes) > 0:
-        # The RESOLVED value, not just --lanes: a config that sets the knob
-        # itself would otherwise queue silently under the bench.
         raise SystemExit(
-            f"--fixed-steps cannot run with cold_lanes={int(cfg.cold_lanes)} "
-            "(resolved from the config): a capped lane is is_done and gets "
-            "refilled, so the bench would measure queue throughput, not the "
-            "cost of one accepted step. Bench the step cost with --lanes 0.")
+            f"--fixed-steps cannot run with cold_lanes={int(cfg.cold_lanes)}: a "
+            "capped lane is is_done and gets refilled, so the bench would measure "
+            "queue throughput, not the cost of one accepted step. Bench the step "
+            "cost with --lanes 0.")
 
     # accept_count depends only on the chemistry (nz, molecules, priors), not on
     # the RT; the correlated-k band grid is fixed by the tables, so the RT runs at

@@ -308,12 +308,16 @@ class Config:
     # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
     # chemistry memory is independent of the spectral grid.
     smc_chem_chunk: int = 0
-    # Lanes the COLD chemistry batch runs on. 0 = every draw in one lockstep
-    # batch, where the call waits for the slowest draw; k > 0 runs k lanes and
-    # refills a lane that certifies with the next draw inside the same while
-    # loop (vulcan_forward.converged_y_queue), so wall time follows total work
-    # / k. Set it from the GPU lane-count bench, not by guess.
-    cold_lanes: int = 0
+    # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
+    # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
+    # and refills a lane that certifies with the next draw inside the same
+    # while loop (vulcan_forward.converged_y_queue), so wall time follows total
+    # work / k. Default 144 = the production particle count (maintainer's
+    # decision, notes 2.13): the init phase's oversampled draws queue through
+    # 144 lanes, a sweep's 144 particles all start at once. Keep it at or above
+    # smc_num_particles: with fewer lanes a sweep's late starters begin only
+    # when a lane frees and push the batch past the step cap.
+    cold_lanes: int = 144
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
