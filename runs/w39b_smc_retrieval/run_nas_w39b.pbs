@@ -255,6 +255,12 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   NSYS_OUT="${LOG_DIR}/nsys_${_jobid%%.*}${NSYS_TAG:-}"
   NSYS_WRAP=(nsys profile -o "${NSYS_OUT}" --force-overwrite=true
              -t cuda,nvtx -s none --cpuctxsw=none)
+  # Under command buffers XLA replays CUDA graphs, which nsys traces as ONE
+  # unit per graph launch by default: the kernel table would then hold no
+  # per-kernel rows for the step loop. Node-level tracing keeps them.
+  if [ "${XLA_CMDBUF:-1}" != "0" ]; then
+    NSYS_WRAP+=(--cuda-graph-trace=node)
+  fi
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
     # 1 kHz keeps the metrics stream small enough for a multi-hour full trace (10 kHz
     # over hours would be GBs); 10 ms resolution is plenty to see busy-vs-idle.

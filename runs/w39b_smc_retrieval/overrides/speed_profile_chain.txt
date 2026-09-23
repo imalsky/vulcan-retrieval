@@ -1,0 +1,20 @@
+# Profile round after speed_bench_chain.txt: what an `ffi` step is made of on the
+# current kernels, the A/B of VULCAN-JAX 0.16.5's gather-table Jacobian against
+# 79534's 0.16.4 arms, and whether the primal at 132 lanes runs as one kernel wave.
+# name|bench||out dir|KEY=VAL;KEY=VAL   (no overrides file: the gpu preset as shipped)
+# Each arm is the fixed-step bench (K=150 accepted steps per stage; 144 lanes unless
+# set). The first two arms are unprofiled: their ms per step read against 79534's
+# p_ffi / g_ffi rows. The two nsys arms capture the timed sweep (the cudaProfilerApi
+# range) with node-level CUDA-graph tracing (run_nas_w39b.pbs adds
+# --cuda-graph-trace=node under command buffers), so the kernel table has one row
+# per kernel:
+#   nsys stats -r cuda_gpu_kern_sum logs/nsys_<job>_<arm>.nsys-rep
+# Node-level tracing adds overhead, so those two give kernel SHARES, not ms per step.
+# Unmeasured until this runs: the K4 kernels' time per call (VULCAN-JAX notes §2.9 has
+# only the estimate), hence the share of the step outside the block solves; the primal
+# at 132 lanes (79499 timed the gradient at 132 / 264, the primal at 144 only).
+p_ffi|bench||data/prof_p_ffi_plain|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=0
+g_ffi|bench||data/prof_g_ffi_plain|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1
+prof_p_ffi|bench||data/prof_p_ffi|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=0;NSYS=1;NSYS_CAPTURE_API=1;NSYS_GPU_METRICS=1
+prof_g_ffi|bench||data/prof_g_ffi|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1;NSYS=1;NSYS_CAPTURE_API=1;NSYS_GPU_METRICS=1
+p_ffi_n132|bench||data/prof_p_ffi_n132|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=0;CALIBRATE_N_DRAWS=132
