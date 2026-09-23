@@ -25,6 +25,6 @@ scipy>=1.12
 matplotlib
 corner
 tqdm
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@023b73ac439b8b52272d4b19d2116a80768950d9
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@804178ef5b1e0bbf06cb4ccd8fd04b28e6de0295
+vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@0922698311e42ab8c5577561aca43d79db6cbefe
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@f1386343b7052e967bf427bea36cabec35a18658
 -e .
