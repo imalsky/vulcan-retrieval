@@ -688,7 +688,6 @@ def collect(out_dir: Path) -> dict:
             "atom_ratio_rel_max": _scalar(vwarm, "atom_ratio_rel_max"),
             "grad_rel_max_gated": _scalar(vwarm, "grad_rel_max_gated"),
             "grad_zeroed_frac": _scalar(vwarm, "grad_zeroed_frac"),
-            "abundance_mode": _scalar(vwarm, "abundance_mode"),
             "validated_frac": (float(_warm_n_ok) / float(_warm_n)
                                if _warm_n_ok is not None and _warm_n else None),
             "checkpoint_sha256": _scalar(vwarm, "checkpoint_sha256"),
@@ -779,13 +778,8 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 ("spectrum_dppm_max", SPEC_PPM_MAX_PASS, "spectrum difference"),
                 ("grad_rel_max_gated", GRAD_REL_FAIL, "MALA drift agreement"),
                 ("grad_zeroed_frac", GRAD_ZEROED_FRAC_FAIL, "zeroed-drift fraction"),
+                ("atom_ratio_rel_max", ATOM_REL_PASS, "elemental inventory"),
             ]
-            # Carve-out is validate_warm's own: under legacy
-            # abundance_mode="masks" the warm inventory IS history-dependent by
-            # construction, so there it is reported, not gated.
-            if str(wv.get("abundance_mode") or "elemental") == "elemental":
-                checks.append(
-                    ("atom_ratio_rel_max", ATOM_REL_PASS, "elemental inventory"))
             for key, limit, label in checks:
                 v = wv.get(key)
                 if v is None or (isinstance(v, float) and math.isnan(v)):

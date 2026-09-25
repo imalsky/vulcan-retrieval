@@ -65,11 +65,9 @@ DLOGL_MAX_PASS = 0.1
 # motivated scale (JWST bin errors are ~100 ppm, systematics floors ~10 ppm).
 SPEC_PPM_MAX_PASS = 5.0
 # Elemental-inventory agreement between the warm-carried and cold-resolved columns
-# (max relative difference of the column H-normalized He/O/C/N/S totals). In
-# abundance_mode="elemental" both paths are CONSTRUCTED with identical conserved
-# targets, so this measures only solver drift (~<1e-6); in legacy "masks" mode the
-# warm path's inventory is history-dependent and this is exactly the audit's
-# path-dependence signal -- reported, warn-only there.
+# (max relative difference of the column H-normalized He/O/C/N/S totals). Both
+# paths are CONSTRUCTED with identical conserved targets, so this measures only
+# solver drift (~<1e-6).
 ATOM_REL_PASS = 1.0e-5
 # WARN if more than this fraction of the cloud fails to cold-converge: the
 # posterior would be sitting against the count_max convergence cliff.
@@ -324,12 +322,8 @@ def main() -> None:
     r_warm, r_cold = _ratios(ck["y_state"]), _ratios(np.asarray(jax.device_get(Y_cold)))
     atom_rel = np.abs(r_warm / r_cold - 1.0)
     atom_rel_max = float(np.max(atom_rel[ok_mask])) if ok_mask.any() else float("nan")
-    # default "elemental", never "masks": if the attribute is missing the soft
-    # branch below would downgrade a real atom-conservation failure to the
-    # "documented legacy leakage" warning path (fail-open)
-    abundance_mode = str(getattr(pipe.fwd.chem, "abundance_mode", "elemental"))
     logger.info(f"elemental inventories (He,O,C,N,S per H) warm-vs-cold: max rel diff "
-                f"{atom_rel_max:.3e} (abundance_mode={abundance_mode})")
+                f"{atom_rel_max:.3e}")
 
     # ---- u-space GRADIENT comparison (the MALA drift) ----
     gs = None
@@ -359,7 +353,6 @@ def main() -> None:
                # the counts a cloud validated on four surviving references
                # reads exactly like one validated on all N.
                checkpoint_sha256=np.asarray(_sha256(ck_path)),
-               abundance_mode=np.asarray(abundance_mode),
                n_validated=np.asarray(s["n_ok"], np.int64),
                n_particles=np.asarray(s["n"], np.int64),
                **({} if gs is None else dict(
@@ -385,13 +378,6 @@ def main() -> None:
     ok_logl = s["n_ok"] > 0 and s["abs_max"] < DLOGL_MAX_PASS
     ok_spec = math.isfinite(dppm_max) and dppm_max < SPEC_PPM_MAX_PASS
     ok_atom = math.isfinite(atom_rel_max) and atom_rel_max < ATOM_REL_PASS
-    if not ok_atom and abundance_mode != "elemental":
-        logger.warning("elemental-inventory mismatch exceeds the gate under legacy "
-                       "abundance_mode='masks' -- this is the documented "
-                       "path-dependence of the mask knob, not a solver bug; rerun "
-                       "with abundance_mode='elemental' (default) for exact, "
-                       "path-independent inventories. Not failing on it here.")
-        ok_atom = True
 
     # GRADIENT is a FAIL axis, not warn-only.
     # Two separate conditions, because they mean different things:

@@ -114,7 +114,7 @@ def _warm_cert(**wv):
                        approximate_history_dependent_target=True)
     base = {"dlogl_max": 1e-3, "spectrum_dppm_max": 0.4,
             "atom_ratio_rel_max": 1e-9, "grad_rel_max_gated": 0.01,
-            "grad_zeroed_frac": 0.02, "abundance_mode": "elemental",
+            "grad_zeroed_frac": 0.02,
             "validated_frac": 1.0, "checkpoint_matches": True}
     base.update(wv)
     c["warm_validation"] = base
@@ -128,15 +128,6 @@ def _warm_cert(**wv):
 def test_a_validated_warm_run_passes():
     """Warm stays usable -- it just has to prove it."""
     assert validate(_warm_cert(), _replay()) == []
-
-
-def test_legacy_masks_mode_reports_inventory_drift_without_failing():
-    """The carve-out validate_warm already makes: under abundance_mode='masks'
-    the warm inventory is history-dependent BY CONSTRUCTION, so it is reported,
-    not gated. Gating it there would fail every legacy run for a known knob."""
-    c = _warm_cert(atom_ratio_rel_max=1.0, abundance_mode="masks")
-    assert validate(c, _replay()) == []
-    assert c["warm_validation"]["atom_ratio_rel_max"] == 1.0   # still recorded
 
 
 # --- every refusal, one row each ----------------------------------------------

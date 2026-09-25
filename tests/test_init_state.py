@@ -207,7 +207,7 @@ def test_validate_config_refuses_broken_knobs(knob, bad):
     "mcmc_target_accept_rwm", "mcmc_step_size_min", "mcmc_step_size_max",
     "mcmc_stage_adapt", "mcmc_stage_adapt_gain", "mcmc_scale_clip", "do_ppc",
     "tp_model", "tp_f", "use_clouds", "infer_lnR0", "overwrite", "log_level",
-    "cold_seed"])
+    "cold_seed", "abundance_mode", "reanchor_atom_ini"])
 def test_a_removed_knob_is_refused(knob):
     """A retired knob in a preset or an override file is an error, never a
     silent no-op (make_config applies overrides with dataclasses.replace)."""

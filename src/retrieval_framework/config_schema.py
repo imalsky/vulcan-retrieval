@@ -75,18 +75,7 @@ class Config:
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
     use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
-    co_mode: str = "fixed_O"           # C/O GUESS construction (elemental mode repairs it exactly)
-    # Abundance-knob semantics. "elemental" (production default) makes lnZ / c_o EXACT
-    # column elemental directions: after the mask-scaled guess the column is renormalized
-    # to sum_i n_i = P/(kB T) per layer and linearly repaired on the runner's reservoir
-    # species so the column ratios hit He/H = base, {O,N,S}/H = Z x base,
-    # C/H = Z e^{c_o} x base exactly, and pv.atom_ini is rebuilt from that column --
-    # conserved inventories are then path-independent (cold == warm by construction).
-    # "masks" reproduces the legacy species-mask knob (published demo caches), whose
-    # elemental leakage (~0.6%/e-fold of Z into H, N/S leakage via the fixed-O b_z)
-    # and sum(n) != M init are documented in vulcan_chem. See chem.audit_init.
-    abundance_mode: str = "elemental"
-    reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
+    co_mode: str = "fixed_O"           # C/O GUESS construction (the engine repairs it exactly)
     count_min: Optional[int] = None
     count_max: Optional[int] = None
     # Warm-continuation step cap for the MUTATION path (accepted steps). A proposal
@@ -333,8 +322,6 @@ class Config:
             art_ptop_bar=float(self.art_ptop_bar),
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
-            abundance_mode=str(self.abundance_mode),
-            reanchor_atom_ini=bool(self.reanchor_atom_ini),
             cfg_overrides=dict(self.cfg_overrides),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
             p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
@@ -632,9 +619,6 @@ def validate_config(cfg: Config) -> None:
             "disabling one shifts the T-P and nuisance indices and silently "
             "reinterprets the parameter vector. Keep all three inferred (use a "
             "tight prior range if you want one effectively fixed).")
-    if str(cfg.abundance_mode) not in ("elemental", "masks"):
-        raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "
-                         "(expected 'elemental' or 'masks')")
     # Planet identity must be declared explicitly by the case: without these the RT
     # would silently normalize with the shared-lib WASP-39b radius/gravity and the
     # chemistry would run WASP-39b's baseline column -- a silently-wrong retrieval of
@@ -710,8 +694,7 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}"
-        f"   cold batch: {lanes}"
-        f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
+        f"   cold batch: {lanes}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}   "
         f"warm_count_max={int(cfg.warm_count_max)} (mutation-proposal cap)",

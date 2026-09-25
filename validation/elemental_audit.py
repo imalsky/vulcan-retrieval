@@ -17,10 +17,9 @@ against atom_ini (the runner's own conservation metric, now anchored exactly).
 Run (GPU node or a patient workstation; ~minutes without --converge, chemistry-
 solve-bound with it):
 
-    python validation/elemental_audit.py --n 30 [--converge] [--mode elemental|masks]
+    python validation/elemental_audit.py --n 30 [--converge]
 
-Exit code 0 = all gates pass (elemental mode); masks mode reports the documented
-leakage without failing (it exists to MEASURE the legacy knob's error).
+Exit code 0 = all gates pass.
 """
 from __future__ import annotations
 
@@ -34,7 +33,7 @@ import numpy as np
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 import _artifact  # noqa: E402
 
-# gates (elemental mode): the projection is exact up to the fixed-iteration
+# gates: the projection is exact up to the fixed-iteration
 # residual; see vulcan_chem._ELEMENTAL_REPAIR_ITERS
 GATE_RATIO = 1.0e-6
 GATE_DENSITY = 1.0e-10
@@ -45,7 +44,6 @@ GATE_REPAIR_POSITIVE = 0.0
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30, help="prior draws to audit")
-    ap.add_argument("--mode", default="elemental", choices=["elemental", "masks"])
     ap.add_argument("--converge", action="store_true",
                     help="also re-converge each draw and report elemental drift")
     ap.add_argument("--seed", type=int, default=7)
@@ -57,7 +55,7 @@ def main() -> int:
     # profile and prior box both come from it, so this audit can never
     # measure a model production does not run.
     cfg = _artifact.production_config()
-    profile = _artifact.production_profile(abundance_mode=args.mode)
+    profile = _artifact.production_profile()
     chem = vulcan_chem.build_chem_model(profile)
 
     rng = np.random.default_rng(args.seed)
@@ -74,11 +72,8 @@ def main() -> int:
         dens = a["density_closure_max_rel"]
         atom = a["atom_ini_max_rel_err"]
         rep = a.get("min_repair_factor", np.nan)
-        if args.mode == "elemental":
-            ok = (r < GATE_RATIO and dco < GATE_RATIO and dens < GATE_DENSITY
-                  and atom < GATE_ATOM_INI and rep > GATE_REPAIR_POSITIVE)
-        else:
-            ok = True   # masks mode: measurement, not a gate
+        ok = (r < GATE_RATIO and dco < GATE_RATIO and dens < GATE_DENSITY
+              and atom < GATE_ATOM_INI and rep > GATE_REPAIR_POSITIVE)
         fails += (not ok)
         worst["ratio"] = max(worst["ratio"], 0.0 if np.isnan(r) else r)
         worst["dco"] = max(worst["dco"], 0.0 if np.isnan(dco) else dco)
@@ -101,17 +96,14 @@ def main() -> int:
                   f"(runner drift metric vs exact atom_ini)", flush=True)
 
     print("\n==== elemental audit summary ====")
-    print(f"mode={args.mode} draws={args.n} | worst ratio_err={worst['ratio']:.3e} "
+    print(f"draws={args.n} | worst ratio_err={worst['ratio']:.3e} "
           f"dCO={worst['dco']:.3e} density={worst['dens']:.3e} "
           f"atom_ini={worst['atom']:.3e} min_repair={worst['repair']:.4f}")
-    if args.mode == "elemental":
-        verdict = fails == 0
-        print(f"VERDICT: {'PASS' if verdict else f'FAIL ({fails}/{args.n} draws)'} "
-              f"(gates: ratio<{GATE_RATIO:g}, density<{GATE_DENSITY:g}, "
-              f"atom_ini<{GATE_ATOM_INI:g}, repair>{GATE_REPAIR_POSITIVE:g})")
-        return 0 if verdict else 1
-    print("masks mode: leakage measured (no gate) -- compare against the elemental run")
-    return 0
+    verdict = fails == 0
+    print(f"VERDICT: {'PASS' if verdict else f'FAIL ({fails}/{args.n} draws)'} "
+          f"(gates: ratio<{GATE_RATIO:g}, density<{GATE_DENSITY:g}, "
+          f"atom_ini<{GATE_ATOM_INI:g}, repair>{GATE_REPAIR_POSITIVE:g})")
+    return 0 if verdict else 1
 
 
 if __name__ == "__main__":

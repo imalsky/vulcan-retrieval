@@ -85,11 +85,7 @@ RSTAR_CM = 0.932 * R_SUN_CM
 #     step count -- forcing dt to dt_max drives the Ros2 step's forward tangent singular.
 SMOKE = {
     "use_photo": True,
-    # The published demo/figure caches were built under the legacy "masks"
-    # initialization; pinned here so a fresh run reproduces them. The engine
-    # default is "elemental" (production).
-    "abundance_mode": "masks",
-    "nz": 40,                  # coarse column -> cheaper warm-up + jvps
+    "nz": 40,                 # coarse column -> cheaper warm-up + jvps
     "yconv_cri": 1.0e-3,
     "molecules": ["CO"],       # fully offline
     "nu_min": 4280.0,          # ~2.31-2.34 um, the cached CO 2-0 band
