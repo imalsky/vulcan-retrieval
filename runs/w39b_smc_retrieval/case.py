@@ -56,9 +56,11 @@ _W39B = dict(
     #         dln(C/O) about the 0.549 baseline -> C/O in [0.10, 0.70]. Upper edge 0.24
     #         stays below the fixed-O b_z positivity bound (~0.566) too.
     prior_c_o=(-1.70, 0.24),
-    #   Kzz : Tsai nominal Kzz(P) scaled x0.1..x10; widened to x0.01..x100 (+/-2 dex)
-    #         about the VULCAN W39b baseline profile.
-    prior_lnKzz=(-4.6, 4.6),
+    #   Kzz : x0.1..x100 about the VULCAN W39b baseline profile. The lower edge
+    #         is Tsai's tested x0.1: below it most columns do not certify within
+    #         count_max (12 of 15 prior draws under x0.03 rejected, against 12 of
+    #         102 in this range; notes §1.2). Every draw above x10 certified.
+    prior_lnKzz=(-2.3, 4.6),
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
     #         gives a limb T ~770-1540 K -- physical for W39b, no unmodelably cold/hot
