@@ -18,7 +18,11 @@ Validates the on-graph condensation rebuild end-to-end:
 
 Setup mirrors VULCAN-JAX's condensation runtime test: a small synthetic
 column on the production SNCHO network (its one condensation reaction is
-S8 -> S8_l_s), const_mix init (no equilibrium seed), photochemistry off.
+S8 -> S8_l_s), photochemistry off. Every solve starts from the cfg's
+const_mix column (``chem.y0``) as a continuation, not from the engine's cold
+equilibrium seed: at 400 K that seed holds S8 at ~1e-66 VMR, nothing
+condenses and the solve certifies at count_min (121 steps against 2175 to
+the cap).
 Convergence uses the upstream conden-window + whole-column fix_species pin
 (same methodology jwst_tool.forward.CONDEN_CFG ships): without the pin the
 steady state is transport-limited -- the upper S8 reservoir drains through
@@ -117,14 +121,15 @@ def _profile(**extra):
         use_photo=False,
         yconv_cri=1.0e-2,
         count_max=5000,
-        # The const_mix start, NOT the engine's default equilibrium seed: at
-        # 400 K the seed holds S8 at ~1e-66 VMR, nothing condenses and the
-        # solve certifies at count_min (121 steps against 2175 to the cap).
-        cold_seed="baseline",
         cfg_overrides=dict(_CFG_OVERRIDES),
     )
     prof.update(extra)
     return prof
+
+
+def _const_mix(chem):
+    """Start a solve from the const_mix column (see the module docstring)."""
+    return {"warm_y": chem.y0, "lnZ_ref": 0.0, "c_o_ref": 0.0}
 
 
 @pytest.fixture(scope="module")
@@ -222,7 +227,8 @@ def test_isothermal_condensation_converges_and_rains_out(stack, chem_iso):
     activated and the S8 rainout observables settled."""
     _, jax, jnp = stack
     s8, s8_ls = _s8_cols(chem_iso)
-    final, _init = chem_iso.run_diag(jnp.asarray(_theta(T_STRUCT)))
+    final, _init = chem_iso.run_diag(jnp.asarray(_theta(T_STRUCT)),
+                                     **_const_mix(chem_iso))
     assert int(final.accept_count) < chem_iso.count_max, \
         "condensing solve must complete within the step budget"
     assert float(final.t) >= float(_CFG_OVERRIDES["runtime"]), \
@@ -307,7 +313,8 @@ def test_guillot_condensation_end_to_end(stack, chem_guillot):
     np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re[0]), want_sat,
                                rtol=1e-12)
     s8, s8_ls = _s8_cols(chem_guillot)
-    final, _init = chem_guillot.run_diag(jnp.asarray(th))
+    final, _init = chem_guillot.run_diag(jnp.asarray(th),
+                                         **_const_mix(chem_guillot))
     assert int(final.accept_count) < chem_guillot.count_max, \
         "Guillot condensing solve must complete within the step budget"
     assert float(final.t) >= GUILLOT_RUNTIME, \
@@ -368,7 +375,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     s8, s8_ls = _s8_cols(chem_iso)
     smooth_cols = [chem_iso.sidx[m] for m in ("H2O", "CO", "H2S")]
     th0 = jnp.asarray(_theta(T_STRUCT))
-    y_base = chem_iso.converged_y(th0)
+    y_base = chem_iso.converged_y(th0, **_const_mix(chem_iso))
 
     def f(th):
         y = chem_iso.converged_y(th, warm_y=y_base)
