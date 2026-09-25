@@ -41,8 +41,7 @@ def _stub_pipe(cfg):
 def test_smc_recovers_gaussian_posterior(tmp_path):
     cfg = C.Config(
         smc_num_particles=256, smc_num_mcmc_steps=10, smc_max_steps=40,
-        smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-        num_samples=256, num_chains=2,
+        smc_target_ess_frac=0.6, num_samples=256, num_chains=2,
     )
     pipe = _stub_pipe(cfg)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(1), progress=False,
@@ -309,8 +308,7 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
     only checkpoint was per-stage)."""
     import pytest
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-                   num_samples=64, num_chains=1)
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     ck = tmp_path / "ck.npz"
 
     # run 1: the mutation kernel dies at stage 0 (simulating the bad-grad raise)
@@ -397,8 +395,8 @@ def test_tangent_blown_proposal_zero_drift_not_fatal(tmp_path, monkeypatch):
     theta-correlated suppression of the posterior bulk AND its 5% per-sweep
     abort tripped with near-certainty over a full ladder."""
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-                   num_samples=32, num_chains=1)   # default backstop 0.25 -> 8/sweep
+                   smc_target_ess_frac=0.6, num_samples=32,
+                   num_chains=1)   # default backstop 0.25 -> 8/sweep
     pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(5), progress=False,
                          checkpoint_path=ck, resume_from=ck)
@@ -423,8 +421,7 @@ def test_tangent_blown_over_threshold_raises(tmp_path, monkeypatch):
     breakage must never be absorbed as a zero-drift class."""
     import pytest
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True, mala_step_size=0.2,
-                   num_samples=32, num_chains=1,
+                   smc_target_ess_frac=0.6, num_samples=32, num_chains=1,
                    smc_tangent_bad_max_frac=0.0)   # zero tolerance
     pipe, ck = _init_ck_then_poison(cfg, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="non-finite-gradient") as ei:
@@ -439,21 +436,21 @@ def test_calibrate_benchmarks_stage0_conditions(tmp_path):
     """Regression for NAS job 64961: calibrate() must benchmark the mutation at the
     ladder's own stage-0 conditions (ESS-bisected first beta, stage-0 resample,
     cloud-width preconditioner, clamped step). The old hard-coded
-    (beta=0.5, step=mala_step_size, scale=1) proposal made drift moves
+    (beta=0.5, step=C.MALA_STEP0, scale=1) proposal made drift moves
     ~step*beta*|G| with prior-cloud gradients -- proposals the production ladder
     never launches -- and aborted the calibration on a spurious AD-pathology raise."""
     from retrieval_framework import run_smc
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=3,
-                   smc_target_ess_frac=0.6, mcmc_stage_adapt=True,
-                   num_samples=64, num_chains=1, out_dir=tmp_path)
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1,
+                   out_dir=tmp_path)
     pipe = _stub_pipe(cfg)
     pipe.n_chem_tp = 0
     pipe.chem_mode = "stub"
     proj = run_smc.calibrate(cfg, pipe, P, jax)
 
     assert 0.0 < proj["calibration_beta_stage0"] <= 1.0
-    assert cfg.mcmc_step_size_min <= proj["calibration_step"] <= cfg.mcmc_step_size_max
+    assert C.STEP_MIN <= proj["calibration_step"] <= C.STEP_MAX
     # preconditioner is the resampled cloud's per-dim width, never unit scale
     assert proj["calibration_scale_min"] >= 1e-3
-    assert proj["calibration_scale_max"] <= cfg.mcmc_scale_clip
+    assert proj["calibration_scale_max"] <= C.SCALE_CLIP
     assert (tmp_path / "timing.json").exists()

@@ -79,20 +79,17 @@ def main() -> int:
     # ---- RT stage alone (abstract inputs; vjp with unit cotangent) ----
     nl = int(cfg.art_nlayer)
     mols = list(fwd.rt.molecules)
-    use_clouds = bool(cfg.use_clouds)
 
     def rt_vjp(auxb, r0b, cpb):
         def one(aux, r0, cp):
-            depth, vjp_fn = jax.vjp(
-                lambda a, r, c: fwd.rt_depth(a, r, c if use_clouds else None),
-                aux, r0, cp)
+            depth, vjp_fn = jax.vjp(fwd.rt_depth, aux, r0, cp)
             bars = vjp_fn(jnp.ones_like(depth))
             return jnp.sum(depth), jax.tree_util.tree_map(jnp.sum, bars)
         return jax.vmap(one)(auxb, r0b, cpb)
 
     def rt_primal(auxb, r0b, cpb):
         def one(aux, r0, cp):
-            return jnp.sum(fwd.rt_depth(aux, r0, cp if use_clouds else None))
+            return jnp.sum(fwd.rt_depth(aux, r0, cp))
         return jax.vmap(one)(auxb, r0b, cpb)
 
     def _aux_sds(w):
@@ -116,8 +113,7 @@ def main() -> int:
            jax.ShapeDtypeStruct((rt_pw, 2), np.float64))
 
     # ---- the full staged evaluators exactly as the SMC uses them ----
-    report(f"FULL cold_vg (chem_chunk={cfg.smc_chem_chunk}, "
-           f"rt_vjp_chunk={cfg.smc_rt_vjp_chunk})",
+    report(f"FULL cold_vg (rt_vjp_chunk={cfg.smc_rt_vjp_chunk})",
            pipe.batch_eval_cold_vg, U, Y0, refs0)
     # init phase 2 runs at N + init_phase2_spare width -- the WIDEST gradient eval
     # in the run (the mutation kernel matches cold_vg at width N)

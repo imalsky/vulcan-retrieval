@@ -2,7 +2,6 @@
   "_comment": "Low-fidelity proof-of-concept config at nz=60 / art_nlayer=60 (at nz=40, calibrate_count_max left 9/48 draws unconverged at 20000 steps). No count_max here: it falls back to gpu_config's. Rerun calibrate_count_max.py at this nz/art_nlayer before any other run with this file. smc_rt_vjp_chunk=6 was probed at art_nlayer=40, not 60: PROBE_MEMORY=1 first.",
   "nz": 60,
   "art_nlayer": 60,
-  "smc_chem_chunk": 0,
   "smc_rt_chunk": 0,
   "smc_rt_vjp_chunk": 6,
   "smc_num_mcmc_steps": 6,

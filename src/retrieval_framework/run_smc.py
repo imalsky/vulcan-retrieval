@@ -153,28 +153,21 @@ def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
     (cfg.out_dir / "config.json").write_text(json.dumps(d, indent=2, default=str))
 
 
-def set_observations(cfg: C.Config, pipe, P, obs_path: Path):
-    """Load real (or load/generate synthetic) observations into ``pipe`` exactly
+def set_observations(cfg: C.Config, pipe, P):
+    """Load real (or generate synthetic) observations into ``pipe`` exactly
     once, before any jitted likelihood call. Returns the bundle to save as
-    observations.npz, or None when an existing synthetic file was reused.
-    Writes nothing: the caller saves it after its resume-identity check."""
-    obs_save = None
+    observations.npz. Writes nothing: the caller saves it after its
+    resume-identity check."""
     if cfg.generate_synthetic_data:
-        if obs_path.exists() and not cfg.overwrite:
-            d = np.load(obs_path)
-            pipe.set_observations(d["depth"], d["sigma"])
-            pipe.flux_true = d["flux_true"] if "flux_true" in d.files else None
-            log.info(f"Loaded existing synthetic observations: {obs_path}")
-        else:
-            log.info("Generating synthetic observations (injection at truth_*)...")
-            o = P.generate_observations(pipe, seed=int(cfg.seed))
-            obs_save = dict(
-                wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
-                depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
-                group=np.asarray(pipe.obs["group"], dtype="<U16"),
-                synthetic=np.asarray(1, np.int32),
-                inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
-                inferred_param_truth=np.asarray(pipe.param_truth))
+        log.info("Generating synthetic observations (injection at truth_*)...")
+        o = P.generate_observations(pipe, seed=int(cfg.seed))
+        obs_save = dict(
+            wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
+            depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
+            group=np.asarray(pipe.obs["group"], dtype="<U16"),
+            synthetic=np.asarray(1, np.int32),
+            inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
+            inferred_param_truth=np.asarray(pipe.param_truth))
     else:
         o = P.load_real_into_pipe(pipe)
         obs_save = dict(
@@ -282,7 +275,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
     # Stage-0 conditions, not an arbitrary proposal. Under MALA the drift term is
     # step*scale^2*beta*G, and a prior-like cloud carries |L| (hence |G|) up to ~1e6 --
-    # the old hard-coded (beta=0.5, step=mala_step_size, scale=1) benchmark launched
+    # the old hard-coded (beta=0.5, step=MALA_STEP0, scale=1) benchmark launched
     # proposals so far off the converged map that their tangents went non-finite, and
     # _check_mutation_health aborted the calibration on an "AD pathology" the ladder's
     # tiny adaptive first beta can never produce (NAS job 64961: 8 bad grads/sweep at
@@ -296,11 +289,10 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     key, sub = jax.random.split(key)
     idx = P._systematic_resample_idx(sub, jnp.asarray(w / w.sum(), pipe.dtype), N)
     U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
-    scale_np = (P._proposal_scale(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
-                if cfg.mcmc_stage_adapt else np.eye(pipe.n_dim))
+    scale_np = P._proposal_scale(np.asarray(jax.device_get(U)), cap=C.SCALE_CLIP)
     scale = jnp.asarray(scale_np, pipe.dtype)
     scale_w = np.abs(np.diag(scale_np))        # per-dim proposal widths, for the log
-    step_f = min(max(float(cfg.mala_step_size), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max)
+    step_f = min(max(C.MALA_STEP0, C.STEP_MIN), C.STEP_MAX)
     step = jnp.asarray(step_f, pipe.dtype)
     log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
              f"step={step_f:.3g} width=[{float(scale_w.min()):.3g}, {float(scale_w.max()):.3g}]")
@@ -405,10 +397,10 @@ def main() -> None:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[logging.StreamHandler(),
-                  logging.FileHandler(cfg.out_dir / "run.log", mode="w" if cfg.overwrite else "a")],
+                  logging.FileHandler(cfg.out_dir / "run.log", mode="w")],
         force=True,
     )
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={cfg.out_dir}")
@@ -437,7 +429,7 @@ def main() -> None:
     # settled below: a refused resume must leave the killed run's archived
     # identity exactly as it was.
     obs_path = cfg.out_dir / "observations.npz"
-    obs_save = set_observations(cfg, pipe, P, obs_path)
+    obs_save = set_observations(cfg, pipe, P)
 
     # ---- resume identity: BEFORE the run directory is touched ---------------
     # pipeline.run_smc_loop refuses a mismatched checkpoint, but by then the
@@ -459,9 +451,8 @@ def main() -> None:
         refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
 
     write_config_json(cfg, pipe, preset)
-    if obs_save is not None:
-        P.save_npz(obs_path, **obs_save)
-        log.info(f"Saved observations: {obs_path}")
+    P.save_npz(obs_path, **obs_save)
+    log.info(f"Saved observations: {obs_path}")
     # The CANONICAL manifest, not only its hash: a refused resume names the
     # differing class only if the two manifests can be diffed. The digest that
     # binds the checkpoint is sha256 of exactly this document.
@@ -583,79 +574,78 @@ def main() -> None:
         log.info("run_inference=False; using existing posterior_samples.npz.")
 
     # ---- posterior predictive (binned, on the observed grid) ----
-    if cfg.do_ppc:
-        log.info("Posterior predictive...")
-        import jax.numpy as jnp
-        s = np.load(samples_path)
-        if "reached_beta1" in s.files and not bool(int(s["reached_beta1"])):
-            log.warning(f"PPC input samples are TEMPERED (final beta="
-                        f"{float(s['final_beta']):.3f} < 1): the predictive band is "
-                        "under the tempered measure, not the posterior predictive.")
-        theta_all = np.asarray(s["samples"]).reshape(-1, pipe.n_dim)
-        rng = np.random.default_rng(cfg.seed + 1)
-        n_take = min(int(cfg.ppc_draws), theta_all.shape[0])
-        sel = theta_all[rng.choice(theta_all.shape[0], size=n_take, replace=False)]
-        # Every draw is a copy of one final particle's theta, and that particle
-        # carries the converged column its likelihood came from, so a draw's
-        # spectrum is RT only. The final checkpoint holds the columns; it must
-        # hold the samples file's own cloud.
-        ck = np.load(ckpt_path)
-        if not np.array_equal(ck["u_particles"], s["u_particles"]):
-            raise RuntimeError(f"{ckpt_path} does not hold the final cloud of "
-                               f"{samples_path}: no carried columns for the PPC")
-        match = np.all(sel[:, None, :] == ck["theta_particles"][None], axis=2)
-        if not match.any(axis=1).all():
-            raise RuntimeError(f"{int((~match.any(axis=1)).sum())} PPC draw(s) match "
-                               f"no final particle in {ckpt_path}")
-        Y_sel = ck["y_state"][match.argmax(axis=1)]
-        preds = []
-        for i0 in range(0, n_take, int(cfg.ppc_chunk_size)):
-            i1 = i0 + int(cfg.ppc_chunk_size)
-            preds.append(np.asarray(pipe.observed_depth_from_y_jit(
-                jnp.asarray(Y_sel[i0:i1], pipe.dtype), jnp.asarray(sel[i0:i1], pipe.dtype))))
-            log.info(f"  ppc {min(i1, n_take)}/{n_take}")
-        mu_draws = np.concatenate(preds, axis=0)     # LATENT model curves, no noise
+    log.info("Posterior predictive...")
+    import jax.numpy as jnp
+    s = np.load(samples_path)
+    if "reached_beta1" in s.files and not bool(int(s["reached_beta1"])):
+        log.warning(f"PPC input samples are TEMPERED (final beta="
+                    f"{float(s['final_beta']):.3f} < 1): the predictive band is "
+                    "under the tempered measure, not the posterior predictive.")
+    theta_all = np.asarray(s["samples"]).reshape(-1, pipe.n_dim)
+    rng = np.random.default_rng(cfg.seed + 1)
+    n_take = min(int(cfg.ppc_draws), theta_all.shape[0])
+    sel = theta_all[rng.choice(theta_all.shape[0], size=n_take, replace=False)]
+    # Every draw is a copy of one final particle's theta, and that particle
+    # carries the converged column its likelihood came from, so a draw's
+    # spectrum is RT only. The final checkpoint holds the columns; it must
+    # hold the samples file's own cloud.
+    ck = np.load(ckpt_path)
+    if not np.array_equal(ck["u_particles"], s["u_particles"]):
+        raise RuntimeError(f"{ckpt_path} does not hold the final cloud of "
+                           f"{samples_path}: no carried columns for the PPC")
+    match = np.all(sel[:, None, :] == ck["theta_particles"][None], axis=2)
+    if not match.any(axis=1).all():
+        raise RuntimeError(f"{int((~match.any(axis=1)).sum())} PPC draw(s) match "
+                           f"no final particle in {ckpt_path}")
+    Y_sel = ck["y_state"][match.argmax(axis=1)]
+    preds = []
+    for i0 in range(0, n_take, int(cfg.ppc_chunk_size)):
+        i1 = i0 + int(cfg.ppc_chunk_size)
+        preds.append(np.asarray(pipe.observed_depth_from_y_jit(
+            jnp.asarray(Y_sel[i0:i1], pipe.dtype), jnp.asarray(sel[i0:i1], pipe.dtype))))
+        log.info(f"  ppc {min(i1, n_take)}/{n_take}")
+    mu_draws = np.concatenate(preds, axis=0)     # LATENT model curves, no noise
 
-        # The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
-        # noise_inflation, and mu already carries the instrument offsets, so a true
-        # replicate is mu + N(0, sigma_eff^2). The latent band (spread of mu) and
-        # the predictive band (spread of y_rep) are different objects: only the
-        # second is comparable to the data, and only it responds to the inferred
-        # noise inflation. Both are saved, named apart.
-        names = list(pipe.names)
-        ni = names.index("noise_inflation") if "noise_inflation" in names else None
-        infl = sel[:, ni][:, None] if ni is not None else np.ones((sel.shape[0], 1))
-        y_rep, sig_eff = predictive_replicates(mu_draws, pipe.obs_sigma, infl, rng)
+    # The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
+    # noise_inflation, and mu already carries the instrument offsets, so a true
+    # replicate is mu + N(0, sigma_eff^2). The latent band (spread of mu) and
+    # the predictive band (spread of y_rep) are different objects: only the
+    # second is comparable to the data, and only it responds to the inferred
+    # noise inflation. Both are saved, named apart.
+    names = list(pipe.names)
+    ni = names.index("noise_inflation") if "noise_inflation" in names else None
+    infl = sel[:, ni][:, None] if ni is not None else np.ones((sel.shape[0], 1))
+    y_rep, sig_eff = predictive_replicates(mu_draws, pipe.obs_sigma, infl, rng)
 
-        # Calibrated posterior-predictive check on the likelihood's OWN discrepancy
-        # T(y, theta) = sum(((y - mu)/sigma_eff)^2), observed vs replicated per draw.
-        # p near 0 or 1 is a misfit; ~0.5 is consistent.
-        t_obs = np.sum(((np.asarray(pipe.obs_depth)[None, :] - mu_draws) / sig_eff) ** 2, axis=1)
-        t_rep = np.sum(((y_rep - mu_draws) / sig_eff) ** 2, axis=1)
-        ppp = float(np.mean(t_rep >= t_obs))
+    # Calibrated posterior-predictive check on the likelihood's OWN discrepancy
+    # T(y, theta) = sum(((y - mu)/sigma_eff)^2), observed vs replicated per draw.
+    # p near 0 or 1 is a misfit; ~0.5 is consistent.
+    t_obs = np.sum(((np.asarray(pipe.obs_depth)[None, :] - mu_draws) / sig_eff) ** 2, axis=1)
+    t_rep = np.sum(((y_rep - mu_draws) / sig_eff) ** 2, axis=1)
+    ppp = float(np.mean(t_rep >= t_obs))
 
-        theta_med = np.median(theta_all, axis=0)
-        mu_med = np.asarray(pipe.observed_depth_model_jit(jnp.asarray(theta_med, pipe.dtype)))
-        sig_med = np.asarray(pipe.obs_sigma) * (float(theta_med[ni]) if ni is not None else 1.0)
-        dof = int(pipe.n_bin) - int(pipe.n_dim)
-        chi2_nu = (float(np.sum(((pipe.obs_depth - mu_med) / sig_med) ** 2) / dof)
-                   if dof > 0 else float("nan"))
-        P.save_npz(cfg.out_dir / "posterior_predictive.npz",
-                   model_draws=mu_draws, pred_draws=y_rep, theta_sel=sel, wl=pipe.obs["wl"],
-                   model_p05=np.nanquantile(mu_draws, 0.05, axis=0),
-                   model_p50=np.nanquantile(mu_draws, 0.50, axis=0),
-                   model_p95=np.nanquantile(mu_draws, 0.95, axis=0),
-                   pred_p05=np.nanquantile(y_rep, 0.05, axis=0),
-                   pred_p50=np.nanquantile(y_rep, 0.50, axis=0),
-                   pred_p95=np.nanquantile(y_rep, 0.95, axis=0),
-                   theta_median=theta_med, mu_at_median=mu_med,
-                   sigma_eff_at_median=sig_med, ppp_chi2=np.asarray(ppp),
-                   chi2_reduced=np.asarray(chi2_nu), chi2_dof=np.asarray(dof),
-                   obs_depth=pipe.obs_depth, obs_sigma=pipe.obs_sigma)
-        log.info(f"Saved posterior predictive | posterior-predictive p (chi2 discrepancy) "
-                 f"= {ppp:.3f} | chi2/dof at posterior median = {chi2_nu:.2f} "
-                 f"(dof = {pipe.n_bin} bins - {pipe.n_dim} params = {dof}, "
-                 "sigma includes the inferred noise inflation)")
+    theta_med = np.median(theta_all, axis=0)
+    mu_med = np.asarray(pipe.observed_depth_model_jit(jnp.asarray(theta_med, pipe.dtype)))
+    sig_med = np.asarray(pipe.obs_sigma) * (float(theta_med[ni]) if ni is not None else 1.0)
+    dof = int(pipe.n_bin) - int(pipe.n_dim)
+    chi2_nu = (float(np.sum(((pipe.obs_depth - mu_med) / sig_med) ** 2) / dof)
+               if dof > 0 else float("nan"))
+    P.save_npz(cfg.out_dir / "posterior_predictive.npz",
+               model_draws=mu_draws, pred_draws=y_rep, theta_sel=sel, wl=pipe.obs["wl"],
+               model_p05=np.nanquantile(mu_draws, 0.05, axis=0),
+               model_p50=np.nanquantile(mu_draws, 0.50, axis=0),
+               model_p95=np.nanquantile(mu_draws, 0.95, axis=0),
+               pred_p05=np.nanquantile(y_rep, 0.05, axis=0),
+               pred_p50=np.nanquantile(y_rep, 0.50, axis=0),
+               pred_p95=np.nanquantile(y_rep, 0.95, axis=0),
+               theta_median=theta_med, mu_at_median=mu_med,
+               sigma_eff_at_median=sig_med, ppp_chi2=np.asarray(ppp),
+               chi2_reduced=np.asarray(chi2_nu), chi2_dof=np.asarray(dof),
+               obs_depth=pipe.obs_depth, obs_sigma=pipe.obs_sigma)
+    log.info(f"Saved posterior predictive | posterior-predictive p (chi2 discrepancy) "
+             f"= {ppp:.3f} | chi2/dof at posterior median = {chi2_nu:.2f} "
+             f"(dof = {pipe.n_bin} bins - {pipe.n_dim} params = {dof}, "
+             "sigma includes the inferred noise inflation)")
 
     log.info("DONE.")
 

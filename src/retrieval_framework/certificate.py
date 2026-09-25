@@ -368,16 +368,14 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
 # density or the numbers a resume carries. Per-JOB caps (smc_max_steps, the
 # walltime governor) are documented as such; the RT chunk sizes are batch
 # splits that are numerically identical at any width; the rest is bookkeeping
-# or post-processing that runs after sampling. `smc_chem_chunk` is NOT free: a
-# chemistry chunk is one batched solve whose lanes share loop ticks (and its
-# own queue under cold_lanes > 0), so it moves the map at the convergence
-# scale (pipeline._make_batch_eval). Everything NOT listed here is bound.
+# or post-processing that runs after sampling. Everything NOT listed here is
+# bound.
 TARGET_FREE_KEYS = frozenset({
-    "out_dir", "run_label", "log_level", "overwrite",
+    "out_dir", "run_label",
     "attrition_justification",
     "smc_max_steps", "walltime_seconds",
     "smc_rt_chunk", "smc_rt_vjp_chunk",
-    "run_inference", "do_ppc", "ppc_draws", "ppc_chunk_size",
+    "run_inference", "ppc_draws", "ppc_chunk_size",
     "num_samples", "num_chains",
 })
 

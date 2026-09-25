@@ -46,8 +46,6 @@ class Config:
     out_dir: Optional[Path] = None     # set by the driver from the run dir + preset
     run_label: str = ""                # short human label for plot titles (e.g. "WASP-39b")
     seed: int = 20260704
-    log_level: str = "INFO"
-    overwrite: bool = True
 
     # Precision is not a knob: VULCAN-JAX forces jax_enable_x64=True on import
     # (vulcan_chem), so the whole chemistry+RT chain runs in float64 unconditionally;
@@ -71,8 +69,8 @@ class Config:
     # (ExoMol/HITEMP high-temperature line lists with H2/He broadening already
     # applied, integrated over each R=1000 band offline; the band grid and the
     # 16-point quadrature come from the files, so there is no spectral-resolution
-    # knob). This is the only value the engine accepts; validate_config refuses
-    # anything else.
+    # knob). This is the only value the engine accepts (build_rt_model refuses
+    # anything else); the certificate refuses a run that recorded another.
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
@@ -89,12 +87,14 @@ class Config:
     # and sum(n) != M init are documented in vulcan_chem. See chem.audit_init.
     abundance_mode: str = "elemental"
     reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
-    # Where a COLD solve starts: "eq" = the network's own Gibbs equilibrium at
-    # the proposal's own T-P and elemental composition (end-to-end JAX, no host
-    # callback; the upstream VULCAN start); "baseline" = the build's baseline
-    # column scaled by the theta masks. The baseline start burns the whole step
-    # budget on cool, weakly mixed draws (notes §1.1). Deterministic in theta,
-    # so not the history-dependent warm start §2.6 rejects.
+    # Where a COLD solve starts: the network's own Gibbs equilibrium at the
+    # proposal's own T-P and elemental composition (end-to-end JAX, no host
+    # callback; the upstream VULCAN start). Deterministic in theta, so not the
+    # history-dependent warm start §2.6 rejects. "eq" is the only value
+    # validate_config accepts: the engine's "baseline" start (the build's
+    # baseline column scaled by the theta masks) burns the whole step budget on
+    # cool, weakly mixed draws (notes §1.1). The engine's default is "baseline",
+    # so profile() always sends this field.
     cold_seed: str = "eq"
     count_min: Optional[int] = None
     count_max: Optional[int] = None
@@ -180,19 +180,16 @@ class Config:
     # (observations._refuse_unresolved_products refuses them). 0 disables the cut.
     obs_max_bin_R: float = 0.0
 
-    # ---- T-P profile (ExoJax built-ins: exojax.atm.atmprof) -------------------
-    # "guillot" : atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f) -- the built-in
-    #             irradiated analytic profile (uses jnp.exp, forward-mode-clean).
-    tp_model: str = "guillot"
+    # ---- T-P profile: exojax.atm.atmprof.atmprof_Guillot(P, g, kappa, gamma, Tint,
+    #      Tirr, f), the built-in irradiated analytic profile (uses jnp.exp,
+    #      forward-mode-clean); f = GUILLOT_F below --------------------------------
     tp_gravity_cgs: float = 422.0      # WASP-39b surface gravity (config.GS_CGS)
-    tp_f: float = 0.25                 # 1/4 = whole-planet average (transmission terminator)
     tp_Tint_K: float = 150.0           # fixed interior temperature (transmission barely constrains it)
     tp_infer_gamma: bool = True        # retrieve log10(gamma); False -> fixed no-inversion
     tp_gamma_fixed: float = 0.4        # used only when tp_infer_gamma=False
 
     # ---- clouds (ExoJax powerlaw_clouds: kappa(nu)=kappac0*(nu/CLOUD_NUC0)^alphac,
     #      cm^2 per gram of atmosphere, uniformly mixed; alphac=0 -> gray deck) -----
-    use_clouds: bool = True
     prior_log10kappa_cloud: Tuple[float, float] = (-7.0, 1.0)   # cm^2/g at 3.5 um
     truth_log10kappa_cloud: float = -6.5                        # ~cloud-free injection
     prior_cloud_alpha: Tuple[float, float] = (0.0, 6.0)         # 0=gray, 4~Rayleigh haze
@@ -202,7 +199,6 @@ class Config:
     infer_lnZ: bool = True
     infer_c_o: bool = True
     infer_lnKzz: bool = True
-    infer_lnR0: bool = True
     infer_offsets: bool = True         # one flat depth offset per instrument group beyond the reference
 
     # ---- priors (all bounded; uniform unless noted). Truth = synthetic-injection
@@ -268,12 +264,12 @@ class Config:
     # "mala": preconditioned MALA on the staged forward-jvp(chem)+vjp(RT)
     #         gradient; "rwm": full-covariance random-walk Metropolis on the SAME
     #         Cholesky preconditioner, primal-only, symmetric proposal so log q
-    #         cancels. Both read mala_step_size as the scale of the proposal
-    #         covariance 2*step*C, so the step, its clamps and the Robbins-Monro
-    #         state are shared. This is a DELIBERATE configured kernel, not a
-    #         fallback: under "mala" a flagged gradient pathology still raises.
+    #         cancels. Both read the step as the scale of the proposal
+    #         covariance 2*step*C, so the step (seeded at MALA_STEP0), its clamps
+    #         and the Robbins-Monro state are shared; only the target acceptance
+    #         differs (TARGET_ACCEPT). This is a DELIBERATE configured kernel, not
+    #         a fallback: under "mala" a flagged gradient pathology still raises.
     smc_mcmc_kernel: str = "mala"
-    mala_step_size: float = 0.2
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
     # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
     # (finite certified primal, non-finite forward-mode tangent). Such
@@ -301,9 +297,6 @@ class Config:
     # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
     # random-overlap folds, so its memory is linear in this width (notes 1.3).
     smc_rt_vjp_chunk: int = 6
-    # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
-    # chemistry memory is independent of the spectral grid.
-    smc_chem_chunk: int = 0
     # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
     # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
     # and refills a lane that certifies with the next draw inside the same
@@ -321,27 +314,11 @@ class Config:
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
 
-    # MALA step size: the per-stage Robbins-Monro adaptation below is the only
-    # tuner. mala_step_size seeds it.
-    mcmc_target_accept_mala: float = 0.55
-    # 0.234 is the d->inf optimal RWM acceptance (MALA's is 0.574).
-    mcmc_target_accept_rwm: float = 0.234
-    mcmc_step_size_min: float = 1.0e-3
-    mcmc_step_size_max: float = 3.0
-    # Per-stage adaptation: the MALA proposal is preconditioned with the ABSOLUTE
-    # per-dim std of the freshly resampled cloud (clipped to [1e-3, mcmc_scale_clip]),
-    # so the proposal narrows in lockstep with tempering; the scalar step size is then
-    # only Robbins-Monro fine-tuned toward mcmc_target_accept_mala.
-    mcmc_stage_adapt: bool = True
-    mcmc_stage_adapt_gain: float = 1.0
-    mcmc_scale_clip: float = 20.0
-
     # posterior draws
     num_samples: int = 48
     num_chains: int = 2
 
-    # ---- posterior predictive -------------------------------------------------
-    do_ppc: bool = True
+    # ---- posterior predictive (always run after a finished ladder) ------------
     ppc_draws: int = 64
     ppc_chunk_size: int = 16
 
@@ -393,6 +370,19 @@ class Config:
 # Presets live with each case (runs/<case>/case.py), not here: a preset IS the
 # planet-specific part of a retrieval. The framework only defines the schema.
 
+# Fixed choices, not Config fields: no preset or override ever set them.
+GUILLOT_F = 0.25        # Guillot f: 1/4 = whole-planet average irradiation
+# The mutation step: seeded at MALA_STEP0, Robbins-Monro tuned once per stage
+# toward the kernel's TARGET_ACCEPT (0.234 is the d->inf optimal RWM rate,
+# MALA's is 0.574) and clamped to [STEP_MIN, STEP_MAX]. The preconditioner is
+# the ABSOLUTE per-dim width of the freshly resampled cloud, clipped to
+# [1e-3, SCALE_CLIP], so the proposal narrows with the tempering and the step
+# only fine-tunes.
+MALA_STEP0 = 0.2
+TARGET_ACCEPT = {"mala": 0.55, "rwm": 0.234}
+STEP_MIN, STEP_MAX = 1.0e-3, 3.0
+SCALE_CLIP = 20.0
+
 
 # Parameter specification (the ordered, active parameter list + priors)
 @dataclass(frozen=True)
@@ -427,23 +417,19 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
         add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
 
     # --- T-P (ExoJax Guillot) ---
-    if cfg.tp_model != "guillot":
-        raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
     add("Tirr", r"$T_{\rm irr}$ [K]", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
     add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
     if cfg.tp_infer_gamma:
         add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
 
     # --- radius nuisance ---
-    if cfg.infer_lnR0:
-        add("lnR0", r"$\ln R_0$", *cfg.prior_lnR0, cfg.truth_lnR0, "lnR0")
+    add("lnR0", r"$\ln R_0$", *cfg.prior_lnR0, cfg.truth_lnR0, "lnR0")
 
     # --- clouds (RT-only, like lnR0: cheap gradient dims) ---
-    if cfg.use_clouds:
-        add("log10kappa_cloud", r"$\log_{10}\kappa_{\rm cl}$", *cfg.prior_log10kappa_cloud,
-            cfg.truth_log10kappa_cloud, "cloud")
-        add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha,
-            cfg.truth_cloud_alpha, "cloud")
+    add("log10kappa_cloud", r"$\log_{10}\kappa_{\rm cl}$", *cfg.prior_log10kappa_cloud,
+        cfg.truth_log10kappa_cloud, "cloud")
+    add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha,
+        cfg.truth_cloud_alpha, "cloud")
 
     # --- inter-instrument offsets (ppm), one per group beyond the reference ---
     if cfg.infer_offsets and groups is not None and len(groups) > 1:
@@ -583,7 +569,7 @@ def validate_config(cfg: Config) -> None:
                  "ppc_chunk_size", "cold_refill_chunk"):
         if int(getattr(cfg, name)) < 1:
             raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
-    for name in ("smc_rt_chunk", "smc_rt_vjp_chunk", "smc_chem_chunk"):
+    for name in ("smc_rt_chunk", "smc_rt_vjp_chunk"):
         if int(getattr(cfg, name)) < 0:
             raise ValueError(f"{name} must be >= 0 (0 = no chunking), "
                              f"got {getattr(cfg, name)!r}")
@@ -595,10 +581,6 @@ def validate_config(cfg: Config) -> None:
     if not (0.0 < cfg.smc_tangent_bad_max_frac <= 1.0):
         raise ValueError("smc_tangent_bad_max_frac must be in (0, 1] -- it is the "
                          "systematic-breakage backstop, not an off switch")
-    if not (0.0 < cfg.mcmc_step_size_min < cfg.mcmc_step_size_max):
-        raise ValueError(
-            f"need 0 < mcmc_step_size_min < mcmc_step_size_max, got "
-            f"{cfg.mcmc_step_size_min!r} and {cfg.mcmc_step_size_max!r}")
     if str(cfg.smc_mcmc_kernel).strip().lower() not in ("mala", "rwm"):
         raise ValueError(
             f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
@@ -660,10 +642,10 @@ def validate_config(cfg: Config) -> None:
             "disabling one shifts the T-P and nuisance indices and silently "
             "reinterprets the parameter vector. Keep all three inferred (use a "
             "tight prior range if you want one effectively fixed).")
-    if cfg.tp_model != "guillot":
-        raise ValueError(f"unknown tp_model {cfg.tp_model!r}")
-    if str(cfg.cold_seed) not in ("eq", "baseline"):
-        raise ValueError(f"unknown cold_seed {cfg.cold_seed!r}: expected 'eq' or 'baseline'")
+    if str(cfg.cold_seed) != "eq":
+        raise ValueError(f"cold_seed={cfg.cold_seed!r}: only 'eq' (the equilibrium "
+                         "start) is supported; the baseline start burns the step "
+                         "budget on cool, weakly mixed draws (notes §1.1)")
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
         raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "
                          "(expected 'elemental' or 'masks')")
@@ -684,14 +666,6 @@ def validate_config(cfg: Config) -> None:
         import warnings
         warnings.warn("use_photo=False: the forward-mode tangent is only validated with "
                       "photochemistry ON. Proceed with caution.")
-    if str(cfg.opacity_mode) != "exomolop":
-        raise ValueError(
-            f"opacity_mode={cfg.opacity_mode!r} is not available: the sampled "
-            "line-by-line path ('lbl') was removed with vulcan-forward 0.11.0 "
-            "(measured 857 ppm rms / 3177 ppm max binned-shape error and 1.30x "
-            "too much feature contrast on the production band, non-convergent; "
-            "notes.md). Correlated-k over the ExoMolOP tables ('exomolop', the "
-            "default) is the only opacity path -- drop the key.")
 
 
 # Loud config banner (printed at the top of every run so nothing is a surprise)
@@ -738,8 +712,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
     kern = str(cfg.smc_mcmc_kernel).strip().lower()
     kern_label = ("forward-jvp MALA" if kern == "mala"
                   else "gradient-free random-walk Metropolis")
-    kern_target = (cfg.mcmc_target_accept_mala if kern == "mala"
-                   else cfg.mcmc_target_accept_rwm)
+    kern_target = TARGET_ACCEPT[kern]
 
     lines = [
         "", bar,
@@ -763,7 +736,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
         "raise only if < N survive)",
         rule("T-P profile"),
-        f"    model={cfg.tp_model}   Tint={cfg.tp_Tint_K:g}K   f={cfg.tp_f:g}   g={cfg.tp_gravity_cgs:g}cgs"
+        f"    model=guillot   Tint={cfg.tp_Tint_K:g}K   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
         f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}",
         "    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
         rule("data"),
@@ -772,11 +745,10 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
         f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
         f"target_ess_frac={cfg.smc_target_ess_frac:g}",
-        f"    kernel={kern}   step={cfg.mala_step_size:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
-        f"    preconditioner: full cloud covariance (Cholesky)   "
-        f"step tuning: {'per-stage Robbins-Monro' if cfg.mcmc_stage_adapt else 'fixed'}",
+        f"    kernel={kern}   step={MALA_STEP0:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
+        "    preconditioner: full cloud covariance (Cholesky)   step tuning: per-stage Robbins-Monro",
         f"    chem_mode={cfg.smc_chem_mode}   "
-        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}   chem_chunk={cfg.smc_chem_chunk}",
+        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}",
         f"    walltime governor: {cfg.walltime_seconds / 3600.0:.1f} h"
         + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
         rule(f"parameters ({len(specs)})   [prior : truth]"),

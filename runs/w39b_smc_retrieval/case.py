@@ -93,7 +93,6 @@ def smoke_config(**overrides: Any) -> Config:
         smc_num_particles=12, smc_num_mcmc_steps=4, smc_max_steps=8,
         smc_target_ess_frac=0.5,
         num_samples=12, num_chains=1, ppc_draws=12, ppc_chunk_size=6,
-        do_ppc=True,
     )
     base.update(overrides)
     return Config(**base)
@@ -179,7 +178,6 @@ def gpu_config(**overrides: Any) -> Config:
         # RT vjp costs at most ~1.5 s of a gradient evaluation (notes §1.4).
         # Chunking is numerically identical at any width.
         smc_rt_vjp_chunk=4,
-        mcmc_stage_adapt=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall
     )                                     # for build/compile + init + PPC + plots

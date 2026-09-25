@@ -202,7 +202,7 @@ def main() -> None:
     out = cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[logging.StreamHandler(), logging.FileHandler(out / "run.log", mode="a")],
         force=True)
@@ -234,7 +234,7 @@ def main() -> None:
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names}")
     obs_path = out / "observations.npz"
-    obs_save = set_observations(cfg, pipe, P, obs_path)
+    obs_save = set_observations(cfg, pipe, P)
 
     # resume identity before anything in the run directory is written; the
     # start policy, the batch width (the lane queue's composition) and n_live
@@ -261,8 +261,7 @@ def main() -> None:
                               "set RESUME=1 to continue it, or point SMC_RETRIEVAL_OUT_DIR "
                               "at a fresh directory.")
     write_config_json(cfg, pipe, preset)
-    if obs_save is not None:
-        P.save_npz(obs_path, **obs_save)
+    P.save_npz(obs_path, **obs_save)
     (out / _cert.MANIFEST_FILE).write_text(json.dumps(
         _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True, default=str) + "\n")
     digest_path.write_text(want + "\n")

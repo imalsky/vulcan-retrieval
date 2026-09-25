@@ -9,9 +9,9 @@ Reads the .npz bundles run_smc.py wrote into an output dir and produces, in
     tp_posterior.png      retrieved Guillot T-P credible band (+ truth for synthetic)
     smc_diagnostics.png   beta ladder / ESS / acceptance + step size / unique + logZ
 
-Self-contained: numpy + matplotlib + corner only -- no jax, no VULCAN, no exojax
-(the Guillot curve is re-evaluated here in numpy from the same Guillot 2010 Eq. 29
-that exojax.atm.atmprof.atmprof_Guillot implements).
+numpy + matplotlib + corner and the jax-free config_schema constants -- no jax,
+no VULCAN, no exojax (the Guillot curve is re-evaluated here in numpy from the
+same Guillot 2010 Eq. 29 that exojax.atm.atmprof.atmprof_Guillot implements).
 
 Usage:  python -m retrieval_framework.plot_smc <out_dir>
         (relative paths resolve against the cwd; a run dir's outputs live in
@@ -28,6 +28,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from retrieval_framework.config_schema import GUILLOT_F, TARGET_ACCEPT
 
 DPI = 200
 
@@ -172,33 +174,32 @@ def main() -> None:
     print("[plot] spectrum_fit.png")
 
     # ---------------- T-P posterior ----------------
-    if cfgj.get("tp_model", "guillot") == "guillot":
-        g_cgs = float(cfgj["tp_gravity_cgs"]); f_g = float(cfgj["tp_f"]); Tint = float(cfgj["tp_Tint_K"])
-        iT = names.index("Tirr"); ik = names.index("log10kappa")
-        ig = names.index("log10gamma") if "log10gamma" in names else None
-        gam_fix = float(cfgj.get("tp_gamma_fixed", 0.4))
-        p_bar = np.logspace(-8, np.log10(7.0), 120)
-        rng = np.random.default_rng(3)
-        sel = theta[rng.choice(theta.shape[0], size=min(300, theta.shape[0]), replace=False)]
-        curves = np.stack([
-            guillot_T(p_bar, g_cgs, 10.0 ** t[ik], (10.0 ** t[ig] if ig is not None else gam_fix),
-                      Tint, t[iT], f_g) for t in sel])
-        qs = np.nanpercentile(curves, [5, 50, 95], axis=0)
-        fig, ax = plt.subplots(figsize=(4.6, 5.4))
-        ax.fill_betweenx(p_bar, qs[0], qs[2], alpha=0.30, color="#1f77b4", lw=0, label="5-95%")
-        ax.plot(qs[1], p_bar, color="#1f77b4", lw=1.6, label="median")
-        if synthetic and np.isfinite(truth).any():
-            ax.plot(guillot_T(p_bar, g_cgs, 10.0 ** truth[ik],
-                              (10.0 ** truth[ig] if ig is not None else gam_fix), Tint, truth[iT], f_g),
-                    p_bar, "k--", lw=1.2, label="truth")
-        ax.set_yscale("log"); ax.invert_yaxis()
-        ax.set_xlabel("T [K]"); ax.set_ylabel("P [bar]")
-        ax.legend(fontsize=8, frameon=False)
-        # same tempered stamp as corner/spectrum: this band is NOT a posterior band
-        # when the ladder stopped at beta<1
-        ax.set_title("Retrieved Guillot T-P" + tempered_tag, fontsize=9)
-        fig.tight_layout(); fig.savefig(plots / "tp_posterior.png", dpi=DPI); plt.close(fig)
-        print("[plot] tp_posterior.png")
+    g_cgs = float(cfgj["tp_gravity_cgs"]); f_g = GUILLOT_F; Tint = float(cfgj["tp_Tint_K"])
+    iT = names.index("Tirr"); ik = names.index("log10kappa")
+    ig = names.index("log10gamma") if "log10gamma" in names else None
+    gam_fix = float(cfgj.get("tp_gamma_fixed", 0.4))
+    p_bar = np.logspace(-8, np.log10(7.0), 120)
+    rng = np.random.default_rng(3)
+    sel = theta[rng.choice(theta.shape[0], size=min(300, theta.shape[0]), replace=False)]
+    curves = np.stack([
+        guillot_T(p_bar, g_cgs, 10.0 ** t[ik], (10.0 ** t[ig] if ig is not None else gam_fix),
+                  Tint, t[iT], f_g) for t in sel])
+    qs = np.nanpercentile(curves, [5, 50, 95], axis=0)
+    fig, ax = plt.subplots(figsize=(4.6, 5.4))
+    ax.fill_betweenx(p_bar, qs[0], qs[2], alpha=0.30, color="#1f77b4", lw=0, label="5-95%")
+    ax.plot(qs[1], p_bar, color="#1f77b4", lw=1.6, label="median")
+    if synthetic and np.isfinite(truth).any():
+        ax.plot(guillot_T(p_bar, g_cgs, 10.0 ** truth[ik],
+                          (10.0 ** truth[ig] if ig is not None else gam_fix), Tint, truth[iT], f_g),
+                p_bar, "k--", lw=1.2, label="truth")
+    ax.set_yscale("log"); ax.invert_yaxis()
+    ax.set_xlabel("T [K]"); ax.set_ylabel("P [bar]")
+    ax.legend(fontsize=8, frameon=False)
+    # same tempered stamp as corner/spectrum: this band is NOT a posterior band
+    # when the ladder stopped at beta<1
+    ax.set_title("Retrieved Guillot T-P" + tempered_tag, fontsize=9)
+    fig.tight_layout(); fig.savefig(plots / "tp_posterior.png", dpi=DPI); plt.close(fig)
+    print("[plot] tp_posterior.png")
 
     # ---------------- SMC diagnostics ----------------
     xp = out / "smc_extra_fields.npz"
@@ -218,9 +219,7 @@ def main() -> None:
         a.plot(stages, np.asarray(x["smc_acceptance_rate"], float), "o-", ms=3, label="acceptance")
         # archived configs predate smc_mcmc_kernel, so default to mala
         _kern = str(cfgj.get("smc_mcmc_kernel", "mala")).strip().lower()
-        a.axhline(float(cfgj["mcmc_target_accept_mala"] if _kern == "mala"
-                        else cfgj["mcmc_target_accept_rwm"]),
-                  color="r", lw=0.7, ls="--", label="target")
+        a.axhline(TARGET_ACCEPT[_kern], color="r", lw=0.7, ls="--", label="target")
         a2 = a.twinx(); a2.semilogy(stages, np.asarray(x["smc_step_size_history"], float),
                                     "s-", ms=2.5, color="#2ca02c", alpha=0.7, label="step size")
         a.set_xlabel("stage"); a.set_ylabel("acceptance"); a2.set_ylabel("step size")

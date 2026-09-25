@@ -56,7 +56,6 @@ def _repo_lnz(seed):
     theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)
     cfg = C.Config(smc_num_particles=N_PART, smc_num_mcmc_steps=N_MCMC,
                    smc_max_steps=60, smc_target_ess_frac=ESS_FRAC,
-                   mcmc_stage_adapt=True, mala_step_size=0.2,
                    num_samples=N_PART, num_chains=1)
     pipe = P.Pipeline(
         cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,

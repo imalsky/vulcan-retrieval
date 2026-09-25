@@ -532,7 +532,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         raise ValueError(f"smc_chem_mode must be 'warm' or 'cold', got {chem_mode!r}")
     rt_chunk = int(cfg.smc_rt_chunk or 0)
     rt_vjp_chunk = int(cfg.smc_rt_vjp_chunk or 0)
-    chem_chunk = int(cfg.smc_chem_chunk or 0)
     y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)          # (nz, ni)
     eye_c = jnp.eye(n_chem_tp, dtype=dtype)
     have_cloud = bool(n_cloud)
@@ -761,10 +760,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     DAUX = jax.tree_util.tree_map(
                         lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
                     return AUX, DAUX, Y_l[0], CD_l[0]
-
-            def _chem_map(C_, Y, refs):
-                return _map_chunks(lambda a: _chem_batch(*a),
-                                   (C_, Y, refs), chem_chunk)
         else:
             # Primal-only, but gated the SAME way as the gradient path: the
             # likelihood of a given map must be ONE function. This evaluator is
@@ -811,16 +806,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                      else jnp.ones((Theta.shape[0],), bool))
             usable = valid   # narrowed to (valid & certified) on the warm gradient path
             if want_grad:
-                # Chemistry jvp directions, optionally lax.map-chunked over
-                # particles: a chunk is ONE batched solve in either chem mode,
-                # so its lanes share the chunk's loop ticks (and, with
-                # cold_lanes > 0, its own queue) -- chunking moves the answer at
-                # the convergence scale, it is not the single wide call.
-                # The chemistry tangent lanes are cheap (probe 2026-07-07: ~20 MB
-                # per lane pair, 0.78 GiB at 36 lanes), so full width
-                # (chem_chunk=0) is the default. The RT VJP below is the memory
-                # wall (per-lane GiB: notes.md §1.3).
-                AUX, DAUX, Ynew, CD = _chem_map(C_, Y, refs)
+                # Chemistry jvp directions: ONE batched solve for the whole
+                # cloud in either chem mode. The chemistry tangent lanes are
+                # cheap (~20 MB per lane pair, notes.md §1.3); the RT VJP below
+                # is the memory wall.
+                AUX, DAUX, Ynew, CD = _chem_batch(C_, Y, refs)
                 vals, g_th, bads = _map_chunked(_rt_val_grad, (AUX, DAUX, Theta),
                                                 rt_vjp_chunk)
                 G = g_th * dTh                                       # chain to u-space
@@ -1891,14 +1881,12 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                             _init_draw_count(pipe, N))
 
     # _DRAW_KEY / _INIT_KEY sit outside the per-stage fold_in namespace below.
-    step = float(cfg.mala_step_size)
-    # Both kernels share mala_step_size, its clamps and the Robbins-Monro state;
+    step = C.MALA_STEP0
+    # Both kernels share the step, its clamps and the Robbins-Monro state;
     # only the acceptance they aim at differs (0.234 is the d->inf optimum for a
     # random walk, 0.55 the MALA target).
-    target_acc = float(cfg.mcmc_target_accept_mala
-                       if str(cfg.smc_mcmc_kernel).strip().lower() == "mala"
-                       else cfg.mcmc_target_accept_rwm)
-    log_step = math.log(min(max(step, cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
+    target_acc = C.TARGET_ACCEPT[str(cfg.smc_mcmc_kernel).strip().lower()]
+    log_step = math.log(min(max(step, C.STEP_MIN), C.STEP_MAX))
     scale = np.eye(n_dim)
     mutate = _make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
 
@@ -2056,8 +2044,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         cost = cost[idx]
         # (3.5) preconditioner from the freshly RESAMPLED cloud (absolute per-dim
         # width: the proposal tracks the tempered posterior as it narrows)
-        if cfg.mcmc_stage_adapt:
-            scale = _proposal_scale(np.asarray(jax.device_get(U)), cap=float(cfg.mcmc_scale_clip))
+        scale = _proposal_scale(np.asarray(jax.device_get(U)), cap=C.SCALE_CLIP)
         # (4) mutate at the new temperature -- badgrad events are handled as
         # zero-drift moves and warn+dump per-particle forensics next to the
         # checkpoint; a sweep beyond the systematic-breakage backstop raises
@@ -2080,9 +2067,9 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         n_uniq = int(np.unique(np.round(U_np, 9), axis=0).shape[0])
         # (5) Robbins-Monro step-size trim toward the target acceptance (fine-tuning
         # only -- the width is carried by the absolute preconditioner above)
-        if cfg.mcmc_stage_adapt and math.isfinite(acc_f):
-            log_step += float(cfg.mcmc_stage_adapt_gain) * (acc_f - target_acc)
-            log_step = math.log(min(max(math.exp(log_step), cfg.mcmc_step_size_min), cfg.mcmc_step_size_max))
+        if math.isfinite(acc_f):
+            log_step += acc_f - target_acc
+            log_step = math.log(min(max(math.exp(log_step), C.STEP_MIN), C.STEP_MAX))
 
         beta = beta_new
         betas.append(beta); ess_hist.append(ess); acc_hist.append(acc_f)
