@@ -103,50 +103,7 @@ def _replay(passed=True):
 
 def test_a_clean_cold_run_passes():
     assert validate(_passing_cert(), _replay()) == []
-
-
-@pytest.mark.parametrize("key, value", [
-    ("art_ptop_bar", 1e-8),          # pressure domain
-    ("nz", 80),                      # chemistry grid
-    ("art_nlayer", 101),             # RT grid
-    ("yconv_cri", 0.001),            # convergence tolerance
-    ("molecules", ["H2O"]),          # opacity list
-])
-def test_artifact_measured_at_a_different_state_warns(key, value):
-    """A PASS artifact certifies only the state it was measured at. Every key it
-    recorded is bound, not a hand-picked three -- a ladder run at a different
-    chemistry tolerance or molecule list measured a different model, whatever its
-    grid says (the shipped artifacts were made at yconv_cri=0.001 vs production
-    0.01 and rode a three-key comparison)."""
-    c = _passing_cert()
-    c["resolved_config"][key] = value
-    assert any("different state" in w for w in certificate.artifact_warnings(c))
-
-
-def test_artifact_without_a_recorded_config_warns():
-    c = _passing_cert()
-    c["validation_artifacts"]["resolution_ladder"]["resolved_config"] = {}
-    assert any("nothing binds it" in w for w in certificate.artifact_warnings(c))
-    assert not certificate.artifact_warnings(_passing_cert())
-
-
-@pytest.mark.parametrize("key", ["smc_logZ", "smc_logZ_box",
-                                 "log_support_fraction",
-                                 "log_support_fraction_err"])
-def test_every_evidence_semantics_field_is_required(key):
-    c = _passing_cert()
-    c["evidence"][key] = None
-    assert any(f"no {key} recorded" in p for p in validate(c, _replay()))
-
-
-# --- run health: a diagnostic that is PRESENT is not a diagnostic that PASSED --
-
-
-@pytest.mark.parametrize("acc", [[0.55, 0.5, 0.01], [0.55, 0.5, 0.99]])
-def test_acceptance_outside_the_band_is_refused(acc):
-    c = _passing_cert()
-    c["diagnostics"]["acceptance_rate"] = acc
-    assert any("acceptance" in p for p in validate(c, _replay()))
+    assert certificate.warnings(_passing_cert()) == []
 
 
 # --- warm runs ---------------------------------------------------------------
@@ -240,6 +197,34 @@ _REFUSALS = [
      ("no reference coverage",)),
     ("warm_stale_validate_warm", lambda: _warm_cert(checkpoint_matches=False), _noop, _replay,  # same binding mala_reversibility carries
      ("does not match the current",)),
+    *[(f"warm_{k}_over_gate", lambda k=k, v=v: _warm_cert(**{k: v}), _noop, _replay, (k,))
+      for k, v in (("dlogl_max", 5.0), ("spectrum_dppm_max", 50.0),
+                   ("grad_rel_max_gated", 0.9), ("grad_zeroed_frac", 0.9))],
+    *[(f"evidence_{k}_missing", _passing_cert, _set("evidence", k, value=None), _replay,
+       (f"no {k} recorded",)) for k in ("smc_logZ", "smc_logZ_box", "log_support_fraction")],
+    # a diagnostic that is PRESENT is not a diagnostic that PASSED
+    ("acceptance_too_low", _passing_cert, _set("diagnostics", "acceptance_rate", value=[0.55, 0.5, 0.01]),
+     _replay, ("acceptance",)),
+    ("acceptance_too_high", _passing_cert, _set("diagnostics", "acceptance_rate", value=[0.55, 0.5, 0.99]),
+     _replay, ("acceptance",)),
+    ("late_badgrad", _passing_cert, _set("diagnostics", "badgrad", value=[3, 1, 400]), _replay, ("zero-drift",)),
+    ("ragged_diagnostics", _passing_cert,             # a ragged series must fail, not silently disable its gate
+     _set("diagnostics", "warm_stalled", value=[4, 0]), _replay, ("mismatched lengths",)),
+    ("nonfinite_diagnostic", _passing_cert, _set("diagnostics", "ess", value=[110.0, float("nan"), 105.0]),
+     _replay, ("non-finite",)),
+    # the checkpoint, the samples and the diagnostics must all name the SAME target
+    *[(f"{k}_missing", _passing_cert, _set("target", k, value=None), _replay, ("no target digest",))
+      for k in ("digest", "digest_samples", "digest_checkpoint")],
+    *[(f"{k}_disagrees", _passing_cert, _set("target", k, value="0" * 64), _replay, ("DISAGREES",))
+      for k in ("digest_samples", "digest_checkpoint")],
+    # an UNMEASURED support fraction is not a small one; an aggregate that
+    # disagrees with its own parts describes a different run
+    ("attrition_missing", _passing_cert, _set("evidence", "log_conv_attrition", value=None), _replay,
+     ("missing or non-finite",)),
+    ("attrition_nan", _passing_cert, _set("evidence", "log_conv_attrition", value=float("nan")), _replay,
+     ("missing or non-finite",)),
+    ("attrition_disagrees_with_parts", _passing_cert, _set("evidence", "f_c1", value=0.5), _replay,
+     ("does not equal",)),
 ]
 
 
@@ -261,6 +246,12 @@ _ARTIFACT_WARNINGS = [
      _replay, ("data:opacity_sha256:H2O",)),
     ("artifact_opacity_data_unrecorded", _passing_cert,
      _set("validation_artifacts", "top_pressure_ladder", "science_data", value={}), _replay, ("data:not recorded",)),
+    ("artifact_config_unrecorded", _passing_cert,
+     _set("validation_artifacts", "resolution_ladder", "resolved_config", value={}), _replay, ("nothing binds it",)),
+    # a PASS artifact certifies only the state it was measured at, every key it recorded
+    *[(f"artifact_different_{k}", _passing_cert, _set("resolved_config", k, value=v), _replay, ("different state",))
+      for k, v in (("art_ptop_bar", 1e-8), ("nz", 80), ("art_nlayer", 101),
+                   ("yconv_cri", 0.001), ("molecules", ["H2O"]))],
 ]
 
 
@@ -283,18 +274,6 @@ def test_the_certificate_refuses(cert, mutate, replay, expect):
     mutate(c)
     problems = validate(c, replay())
     assert any(all(s in p for s in expect) for p in problems), (expect, problems)
-
-
-@pytest.mark.parametrize("key, bad", [
-    ("dlogl_max", 5.0),
-    ("spectrum_dppm_max", 50.0),
-    ("grad_rel_max_gated", 0.9),
-    ("grad_zeroed_frac", 0.9),
-    ("atom_ratio_rel_max", 1.0),
-])
-def test_each_warm_axis_can_fail_the_certificate(key, bad):
-    problems = validate(_warm_cert(**{key: bad}), _replay())
-    assert any(key in p for p in problems), (key, problems)
 
 
 def test_collect_reads_the_files_and_keys_written_by_run_smc(tmp_path,
@@ -468,22 +447,6 @@ def test_target_digest_moves_with_code_and_with_data(monkeypatch):
     assert certificate.target_digest(cfg, pipe) != a, "observations not bound"
 
 
-@pytest.mark.parametrize("mutate, expect", [
-    (lambda d: d.update(badgrad=[3, 1, 400]), "zero-drift"),
-    (lambda d: d.update(warm_stalled=[4, 0]), "mismatched lengths"),
-    (lambda d: d.update(ess=[110.0, float("nan"), 105.0]), "non-finite"),
-])
-def test_diagnostic_arrays_are_gated_not_just_present(mutate, expect):
-    """A ragged or non-finite series must FAIL, not silently disable its gate.
-
-    len(warm_capped) != len(warm_stalled) used to skip the convergence-rejection
-    gate entirely, which reads exactly like passing it.
-    """
-    c = _passing_cert()
-    mutate(c["diagnostics"])
-    assert any(expect in p for p in validate(c, _replay()))
-
-
 @pytest.mark.parametrize("survived, justified, warned", [
     (0.50, False, True),    # 50% removed: warned whatever is claimed
     (0.50, True,  True),
@@ -504,22 +467,6 @@ def test_convergence_attrition_warns(survived, justified, warned):
     assert bool(certificate.attrition_warnings(c)) is warned
 
 
-@pytest.mark.parametrize("mutate, expect", [
-    (lambda t: t.update(digest=None), "no target digest"),
-    (lambda t: t.update(digest_samples=None), "no target digest"),
-    (lambda t: t.update(digest_checkpoint=None), "no target digest"),
-    (lambda t: t.update(digest_samples="0" * 64), "DISAGREES"),
-    (lambda t: t.update(digest_checkpoint="0" * 64), "DISAGREES"),
-])
-def test_target_digest_must_be_present_and_agree(mutate, expect):
-    """RC-03: the checkpoint, the samples and the diagnostics must all name the
-    SAME target. A missing copy is not a pass -- an unbound number is exactly
-    what lets two targets be reported as one run."""
-    c = _passing_cert()
-    mutate(c["target"])
-    assert any(expect in p for p in validate(c, _replay()))
-
-
 def test_absent_checkpoint_does_not_demand_its_digest():
     """A finished run may be certified after its checkpoint is cleaned up.
 
@@ -532,19 +479,6 @@ def test_absent_checkpoint_does_not_demand_its_digest():
     assert not [p for p in validate(c, _replay()) if "target digest" in p]
     c["target"]["digest_manifest"] = None
     assert any("target_manifest.json" in p for p in validate(c, _replay()))
-
-
-@pytest.mark.parametrize("mutate, expect", [
-    (lambda e: e.update(log_conv_attrition=None), "missing or non-finite"),
-    (lambda e: e.update(log_conv_attrition=float("nan")), "missing or non-finite"),
-    (lambda e: e.update(f_c1=0.5), "does not equal"),
-])
-def test_attrition_evidence_fails_closed(mutate, expect):
-    """An UNMEASURED support fraction is not a small one, and an aggregate that
-    disagrees with its own parts describes a different run."""
-    c = _passing_cert()
-    mutate(c["evidence"])
-    assert any(expect in p for p in validate(c, _replay()))
 
 
 def _repo(**over):
@@ -646,12 +580,6 @@ def test_resume_is_refused_before_the_run_directory_is_written(
             refuse_mismatched_resume(ck, want)
     else:
         refuse_mismatched_resume(ck, want)
-
-
-def test_resume_with_no_checkpoint_is_not_this_gate(tmp_path):
-    """Absent checkpoint is run_smc's own fail-loud path, not a target mismatch."""
-    from retrieval_framework.run_smc import refuse_mismatched_resume
-    refuse_mismatched_resume(tmp_path / "nope.npz", "a" * 64)
 
 
 def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):

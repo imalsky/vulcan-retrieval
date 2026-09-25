@@ -22,6 +22,13 @@ SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", -8.0, 8.0, float(M[i]), "chem")
          for i in range(3)]
 
 
+def _dying_make_mutation(pipe_, n_mcmc):
+    """A mutation kernel that dies before its first sweep (a stage-0 death)."""
+    def mutate(*a, **k):
+        raise RuntimeError("simulated stage-0 death")
+    return mutate
+
+
 def _stub_pipe(cfg):
     theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)
     m = jnp.asarray(M)
@@ -306,20 +313,13 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
     must survive a stage-0 death and let RESUME skip the init entirely (NAS job
     65200: a bad-gradient raise at stage 0 threw away a 2.1 h init because the
     only checkpoint was per-stage)."""
-    import pytest
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     ck = tmp_path / "ck.npz"
 
     # run 1: the mutation kernel dies at stage 0 (simulating the bad-grad raise)
     real_make_mutation = P._make_mutation
-
-    def dying_make_mutation(pipe_, n_mcmc):
-        def mutate(*a, **k):
-            raise RuntimeError("simulated stage-0 bad-gradient death")
-        return mutate
-
-    monkeypatch.setattr(P, "_make_mutation", dying_make_mutation)
+    monkeypatch.setattr(P, "_make_mutation", _dying_make_mutation)
     with pytest.raises(RuntimeError, match="simulated stage-0"):
         P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(3), progress=False,
                        checkpoint_path=ck)
@@ -352,17 +352,10 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
     non-finite gradient entries are ZEROED and the particle is flagged in
     stats.bad_grad (pipeline._rt_val_grad zeroes; the flag drives the zero-drift
     handling + forensics)."""
-    import pytest
     ck = tmp_path / "ck.npz"
-
-    def dying_make_mutation(pipe_, n_mcmc):
-        def mutate(*a, **k):
-            raise RuntimeError("die before any sweep")
-        return mutate
-
     real_make_mutation = P._make_mutation
-    monkeypatch.setattr(P, "_make_mutation", dying_make_mutation)
-    with pytest.raises(RuntimeError, match="die before any sweep"):
+    monkeypatch.setattr(P, "_make_mutation", _dying_make_mutation)
+    with pytest.raises(RuntimeError, match="simulated stage-0"):
         P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(seed), progress=False,
                        checkpoint_path=ck)
     monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
@@ -419,7 +412,6 @@ def test_tangent_blown_proposal_zero_drift_not_fatal(tmp_path, monkeypatch):
 def test_tangent_blown_over_threshold_raises(tmp_path, monkeypatch):
     """Above the per-sweep backstop the loud raise is intact: a systematic AD
     breakage must never be absorbed as a zero-drift class."""
-    import pytest
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=32, num_chains=1,
                    smc_tangent_bad_max_frac=0.0)   # zero tolerance

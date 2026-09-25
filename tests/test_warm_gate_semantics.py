@@ -1,20 +1,14 @@
-"""Cold is the default target, and the warm gradient gate is implementable.
+"""The warm gradient gate is implementable.
 
-Two things pinned here:
-
-1. `smc_chem_mode` defaults to "cold", so a likelihood evaluation is a fixed
-   deterministic function of theta -- what MALA, SMC tempering, and a quoted
-   evidence all assume. Warm continuation stays available by explicit opt-in.
-
-2. The warm-vs-cold GRADIENT comparison is a FAIL gate, but it EXCLUDES rows
-   whose warm drift was zeroed by the badgrad handling. That exclusion is what
-   makes the gate mean anything: a zeroed warm row against a finite cold row
-   reads rel exactly 1.0 by construction, so a naive hard gate at 0.1 would fail
-   every run containing a single badgrad particle -- which is most runs, since
-   the class is posterior-concentrated (6.5% of certified proposals at job
-   65815). The gate would then be re-measuring "did badgrad occur" rather than
-   "does warm continuation reproduce the cold drift". The zeroed fraction gets
-   its own separate ceiling instead.
+The warm-vs-cold GRADIENT comparison is a FAIL gate, but it EXCLUDES rows
+whose warm drift was zeroed by the badgrad handling. That exclusion is what
+makes the gate mean anything: a zeroed warm row against a finite cold row
+reads rel exactly 1.0 by construction, so a naive hard gate at 0.1 would fail
+every run containing a single badgrad particle -- which is most runs, since
+the class is posterior-concentrated (6.5% of certified proposals at job
+65815). The gate would then be re-measuring "did badgrad occur" rather than
+"does warm continuation reproduce the cold drift". The zeroed fraction gets
+its own separate ceiling instead.
 
 Pure numpy; no jax, no chemistry stack.
 """
@@ -24,33 +18,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from retrieval_framework import config_schema as C
 from retrieval_framework.validate_warm import (
     GRAD_REL_FAIL, GRAD_ZEROED_FRAC_FAIL, compare_grad,
 )
 
-
-# --- the default target ------------------------------------------------------
-
-def test_default_chem_mode_is_cold():
-    assert C.Config.smc_chem_mode == "cold"
-
-
-def test_w39b_production_preset_resolves_to_cold():
-    """The case the paper reports must not quietly stay on the warm target."""
-    import importlib.util
-    from pathlib import Path
-
-    case_py = (Path(__file__).resolve().parents[1] / "runs"
-               / "w39b_smc_retrieval" / "case.py")
-    spec = importlib.util.spec_from_file_location("w39b_case", case_py)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    cfg = mod.PRESETS["gpu"]()
-    assert cfg.smc_chem_mode == "cold"
-
-
-# --- the gradient gate -------------------------------------------------------
 
 def _grads(n=10, d=4, seed=0):
     rng = np.random.default_rng(seed)

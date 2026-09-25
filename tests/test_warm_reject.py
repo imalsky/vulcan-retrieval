@@ -12,17 +12,13 @@ capped at warm_count_max < count_max, so a doomed proposal is cut off at the war
 (here 5) instead of marching to the cold cap (here 50) -- asserted via the observed
 accept_count landing at the warm cap, far below the cold one.
 
-This builds the REAL smoke pipeline (CO-only, fully offline) with warm_count_max=5 so
-every warm continuation from the baseline column is guaranteed non-converged (the
-readiness floor count_min=120 alone forbids convergence in 5 steps). It is a heavier
-integration test than the rest of the suite (~1-3 min: real chemistry+RT build + a
-couple of XLA compiles) and SKIPS cleanly when the VULCAN-JAX / ExoJax stack or its
-data/env is unavailable.
+This uses the REAL smoke pipeline (CO-only, fully offline; conftest.capped_smoke_pipe)
+at warm_count_max=5, so every warm continuation from the baseline column is guaranteed
+non-converged (the readiness floor count_min=120 alone forbids convergence in 5 steps).
+It is a heavier integration test than the rest of the suite (~1-3 min: real
+chemistry+RT build + a couple of XLA compiles) and SKIPS cleanly when the VULCAN-JAX /
+ExoJax stack or its data/env is unavailable.
 """
-import dataclasses
-import os
-from pathlib import Path
-
 import numpy as np
 import pytest
 import jax
@@ -31,7 +27,6 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
 from retrieval_framework import pipeline as P  # noqa: E402
-from retrieval_framework import run_smc as R  # noqa: E402
 
 # SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
 # line lists, chemistry converged to steady state), so it costs
@@ -39,40 +34,20 @@ from retrieval_framework import run_smc as R  # noqa: E402
 # is the opt-in fast inner loop.
 pytestmark = pytest.mark.slow
 
-# tests/ and runs/ are siblings inside the vulcan-retrieval package dir
-RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
-WARM_CMAX = 5     # so a warm continuation from baseline cannot converge (<= 5 steps)
-COLD_CMAX = 50    # well above WARM_CMAX: proves the warm cap (not this) cut the loop
+WARM_CMAX = 5     # conftest.CAPPED_WARM_CMAX: a warm continuation from baseline cannot converge
+COLD_CMAX = 50    # conftest.CAPPED_COLD_CMAX: well above WARM_CMAX, proves the warm cap cut the loop
 N = 4
 
 
 @pytest.fixture(scope="module")
-def smoke():
-    """(pipe, ACC, L_gated, G, n_bad, L_ungated) from the real smoke pipeline at
-    warm_count_max=5 / count_max=50; built once and shared. Skips if the chem
-    stack/env is unavailable."""
-    if not RUN_DIR.exists():
-        pytest.skip(f"run dir {RUN_DIR} not present")
-    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")
-    try:
-        cfg, preset = R.make_config(RUN_DIR)
-        if preset != "smoke":
-            pytest.skip(f"preset resolved to {preset!r}, not smoke")
-        # This file tests the WARM mutation kernel's rejection gate, so it must
-        # ask for warm mode explicitly. `smc_chem_mode` defaults to "cold"
-        # (a cold target is the fixed density the sampler and the
-        # evidence assume); inheriting the default here would silently build the
-        # cold evaluators and test nothing about the warm cap.
-        cfg = dataclasses.replace(cfg, count_max=COLD_CMAX,
-                                  warm_count_max=WARM_CMAX,
-                                  smc_chem_mode="warm")
-        pipe = P.build_pipeline(cfg)
-    # Skip ONLY on a missing-data or missing-dependency environment; a broader
-    # handler reports a real forward-model break as a green skip.
-    except (FileNotFoundError, OSError, ImportError) as e:
-        pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
-    pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
-
+def smoke(capped_smoke_pipe):
+    """(pipe, ACC, L_gated, G, n_bad, L_ungated) from the shared real smoke
+    pipeline at warm_count_max=5 / count_max=50 in WARM mode (smc_chem_mode
+    defaults to "cold", which would build the cold evaluators and test nothing
+    about the warm cap)."""
+    pipe = capped_smoke_pipe
+    assert int(pipe.fwd.chem.warm_count_max) == WARM_CMAX
+    assert int(pipe.fwd.chem.count_max) == COLD_CMAX
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)
     Y0, refs0 = P._blank_state(pipe, N)
     C_ = jax.vmap(pipe.theta_from_u)(U)[:, : pipe.n_chem_tp]
@@ -99,8 +74,6 @@ def test_warm_cap_binds_not_cold_cap(smoke):
     # it), nowhere near the cold count_max -- the wall-clock point of the cap
     assert np.all(smoke["ACC"] <= WARM_CMAX + 1)
     assert np.all(smoke["ACC"] < COLD_CMAX)
-    assert int(smoke["pipe"].fwd.chem.count_max) == COLD_CMAX
-    assert int(smoke["pipe"].fwd.chem.warm_count_max) == WARM_CMAX
 
 
 def test_move_vg_rejects_nonconverged_without_raising(smoke):

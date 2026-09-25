@@ -33,32 +33,18 @@ if importlib.util.find_spec("exojax") is None:                  # pragma: no cov
 from retrieval_framework.retrieval_forward import _refuse_condense_inference  # noqa: E402
 
 
-def _chem(conden_spec):
-    return SimpleNamespace(conden_spec=conden_spec)
-
-
-def _cfg(run_inference, allow=False, name="Earth"):
-    return SimpleNamespace(
-        run_inference=run_inference,
-        allow_condense_inference=allow,
-        vulcan_cfg_name=name,
-    )
-
-
-def test_refuses_inference_when_conden_resolved():
-    with pytest.raises(ValueError, match="RESOLVED VULCAN config"):
-        _refuse_condense_inference(_chem(object()), _cfg(run_inference=True))
-
-
-def test_allows_forward_solve_with_conden():
-    # run_inference=False (forward / synthetic) is always allowed.
-    _refuse_condense_inference(_chem(object()), _cfg(run_inference=False))
-
-
-def test_allows_explicit_optin():
-    _refuse_condense_inference(_chem(object()), _cfg(run_inference=True, allow=True))
-
-
-def test_noop_without_condensation():
-    # conden_spec is None when condensation is off in the resolved config.
-    _refuse_condense_inference(_chem(None), _cfg(run_inference=True, name="W39b"))
+@pytest.mark.parametrize("conden, run_inference, allow, refused", [
+    (True, True, False, True),     # inference through a resolved condensing state
+    (True, False, False, False),   # a forward / synthetic solve is always allowed
+    (True, True, True, False),     # the explicit expert opt-in
+    (False, True, False, False),   # conden_spec is None: condensation off
+])
+def test_inference_gate_reads_the_resolved_conden_spec(conden, run_inference, allow, refused):
+    chem = SimpleNamespace(conden_spec=object() if conden else None)
+    cfg = SimpleNamespace(run_inference=run_inference, allow_condense_inference=allow,
+                          vulcan_cfg_name="Earth")
+    if refused:
+        with pytest.raises(ValueError, match="RESOLVED VULCAN config"):
+            _refuse_condense_inference(chem, cfg)
+    else:
+        _refuse_condense_inference(chem, cfg)

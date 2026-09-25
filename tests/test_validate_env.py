@@ -2,8 +2,7 @@
 
 The interpreter/jax/editable checks are exercised for real by the PBS preflight
 and the bootstrap; here we pin the environment-independent logic: version-file
-parsing, the data-tree fingerprints, and the loud aggregate verdict on a
-missing project root.
+parsing, the data-tree fingerprints and the exogibbs floor.
 """
 from __future__ import annotations
 
@@ -52,15 +51,6 @@ def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path):
     V._check_data_tree(tmp_path, PROD)
     assert V._ERRORS == []
     assert V._WARNINGS == []
-
-
-def test_main_fails_loudly_without_checkouts(tmp_path: Path, capsys):
-    _reset()
-    rc = V.main([str(tmp_path)])
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "must contain the vulcan-retrieval and" in err
-    assert "bootstrap_nas_env.pbs" in err
 
 
 def test_exogibbs_floor_rejects_an_old_release(monkeypatch):

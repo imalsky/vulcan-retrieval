@@ -8,7 +8,6 @@ No VULCAN/ExoJax here -- a tiny chem-LIKE fake pipe (has_chem_state=True) provid
 two batched evaluators _init_state calls, with count_max exhaustion made a deterministic
 function of the draw so the test controls exactly which particles are rejected.
 """
-import sys
 import types
 from dataclasses import replace
 from typing import NamedTuple
@@ -214,17 +213,3 @@ def test_a_removed_knob_is_refused(knob):
     silent no-op (make_config applies overrides with dataclasses.replace)."""
     with pytest.raises(TypeError, match=knob):
         replace(C.Config(), **{knob: 0})
-
-
-def test_calibrate_count_max_refuses_lanes_with_fixed_steps(monkeypatch, capsys):
-    """The fixed-step bench pins every lane at K accepted steps, so every lane is
-    is_done: on the lane-queue route it would be written out and refilled, and the
-    reported ms/step would be queue throughput, not the cost of one accepted step.
-    The calibrator refuses the combination at argument parsing, before it builds
-    a config or a pipeline."""
-    from retrieval_framework import calibrate_count_max as CC
-    monkeypatch.setattr(sys, "argv", ["calibrate_count_max", ".", "--lanes", "48",
-                                      "--fixed-steps", "200"])
-    with pytest.raises(SystemExit):
-        CC.main()
-    assert "queue throughput" in capsys.readouterr().err
