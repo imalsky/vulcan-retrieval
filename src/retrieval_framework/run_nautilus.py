@@ -43,9 +43,10 @@ The run stops at ``cfg.walltime_seconds`` (the preset's governor) and exits 0
 unfinished; resubmit with RESUME=1.
 
     python -m retrieval_framework.run_nautilus <run_dir>
-Env: NAUTILUS_N_LIVE (default 500), NAUTILUS_N_EFF (default 10000),
+Env: NAUTILUS_N_LIVE (default N_LIVE), NAUTILUS_N_EFF (default N_EFF),
 NAUTILUS_N_BATCH (default 2 x cold_lanes: each lane solves ~2 columns per batch;
-the SMC init already runs 2.5 x lanes columns in one call), NAUTILUS_WARM
+the SMC init already runs 2.5 x lanes columns in one call; with cold_lanes = 0,
+one lockstep batch of config_schema.device_lane_count() columns), NAUTILUS_WARM
 (default 1).
 """
 from __future__ import annotations
@@ -64,6 +65,9 @@ from retrieval_framework import config_schema as C
 from retrieval_framework.run_smc import make_config, set_observations, write_config_json
 
 log = logging.getLogger("retrieval")
+
+N_LIVE = 500        # live points
+N_EFF = 10_000      # effective posterior samples at which nautilus stops
 
 
 class Anchors:
@@ -202,10 +206,11 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[logging.StreamHandler(), logging.FileHandler(out / "run.log", mode="a")],
         force=True)
-    n_live = int(os.environ.get("NAUTILUS_N_LIVE", "500"))
-    n_eff = int(os.environ.get("NAUTILUS_N_EFF", "10000"))
+    n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
+    n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
     lanes = int(cfg.cold_lanes)
-    n_batch = int(os.environ.get("NAUTILUS_N_BATCH", str(2 * lanes if lanes > 0 else 132)))
+    n_batch = int(os.environ.get(
+        "NAUTILUS_N_BATCH", str(2 * lanes if lanes > 0 else C.device_lane_count())))
     warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_eff={n_eff} n_batch={n_batch} "
