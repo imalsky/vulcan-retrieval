@@ -3,6 +3,7 @@ analytic Gaussian posterior (flat box prior x independent Gaussian likelihood), 
 the posterior is known exactly. No VULCAN/ExoJax -- pipeline's forward import is lazy.
 """
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -177,6 +178,72 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     assert res["logZ"] == full["logZ"]
     assert np.array_equal(res["U"], full["U"])
     assert np.array_equal(res["theta_draws"], full["theta_draws"])
+
+
+def _costed_stub_pipe(cfg, position_dependent):
+    """The stub with a per-proposal cost (accept count) that varies with theta,
+    so the slowest-first queue order is not the identity. With
+    ``position_dependent`` the likelihood also moves by 1e-9 per batch position,
+    the stand-in for the real queue, where the tick a proposal enters its lane
+    moves its column at the convergence scale."""
+    pipe = _stub_pipe(cfg)
+    evg, el = P._get_batch_evals(pipe)[2:]
+
+    def cost(U):
+        return (jnp.abs(U[:, 0]) * 1000.0).astype(jnp.int32)
+
+    def pos(U):
+        return 1e-9 * jnp.arange(U.shape[0]) if position_dependent else 0.0
+
+    def vg(U, Y, refs):
+        L, G, Y2, r2, nb, st = evg(U, Y, refs)
+        return L + pos(U), G, Y2, r2, nb, st._replace(acc=cost(U))
+
+    def l(U, Y, refs):
+        L, Y2, r2, st = el(U, Y, refs)
+        return L + pos(U), Y2, r2, st._replace(acc=cost(U))
+
+    pipe._stub_evals = (vg, l)
+    return pipe
+
+
+def _ladder(pipe, **kw):
+    return P.run_smc_loop(pipe, key=jax.random.PRNGKey(11), progress=False, **kw)
+
+
+def test_slowest_first_order_leaves_the_kernel_unchanged():
+    """More particles than lanes sends each sweep's proposals to the queue
+    slowest first and restores particle order after. On evaluators that do not
+    depend on batch position the run is bitwise the unordered one: the order
+    moves only a proposal's queue entry, never which particle gets which
+    result."""
+    base = dict(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
+                smc_target_ess_frac=0.6, num_samples=128, num_chains=1)
+    runs = [_ladder(_costed_stub_pipe(C.Config(cold_lanes=k, **base), False))
+            for k in (0, 40)]
+    assert runs[0]["reached_beta1"]
+    assert runs[0]["logZ"] == runs[1]["logZ"]
+    assert np.array_equal(runs[0]["U"], runs[1]["U"])
+
+
+def test_slowest_first_order_resumes_bit_identically(tmp_path):
+    """The order comes from each particle's last proposal count, which the
+    checkpoint carries, so a resumed ordered run reproduces the uninterrupted
+    one even where batch position moves the likelihood (the real queue)."""
+    cfg = C.Config(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, num_samples=128, num_chains=1,
+                   cold_lanes=40)
+    full = _ladder(_costed_stub_pipe(cfg, True))
+    unordered = _ladder(_costed_stub_pipe(replace(cfg, cold_lanes=0), True))
+    assert unordered["logZ"] != full["logZ"], "the order was never applied"
+    ck = tmp_path / "ck.npz"
+    part = _ladder(_costed_stub_pipe(cfg, True), checkpoint_path=ck,
+                   walltime_seconds=1e-9)
+    assert not part["reached_beta1"]
+    res = _ladder(_costed_stub_pipe(cfg, True), checkpoint_path=ck,
+                  resume_from=ck)
+    assert res["logZ"] == full["logZ"]
+    assert np.array_equal(res["U"], full["U"])
 
 
 @pytest.mark.parametrize("field, bad, match", [

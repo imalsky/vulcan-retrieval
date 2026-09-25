@@ -24,7 +24,8 @@ WHAT IT GATES. Each check answers "would a reader be misled?":
     already-implemented support-fraction uncertainties;
   * the run-health diagnostics (bad-gradient, cap, stall, rejection, ESS,
     uniqueness);
-  * the two production-fidelity artifacts from `validation/results/`;
+  * the two production-fidelity artifacts from `validation/results/` (warned,
+    not gated);
   * a cold replay of a small deterministic subset, which catches an
     environment or provenance mistake that every internal check would miss.
 
@@ -86,13 +87,11 @@ LATE_REJECT_FRAC_FAIL = 0.02   # per-proposal rate over the late stages
 PRIOR_RAIL_FRAC = 0.02
 # Chemistry-convergence attrition: the fraction of the declared prior removed by
 # conditioning on "the solver converged". Surviving the run is not evidence that
-# the removed region carries negligible posterior mass, so past this the run is
-# reportable only with an independent demonstration that it does.
-CONV_ATTRITION_FAIL = 0.10
-# Below CONV_ATTRITION_FAIL but above this, the run is reportable only with the
-# independent demonstration NAMED in the config (cfg.attrition_justification):
-# a per-cent of the declared prior removed by the solver is still a support
-# change, and "it was only a few per cent" is not the demonstration.
+# the removed region carries negligible posterior mass. These two levels WARN
+# (attrition_warnings), they do not fail the run (maintainer's decision, notes
+# 2.12): past CONV_ATTRITION_WARN always, past CONV_ATTRITION_JUSTIFY when no
+# independent demonstration is named in cfg.attrition_justification.
+CONV_ATTRITION_WARN = 0.10
 CONV_ATTRITION_JUSTIFY = 0.01
 # Zero-drift (badgrad) proposals are a valid MH move, but a late ladder made
 # mostly of them is sampling with a drift that is largely fictitious. Same rate
@@ -103,10 +102,11 @@ BADGRAD_FRAC_FAIL = 0.25
 _PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
                    "warm_capped", "warm_stalled", "badgrad")
 
-# The two production-fidelity artifacts. Their absence is a FAIL for a few-ppm or
-# evidence claim: a check that was never run at production settings is not a check
-# that passed. And each certifies ONE resolved state, so validate() compares every
-# key it recorded against the run -- not a hand-picked three. A ladder measured at
+# The two production-fidelity artifacts. Their absence WARNS (artifact_warnings;
+# the maintainer's decision, notes 2.4): a check that was never run at production
+# settings is not a check that passed, and a reported few-ppm or evidence claim
+# carries the warning. Each certifies ONE resolved state, so every key it
+# recorded is compared against the run -- not a hand-picked three. A ladder measured at
 # a different chemistry tolerance, molecule list, pressure domain or code revision
 # measured a different model, whatever its grid says.
 REQUIRED_VALIDATION_ARTIFACTS = (
@@ -419,6 +419,9 @@ def target_manifest(cfg, pipe) -> dict:
                   "src_diff": s.get("src_diff")}
                  for r, s in _repo_states().items()},
         "versions": _versions(),
+        # the solver moves every column at the convergence scale (fast vs ffi
+        # agree to residual, not bitwise), so a resume must not switch it
+        "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
     }
 
 
@@ -869,9 +872,9 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             "fraction cannot be positive (that claims MORE draws survived than "
             "were drawn)")
     else:
-        attrition = 1.0 - math.exp(float(lca))
         # the aggregate IS ln(f_c1 f_c2); a disagreement means one of the three
-        # numbers describes a different run
+        # numbers describes a different run. The attrition LEVEL is a warning
+        # (attrition_warnings), not a gate.
         if (not bad_f and f1 is not None and f2 is not None
                 and abs(float(lca) - (math.log(f1) + math.log(f2))) > 1e-6):
             problems.append(
@@ -879,31 +882,14 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 f"ln(f_c1 f_c2) = {math.log(f1) + math.log(f2):.6f}: the "
                 "aggregate and the per-stage survival fractions were not "
                 "measured on the same run")
-        if attrition > CONV_ATTRITION_FAIL:
-            problems.append(
-                f"chemistry-convergence attrition {attrition:.1%} exceeds "
-                f"{CONV_ATTRITION_FAIL:.0%}: conditioning on convergence removed "
-                "that much of the declared prior. The operational posterior and "
-                "logZ are conditional on a solver-defined support; report them "
-                "only with independent evidence that the rejected region carries "
-                "negligible posterior mass")
-        elif attrition > CONV_ATTRITION_JUSTIFY and not str(
-                cert["resolved_config"].get("attrition_justification", "")).strip():
-            problems.append(
-                f"chemistry-convergence attrition {attrition:.1%} exceeds "
-                f"{CONV_ATTRITION_JUSTIFY:.0%} and no attrition_justification is "
-                "recorded: set cfg.attrition_justification to the independent "
-                "demonstration that the rejected region carries negligible "
-                "posterior mass (e.g. the artifact that re-solved the rejected "
-                "high-likelihood draws more robustly)")
     if ev.get("f_c1") is None or ev.get("f_c2") is None:
         problems.append(
             "the cold-init and warm-recertification survival fractions are not "
             "both recorded: their product alone does not say which solver stage "
             "removed the prior mass")
 
-    # --- production-fidelity artifacts --------------------------------------
-    required = set(REQUIRED_VALIDATION_ARTIFACTS)
+    # --- opacity path (the production-fidelity artifacts only warn:
+    # artifact_warnings) --------------------------------------------------------
     opa = str(cert["resolved_config"].get("opacity_mode", "")) or None
     if opa is None:
         problems.append(
@@ -915,24 +901,73 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             "line-by-line path was removed with vulcan-forward 0.11.0 and is "
             "measurably biased on this band; only correlated-k ('exomolop') "
             "runs are certifiable")
+    # --- cold replay --------------------------------------------------------
+    if replay is not None and replay.get("ran"):
+        if not replay.get("passed"):
+            problems.append(
+                f"cold replay MISMATCH: {replay.get('detail', '')}")
+    else:
+        problems.append(
+            "cold replay not run: a deterministic re-solve of a small subset "
+            "is what catches an environment or provenance mistake that every "
+            "internal consistency check would pass")
+
+    return problems
+
+
+def attrition_warnings(cert: dict) -> list[str]:
+    """Warnings on the chemistry-convergence attrition level; empty below
+    CONV_ATTRITION_JUSTIFY. A missing or malformed attrition is validate()'s
+    failure, not a warning."""
+    lca = cert["evidence"].get("log_conv_attrition")
+    if lca is None or not math.isfinite(float(lca)) or float(lca) > 0.0:
+        return []
+    attrition = 1.0 - math.exp(float(lca))
+    why = str(cert["resolved_config"].get("attrition_justification", "")).strip()
+    if attrition > CONV_ATTRITION_WARN:
+        return [
+            f"chemistry-convergence attrition {attrition:.1%} exceeds "
+            f"{CONV_ATTRITION_WARN:.0%}: conditioning on convergence removed "
+            "that much of the declared prior, so the operational posterior and "
+            "logZ are conditional on a solver-defined support"
+            + (f" (justification recorded: {why})" if why else
+               "; no independent evidence that the rejected region carries "
+               "negligible posterior mass is recorded")]
+    if attrition > CONV_ATTRITION_JUSTIFY and not why:
+        return [
+            f"chemistry-convergence attrition {attrition:.1%} exceeds "
+            f"{CONV_ATTRITION_JUSTIFY:.0%} and no attrition_justification is "
+            "recorded: cfg.attrition_justification names the independent "
+            "demonstration that the rejected region carries negligible "
+            "posterior mass"]
+    return []
+
+
+def artifact_warnings(cert: dict) -> list[str]:
+    """Warnings on the two production-fidelity artifacts: missing, not PASS,
+    or measured at a different state than this run. They do not fail the
+    certificate (maintainer's decision, notes 2.4): the maintainer decides by
+    hand when the validation is done."""
+    required = set(REQUIRED_VALIDATION_ARTIFACTS)
+    out = []
     for name, art in cert["validation_artifacts"].items():
         if name not in required:
             continue
         if art is None:
-            problems.append(
+            out.append(
                 f"validation artifact '{name}' is missing: the production "
                 "choice it measures has not been checked at production "
                 "settings, so no few-ppm or converged-evidence claim is "
                 "supported")
         elif art.get("status") == "FAIL":
-            problems.append(f"validation artifact '{name}' FAILED: "
+            out.append(f"validation artifact '{name}' FAILED: "
                             f"{art.get('summary', '')[:160]}")
         elif art.get("status") == "REPORT":
-            problems.append(
+            out.append(
                 f"validation artifact '{name}' is REPORT, not PASS -- its "
                 "decisive test was not run (see its summary)")
         elif art.get("status") != "PASS":
-            problems.append(
+            out.append(
                 f"validation artifact '{name}' has status "
                 f"{art.get('status')!r}, expected PASS: "
                 f"{art.get('summary', '')[:160]}")
@@ -966,7 +1001,7 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                     drift += sorted(f"data:{group}:{k}" for k in set(a) | set(r)
                                     if a.get(k) != r.get(k))
             if not got:
-                problems.append(
+                out.append(
                     f"validation artifact '{name}' records no resolved config, so "
                     "nothing binds it to this run")
             elif drift:
@@ -974,24 +1009,18 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                     f"{k}: artifact={got.get(k)!r} run={run_cfg.get(k)!r}"
                     if not k.startswith("code:") else k
                     for k in drift[:8])
-                problems.append(
+                out.append(
                     f"validation artifact '{name}' was measured at a different "
                     f"state than this run ({len(drift)} difference(s): {detail}"
                     f"{', ...' if len(drift) > 8 else ''}). It measured a "
                     "different model; re-run it on the production manifest")
 
-    # --- cold replay --------------------------------------------------------
-    if replay is not None and replay.get("ran"):
-        if not replay.get("passed"):
-            problems.append(
-                f"cold replay MISMATCH: {replay.get('detail', '')}")
-    else:
-        problems.append(
-            "cold replay not run: a deterministic re-solve of a small subset "
-            "is what catches an environment or provenance mistake that every "
-            "internal consistency check would pass")
+    return out
 
-    return problems
+
+def warnings(cert: dict) -> list[str]:
+    """Everything reported alongside the numbers without failing the run."""
+    return attrition_warnings(cert) + artifact_warnings(cert)
 
 
 def health_problems(diag: dict) -> list[str]:
@@ -1107,7 +1136,7 @@ def rail_problems(post: list | None) -> list[str]:
     return out
 
 
-def render(cert: dict, problems: list[str]) -> str:
+def render(cert: dict, problems: list[str], warnings: list[str] = ()) -> str:
     ok = not problems
     L = [
         "# Retrieval production certificate",
@@ -1123,7 +1152,11 @@ def render(cert: dict, problems: list[str]) -> str:
         L += ["## Why this run may not be reported", ""]
         L += [f"- {p}" for p in problems]
         L += [""]
-    conv, tgt, ev = cert["convergence"], cert["target"], cert["evidence"]
+    if warnings:
+        L += ["## Warnings (report alongside the numbers)", ""]
+        L += [f"- {w}" for w in warnings]
+        L += [""]
+    conv, tgt, ev =cert["convergence"], cert["target"], cert["evidence"]
     L += [
         "## Result", "",
         "| field | value |", "|---|---|",
@@ -1223,13 +1256,17 @@ def main(argv=None) -> int:
     cert["cold_replay"] = replay
 
     problems = validate(cert, replay)
-    cert["verdict"] = {"passed": not problems, "problems": problems}
+    warned = warnings(cert)
+    cert["verdict"] = {"passed": not problems, "problems": problems,
+                       "warnings": warned}
 
     (out_dir / "certificate.json").write_text(
         json.dumps(cert, indent=2, default=str) + "\n")
-    (out_dir / "certificate.md").write_text(render(cert, problems))
+    (out_dir / "certificate.md").write_text(render(cert, problems, warned))
     print(f"wrote {out_dir / 'certificate.json'}")
     print(f"wrote {out_dir / 'certificate.md'}")
+    for w in warned:
+        print(f"WARNING: {w}", file=sys.stderr)
 
     if problems:
         print(f"\nCERTIFICATE: FAIL ({len(problems)} problem(s))",

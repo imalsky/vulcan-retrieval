@@ -103,8 +103,8 @@ def gpu_config(**overrides: Any) -> Config:
     Band note: the native model band is 1.01-5.26 um (nu 1900-9900). NIRISS SOSS
     order 1 supplies the short-wavelength water bands and offset/cloud leverage;
     the 1.02 um edge stays inside the H2-H2 CIA table. count_max=5000 is a hard
-    convergence gate, not a reason to extend failed draws. Run PROBE_MEMORY after
-    any band/chunk/N change and CALIBRATE_ONLY before a full submission.
+    convergence gate, not a reason to extend failed draws. Run CALIBRATE_ONLY
+    before a full submission.
     """
     lanes = device_lane_count()
     base = dict(
@@ -124,7 +124,7 @@ def gpu_config(**overrides: Any) -> Config:
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S",
                    "NH3", "OCS", "SH", "SO"),
         # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
-        # carried through the RT vjp, so PROBE_MEMORY must certify the chunk below.
+        # carried through the RT vjp, so the vjp chunk below sets its memory.
         nu_min=1900.0, nu_max=9900.0, art_nlayer=67,
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
@@ -148,8 +148,8 @@ def gpu_config(**overrides: Any) -> Config:
         # warning (pipeline._init_state raises above it), because conditioning on
         # convergence removes part of the declared prior. 0.35 covers the measured
         # 29% with margin. It is NOT a claim that the removed region is negligible:
-        # certificate.validate still fails any run above CONV_ATTRITION_FAIL until
-        # that region is shown to carry negligible posterior mass.
+        # the certificate WARNS above CONV_ATTRITION_WARN (10%) until that region
+        # is shown to carry negligible posterior mass.
         init_max_nonconverged_frac=0.35,
         # COLD chemistry. Every likelihood evaluation uses the published
         # solve-from-baseline map, so the target is a fixed deterministic
@@ -175,8 +175,7 @@ def gpu_config(**overrides: Any) -> Config:
         # probe (job 79500, 12 absorbers) reads 3.20 GiB per vjp lane, 12.57 at
         # 4, against the ~81 GiB pool. A wider chunk fits but buys no time: the
         # RT vjp costs at most ~1.5 s of a gradient evaluation (notes §1.4).
-        # Chunking is numerically identical at any width; PROBE_MEMORY=1 on the
-        # GPU before changing it.
+        # Chunking is numerically identical at any width.
         smc_rt_vjp_chunk=4,
         mcmc_stage_adapt=True,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,

@@ -1502,9 +1502,12 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     """Build the state-carrying mutation:
 
         mutate(key, U, Y, refs, L, G, beta, step, scale,
-               where="mutation", dump_dir=None, dump_tag="")
+               where="mutation", dump_dir=None, dump_tag="", cost=None)
             -> (U, Y, refs, L, G, mean_acceptance, n_bad_grad,
-                n_warm_capped, n_stalled)
+                n_warm_capped, n_stalled, cost)
+
+    ``cost`` (N,) is each particle's accept count on its last proposal (zeros
+    when None); it only orders the queue when particles outnumber lanes.
 
     ``n_warm_capped`` totals the proposals rejected specifically because their warm
     solve hit warm_count_max; ``n_stalled`` those rejected because the solve exited
@@ -1547,11 +1550,36 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     the offending sweep (loud-error rule -- a MALA that silently loses its
     gradient is a different sampler); callers need no separate health check."""
     log_prior_u = pipe.log_prior_u
-    _, _, move_vg, move_l = _get_batch_evals(pipe)
+    _, _move_vg, _move_l = _get_batch_evals(pipe)[1:]
     theta_from_u = pipe.theta_from_u
     kernel = str(pipe.cfg.smc_mcmc_kernel).strip().lower()
+    # More particles than lanes: the lane queue starts the first `cold_lanes`
+    # proposals and refills in particle order, so a slow proposal that starts
+    # late holds the sweep open. Each particle's previous proposal count
+    # (`cost`) predicts its next one, so the proposals go to the queue slowest
+    # first and come back in particle order. The evaluators are per-particle,
+    # so the order changes only which tick a proposal enters its lane at (the
+    # queue's convergence-scale contract), never the kernel. With particles <=
+    # lanes every proposal starts at tick 0 and the order is not applied.
+    ordered = 0 < int(pipe.cfg.cold_lanes) < int(pipe.cfg.smc_num_particles)
 
-    def sweep(k, U, Y, refs, L, G, beta, step, scale):
+    def _slowest_first(ev, cost, *args):
+        if not ordered:
+            return ev(*args)
+        n = cost.shape[0]
+        perm = jnp.argsort(-cost)          # stable: ties keep particle order
+        inv = jnp.argsort(perm)
+        out = ev(*(a[perm] for a in args))
+        return jax.tree_util.tree_map(
+            lambda x: x[inv] if jnp.ndim(x) and x.shape[0] == n else x, out)
+
+    def move_vg(cost, *args):
+        return _slowest_first(_move_vg, cost, *args)
+
+    def move_l(cost, *args):
+        return _slowest_first(_move_l, cost, *args)
+
+    def sweep(k, U, Y, refs, L, G, beta, step, scale, cost):
         def dlogprior(U_):
             return 1.0 - 2.0 * jax.nn.sigmoid(U_)
 
@@ -1563,7 +1591,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         cov = scale @ scale.T
         U_new = U + step * (GT @ cov) + jnp.sqrt(2.0 * step) * (noise @ scale.T)
         theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; negligible next to the solves
-        L_new, G_new, Y_new, refs_new, n_bad, stats = move_vg(U_new, Y, refs)
+        L_new, G_new, Y_new, refs_new, n_bad, stats = move_vg(cost, U_new, Y, refs)
         # Tangent-blown proposals (finite certified primal, non-finite
         # forward-mode tangent) are handled as ZERO-DRIFT MALA moves, never
         # rejections: the eval zeroed the non-finite gradient entries, and
@@ -1609,7 +1637,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         return (U, Y, refs, L, G, jnp.mean(acc), n_rej, n_bad, stats,
                 theta_new, L_new)
 
-    def sweep_rwm(k, U, Y, refs, L, G, beta, step, scale):
+    def sweep_rwm(k, U, Y, refs, L, G, beta, step, scale, cost):
         """Gradient-free full-covariance random-walk Metropolis, same 11-tuple.
 
         u' ~ N(u, 2*step*C) with C = scale @ scale.T -- the MALA proposal with
@@ -1620,7 +1648,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         noise = jax.random.normal(kp, U.shape, dtype=U.dtype)
         U_new = U + jnp.sqrt(2.0 * step) * (noise @ scale.T)
         theta_new = jax.vmap(theta_from_u)(U_new)   # forensics; keeps the tuple shape
-        L_new, Y_new, refs_new, stats = move_l(U_new, Y, refs)
+        L_new, Y_new, refs_new, stats = move_l(cost, U_new, Y, refs)
         LP = jax.vmap(log_prior_u)(U) + beta * L
         LP_new = jax.vmap(log_prior_u)(U_new) + beta * L_new
         log_acc = LP_new - LP                       # symmetric proposal: log q cancels
@@ -1648,14 +1676,19 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
 
     def mutate(key, U, Y, refs, L, G, beta, step, scale,
-               where: str = "mutation", dump_dir=None, dump_tag: str = ""):
+               where: str = "mutation", dump_dir=None, dump_tag: str = "",
+               cost=None):
         keys = jax.random.split(key, n_mcmc)   # same stream the lax.scan consumed
         n_prop = int(U.shape[0])
+        if cost is None:
+            cost = jnp.zeros((n_prop,), jnp.int32)
         accs: List[float] = []
         n_bad_tot = n_cap_tot = n_stall_tot = 0
         for j in range(n_mcmc):
             (U, Y, refs, L, G, acc, n_rej, n_bad, stats, theta_new,
-             L_new) = sweep_jit(keys[j], U, Y, refs, L, G, beta, step, scale)
+             L_new) = sweep_jit(keys[j], U, Y, refs, L, G, beta, step, scale,
+                                cost)
+            cost = stats.acc
             n_bad_j = int(jax.device_get(n_bad))
             n_cap_j = int(jax.device_get(stats.n_capped))
             n_stall_j = int(jax.device_get(stats.n_stalled))
@@ -1685,7 +1718,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
             n_cap_tot += n_cap_j
             n_stall_tot += n_stall_j
         return (U, Y, refs, L, G, float(np.mean(accs)), n_bad_tot,
-                n_cap_tot, n_stall_tot)
+                n_cap_tot, n_stall_tot, cost)
 
     return mutate
 
@@ -1746,7 +1779,7 @@ _DRAW_KEY = 2_000_000
 _INIT_KEY = 3_000_000
 
 
-def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G,
+def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost,
                       betas, ess_hist, acc_hist, logz_inc_hist, step_hist,
                       uniq_hist, capped_hist, stalled_hist, badgrad_hist, scale,
                       last_step, logZ, init_stats, log_step) -> None:
@@ -1805,7 +1838,11 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G,
              y_state=np.asarray(jax.device_get(Y), np.float64),
              chem_refs=np.asarray(jax.device_get(refs), np.float64),
              loglik=np.asarray(jax.device_get(L), np.float64),
-             grad_u=np.asarray(jax.device_get(G), np.float64))
+             grad_u=np.asarray(jax.device_get(G), np.float64),
+             # each particle's last proposal count: the queue order when
+             # particles outnumber lanes, so a resumed run orders as the
+             # uninterrupted one did
+             move_cost=np.asarray(jax.device_get(cost), np.int64))
     tmp.replace(checkpoint_path)
 
 
@@ -1879,6 +1916,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     badgrad_hist: List[int] = []
     logZ = 0.0
     init_stats: Optional[Dict[str, int]] = None
+    cost = jnp.zeros((N,), jnp.int32)
 
     state_loaded = False
     if resume_from is not None and not Path(resume_from).exists():
@@ -1930,6 +1968,14 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         refs = jnp.asarray(ck["chem_refs"], dtype)
         L = jnp.asarray(ck["loglik"], dtype)
         G = jnp.asarray(ck["grad_u"], dtype)
+        if "move_cost" in ck.files:
+            cost = jnp.asarray(ck["move_cost"], jnp.int32)
+        elif 0 < int(cfg.cold_lanes) < N:
+            raise ValueError(
+                f"checkpoint {resume_from} has no move_cost: with {N} particles on "
+                f"{int(cfg.cold_lanes)} lanes the queue order comes from it, so the "
+                "resumed run would not reproduce the uninterrupted one. Start a "
+                "fresh run.")
         state_loaded = True
         if beta == 0.0:
             logger.info(f"RESUMED from {resume_from}: INIT-LEVEL checkpoint "
@@ -1956,7 +2002,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
             # raise, OOM, preemption -- must not throw away the hours-scale init;
             # RESUME=1 recovers it and enters the ladder at beta=0.
             _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs,
-                              L=L, G=G,
+                              L=L, G=G, cost=cost,
                               betas=betas, ess_hist=ess_hist,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,
@@ -2013,6 +2059,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # (3) systematic resample (the carried state travels with its particle)
         idx = _systematic_resample_idx(k_res, jnp.asarray(w_norm, dtype), N)
         U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
+        cost = cost[idx]
         # (3.5) preconditioner from the freshly RESAMPLED cloud (absolute per-dim
         # width: the proposal tracks the tempered posterior as it narrows)
         if cfg.mcmc_stage_adapt:
@@ -2021,7 +2068,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # zero-drift moves and warn+dump per-particle forensics next to the
         # checkpoint; a sweep beyond the systematic-breakage backstop raises
         # INSIDE mutate at the offending sweep
-        U, Y, refs, L, G, acc, n_bad, n_capped, n_stalled = mutate(
+        U, Y, refs, L, G, acc, n_bad, n_capped, n_stalled, cost = mutate(
             k_mut, U, Y, refs, L, G,
             jnp.asarray(beta_new, dtype),
             jnp.asarray(math.exp(log_step), dtype),
@@ -2029,7 +2076,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
             where=f"SMC stage {stage} (beta={beta_new:.3e})",
             dump_dir=(Path(checkpoint_path).parent
                       if checkpoint_path is not None else None),
-            dump_tag=f"stage{stage:03d}")
+            dump_tag=f"stage{stage:03d}", cost=cost)
         jax.block_until_ready(U)
         acc_f = float(acc)
         n_capped_f = int(n_capped)
@@ -2059,7 +2106,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
 
         if checkpoint_path is not None:
             _write_checkpoint(checkpoint_path, pipe, U=U, Y=Y, refs=refs,
-                              L=L, G=G,
+                              L=L, G=G, cost=cost,
                               betas=betas, ess_hist=ess_hist,
                               acc_hist=acc_hist, logz_inc_hist=logz_inc_hist,
                               step_hist=step_hist, uniq_hist=uniq_hist,

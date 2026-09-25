@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import os
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 # stdlib-only re-export of the engine constants (see forward/config.py); this
@@ -128,15 +130,15 @@ class Config:
     #                                 _init_state RAISES. Conditioning on convergence
     #                                 removes part of the DECLARED prior, so a run that
     #                                 rejects heavily is sampling a different support.
-    #                                 This is the per-run floor; certificate.validate
-    #                                 applies the tighter release gates
-    #                                 (CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_FAIL).
+    #                                 This is the per-run floor; the certificate
+    #                                 WARNS at the tighter levels
+    #                                 (CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_WARN).
     # Both only apply when has_chem_state (real pipelines); stubs draw exactly N.
     init_max_nonconverged_frac: float = 0.1
     init_oversample: float = 2.0
     # The independent demonstration that the region the solver rejected carries
     # negligible posterior mass (an artifact name, job number or DOI).
-    # certificate.validate REFUSES a run whose attrition exceeds
+    # The certificate WARNS on a run whose attrition exceeds
     # CONV_ATTRITION_JUSTIFY with this left empty.
     attrition_justification: str = ""
     # Phase 2 evaluates target_n + init_phase2_spare survivors, culls columns that
@@ -299,11 +301,11 @@ class Config:
     # both post-run validators; cold is the publication default.
     smc_chem_mode: str = "cold"
     # Particles per lax.map chunk through the ExoJAX RT. 0 = one all-particle
-    # batch. RT VJP is the memory wall; run PROBE_MEMORY=1 before raising widths
-    # or changing the spectral band/art_nlayer.
+    # batch. RT VJP is the memory wall (notes 1.3); PROBE_MEMORY=1 reads the
+    # peak when a width or the band grows a lot.
     smc_rt_chunk: int = 16              # primal-likelihood RT chunk
     # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
-    # random-overlap folds; PROBE_MEMORY=1 before raising this or changing the grid.
+    # random-overlap folds, so its memory is linear in this width (notes 1.3).
     smc_rt_vjp_chunk: int = 6
     # Particles per chemistry-gradient chunk. 0 keeps the full-width staged batch;
     # chemistry memory is independent of the spectral grid.
@@ -316,9 +318,10 @@ class Config:
     # `device_lane_count()`, one kernel wave of the card (132 on the GH200;
     # maintainer's decision, notes 2.13): the init phase's oversampled draws
     # queue through that many lanes, a sweep's particles all start at once.
-    # Keep it at or above smc_num_particles: with fewer lanes a sweep's late
-    # starters begin only when a lane frees and push the batch past the step
-    # cap. The schema default is the width the presets used before 0.24.0.
+    # Below smc_num_particles a sweep's proposals queue, slowest first
+    # (pipeline._make_mutation); the preset keeps particles = lanes (notes
+    # register 92). The schema default is the width the presets used before
+    # 0.24.0.
     cold_lanes: int = 144
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
@@ -481,6 +484,95 @@ def device_lane_count(fallback: int = 144) -> int:
             f"device {dev} ({dev.device_kind}) reports no core_count; set "
             "cold_lanes and smc_num_particles explicitly in the preset")
     return int(n)
+
+
+# CUDA compute capabilities whose FP64 runs at half the FP32 rate (P100, V100,
+# A100/A30, H100/GH200, B200). Every other CUDA card runs FP64 at 1/32 to 1/64,
+# and the chemistry is f64 by rule.
+_FULL_RATE_FP64 = ("6.0", "7.0", "8.0", "9.0", "10.0")
+
+
+def hardware_profile() -> dict:
+    """The hardware this process runs on, read from JAX and the OS: backend,
+    device kind, host cores and RAM, and on a CUDA device its SM count,
+    compute capability, memory and FP64 class. run_smc prints it and records
+    it in config.json."""
+    import jax
+
+    dev = jax.devices()[0]
+    prof = {"backend": jax.default_backend(), "device_kind": dev.device_kind,
+            "n_devices": len(jax.devices()),
+            "host_cores": len(os.sched_getaffinity(0)),
+            "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE")
+                                  * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
+            "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
+            "xla_flags": os.environ.get("XLA_FLAGS", "")}
+    if prof["backend"] in ("gpu", "cuda"):
+        cc = str(getattr(dev, "compute_capability", ""))
+        stats = dev.memory_stats() or {}
+        prof.update(sm_count=getattr(dev, "core_count", None), compute_capability=cc,
+                    device_mem_gib=round(stats.get("bytes_limit", 0) / 2**30, 1),
+                    fp64_full_rate=cc in _FULL_RATE_FP64)
+    return prof
+
+
+def choose_solver() -> str:
+    """Set VULCAN_JAX_SOLVER for this process from the device, unless the user
+    set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
+    the only card it is measured on (GH200: 1.24x on the primal, tied on the
+    gradient, vulcan-retrieval notes 1.4), and only when its CUDA library is
+    built; `fast` everywhere else (the kernel's 125 KB block does not fit
+    sm_86/89 shared memory). Import-frozen by VULCAN-JAX, so this runs before
+    the first vulcan_jax import (make_config calls it). Returns the choice and
+    why, for the log."""
+    import importlib.util
+    import jax
+
+    if "VULCAN_JAX_SOLVER" in os.environ:
+        return f"{os.environ['VULCAN_JAX_SOLVER']} (set by the user)"
+    step = sys.modules.get("vulcan_jax.jax_step")
+    if step is not None:        # already frozen by an earlier import: report it
+        os.environ["VULCAN_JAX_SOLVER"] = step._SOLVER
+        return f"{step._SOLVER} (vulcan_jax was imported before the choice)"
+    dev = jax.devices()[0]
+    cc = str(getattr(dev, "compute_capability", ""))
+    spec = importlib.util.find_spec("vulcan_jax")
+    lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"
+    if jax.default_backend() in ("gpu", "cuda") and cc == "9.0" and lib.is_file():
+        os.environ["VULCAN_JAX_SOLVER"] = "ffi"
+        return f"ffi (compute capability {cc}, {lib.name} built)"
+    os.environ["VULCAN_JAX_SOLVER"] = "fast"
+    why = ("not a CUDA device" if jax.default_backend() not in ("gpu", "cuda") else
+           f"compute capability {cc} is not 9.0" if cc != "9.0" else
+           f"{lib} is not built (python -c 'from vulcan_jax import solver_fast; "
+           "solver_fast.build(cuda=True)' on the GPU host)")
+    return f"fast ({why})"
+
+
+def hardware_warnings(prof: dict) -> list:
+    """Loud warnings about hardware the retrieval runs poorly on."""
+    out = []
+    if prof["backend"] == "cpu":
+        out.append(
+            "running on CPU: the pipeline batches every lane in ONE process, which "
+            "used ~2 cores for 8 lanes on daw (390 ms per step, 49 ms per lane) "
+            "against ~30 ms per lane for one single-thread process per core "
+            "(vulcan-retrieval notes 1.4): about 12x below the machine. Use the "
+            "GPU for production runs.")
+    elif not prof.get("fp64_full_rate", True):
+        out.append(
+            f"{prof['device_kind']} (compute capability "
+            f"{prof.get('compute_capability')}) runs FP64 at 1/32-1/64 of FP32 and "
+            "the chemistry is f64: one W39b column took 213 s on an RTX 6000 Ada "
+            "against 101 s on one CPU core (VULCAN-JAX notes 2.9). Production "
+            "belongs on a full-rate FP64 card (A100, H100, GH200).")
+    if (prof["backend"] in ("gpu", "cuda")
+            and "xla_gpu_enable_command_buffer" not in prof["xla_flags"]):
+        out.append(
+            "XLA_FLAGS carries no --xla_gpu_enable_command_buffer: the NAS PBS "
+            "sets FUSION,CUBLAS,CUSTOM_CALL,WHILE, which ran the primal step 1.9x "
+            "faster on the GH200 (vulcan-retrieval CLAUDE.md, NAS section).")
+    return out
 
 
 def validate_config(cfg: Config) -> None:

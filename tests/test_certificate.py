@@ -112,7 +112,7 @@ def test_a_clean_cold_run_passes():
     ("yconv_cri", 0.001),            # convergence tolerance
     ("molecules", ["H2O"]),          # opacity list
 ])
-def test_artifact_measured_at_a_different_state_is_refused(key, value):
+def test_artifact_measured_at_a_different_state_warns(key, value):
     """A PASS artifact certifies only the state it was measured at. Every key it
     recorded is bound, not a hand-picked three -- a ladder run at a different
     chemistry tolerance or molecule list measured a different model, whatever its
@@ -120,15 +120,14 @@ def test_artifact_measured_at_a_different_state_is_refused(key, value):
     0.01 and rode a three-key comparison)."""
     c = _passing_cert()
     c["resolved_config"][key] = value
-    assert any("different state" in p for p in validate(c, _replay()))
+    assert any("different state" in w for w in certificate.artifact_warnings(c))
 
 
-def test_artifact_without_a_recorded_config_is_refused():
+def test_artifact_without_a_recorded_config_warns():
     c = _passing_cert()
     c["validation_artifacts"]["resolution_ladder"]["resolved_config"] = {}
-    assert any("nothing binds it" in p for p in validate(c, _replay()))
-    assert not [p for p in validate(_passing_cert(), _replay())
-                if "different state" in p]
+    assert any("nothing binds it" in w for w in certificate.artifact_warnings(c))
+    assert not certificate.artifact_warnings(_passing_cert())
 
 
 @pytest.mark.parametrize("key", ["smc_logZ", "smc_logZ_box",
@@ -207,23 +206,6 @@ _REFUSALS = [
     ("beta_just_below_one", _passing_cert, _set("convergence", "final_beta", value=0.999), _replay, ("not 1 within",)),
     ("dirty_repo", _passing_cert,                     # unattributable to a committed state = not evidence
      _set("code", "repos", "jax-vulcan", "dirty", value=True), _replay, ("DIRTY",)),
-    *[(f"artifact_missing_{n}", _passing_cert, _set("validation_artifacts", n, value=None), _replay, (n, "missing"))
-      for n in REQUIRED_VALIDATION_ARTIFACTS],
-    ("artifact_failed", _passing_cert,
-     _set("validation_artifacts", "resolution_ladder", value={"status": "FAIL", "summary": "not converged", "sha256": "d"}),
-     _replay, ("FAILED",)),
-    ("artifact_report_status", _passing_cert,          # REPORT = a decisive test skipped
-     _set("validation_artifacts", "top_pressure_ladder", value={"status": "REPORT", "summary": "decisive test not run", "sha256": "e"}),
-     _replay, ("REPORT, not PASS",)),
-    ("artifact_status_unknown", _passing_cert, _set("validation_artifacts", "resolution_ladder", "status", value=None), _replay, ("expected PASS",)),
-    ("artifact_from_different_code", _passing_cert,    # it measured what the code of its day computed
-     _set("validation_artifacts", "resolution_ladder", "repos", value={"vulcan-retrieval": {"commit": "f" * 40}}),
-     _replay, ("different state",)),
-    ("artifact_different_opacity_data", _passing_cert,  # a swapped k-table leaves every config key identical
-     _set("validation_artifacts", "resolution_ladder", "science_data", "opacity_sha256", "H2O", value="9" * 64),
-     _replay, ("data:opacity_sha256:H2O",)),
-    ("artifact_opacity_data_unrecorded", _passing_cert,
-     _set("validation_artifacts", "top_pressure_ladder", "science_data", value={}), _replay, ("data:not recorded",)),
     ("opacity_mode_unrecorded", _passing_cert, lambda c: c["resolved_config"].pop("opacity_mode"), _replay, ("opacity_mode",)),
     ("opacity_mode_removed_lbl", _passing_cert, _set("resolved_config", "opacity_mode", value="lbl"), _replay, ("removed",)),
     ("cold_replay_not_run", _passing_cert, _noop, lambda: None, ("cold replay not run",)),
@@ -259,6 +241,39 @@ _REFUSALS = [
     ("warm_stale_validate_warm", lambda: _warm_cert(checkpoint_matches=False), _noop, _replay,  # same binding mala_reversibility carries
      ("does not match the current",)),
 ]
+
+
+_ARTIFACT_WARNINGS = [
+    *[(f"artifact_missing_{n}", _passing_cert, _set("validation_artifacts", n, value=None), _replay, (n, "missing"))
+      for n in REQUIRED_VALIDATION_ARTIFACTS],
+    ("artifact_failed", _passing_cert,
+     _set("validation_artifacts", "resolution_ladder", value={"status": "FAIL", "summary": "not converged", "sha256": "d"}),
+     _replay, ("FAILED",)),
+    ("artifact_report_status", _passing_cert,          # REPORT = a decisive test skipped
+     _set("validation_artifacts", "top_pressure_ladder", value={"status": "REPORT", "summary": "decisive test not run", "sha256": "e"}),
+     _replay, ("REPORT, not PASS",)),
+    ("artifact_status_unknown", _passing_cert, _set("validation_artifacts", "resolution_ladder", "status", value=None), _replay, ("expected PASS",)),
+    ("artifact_from_different_code", _passing_cert,    # it measured what the code of its day computed
+     _set("validation_artifacts", "resolution_ladder", "repos", value={"vulcan-retrieval": {"commit": "f" * 40}}),
+     _replay, ("different state",)),
+    ("artifact_different_opacity_data", _passing_cert,  # a swapped k-table leaves every config key identical
+     _set("validation_artifacts", "resolution_ladder", "science_data", "opacity_sha256", "H2O", value="9" * 64),
+     _replay, ("data:opacity_sha256:H2O",)),
+    ("artifact_opacity_data_unrecorded", _passing_cert,
+     _set("validation_artifacts", "top_pressure_ladder", "science_data", value={}), _replay, ("data:not recorded",)),
+]
+
+
+@pytest.mark.parametrize("cert, mutate, replay, expect", [r[1:] for r in _ARTIFACT_WARNINGS],
+                         ids=[r[0] for r in _ARTIFACT_WARNINGS])
+def test_validation_artifacts_warn_not_fail(cert, mutate, replay, expect):
+    """A missing, non-PASS or differently-measured artifact is reported with
+    the numbers and never fails the certificate (notes 2.4)."""
+    c = cert()
+    mutate(c)
+    assert not validate(c, replay())
+    got = certificate.warnings(c)
+    assert any(all(s in w for s in expect) for w in got), (expect, got)
 
 
 @pytest.mark.parametrize("cert, mutate, replay, expect", [r[1:] for r in _REFUSALS],
@@ -469,23 +484,24 @@ def test_diagnostic_arrays_are_gated_not_just_present(mutate, expect):
     assert any(expect in p for p in validate(c, _replay()))
 
 
-@pytest.mark.parametrize("survived, justified, refused", [
-    (0.50, False, True),    # 50% removed: fatal whatever is claimed
+@pytest.mark.parametrize("survived, justified, warned", [
+    (0.50, False, True),    # 50% removed: warned whatever is claimed
     (0.50, True,  True),
-    (0.98, False, True),    # 2%: needs the independent demonstration
+    (0.98, False, True),    # 2%: warned until the demonstration is named
     (0.98, True,  False),
     (0.999, False, False),  # 0.1%: below the justification band
 ])
-def test_convergence_attrition_gate(survived, justified, refused):
-    """Conditioning on convergence removes prior mass. Above CONV_ATTRITION_FAIL
-    the run is unreportable; between CONV_ATTRITION_JUSTIFY and that, only with
-    the recorded independent evidence that the removed region is empty."""
+def test_convergence_attrition_warns(survived, justified, warned):
+    """Conditioning on convergence removes prior mass. The level WARNS (above
+    CONV_ATTRITION_WARN always, above CONV_ATTRITION_JUSTIFY without a named
+    demonstration) and never fails the certificate."""
     c = _passing_cert()
     c["evidence"].update(log_conv_attrition=math.log(survived),
                          f_c1=survived, f_c2=1.0)
     if justified:
         c["resolved_config"]["attrition_justification"] = "job 65999 re-solve"
-    assert bool([p for p in validate(c, _replay()) if "attrition" in p]) is refused
+    assert not validate(c, _replay())
+    assert bool(certificate.attrition_warnings(c)) is warned
 
 
 @pytest.mark.parametrize("mutate, expect", [
@@ -606,7 +622,7 @@ def test_a_fresh_ladder_artifact_is_accepted():
            "resolved_config": cfg.profile(), "repos": dict(_ART_REPOS),
            "science_data": {k: dict(v) for k, v in _ART_DATA.items()}}
     c["validation_artifacts"] = {n: dict(art) for n in REQUIRED_VALIDATION_ARTIFACTS}
-    assert not [p for p in validate(c, _replay()) if "measured at a different" in p]
+    assert not certificate.artifact_warnings(c)
 
 
 # --- run-directory identity (RC-03): a refused resume must not rewrite it -----
