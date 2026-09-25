@@ -64,7 +64,10 @@
 #                           CALIBRATE_FIXED_STEPS=<K> (+ CALIBRATE_GRAD=1, and only
 #                           the value 1 enables it): fixed-step
 #                           step-cost bench, primal or gradient; pair with NSYS=1
-#                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step
+#                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step;
+#                           NCU=1 (+ XLA_CMDBUF=0 NSYS_CAPTURE_API=1, small K): Nsight
+#                           Compute counters on the bt_* kernels inside the timed call,
+#                           NCU_LAUNCH_COUNT launches (default 40 = 8 iterations)
 #                           CALIBRATE_LANES=<k>: run the cold batch on k lanes with
 #                           refill (cfg.cold_lanes; the gpu preset's default is the
 #                           device's SM count, 132 on the GH200; 0 = one lockstep batch, the reference
@@ -317,6 +320,35 @@ fi
 }
 build_nsys_wrap
 
+# --- Nsight Compute on the block-Thomas kernels (NCU=1) --------------------------
+# The counters nsys does not sample: achieved occupancy, FP64 pipe use, stall
+# reasons. Only for the fixed-step bench. Needs XLA_CMDBUF=0 (ncu cannot see
+# inside a CUDA graph) and NSYS_CAPTURE_API=1 (the app's cudaProfilerStart marks
+# the timed second call; ncu profiles nothing before it). Kernel replay
+# snapshots every device allocation per pass, so the preallocated pool is
+# replaced by the platform allocator for this run. Clocks are left unlocked so
+# the rates are the card's real ones.
+NCU_WRAP=()
+if [ "${NCU:-0}" = "1" ]; then
+  [ "${XLA_CMDBUF:-1}" = "0" ] || { echo "ERROR: NCU=1 needs XLA_CMDBUF=0"; exit 1; }
+  [ "${NSYS_CAPTURE_API:-0}" = "1" ] || { echo "ERROR: NCU=1 needs NSYS_CAPTURE_API=1 (the profiler range)"; exit 1; }
+  [ "${NSYS:-0}${NSYS_FULL:-0}" = "00" ] || { echo "ERROR: NCU=1 and NSYS=1 exclude each other"; exit 1; }
+  # By path, never `module load cuda` here: the module's ptxas breaks JAX's
+  # own CUDA compile (job 78981; 80074 died the same way at validate_env).
+  NCU_BIN="${NCU_BIN:-$(command -v ncu 2>/dev/null || ls /usr/local/cuda/bin/ncu /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)}"
+  [ -x "${NCU_BIN:-}" ] || { echo "ERROR: NCU=1 but no ncu found (set NCU_BIN=<path>)"; exit 1; }
+  export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
+  NCU_OUT="${LOG_DIR}/ncu_${_jobid%%.*}"
+  NCU_WRAP=("${NCU_BIN}" -o "${NCU_OUT}" --force-overwrite --profile-from-start off
+            --kernel-name "regex:bt_" --launch-count "${NCU_LAUNCH_COUNT:-40}"
+            --section SpeedOfLight --section ComputeWorkloadAnalysis
+            --section MemoryWorkloadAnalysis --section Occupancy
+            --section LaunchStats --section WarpStateStats
+            --clock-control none)
+  echo "ncu: ${NCU_LAUNCH_COUNT:-40} bt_* launches inside the profiler range -> ${NCU_OUT}.ncu-rep"
+  "${NCU_BIN}" --version | tail -1 || true
+fi
+
 # --- retrieval configuration ---------------------------------------------------
 export SMC_RETRIEVAL_PRESET="${SMC_RETRIEVAL_PRESET:-gpu}"
 if [ "${RESUME:-0}" = "1" ]; then export SMC_RESUME=1; fi
@@ -456,7 +488,7 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # enabled the gradient bench for CALIBRATE_GRAD=0 too.
   GRAD_ARG=""
   if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
-  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
+  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} ${NCU_WRAP[@]+"${NCU_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
     --n-draws "${CALIBRATE_N_DRAWS:-48}" \
     --count-max-probe "${CALIBRATE_COUNT_MAX_PROBE:-20000}" \
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
