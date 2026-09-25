@@ -87,15 +87,6 @@ class Config:
     # and sum(n) != M init are documented in vulcan_chem. See chem.audit_init.
     abundance_mode: str = "elemental"
     reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
-    # Where a COLD solve starts: the network's own Gibbs equilibrium at the
-    # proposal's own T-P and elemental composition (end-to-end JAX, no host
-    # callback; the upstream VULCAN start). Deterministic in theta, so not the
-    # history-dependent warm start §2.6 rejects. "eq" is the only value
-    # validate_config accepts: the engine's "baseline" start (the build's
-    # baseline column scaled by the theta masks) burns the whole step budget on
-    # cool, weakly mixed draws (notes §1.1). The engine's default is "baseline",
-    # so profile() always sends this field.
-    cold_seed: str = "eq"
     count_min: Optional[int] = None
     count_max: Optional[int] = None
     # Warm-continuation step cap for the MUTATION path (accepted steps). A proposal
@@ -343,7 +334,6 @@ class Config:
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
             abundance_mode=str(self.abundance_mode),
-            cold_seed=str(self.cold_seed),
             reanchor_atom_ini=bool(self.reanchor_atom_ini),
             cfg_overrides=dict(self.cfg_overrides),
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
@@ -642,10 +632,6 @@ def validate_config(cfg: Config) -> None:
             "disabling one shifts the T-P and nuisance indices and silently "
             "reinterprets the parameter vector. Keep all three inferred (use a "
             "tight prior range if you want one effectively fixed).")
-    if str(cfg.cold_seed) != "eq":
-        raise ValueError(f"cold_seed={cfg.cold_seed!r}: only 'eq' (the equilibrium "
-                         "start) is supported; the baseline start burns the step "
-                         "budget on cool, weakly mixed draws (notes §1.1)")
     if str(cfg.abundance_mode) not in ("elemental", "masks"):
         raise ValueError(f"unknown abundance_mode {cfg.abundance_mode!r} "
                          "(expected 'elemental' or 'masks')")
@@ -723,7 +709,7 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
-        f"   co_mode={cfg.co_mode}   cold_seed={cfg.cold_seed}"
+        f"   co_mode={cfg.co_mode}"
         f"   cold batch: {lanes}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),

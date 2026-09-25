@@ -193,12 +193,11 @@ def test_init_phase2_spares_exhausted_raises():
         P._init_state(pipe, jnp.asarray(a), target_n=8)
 
 
-@pytest.mark.parametrize("knob,bad", [("cold_lanes", -1), ("cold_refill_chunk", 0),
-                                      ("cold_seed", "baseline")])
+@pytest.mark.parametrize("knob,bad", [("cold_lanes", -1), ("cold_refill_chunk", 0)])
 def test_validate_config_refuses_broken_knobs(knob, bad):
-    """A negative lane count, a zero refill chunk or the retired baseline cold
-    seed is a broken run, not a setting (cold_lanes=0 is the single lockstep
-    batch; the default is the production lane count)."""
+    """A negative lane count or a zero refill chunk is a broken run, not a
+    setting (cold_lanes=0 is the single lockstep batch; the default is the
+    production lane count)."""
     with pytest.raises(ValueError, match=knob):
         C.validate_config(C.Config(**{knob: bad}))
 
@@ -207,7 +206,8 @@ def test_validate_config_refuses_broken_knobs(knob, bad):
     "two_stage_z", "smc_chem_chunk", "mala_step_size", "mcmc_target_accept_mala",
     "mcmc_target_accept_rwm", "mcmc_step_size_min", "mcmc_step_size_max",
     "mcmc_stage_adapt", "mcmc_stage_adapt_gain", "mcmc_scale_clip", "do_ppc",
-    "tp_model", "tp_f", "use_clouds", "infer_lnR0", "overwrite", "log_level"])
+    "tp_model", "tp_f", "use_clouds", "infer_lnR0", "overwrite", "log_level",
+    "cold_seed"])
 def test_a_removed_knob_is_refused(knob):
     """A retired knob in a preset or an override file is an error, never a
     silent no-op (make_config applies overrides with dataclasses.replace)."""

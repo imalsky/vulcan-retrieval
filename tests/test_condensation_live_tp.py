@@ -118,6 +118,10 @@ def _profile(**extra):
         yconv_cri=1.0e-2,
         count_max=5000,
         abundance_mode="elemental",
+        # The const_mix start, NOT the engine's default equilibrium seed: at
+        # 400 K the seed holds S8 at ~1e-66 VMR, nothing condenses and the
+        # solve certifies at count_min (121 steps against 2175 to the cap).
+        cold_seed="baseline",
         cfg_overrides=dict(_CFG_OVERRIDES),
     )
     prof.update(extra)
