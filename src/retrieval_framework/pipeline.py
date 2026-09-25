@@ -961,7 +961,7 @@ def evidence_report(logZ: float, init_stats: dict | None) -> dict:
                                     solver-DEPENDENT (count_max, tolerances);
       log_support_fraction (+err)   their sum;
       logZ_box                      logZ + ln(f_tp f_c1 f_c2): the ZERO-FILLED
-                                    box evidence, i.e. the exact integral of
+                                    box evidence, i.e. the integral of
                                     pi * L * 1[A and C] over the declared box
                                     (the sampler defines non-convergent draws
                                     as rejected / zero likelihood). The ONLY
@@ -969,6 +969,12 @@ def evidence_report(logZ: float, init_stats: dict | None) -> dict:
                                     for cross-model Bayes factors ONLY at
                                     matched solver settings and with the
                                     attrition shown likelihood-negligible.
+
+    "Exact" holds up to one convergence-scale dependence: C and L are
+    functions of theta only while a draw starts at tick 0 of the solver loop.
+    With cold_lanes > 0 a draw that refills a lane enters at the tick that
+    lane was freed at, which moves its column (hence its certificate and L)
+    at the convergence scale (notes §2.13; the maintainer accepted this).
 
     There is deliberately NO ``logZ_box_physical`` (= logZ + ln f_tp): that
     construction restores the T-P prior mass while silently keeping the
@@ -1775,7 +1781,10 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
              # MALA / SMC tempering / the evidence integral assume. Every
              # artifact carries this so a warm logZ can never be read as exact
              # downstream, however far it travels from the run that made it.
-             # A stub pipeline (unit tests, no chemistry) carries no chemistry
+             # A cold run is stamped 0: its likelihood never depends on sampler
+             # history, but with cold_lanes > 0 a draw that refills a lane moves
+             # with its refill tick at the convergence scale (notes §2.13), so
+             # 0 means exact up to that dependence. A stub pipeline (unit tests, no chemistry) carries no chemistry
              # column at all, so it cannot be history-dependent; record "none"
              # rather than defaulting to a mode it does not have.
              chem_mode=np.asarray(str(getattr(pipe, "chem_mode", None) or "none")),
@@ -2062,8 +2071,9 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         f"evidence conditioning: logZ(conditioned/operational) = {logZ:.2f}; "
         f"ZERO-FILLED box evidence logZ_box = {ev['logZ_box']:.2f} +/- "
         f"{ev['log_support_fraction_err']:.2f} (= logZ + ln(f_tp*f_conv); "
-        f"the exact integral of pi*L*1[T-P valid AND converged] over the "
-        f"declared box -- SOLVER-DEPENDENT via the convergence indicator; "
+        f"the integral of pi*L*1[T-P valid AND converged] over the "
+        f"declared box, exact up to the lane queue's convergence-scale refill "
+        f"dependence -- SOLVER-DEPENDENT via the convergence indicator; "
         f"Bayes factors only at matched solver settings AND with the "
         f"attrition shown likelihood-negligible). Supports: T-P window "
         f"f_tp={ev['f_tp']:.3f} (solver-independent), convergence "

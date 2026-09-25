@@ -17,8 +17,10 @@ WHAT IT GATES. Each check answers "would a reader be misled?":
   * the fully resolved config, hashed;
   * `reached_beta1` and a final beta of exactly 1 within tolerance -- a
     beta < 1 cloud is TEMPERED, not a posterior;
-  * an EXACT target: cold chemistry, or an explicit warm run whose artifacts
-    carry `approximate_history_dependent_target` and whose two validators
+  * an EXACT target: cold chemistry (exact up to the lane queue's refill
+    tick, which moves a refilled draw's column at the convergence scale;
+    notes §2.13), or an explicit warm run whose artifacts carry
+    `approximate_history_dependent_target` and whose two validators
     (validate_warm, mala_reversibility) both passed;
   * evidence reported with its operational-prior / box-prior semantics and the
     already-implemented support-fraction uncertainties;
@@ -26,8 +28,10 @@ WHAT IT GATES. Each check answers "would a reader be misled?":
     uniqueness);
   * the two production-fidelity artifacts from `validation/results/` (warned,
     not gated);
-  * a cold replay of a small deterministic subset, which catches an
-    environment or provenance mistake that every internal check would miss.
+  * a cold replay of a small, deterministically chosen subset, agreeing with
+    the recorded likelihoods at the convergence scale (a recorded draw may
+    have entered its lane on a refill), which catches an environment or
+    provenance mistake that every internal check would miss.
 
 This module READS a finished run. It never re-runs the sampler, and it never
 writes into the run's own outputs beyond the certificate itself.
@@ -909,9 +913,10 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 f"cold replay MISMATCH: {replay.get('detail', '')}")
     else:
         problems.append(
-            "cold replay not run: a deterministic re-solve of a small subset "
-            "is what catches an environment or provenance mistake that every "
-            "internal consistency check would pass")
+            "cold replay not run: a re-solve of a small, deterministically "
+            "chosen subset (agreement at the convergence scale) is what catches "
+            "an environment or provenance mistake that every internal "
+            "consistency check would pass")
 
     return problems
 
@@ -1281,10 +1286,12 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
 
     Run even when the production run was already cold: the point is not to
     re-test the sampler but to prove that THIS environment, with THIS data and
-    THIS config, reproduces the recorded numbers. An environment or provenance
-    mistake (a swapped line list, a stale editable install pointing at another
-    checkout, a different network file) passes every internal consistency check
-    and fails here.
+    THIS config, reproduces the recorded numbers -- to the convergence scale,
+    hence the DLOGL_MAX_PASS gate: with cold_lanes > 0 a recorded draw may
+    have entered its lane on a refill, so its column moved with that tick
+    (notes §2.13). An environment or provenance mistake (a swapped line list,
+    a stale editable install pointing at another checkout, a different
+    network file) passes every internal consistency check and fails here.
     """
     ck = out_dir / "smc_checkpoint.npz"
     if not ck.is_file():
