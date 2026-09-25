@@ -12,6 +12,7 @@ Run (from the repo root, or via the PBS script in this directory):
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from retrieval_framework.config_schema import Config, device_lane_count  # light import; jax only inside gpu_config
@@ -60,7 +61,7 @@ _W39B = dict(
     #         is Tsai's tested x0.1: below it most columns do not certify within
     #         count_max (12 of 15 prior draws under x0.03 rejected, against 12 of
     #         102 in this range; notes §1.2). Every draw above x10 certified.
-    prior_lnKzz=(-2.3, 4.6),
+    prior_lnKzz=(math.log(0.1), math.log(100.0)),
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
     #         gives a limb T ~770-1540 K -- physical for W39b, no unmodelably cold/hot
