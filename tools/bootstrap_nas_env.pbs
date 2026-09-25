@@ -111,9 +111,10 @@ python -m pip install --user "jax[cuda12]==0.6.2" "jaxlib==0.6.2"
 # --- installs (constraint-pinned so exojax cannot swap the pinned jax build) -----
 CONSTRAINTS="${TMPDIR}/bootstrap_constraints_$$.txt"
 python - > "${CONSTRAINTS}" <<'PY'
-import jax, jaxlib
+import jax, jaxlib, numpy
 print(f"jax=={jax.__version__}")
 print(f"jaxlib=={jaxlib.__version__}")
+print(f"numpy=={numpy.__version__}")
 PY
 echo "constraints: $(tr '\n' ' ' < "${CONSTRAINTS}")"
 
@@ -130,6 +131,10 @@ python -m pip install --user --no-deps -e "${REPO_DIR}"
 # has a wheel for on aarch64; the gas path needs jax/numpy/pandas only.
 python -m pip install --user --no-deps "exogibbs==0.6.0"
 python -c "import pandas" 2>/dev/null || python -m pip install --user pandas
+
+# --- nested sampling (run_nautilus.py, SAMPLER=nautilus): pure Python on top of
+# scikit-learn; h5py is its checkpoint format. numpy stays at the env's version.
+python -m pip install --user --constraint "${CONSTRAINTS}" "nautilus-sampler==1.0.6" "h5py>=3"
 
 # --- stamp + definitive validation ----------------------------------------------
 python - <<PY

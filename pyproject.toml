@@ -72,9 +72,14 @@ Repository = "https://github.com/imalsky/vulcan-retrieval"
 # corner-plot library).
 plot = ["matplotlib", "corner", "tqdm"]
 
+# Nested sampling (run_nautilus.py): nautilus pulls scikit-learn; h5py is its
+# checkpoint format.
+nautilus = ["nautilus-sampler==1.0.6", "h5py>=3"]
+
 # blackjax is dev-only: the external oracle for the SMC core
 # (tests/test_smc_blackjax_oracle.py, RUN_BLACKJAX_ORACLE=1), never a runtime dep.
-dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5", "blackjax>=1.3"]
+dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5", "blackjax>=1.3",
+       "nautilus-sampler==1.0.6", "h5py>=3"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

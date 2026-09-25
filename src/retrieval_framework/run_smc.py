@@ -125,6 +125,9 @@ def make_config(run_dir: Path) -> Tuple[C.Config, str]:
             overrides[k] = tuple(v)
     if overrides:
         cfg = replace(cfg, **overrides)
+    # VULCAN_JAX_SOLVER is import-frozen: choose it before anything imports
+    # vulcan_jax (every entry point resolves its config here first).
+    print(f"[retrieval] solver: {C.choose_solver()}", flush=True)
     return cfg, preset
 
 
@@ -144,7 +147,42 @@ def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
         real_bins=bool(pipe.real_bins),
         n_chem_tp=int(pipe.n_chem_tp),
     ))
+    d["hardware"] = C.hardware_profile()
     (cfg.out_dir / "config.json").write_text(json.dumps(d, indent=2, default=str))
+
+
+def set_observations(cfg: C.Config, pipe, P, obs_path: Path):
+    """Load real (or load/generate synthetic) observations into ``pipe`` exactly
+    once, before any jitted likelihood call. Returns the bundle to save as
+    observations.npz, or None when an existing synthetic file was reused.
+    Writes nothing: the caller saves it after its resume-identity check."""
+    obs_save = None
+    if cfg.generate_synthetic_data:
+        if obs_path.exists() and not cfg.overwrite:
+            d = np.load(obs_path)
+            pipe.set_observations(d["depth"], d["sigma"])
+            pipe.flux_true = d["flux_true"] if "flux_true" in d.files else None
+            log.info(f"Loaded existing synthetic observations: {obs_path}")
+        else:
+            log.info("Generating synthetic observations (injection at truth_*)...")
+            o = P.generate_observations(pipe, seed=int(cfg.seed))
+            obs_save = dict(
+                wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
+                depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
+                group=np.asarray(pipe.obs["group"], dtype="<U16"),
+                synthetic=np.asarray(1, np.int32),
+                inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
+                inferred_param_truth=np.asarray(pipe.param_truth))
+    else:
+        o = P.load_real_into_pipe(pipe)
+        obs_save = dict(
+            wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
+            depth=o["depth"], sigma=o["sigma"],
+            group=np.asarray(pipe.obs["group"], dtype="<U16"),
+            synthetic=np.asarray(0, np.int32))
+        log.info(f"Using REAL observed spectrum: {pipe.n_bin} bins "
+                 f"({', '.join(pipe.groups)})")
+    return obs_save
 
 
 def predictive_replicates(mu_draws, obs_sigma, infl, rng):
@@ -381,6 +419,10 @@ def main() -> None:
     import jax
     log.info(f"jax backend={jax.default_backend()} devices={jax.devices()} "
              f"(x64 flips on during the VULCAN-JAX import inside build_pipeline)")
+    hw = C.hardware_profile()
+    log.info(f"hardware: {hw}")
+    for w in C.hardware_warnings(hw):
+        log.warning(w)
 
     t0 = time.perf_counter()
     pipe = P.build_pipeline(cfg)
@@ -393,32 +435,7 @@ def main() -> None:
     # settled below: a refused resume must leave the killed run's archived
     # identity exactly as it was.
     obs_path = cfg.out_dir / "observations.npz"
-    obs_save = None
-    if cfg.generate_synthetic_data:
-        if obs_path.exists() and not cfg.overwrite:
-            d = np.load(obs_path)
-            pipe.set_observations(d["depth"], d["sigma"])
-            pipe.flux_true = d["flux_true"] if "flux_true" in d.files else None
-            log.info(f"Loaded existing synthetic observations: {obs_path}")
-        else:
-            log.info("Generating synthetic observations (injection at truth_*)...")
-            o = P.generate_observations(pipe, seed=int(cfg.seed))
-            obs_save = dict(
-                wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
-                depth=o["depth"], sigma=o["sigma"], flux_true=o["flux_true"],
-                group=np.asarray(pipe.obs["group"], dtype="<U16"),
-                synthetic=np.asarray(1, np.int32),
-                inferred_param_names=np.asarray(pipe.names, dtype="<U64"),
-                inferred_param_truth=np.asarray(pipe.param_truth))
-    else:
-        o = P.load_real_into_pipe(pipe)
-        obs_save = dict(
-            wl=pipe.obs["wl"], wl_lo=pipe.obs["wl_lo"], wl_hi=pipe.obs["wl_hi"],
-            depth=o["depth"], sigma=o["sigma"],
-            group=np.asarray(pipe.obs["group"], dtype="<U16"),
-            synthetic=np.asarray(0, np.int32))
-        log.info(f"Using REAL observed spectrum: {pipe.n_bin} bins "
-                 f"({', '.join(pipe.groups)})")
+    obs_save = set_observations(cfg, pipe, P, obs_path)
 
     # ---- resume identity: BEFORE the run directory is touched ---------------
     # pipeline.run_smc_loop refuses a mismatched checkpoint, but by then the

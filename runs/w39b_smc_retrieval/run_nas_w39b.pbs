@@ -34,6 +34,8 @@
 #   qsub -v SYNTH=1 run_nas_w39b.pbs             # gpu-fidelity synthetic recovery test
 #   qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs    # timing projection only (~1 h)
 #   qsub -v CALIBRATE_COUNT_MAX=1 run_nas_w39b.pbs   # accept_count distribution only
+#   qsub -v SAMPLER=nautilus run_nas_w39b.pbs       # nested sampling (run_nautilus.py)
+#   qsub -v SAMPLER=nautilus,RESUME=1 run_nas_w39b.pbs   # continue it in the next job
 #
 # Env knobs (-v):
 #   CONDA_ENV               interpreter env            (default pyt2_8_gh)
@@ -67,9 +69,10 @@
 #                           arm) -- the lane-count arm of the bench, same draws and
 #                           seed. A fixed-step bench runs lockstep on its own.
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
-#   XLA_CMDBUF=0            drop the command-buffer flags (ON by default: 132 ms vs 255 ms per
-#                           accepted primal step, jobs 78995 vs 78991). Opt-OUT, so an A/B is
-#                           one -v variable; the commas stay inside the script
+#   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default: the WHILE
+#                           capture took the primal from ~255 to 132 ms per accepted step, jobs
+#                           78991 (XLA's default set) vs 78995. Opt-OUT, so an A/B is one -v
+#                           variable; the commas stay inside the script
 #   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
 #                           one-command minimum graph size: the arm that shows whether
 #                           the whole step loop is captured as one graph
@@ -145,6 +148,10 @@ export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${htt
 : "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
 export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
+# Log every compile and every persistent-cache hit (WARNING level), so a chained
+# job's log shows whether it reused the last job's ~22 min gradient compiles:
+# grep "Persistent compilation cache hit" in the second job's log.
+export JAX_LOG_COMPILES="${JAX_LOG_COMPILES:-1}"
 export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
 export MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
 export TMPDIR="${VULCAN_SCRATCH}/tmp"
@@ -176,13 +183,16 @@ export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
 # Command buffers are the production default (they cut the primal loop from
-# ~255 to 132 ms per accepted step); XLA_CMDBUF=0 takes them back out for an A/B.
+# ~255 to 132 ms per accepted step); XLA_CMDBUF=0 turns them OFF for an A/B or a
+# per-kernel profile. Off needs the EMPTY value: with no flag at all XLA keeps its
+# own default set (checked on jaxlib 0.6.2: the optimized HLO still carries
+# command_buffer computations), so the old "drop the flag" 0 was never off.
 # The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
 # while loop becomes one graph only if every op in its body is capturable.
 # A function, so a chain arm that sets its own XLA_CMDBUF gets its own flags.
 set_xla_flags() {
   case "${XLA_CMDBUF:-1}" in
-    0) export XLA_FLAGS="${XLA_BASE_FLAGS}" ;;
+    0) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=" ;;
     1) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE" ;;
     2) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" ;;
     *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0, 1 or 2"; return 1 ;;
@@ -190,6 +200,12 @@ set_xla_flags() {
 }
 set_xla_flags || exit 1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+# Production solver: `ffi`, the CUDA block-Thomas kernel (the maintainer's
+# decision, notes 2.13). Pinned here, not left to config_schema.choose_solver(),
+# so the job script states the choice and a missing kernel build fails loudly
+# instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
+# still overrides it.
+export VULCAN_JAX_SOLVER="${VULCAN_JAX_SOLVER:-ffi}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
 if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
@@ -324,7 +340,7 @@ cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, impor
 # app running (job 78814); every path that may run under the wrapper waits for
 # this tree's python before the next step touches the GPU or the job exits.
 wait_for_tree_python() {
-  while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|probe_memory|calibrate_count_max) ${SMC_DIR}" >/dev/null; do
+  while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|run_nautilus|probe_memory|calibrate_count_max) ${SMC_DIR}" >/dev/null; do
     sleep 30
   done
 }
@@ -440,6 +456,14 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
     ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?
+  wait_for_tree_python
+elif [ "${SAMPLER:-smc}" = "nautilus" ]; then
+  # Nested sampling on the same likelihood (retrieval_framework.run_nautilus):
+  # output in <out_dir>_nautilus, stops at the preset's walltime governor and
+  # exits 0 unfinished; continue with RESUME=1. No plots or certificate (both
+  # read the SMC files).
+  echo "========== NAUTILUS RETRIEVAL =========="
+  python -u -m retrieval_framework.run_nautilus "${SMC_DIR}" || rc=$?
   wait_for_tree_python
 else
   echo "========== SMC RETRIEVAL =========="
