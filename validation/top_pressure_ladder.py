@@ -14,7 +14,6 @@ solved there (2026-08-27 artifact) and was replaced by extending the grid.
 """
 from __future__ import annotations
 
-import argparse
 import sys
 import time
 
@@ -48,12 +47,6 @@ def binned_depth(chem, rt, config, interp_map):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--no-artifact", action="store_true",
-                    help="skip writing the provenance-bearing result under "
-                         "validation/results/ (exploration only)")
-    args = ap.parse_args()
-
     from retrieval_framework.forward import config
     from vulcan_forward import interp_map
     # import order is load-bearing: vulcan_chem before exojax
@@ -94,18 +87,17 @@ def main() -> int:
            "a measured T-P/Kzz there, not a constant fill")
     print(f"\nmax |Delta binned depth| = {dppm:.2f} ppm  (gate {GATE_PPM} ppm)")
     print(f"\nVERDICT: {msg}")
-    if not args.no_artifact:
-        _artifact.emit(
-            name="top_pressure_ladder",
-            title="Model top: production vs one decade higher on both grids",
-            measurements=[{
-                "name": f"production ({p_top:.0e} bar) vs extended ({p_top / 10:.0e} bar) model top",
-                "value": f"{dppm:.2f} ppm", "value_raw": float(dppm), "unit": "ppm",
-                "gate": f"< {GATE_PPM} ppm", "decisive": True, "passed": ok,
-            }],
-            status="PASS" if ok else "FAIL", summary=msg,
-            resolved_config={"production": prod, "extended": ext},
-        )
+    _artifact.emit(
+        name="top_pressure_ladder",
+        title="Model top: production vs one decade higher on both grids",
+        measurements=[{
+            "name": f"production ({p_top:.0e} bar) vs extended ({p_top / 10:.0e} bar) model top",
+            "value": f"{dppm:.2f} ppm", "value_raw": float(dppm), "unit": "ppm",
+            "gate": f"< {GATE_PPM} ppm", "decisive": True, "passed": ok,
+        }],
+        status="PASS" if ok else "FAIL", summary=msg,
+        resolved_config={"production": prod, "extended": ext},
+    )
     return 0 if ok else 1
 
 

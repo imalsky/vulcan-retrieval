@@ -275,15 +275,13 @@ def main() -> None:
     drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
     atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
     t_exit = np.asarray(jax.device_get(cd.t), np.float64)
-    atom_names = getattr(pipe.fwd.chem, "atom_order", None)   # vulcan-forward >= 0.19.0
+    atom_names = pipe.fwd.chem.atom_order
     log.info(f"exit element-budget drift |X/H - 1| p50/p90/max = "
              f"{np.nanpercentile(drift, 50):.3g}/{np.nanpercentile(drift, 90):.3g}/"
              f"{np.nanmax(drift):.3g}")
     for i in np.flatnonzero(~conv_ok):
-        a = (atom_names[atom[i]] if atom_names is not None
-             else f"atom index {int(atom[i])} in the runner's atom order")
         log.info(f"  draw {i}: uncertified, accept_count={int(wa[i])}, "
-                 f"budget drift {drift[i]:.3g} on {a}, "
+                 f"budget drift {drift[i]:.3g} on {atom_names[atom[i]]}, "
                  f"drift/t {drift[i] / max(t_exit[i], 1.0):.3g} /s, "
                  f"t {t_exit[i]:.3g} s, longdy {longdy[i]:.3g}")
 

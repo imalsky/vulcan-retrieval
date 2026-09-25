@@ -19,7 +19,7 @@ not) and |L(fwd) - L(carried)| consistent with validate_warm's gate. Any
 asymmetric pair is listed -- if they appear at production settings, either raise
 warm_count_max or run the final ladder stages with smc_chem_mode="cold".
 
-    SMC_RETRIEVAL_PRESET=gpu python validation/mala_reversibility.py runs/w39b_smc_retrieval --pairs 24
+    SMC_RETRIEVAL_PRESET=gpu python validation/mala_reversibility.py runs/w39b_smc_retrieval
 """
 from __future__ import annotations
 
@@ -34,11 +34,12 @@ import numpy as np
 # one copy of the hash primitive, owned by the certificate module
 from retrieval_framework.certificate import _sha256
 
+PAIRS = 24          # nearest-neighbor pairs probed
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", nargs="?", default="runs/w39b_smc_retrieval")
-    ap.add_argument("--pairs", type=int, default=24)
     args = ap.parse_args()
 
     from retrieval_framework.run_smc import make_config
@@ -73,7 +74,7 @@ def main() -> int:
         if a in used or b in used or a == b:
             continue
         pairs.append((int(idx[a]), int(idx[b]))); used.update((a, b))
-        if len(pairs) >= args.pairs:
+        if len(pairs) >= PAIRS:
             break
     print(f"probing {len(pairs)} nearest-neighbor pairs of {int(healthy.sum())} "
           f"healthy particles (warm_count_max={pipe.fwd.chem.warm_count_max})")
@@ -119,12 +120,12 @@ def main() -> int:
     frac = asym / max(1, len(pairs))
     print(f"\n==== reversibility summary ====\nasymmetric pairs: {asym}/{len(pairs)} "
           f"({frac:.0%})")
-    enough_pairs = len(pairs) == args.pairs
+    enough_pairs = len(pairs) == PAIRS
     ok = enough_pairs and asym == 0
     summary = (
         "no state-dependent cap/stall events at this cloud"
         if ok else
-        (f"only {len(pairs)}/{args.pairs} requested healthy pairs were available"
+        (f"only {len(pairs)}/{PAIRS} requested healthy pairs were available"
          if not enough_pairs else
          "the warm cap or stall gate binds asymmetrically; raise "
          "warm_count_max or finish the ladder with smc_chem_mode=cold"))
@@ -141,7 +142,7 @@ def main() -> int:
         "out_dir": str(Path(out).resolve()),
         "status": "PASS" if ok else "FAIL",
         "summary": summary,
-        "pairs_requested": int(args.pairs),
+        "pairs_requested": PAIRS,
         "pairs_tested": len(pairs),
         "healthy_particles": int(healthy.sum()),
         "warm_count_max": wcmax,

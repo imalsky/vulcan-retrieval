@@ -325,7 +325,7 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
                        checkpoint_path=ck)
     assert ck.exists()
     d = np.load(ck)
-    assert int(d["init_checkpoint"]) == 1 and int(d["last_step"]) == -1
+    assert int(d["last_step"]) == -1
     assert list(d["betas"]) == [0.0]
     assert "y_state" in d.files and "loglik" in d.files and "grad_u" in d.files
 
@@ -366,7 +366,7 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
         P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(seed), progress=False,
                        checkpoint_path=ck)
     monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
-    assert ck.exists() and int(np.load(ck)["init_checkpoint"]) == 1
+    assert ck.exists() and int(np.load(ck)["last_step"]) == -1
 
     pipe = _stub_pipe(cfg)
     evg, el, _, _ = P._get_batch_evals(pipe)

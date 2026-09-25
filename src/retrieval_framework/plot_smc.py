@@ -235,7 +235,7 @@ def main() -> None:
         sup = ""
         # headline the ZERO-FILLED box evidence (the only integral-valid box
         # quantity; solver-dependent -- see pipeline.evidence_report) with both
-        # support fractions. The retracted f_tp-only "box_physical" is gone.
+        # support fractions.
         if ("smc_log_support_fraction" in x.files
                 and np.isfinite(float(x["smc_log_support_fraction"]))):
             f_tp = (np.exp(float(x["smc_log_support_physical"]))

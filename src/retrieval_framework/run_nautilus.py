@@ -302,7 +302,6 @@ def main() -> None:
     theta_eq = np.asarray(to_theta(np.log(z_eq) - np.log1p(-z_eq)), np.float64)
     P.save_npz(out / "nautilus_posterior.npz",
                param_names=np.asarray(pipe.names, dtype="<U64"),
-               param_labels=np.asarray(pipe.labels, dtype="<U64"),
                target_digest=np.asarray(want),
                theta=theta, log_w=log_w, log_l=log_l, samples=theta_eq,
                logZ_box=np.asarray(sampler.log_z), n_like=np.asarray(sampler.n_like))

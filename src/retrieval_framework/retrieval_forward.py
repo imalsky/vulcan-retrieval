@@ -74,10 +74,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     Returns SimpleNamespace with:
         native_depth_aux(chem_theta, lnR0) -> ((n_nu,) native transit depth, aux, ok)
+        rt_depth, aux_from_y, the cold and warm chemistry solves (single and batched)
         wl_um     : (n_nu,) native wavelengths (um)
         n_tp      : number of T-P parameters
-        tp_model  : the tp_profile object (eval/unpack)
-        chem, rt, to_art, mol_cols, h2_col, species_masses, p_bar_vulcan
+        tp_model  : the tp_profile object (eval)
+        chem, rt  : the engine's chemistry and RT models
     """
     profile = cfg.profile()
 
@@ -368,10 +369,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         native_depth_aux=native_depth_aux,
         rt_depth=rt_depth,
         chem_solve_cold=chem_solve_cold,
-        chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
-        chem_stage1=chem_stage1,
-        chem_stage2_diag=chem_stage2_diag,
         chem_stage1_batch=chem_stage1_batch,
         chem_stage2_diag_batch=chem_stage2_diag_batch,
         chem_solve_warm=chem_solve_warm,
@@ -381,13 +379,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
         aux_from_y=aux_from_y,
         y_baseline=np.asarray(chem.y0, dtype=np.float64),
-        nz=int(chem.nz), ni=int(chem.ni),
         wl_um=np.asarray(rt.wl_um, dtype=np.float64),
-        nu_grid=np.asarray(rt.nu_grid, dtype=np.float64),
         n_tp=int(n_tp),
         tp_model=tpm,
-        chem=chem, rt=rt, to_art=to_art,
-        mol_cols=mol_cols, h2_col=h2_col, species_masses=species_masses,
-        p_bar_vulcan=np.asarray(chem.p_bar, dtype=np.float64),
+        chem=chem, rt=rt,
         p_art_bar=np.asarray(rt.p_art_bar, dtype=np.float64),
     )

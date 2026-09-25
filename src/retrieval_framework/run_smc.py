@@ -493,7 +493,6 @@ def main() -> None:
 
         P.save_npz(samples_path,
                    param_names=np.asarray(pipe.names, dtype="<U64"),
-                   param_labels=np.asarray(pipe.labels, dtype="<U64"),
                    # the target identity rides with the POSTERIOR as well as the
                    # checkpoint and the diagnostics; the certificate refuses any
                    # disagreement between the three
@@ -513,12 +512,10 @@ def main() -> None:
                        int(str(cfg.smc_chem_mode).strip().lower() == "warm"),
                        np.int32))
         P.save_npz(extra_path,
-                   inference_method=np.asarray(2, np.int32),
                    chem_mode=np.asarray(str(cfg.smc_chem_mode)),
                    approximate_history_dependent_target=np.asarray(
                        int(str(cfg.smc_chem_mode).strip().lower() == "warm"),
                        np.int32),
-                   smc_kernel=np.asarray(f"{kernel}+precond", dtype="<U16"),
                    smc_num_particles=np.asarray(int(cfg.smc_num_particles), np.int32),
                    smc_num_mcmc_steps=np.asarray(int(cfg.smc_num_mcmc_steps), np.int32),
                    smc_betas=res["betas"], smc_ess=res["ess"],
@@ -527,16 +524,13 @@ def main() -> None:
                    smc_logZ_err_lb=np.asarray(res["logZ_err_lb"]),
                    smc_step_size_history=res["step_size_history"],
                    smc_unique_particles=res["unique_particles"],
-                   smc_scale_chol_final=res["scale_chol_final"],
                    smc_warm_capped=res["warm_capped"],
                    smc_warm_stalled=res["warm_stalled"],
                    smc_tangent_rejected=res["tangent_rejected"],
                    # evidence conditioning: smc_logZ is under the OPERATIONAL prior
                    # (T-P window x converged support, renormalized); the measured
                    # support fractions + the ZERO-FILLED box evidence ride along --
-                   # quote them together (see run_smc_loop / evidence_report
-                   # docstrings). The retracted f_tp-only smc_logZ_box_physical is
-                   # intentionally NOT exported (it reconstructs no integral).
+                   # quote them together (pipeline.evidence_report).
                    smc_log_support_fraction=np.asarray(res["log_support_fraction"]),
                    smc_log_support_fraction_err=np.asarray(res["log_support_fraction_err"]),
                    smc_logZ_box=np.asarray(res["logZ_box"]),

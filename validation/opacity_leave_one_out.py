@@ -113,15 +113,12 @@ def main() -> int:
     ap.add_argument("--molecules", nargs="*", default=None,
                     help="candidates to test (default: every installed table "
                          "production does not radiate)")
-    ap.add_argument("--all-candidates", action="store_true",
-                    help="test every molecule in the baseline, production included")
     ap.add_argument("--states", type=int, default=0,
                     help="prior draws on top of the nominal state (and the same "
                          "number from --from-posterior)")
     ap.add_argument("--from-posterior", default=None,
                     help="posterior_samples.npz to draw representative states from")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--no-artifact", action="store_true")
     args = ap.parse_args()
 
     # import order is load-bearing: vulcan_chem sets the import-frozen env vars
@@ -137,9 +134,7 @@ def main() -> int:
     # An OMITTED candidate over the gate is a defect; a PRODUCTION one over the
     # gate is the list working as intended. Screening both is useful, but they
     # are opposite verdicts and must not share one.
-    candidates = (baseline_mols if args.all_candidates
-                  else list(named) if named is not None
-                  else (extra or prod_mols))
+    candidates = list(named) if named is not None else (extra or prod_mols)
     omitted = set(extra)
 
     # The PRODUCTION forward at the augmented molecule list: parametric T-P,
@@ -204,12 +199,11 @@ def main() -> int:
                 f"({', '.join(idle)}) are carried without measurable effect -- "
                 "informational, not a failure; the gate only refuses OMISSIONS.")
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} -- {msg}")
-    if not args.no_artifact:
-        _artifact.emit(
-            name="opacity_leave_one_out",
-            title="Leave-one-out absorber screen on the production observation grid",
-            measurements=measurements, status="PASS" if ok else "FAIL",
-            summary=msg, resolved_config=profile)
+    _artifact.emit(
+        name="opacity_leave_one_out",
+        title="Leave-one-out absorber screen on the production observation grid",
+        measurements=measurements, status="PASS" if ok else "FAIL",
+        summary=msg, resolved_config=profile)
     return 0 if ok else 1
 
 

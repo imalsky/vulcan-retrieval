@@ -64,6 +64,9 @@ REPOSITORIES = {
     # refuse legitimate chained RESUMEs after unrelated planner edits.
 }
 
+# particles the certificate re-solves cold (cold_replay)
+REPLAY_N = 4
+
 # beta must be 1 to within this; the ladder bisects, so it lands on 1 exactly
 # or not at all, and a loose tolerance here would let a nearly-tempered cloud
 # through as a posterior.
@@ -1234,9 +1237,6 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", nargs="?", default=".",
                     help="retrieval case directory containing case.py")
-    ap.add_argument("--replay-n", type=int, default=4,
-                    help="particles to cold-replay (0 disables; the replay is "
-                         "what catches an environment/provenance mistake)")
     args = ap.parse_args(argv)
 
     from retrieval_framework.run_smc import make_config
@@ -1248,9 +1248,7 @@ def main(argv=None) -> int:
 
     cert = collect(out_dir)
 
-    replay = {"ran": False, "reason": "disabled (--replay-n 0)"}
-    if args.replay_n > 0:
-        replay = cold_replay(Path(args.run_dir), cfg, out_dir, args.replay_n)
+    replay = cold_replay(cfg, out_dir, REPLAY_N)
     cert["cold_replay"] = replay
 
     problems = validate(cert, replay)
@@ -1278,7 +1276,7 @@ def main(argv=None) -> int:
     return 0
 
 
-def cold_replay(run_dir: Path, cfg, out_dir: Path, n: int) -> dict:
+def cold_replay(cfg, out_dir: Path, n: int) -> dict:
     """Re-evaluate a few checkpointed particles COLD and compare likelihoods.
 
     Run even when the production run was already cold: the point is not to

@@ -15,10 +15,8 @@ converge on this band; the numbers are archived in notes.md.)
 
 Method: converge the W39b chemistry ONCE (baseline theta), then rebuild the RT at
 each rung, bin every native spectrum onto the SAME R=100 bins, and compare
-adjacent rungs. Optionally convolve with a Gaussian LSF (--lsf-r) before binning
-to show LSF insensitivity at R=100 products, and optionally check a chemistry
-Jacobian column (--jacobian: d(binned depth)/d lnZ via a warm-started jvp per
-rung).
+adjacent rungs, and optionally check a chemistry Jacobian column (--jacobian:
+d(binned depth)/d lnZ via a warm-started jvp per rung).
 
 Run on the GPU node (primal RT only -- the vjp memory wall does not apply):
 
@@ -46,17 +44,7 @@ GATE_PPM = 5.0
 GATE_JAC_REL = 0.01
 BIN_R = 100.0
 BAND = (1900.0, 9900.0)          # production retrieval band (cm^-1)
-
-
-def gaussian_lsf(wl, y, R_lsf):
-    """Gaussian LSF of resolving power R_lsf applied in ln-lambda (host-side)."""
-    ln = np.log(wl)
-    s = 1.0 / (R_lsf * 2.3548200450309493)      # FWHM = 1/R in ln-lambda
-    out = np.empty_like(y)
-    for i, l0 in enumerate(ln):
-        w = np.exp(-0.5 * ((ln - l0) / s) ** 2)
-        out[i] = np.sum(w * y) / np.sum(w)
-    return out
+LADDER = (67, 101, 151)          # art_nlayer rungs; the lowest must be production's
 
 
 def production_pair(rungs, production_value, knob="art_nlayer"):
@@ -73,16 +61,8 @@ def production_pair(rungs, production_value, knob="art_nlayer"):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ladder", type=int, nargs="+", default=[67, 101, 151],
-                    help="art_nlayer rungs; the lowest must be the production "
-                         "value (default: 67 101 151)")
-    ap.add_argument("--lsf-r", type=float, default=0.0,
-                    help="optional Gaussian LSF resolving power before binning")
     ap.add_argument("--jacobian", action="store_true",
                     help="also compare d(binned)/dlnZ per rung (jvp; expensive)")
-    ap.add_argument("--no-artifact", action="store_true",
-                    help="skip writing the provenance-bearing result under "
-                         "validation/results/ (exploration only)")
     args = ap.parse_args()
     knob = "art_nlayer"
 
@@ -123,8 +103,6 @@ def main() -> int:
         d = np.asarray(depth_of(y0), np.float64)
         wl = np.asarray(rt.wl_um, np.float64)
         o = np.argsort(wl); wl, d = wl[o], d[o]
-        if args.lsf_r > 0:
-            d = gaussian_lsf(wl, d, args.lsf_r)
         entry = dict(binned=_artifact.bin_trapz(wl, d, edges))
         if want_jac:
             def f(th):
@@ -136,7 +114,7 @@ def main() -> int:
         return entry
 
     results = {}
-    for rung in sorted(args.ladder):
+    for rung in LADDER:
         t0 = time.time()
         prof = dict(profile); prof[knob] = int(rung)
         results[rung] = run_rung(prof, args.jacobian)
@@ -187,24 +165,23 @@ def main() -> int:
 
     # A verdict printed to a terminal and lost is not evidence. Archive it with
     # enough provenance to tie the number to an exact code and data state.
-    if not args.no_artifact:
-        _artifact.emit(
-            name="resolution_ladder",
-            title="Vertical-grid (art_nlayer) convergence of the binned depth",
-            measurements=measurements,
-            status=status,
-            summary=(
-                f"opacity_mode=exomolop; {knob} ladder {rungs}; "
-                f"production is {profile[knob]}. "
-                + ("The production resolution is converged at the declared "
-                   "gates." if ok else
-                   f"NOT converged at the declared gates -- adopt the lowest "
-                   f"tested passing rung as the production {knob}.")
-                + (" Jacobian axis included." if args.jacobian else
-                   " Jacobian axis NOT run (--jacobian); the depth gate alone "
-                   "does not certify gradient convergence.")),
-            resolved_config=profile,
-        )
+    _artifact.emit(
+        name="resolution_ladder",
+        title="Vertical-grid (art_nlayer) convergence of the binned depth",
+        measurements=measurements,
+        status=status,
+        summary=(
+            f"opacity_mode=exomolop; {knob} ladder {rungs}; "
+            f"production is {profile[knob]}. "
+            + ("The production resolution is converged at the declared "
+               "gates." if ok else
+               f"NOT converged at the declared gates -- adopt the lowest "
+               f"tested passing rung as the production {knob}.")
+            + (" Jacobian axis included." if args.jacobian else
+               " Jacobian axis NOT run (--jacobian); the depth gate alone "
+               "does not certify gradient convergence.")),
+        resolved_config=profile,
+    )
     return 0 if ok else 1
 
 

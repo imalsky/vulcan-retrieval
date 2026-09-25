@@ -669,31 +669,30 @@ def validate_config(cfg: Config) -> None:
 
 
 # Loud config banner (printed at the top of every run so nothing is a surprise)
-def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpec]] = None) -> str:
+def describe_config(cfg: Config, preset: str = "") -> str:
     """A prominent, human-readable dump of the RESOLVED configuration (after preset +
     overrides) -- forward-model fidelity, convergence criteria, T-P handling, data
     source, SMC settings, and the full parameter/prior table. Every entry point logs
     this so the exact numbers a run uses (band, count_max, priors, ...)
     are visible up front rather than buried in the code. Pure string formatting."""
-    if specs is None:
-        # Offset parameters are named per non-REFERENCE group, and the reference is
-        # the wavelength-first group (see the combo field comment), NOT combo[0] --
-        # naming the banner's offsets from cfg.combo prints the WRONG parameter for
-        # any combo not already in wavelength order. Derive
-        # the order the pipeline will actually use by reading the product CSVs (cheap,
-        # numpy-only); band-edge bin drops can still differ slightly from the built
-        # pipeline, which logs its resolved groups after build.
-        groups = list(cfg.combo)
-        if cfg.obs_dir and cfg.obs_products:
-            try:
-                from retrieval_framework import observations as OBS
-                groups = list(OBS.load_real_observations(cfg)["groups"])
-            except Exception:
-                pass   # banner stays provisional; the pipeline logs resolved groups
+    # Offset parameters are named per non-REFERENCE group, and the reference is
+    # the wavelength-first group (see the combo field comment), NOT combo[0] --
+    # naming the banner's offsets from cfg.combo prints the WRONG parameter for
+    # any combo not already in wavelength order. Derive
+    # the order the pipeline will actually use by reading the product CSVs (cheap,
+    # numpy-only); band-edge bin drops can still differ slightly from the built
+    # pipeline, which logs its resolved groups after build.
+    groups = list(cfg.combo)
+    if cfg.obs_dir and cfg.obs_products:
         try:
-            specs = specs_from_config(cfg, groups=groups)
+            from retrieval_framework import observations as OBS
+            groups = list(OBS.load_real_observations(cfg)["groups"])
         except Exception:
-            specs = []
+            pass   # banner stays provisional; the pipeline logs resolved groups
+    try:
+        specs = specs_from_config(cfg, groups=groups)
+    except Exception:
+        specs = []
     W = 84
     bar = "=" * W
 

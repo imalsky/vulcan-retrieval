@@ -185,39 +185,12 @@ def _tree_dot(a, b):
     return sum(jnp.vdot(x, y) for x, y in zip(la, lb))
 
 
-def _map_chunked(fn, args, chunk):
-    """vmap ``fn`` over the leading axis of every leaf of ``args`` (a pytree of stacked
-    per-particle inputs), running ``lax.map`` over padded chunks of ``chunk`` particles
-    to bound peak memory. ``chunk<=0`` (or >= n) is a single all-particles vmap.
-    Identical results to the plain vmap for any chunk (padding rows are dropped)."""
-    leaves = jax.tree_util.tree_leaves(args)
-    n = int(leaves[0].shape[0])
-    vfn = jax.vmap(fn)
-    if chunk <= 0 or chunk >= n:
-        return vfn(args)
-    n_pad = (-n) % chunk
-    if n_pad:
-        args = jax.tree_util.tree_map(
-            lambda x: jnp.concatenate([x, x[:n_pad]], axis=0), args)
-    args = jax.tree_util.tree_map(
-        lambda x: x.reshape((-1, chunk) + x.shape[1:]), args)
-    out = jax.lax.map(vfn, args)
-    return jax.tree_util.tree_map(
-        lambda x: x.reshape((-1,) + x.shape[2:])[:n], out)
-
-
 def _map_chunks(fn, args, chunk):
-    """Apply a BATCH function ``fn`` -- one that already takes the whole stacked
-    pytree ``args`` -- to padded chunks of ``chunk`` particles under ``lax.map``,
-    to bound peak memory. The sibling of ``_map_chunked`` for a function that is
-    batched itself, so there is no inner vmap. ``chunk<=0`` (or >= n) is ONE call
-    on the whole batch. Padding rows are dropped.
-
-    A chunk is its own batch on the solver's batched runner, so its lanes share
-    the chunk's loop ticks, not the whole cloud's: chunking moves the answer at
-    the convergence scale the way the batch already moves against the solo solve
-    (vulcan-forward's converged_y_batch contract), it is not exactly the single
-    call."""
+    """Apply a BATCH function ``fn`` -- one that takes the whole stacked pytree
+    ``args``, here ``jax.vmap`` of a per-particle RT stage -- to padded chunks of
+    ``chunk`` particles under ``lax.map``, to bound peak memory. ``chunk<=0``
+    (or >= n) is ONE call on the whole batch. Padding rows are dropped, so a
+    vmapped per-particle ``fn`` gives the plain vmap's result at any chunk."""
     leaves = jax.tree_util.tree_leaves(args)
     n = int(leaves[0].shape[0])
     if chunk <= 0 or chunk >= n:
@@ -568,7 +541,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return _mu_from_depth(_rt_wrap(aux, r0, cp), theta)
 
     observed_depth_from_y_jit = jax.jit(
-        lambda Y, Theta: _map_chunked(_mu_from_column, (Y, Theta), rt_chunk))
+        lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
 
     def _rt_val_grad(args):
         """Per-particle RT stage WITH gradient: primal depth + ONE reverse-mode vjp.
@@ -811,8 +784,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # cheap (~20 MB per lane pair, notes.md §1.3); the RT VJP below
                 # is the memory wall.
                 AUX, DAUX, Ynew, CD = _chem_batch(C_, Y, refs)
-                vals, g_th, bads = _map_chunked(_rt_val_grad, (AUX, DAUX, Theta),
-                                                rt_vjp_chunk)
+                vals, g_th, bads = _map_chunks(jax.vmap(_rt_val_grad),
+                                               (AUX, DAUX, Theta), rt_vjp_chunk)
                 G = g_th * dTh                                       # chain to u-space
                 # Two REJECTION classes (MH rejections, not AD pathologies) whose
                 # (garbage) gradients must NOT trip n_bad_grad:
@@ -851,11 +824,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     bad_grad=bads & usable, chem_tan_bad=chem_bad)
             elif diag:
                 AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs)
-                vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
+                vals = _map_chunks(jax.vmap(_rt_val), (AUX, Theta), rt_chunk)
                 G = None
             else:
                 AUX, Ynew, CDL = _chem_primal(C_, Y, refs)
-                vals = _map_chunked(_rt_val, (AUX, Theta), rt_chunk)
+                vals = _map_chunks(jax.vmap(_rt_val), (AUX, Theta), rt_chunk)
                 G = None
                 ACC = CDL.accept_count.astype(jnp.int32)
                 conv_ok = CDL.conv_normal > 0.5
@@ -896,9 +869,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     pipe.__dict__.update(dict(
         cfg=cfg, dtype=dtype, npdtype=npdtype,
         fwd=fwd, obs=obs, real_bins=real_bins, groups=groups,
-        B=B, O=O, n_bin=n_bin,
-        specs=specs, names=names, kinds=kinds, labels=labels, n_dim=n_dim,
-        n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx, off_idx=off_idx, noise_idx=noise_idx,
+        B=B, n_bin=n_bin,
+        names=names, kinds=kinds, labels=labels, n_dim=n_dim,
+        n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx,
         cloud_idx=cloud_idx, n_cloud=n_cloud,
         param_prior_lo=np.asarray([s.lo for s in specs], npdtype),
         param_prior_hi=np.asarray([s.hi for s in specs], npdtype),
@@ -906,10 +879,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # sample_prior_u is the T-P-window-restricted (redraw) sampler; the validity
         # predicate is exposed for diagnostics/calibration.
         theta_from_u=theta_from_u, log_prior_u=log_prior_u, sample_prior_u=sample_prior_u_valid,
-        tp_valid=tp_valid, n_tp=n_tp,
+        tp_valid=tp_valid,
         tp_prior_stats=tp_prior_stats,
         theta_truth=theta_truth,
-        observed_depth_model=observed_depth_model, observed_depth_model_jit=observed_depth_model_jit,
+        observed_depth_model_jit=observed_depth_model_jit,
         observed_depth_from_y_jit=observed_depth_from_y_jit,
         log_likelihood_u=log_likelihood_u,
         value_and_grad_naive=_value_and_grad_naive, value_and_grad_block=_value_and_grad_block,
@@ -930,7 +903,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         batch_eval_init_vg=_make_batch_eval(chem_mode, True, mutation_cap=False),
         batch_eval_move_l=_make_batch_eval(chem_mode, False),
         # observations injected by set_observations
-        obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None, flux_true=None,
+        obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None,
     ))
 
     def set_observations(depth, sigma):
@@ -1075,7 +1048,6 @@ def load_real_into_pipe(pipe: Pipeline) -> Dict[str, np.ndarray]:
     depth = np.asarray(obs["depth"], pipe.npdtype)
     sigma = np.asarray(obs["sigma"], pipe.npdtype)
     pipe.set_observations(depth, sigma)
-    pipe.flux_true = np.full_like(depth, np.nan)
     return dict(depth=depth, sigma=sigma)
 
 
@@ -1089,7 +1061,6 @@ def generate_observations(pipe: Pipeline, seed: int) -> Dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     depth = mu_true + rng.standard_normal(mu_true.shape) * sigma
     pipe.set_observations(depth, sigma)
-    pipe.flux_true = mu_true
     return dict(depth=depth, sigma=sigma, flux_true=mu_true)
 
 
@@ -1795,7 +1766,6 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
              # on every libm; bit-identical resume is the contract)
              mala_log_step=np.asarray(float(log_step)),
              last_step=np.asarray(int(last_step), np.int64),
-             init_checkpoint=np.asarray(1 if int(last_step) < 0 else 0, np.int64),
              logZ=np.asarray(logZ),
              # TARGET-EXACTNESS STAMP. Under warm continuation a
              # likelihood evaluation depends on the particle's carried column,
@@ -1815,9 +1785,8 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
              approximate_history_dependent_target=np.asarray(
                  1 if str(getattr(pipe, "chem_mode", None)) == "warm" else 0,
                  np.int64),
-             **({"init_stats_keys": np.asarray(list(init_stats.keys())),
-                 "init_stats_vals": np.asarray(list(init_stats.values()), np.int64)}
-                if init_stats else {}),
+             init_stats_keys=np.asarray(list(init_stats.keys())),
+             init_stats_vals=np.asarray(list(init_stats.values()), np.int64),
              # carried per-particle state: resume warm-continues without re-init
              y_state=np.asarray(jax.device_get(Y), np.float64),
              chem_refs=np.asarray(jax.device_get(refs), np.float64),
@@ -1840,31 +1809,11 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     Pass ``resume_from=<checkpoint.npz>`` to continue a killed run from its tempered
     cloud (the ladder resumes at the checkpointed beta; completed stages are kept).
 
-    EVIDENCE SEMANTICS: the returned ``logZ`` is the evidence under the
-    OPERATIONAL prior -- the declared box restricted to the modelable T-P window
-    (A) and to draws whose chemistry converges (C), renormalized:
-    Z_oper = E_pi[L | A and C]. Because the sampler DEFINES a non-convergent
-    draw as rejected (zero likelihood), the one integral-valid box quantity is
-    the ZERO-FILLED evidence
-
-        logZ_box = logZ + ln(f_tp) + ln(f_c1) + ln(f_c2)
-                 = ln( integral_box pi(theta) L(theta) 1[A and C](theta) dtheta ),
-
-    which is SOLVER-DEPENDENT through the convergence indicator (count_max,
-    warm_count_max, tolerances, the certification gate -- the canonical
-    conv_normal predicate in _proposal_converged, which also rejects
-    stall-certified exits -- and init history all move C). Cross-model
-    Bayes factors from logZ_box are defensible ONLY when (a) every model is run
-    at matched solver settings (including the same certification-gate
-    predicate) AND (b) the convergence attrition is shown to be
-    likelihood-negligible (f_c near 1, or the rejected region demonstrated to
-    carry negligible posterior mass); report both with any comparison. The old
-    ``logZ_box_physical = logZ + ln(f_tp)`` is GONE: restoring the T-P prior
-    mass while silently keeping the convergence conditioning renormalized is
-    P(A) * E[L | A and C] -- neither the box integral over A (needs L on the
-    non-converged set) nor the A-conditioned evidence (same reason); a support
-    fraction cannot reconstruct an unevaluated likelihood (see
-    tests/test_evidence_semantics.py for the numeric counterexample). Never
+    EVIDENCE SEMANTICS (evidence_report): the returned ``logZ`` is the evidence
+    under the OPERATIONAL prior (box, T-P window and converged chemistry,
+    renormalized); ``logZ_box`` is the ZERO-FILLED box evidence, SOLVER-DEPENDENT
+    through the convergence indicator (count_max, warm_count_max, tolerances,
+    the canonical conv_normal gate in _proposal_converged, init history). Never
     difference bare ``logZ`` across models with different support fractions."""
     cfg = pipe.cfg
     dtype = pipe.dtype
@@ -1917,7 +1866,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # Adopting betas/logZ/loglik across a target change would splice two
         # different densities into one evidence integral, and nothing
         # downstream could detect it -- the certificate reads the last job only.
-        ck_mode = str(ck["chem_mode"]) if "chem_mode" in ck.files else "none"
+        ck_mode = str(ck["chem_mode"])
         now_mode = str(getattr(pipe, "chem_mode", None) or "none")
         if ck_mode != now_mode:
             raise ValueError(
@@ -1934,30 +1883,21 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         step_hist = [float(x) for x in ck["step_size_history"]]
         uniq_hist = [int(x) for x in ck["unique_particles"]]
         logZ = float(ck["logZ"])
-        # Every key below is written unconditionally by the checkpoint writer
-        # above since before `target_digest` existed, and refuse_mismatched_resume
-        # has already refused any checkpoint without a digest, so no older layout
-        # can reach this point.
+        # The digest binds the code commit, so refuse_mismatched_resume has
+        # already refused any checkpoint this code did not write: every key the
+        # writer above writes is present.
         scale = np.asarray(ck["scale_chol"], np.float64)
         capped_hist = [int(x) for x in ck["warm_capped"]]
         stalled_hist = [int(x) for x in ck["warm_stalled"]]
         badgrad_hist = [int(x) for x in ck["tangent_rejected"]]
-        if "init_stats_keys" in ck.files:   # written only when init produced stats
-            init_stats = {str(k): int(v) for k, v in
-                          zip(ck["init_stats_keys"], ck["init_stats_vals"])}
+        init_stats = {str(k): int(v) for k, v in
+                      zip(ck["init_stats_keys"], ck["init_stats_vals"])}
         log_step = float(ck["mala_log_step"])
         Y = jnp.asarray(ck["y_state"], dtype)
         refs = jnp.asarray(ck["chem_refs"], dtype)
         L = jnp.asarray(ck["loglik"], dtype)
         G = jnp.asarray(ck["grad_u"], dtype)
-        if "move_cost" in ck.files:
-            cost = jnp.asarray(ck["move_cost"], jnp.int32)
-        elif 0 < int(cfg.cold_lanes) < N:
-            raise ValueError(
-                f"checkpoint {resume_from} has no move_cost: with {N} particles on "
-                f"{int(cfg.cold_lanes)} lanes the queue order comes from it, so the "
-                "resumed run would not reproduce the uninterrupted one. Start a "
-                "fresh run.")
+        cost = jnp.asarray(ck["move_cost"], jnp.int32)
         state_loaded = True
         if beta == 0.0:
             logger.info(f"RESUMED from {resume_from}: INIT-LEVEL checkpoint "
@@ -2114,26 +2054,18 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     theta_draws = np.asarray(jax.device_get(jax.vmap(pipe.theta_from_u)(U)), np.float64)[draw_idx]
     theta_draws = theta_draws.reshape(int(cfg.num_chains), int(cfg.num_samples), n_dim)
 
-    # ---- evidence conditioning report (semantics + retraction rationale in
-    # evidence_report's docstring) --------------------------------------------
+    # ---- evidence conditioning report (semantics in evidence_report) --------
     ev = evidence_report(logZ, init_stats)
-    if init_stats:
-        logger.info(
-            f"evidence conditioning: logZ(conditioned/operational) = {logZ:.2f}; "
-            f"ZERO-FILLED box evidence logZ_box = {ev['logZ_box']:.2f} +/- "
-            f"{ev['log_support_fraction_err']:.2f} (= logZ + ln(f_tp*f_conv); "
-            f"the exact integral of pi*L*1[T-P valid AND converged] over the "
-            f"declared box -- SOLVER-DEPENDENT via the convergence indicator; "
-            f"Bayes factors only at matched solver settings AND with the "
-            f"attrition shown likelihood-negligible). Supports: T-P window "
-            f"f_tp={ev['f_tp']:.3f} (solver-independent), convergence "
-            f"f_conv={ev['f_conv']:.3f} (solver-dependent). There is NO "
-            f"f_tp-only 'physical' evidence: that arithmetic reconstructs no "
-            f"integral (recheck P0-B, retracted).")
-    else:
-        logger.warning("evidence conditioning: no init_stats available (old resume "
-                       "checkpoint) -- the operational-prior support fraction is "
-                       "unknown; do NOT quote logZ as a box-prior evidence.")
+    logger.info(
+        f"evidence conditioning: logZ(conditioned/operational) = {logZ:.2f}; "
+        f"ZERO-FILLED box evidence logZ_box = {ev['logZ_box']:.2f} +/- "
+        f"{ev['log_support_fraction_err']:.2f} (= logZ + ln(f_tp*f_conv); "
+        f"the exact integral of pi*L*1[T-P valid AND converged] over the "
+        f"declared box -- SOLVER-DEPENDENT via the convergence indicator; "
+        f"Bayes factors only at matched solver settings AND with the "
+        f"attrition shown likelihood-negligible). Supports: T-P window "
+        f"f_tp={ev['f_tp']:.3f} (solver-independent), convergence "
+        f"f_conv={ev['f_conv']:.3f} (solver-dependent).")
 
     # Monte Carlo uncertainty on logZ. Each tempering stage is an importance
     # step whose relative weight variance is approximated by (N/ESS - 1)/N; the
@@ -2150,9 +2082,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         ess=np.asarray(ess_hist), acceptance_rate=np.asarray(acc_hist),
         logZ_increment=np.asarray(logz_inc_hist), logZ=logZ,
         logZ_err_lb=logZ_err_lb,
-        # evidence-semantics fields from evidence_report: logZ_box is the
-        # ZERO-FILLED box evidence; the retracted logZ_box_physical is
-        # intentionally ABSENT
+        # evidence-semantics fields from evidence_report
         log_support_fraction=ev["log_support_fraction"],
         log_support_fraction_err=ev["log_support_fraction_err"],
         logZ_box=ev["logZ_box"],
@@ -2160,11 +2090,11 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         log_support_physical_err=ev["log_support_physical_err"],
         log_conv_attrition=ev["log_conv_attrition"],
         log_conv_attrition_err=ev["log_conv_attrition_err"],
-        init_stats=(init_stats or {}),
+        init_stats=init_stats,
         warm_capped=np.asarray(capped_hist, np.int64),
         warm_stalled=np.asarray(stalled_hist, np.int64),
         # legacy key name (pre-zero-drift-rework): per-stage badgrad counts
         tangent_rejected=np.asarray(badgrad_hist, np.int64),
         step_size_history=np.asarray(step_hist), unique_particles=np.asarray(uniq_hist, np.int64),
-        scale_chol_final=np.asarray(scale), theta_draws=theta_draws,
+        theta_draws=theta_draws,
     )
