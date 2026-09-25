@@ -802,8 +802,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 bitwise (vulcan-jax notes 2.9). Same map as the gradient
                 path's, which is what makes this the FD reference for it."""
                 if warm:
-                    Y_new, CD = fwd.chem_solve_warm_diag_batch(
-                        C_, Y, refs[:, 0], refs[:, 1])
+                    # mutation_cap=False: the cold count_max, as on the gradient
+                    # path (run_nautilus's anchored warm starts)
+                    solve = (fwd.chem_solve_warm_diag_batch if mutation_cap
+                             else fwd.chem_solve_warm_diag_full_batch)
+                    Y_new, CD = solve(C_, Y, refs[:, 0], refs[:, 1])
                 else:
                     Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD

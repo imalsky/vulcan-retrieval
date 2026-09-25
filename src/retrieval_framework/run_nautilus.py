@@ -1,20 +1,31 @@
 """run_nautilus.py -- nested sampling (nautilus) on the retrieval's likelihood.
 
 Same case, preset, overrides and observations as run_smc; a different sampler.
-Every likelihood call is a COLD column through ``pipe.batch_eval_cold_l_diag``
-(the certificate gate, on the lane queue at ``cfg.cold_lanes``) with the SMC
-init's rejection rule: a non-finite forward, a T-P draw outside the window, a
-count_max-exhausted solve or a stall-certified exit gets log L = -inf. The
-evidence is therefore the ZERO-FILLED box evidence, the quantity the SMC run
-reports as ``logZ_box`` -- not its ``logZ`` (pipeline.evidence_report).
+Every likelihood call goes through the pipeline's batched chemistry + RT on the
+lane queue at ``cfg.cold_lanes`` with the SMC init's rejection rule: a
+non-finite forward, a T-P draw outside the window, a count_max-exhausted solve
+or a stall-certified exit gets log L = -inf. The evidence is therefore the
+ZERO-FILLED box evidence, the quantity an SMC run reports as ``logZ_box`` --
+not its ``logZ`` (pipeline.evidence_report).
+
+Warm starts (default; NAUTILUS_WARM=0 turns them off): every certified column
+becomes an anchor, keyed by its chemistry + T-P coordinates in the unit cube,
+and each later solve continues from its nearest anchor (the pipeline's warm
+map at the cold count_max) instead of the cold two-stage solve; batches before
+the first certified column run cold. The certified state is start-dependent at
+the convergence tolerance (<= 5 ppm on 15 of 16 CPU-screen targets, one 48 ppm,
+against ~69 ppm noise; vulcan-retrieval notes 2.14), so with warm starts the
+likelihood depends on the evaluation order at that level and the posterior and
+evidence are approximate there (the maintainer's choice, for ~3-5x fewer steps).
 
 nautilus samples the unit cube; z -> u = logit(z) is the retrieval's own
 u-space (pipeline.make_uspace), so theta = theta_from_u(u) follows the box
 prior exactly and the posterior is stored in theta.
 
 Output directory: ``<out_dir>_nautilus`` (default runs/<case>/data/gpu_nautilus):
-nautilus_checkpoint.hdf5 (rewritten every iteration), nautilus_tally.json
-(rejection counts, summed over jobs), and when the run finishes
+nautilus_checkpoint.hdf5 (rewritten every iteration), anchors/ (one npz of
+certified columns per batch, reloaded on resume), nautilus_tally.json
+(rejection and warm-start counts, summed over jobs), and when the run finishes
 nautilus_posterior.npz + nautilus_summary.json. ``SMC_RESUME=1`` (the PBS's
 RESUME=1) continues the checkpoint; without it an existing checkpoint raises.
 The run stops at ``cfg.walltime_seconds`` (the preset's governor) and exits 0
@@ -23,7 +34,8 @@ unfinished; resubmit with RESUME=1.
     python -m retrieval_framework.run_nautilus <run_dir>
 Env: NAUTILUS_N_LIVE (default 500), NAUTILUS_N_EFF (default 10000),
 NAUTILUS_N_BATCH (default 2 x cold_lanes: each lane solves ~2 columns per batch;
-the SMC init already runs 2.5 x lanes columns in one call).
+the SMC init already runs 2.5 x lanes columns in one call), NAUTILUS_WARM
+(default 1).
 """
 from __future__ import annotations
 
@@ -43,45 +55,114 @@ from retrieval_framework.run_smc import make_config, set_observations, write_con
 log = logging.getLogger("retrieval")
 
 
-def make_loglike(pipe, n_batch: int, tally: dict):
+class Anchors:
+    """Certified columns so far: unit-cube chemistry + T-P coordinates ``z``,
+    the column ``Y`` and its reference (lnZ, c_o). One npz per added batch in
+    ``folder``; an existing folder is reloaded (resume)."""
+
+    def __init__(self, folder: Path, n_key: int):
+        self.folder = folder
+        folder.mkdir(parents=True, exist_ok=True)
+        self.z = np.empty((0, n_key))
+        self.refs = np.empty((0, 2))
+        self.parts, self.part, self.row = [], np.empty(0, int), np.empty(0, int)
+        for f in sorted(folder.glob("anchors_*.npz")):
+            with np.load(f) as d:
+                self._append(d["z"], d["Y"], d["refs"])
+
+    def __len__(self):
+        return len(self.z)
+
+    def _append(self, z, Y, refs):
+        self.part = np.concatenate([self.part, np.full(len(z), len(self.parts))])
+        self.row = np.concatenate([self.row, np.arange(len(z))])
+        self.parts.append(np.asarray(Y))
+        self.z = np.concatenate([self.z, z])
+        self.refs = np.concatenate([self.refs, refs])
+
+    def add(self, z, Y, refs):
+        if len(z):
+            np.savez(self.folder / f"anchors_{len(self.parts):05d}.npz", z=z, Y=Y, refs=refs)
+            self._append(z, Y, refs)
+
+    def nearest(self, zq):
+        """(index, distance) of each query's nearest anchor (Euclidean, unit cube)."""
+        idx = np.empty(len(zq), int)
+        dist = np.empty(len(zq))
+        for j in range(0, len(zq), 64):
+            d2 = ((zq[j:j + 64, None, :] - self.z[None]) ** 2).sum(-1)
+            idx[j:j + 64] = d2.argmin(1)
+            dist[j:j + 64] = np.sqrt(d2.min(1))
+        return idx, dist
+
+    def columns(self, idx):
+        return (np.stack([self.parts[p][r] for p, r in zip(self.part[idx], self.row[idx])]),
+                self.refs[idx])
+
+
+def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
-    every rejection class. Calls the compiled evaluator at one fixed width
+    every rejection class. Calls a compiled evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with copies of its last row) and
-    adds this call's counts to ``tally``."""
+    adds this call's counts to ``tally``. With ``anchors``, a chunk starts
+    from the nearest certified column (warm, cold count_max) once one exists,
+    and every certified column it returns becomes an anchor."""
     import jax
     import jax.numpy as jnp
 
     from retrieval_framework import pipeline as P
 
-    ev = jax.jit(pipe.batch_eval_cold_l_diag)
+    ev_cold = jax.jit(pipe.batch_eval_cold_l_diag)
+    ev_warm = (jax.jit(pipe._make_batch_eval("warm", False, mutation_cap=False))
+               if anchors is not None else None)
     tp_ok = jax.jit(jax.vmap(lambda u: pipe.tp_valid(pipe.theta_from_u(u))))
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
+    k = int(pipe.n_chem_tp)
 
     def loglike(Z):
         Z = np.atleast_2d(np.asarray(Z, np.float64))
-        U = np.log(Z) - np.log1p(-Z)
         out = np.empty(len(Z))
         for i in range(0, len(Z), n_batch):
-            Uc = U[i:i + n_batch]
-            m = len(Uc)
+            Zc = Z[i:i + n_batch]
+            m = len(Zc)
             if m < n_batch:
-                Uc = np.concatenate([Uc, np.repeat(Uc[-1:], n_batch - m, axis=0)])
-            Uj = jnp.asarray(Uc, pipe.dtype)
-            L, _, _, cd = ev(Uj, Y0, refs0)
+                Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
+            Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
+            warm = anchors is not None and len(anchors) > 0
+            if warm:
+                idx, dist = anchors.nearest(Zc[:, :k])
+                Yw, rw = anchors.columns(idx)
+                L, Ynew, rnew, st = ev_warm(Uj, jnp.asarray(Yw, pipe.dtype),
+                                            jnp.asarray(rw, pipe.dtype))
+                acc, conv = st.acc, st.conv_ok
+            else:
+                L, Ynew, rnew, cd = ev_cold(Uj, Y0, refs0)
+                acc, conv = cd.accept_count, cd.conv_normal
             L = np.asarray(jax.device_get(L), np.float64)[:m]
-            acc = np.asarray(jax.device_get(cd.accept_count), np.int64)[:m]
-            conv = np.asarray(jax.device_get(cd.conv_normal), bool)[:m]
+            acc = np.asarray(jax.device_get(acc), np.int64)[:m]
+            conv = np.asarray(jax.device_get(conv), bool)[:m]
             tp_out = ~np.asarray(jax.device_get(tp_ok(Uj)), bool)[:m]
             nonfinite = ~np.isfinite(L) | (L <= P.REJECT_BELOW)
             exhausted = ~tp_out & (acc >= count_max)
             stalled = ~tp_out & ~conv & ~exhausted & ~nonfinite
             dead = tp_out | nonfinite | exhausted | stalled
             out[i:i + m] = np.where(dead, -np.inf, L)
-            for k, v in (("n_eval", m), ("tp_out", tp_out.sum()),
-                         ("exhausted", exhausted.sum()), ("stalled", stalled.sum()),
-                         ("nonfinite", (nonfinite & ~tp_out & ~exhausted).sum())):
-                tally[k] = tally.get(k, 0) + int(v)
+            mode = "warm" if warm else "cold"
+            for key, v in (("n_eval", m), ("tp_out", tp_out.sum()),
+                           ("exhausted", exhausted.sum()), ("stalled", stalled.sum()),
+                           ("nonfinite", (nonfinite & ~tp_out & ~exhausted).sum()),
+                           (f"n_{mode}", m), (f"{mode}_certified", (~dead).sum()),
+                           (f"{mode}_steps_certified", acc[~dead].sum())):
+                tally[key] = tally.get(key, 0) + int(v)
+            if warm:
+                tally["warm_anchor_dist_sum"] = (tally.get("warm_anchor_dist_sum", 0.0)
+                                                 + float(dist[:m].sum()))
+            if anchors is not None:
+                alive = ~dead
+                anchors.add(Zc[:m][alive][:, :k],
+                            np.asarray(jax.device_get(Ynew), np.float64)[:m][alive],
+                            np.asarray(jax.device_get(rnew), np.float64)[:m][alive])
         return out
 
     return loglike
@@ -107,9 +188,11 @@ def main() -> None:
     n_eff = int(os.environ.get("NAUTILUS_N_EFF", "10000"))
     lanes = int(cfg.cold_lanes)
     n_batch = int(os.environ.get("NAUTILUS_N_BATCH", str(2 * lanes if lanes > 0 else 132)))
+    warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_eff={n_eff} n_batch={n_batch} "
-             f"(cold_lanes={lanes}) seed={cfg.seed}")
+             f"(cold_lanes={lanes}) seed={cfg.seed} "
+             f"starts={'anchored warm (growing)' if warm else 'cold'}")
     log.info(C.describe_config(cfg, preset))
 
     import jax
@@ -130,11 +213,12 @@ def main() -> None:
     obs_path = out / "observations.npz"
     obs_save = set_observations(cfg, pipe, P, obs_path)
 
-    # resume identity before anything in the run directory is written
+    # resume identity before anything in the run directory is written; the
+    # start policy is part of the target, so a resume cannot switch it
     ckpt = out / "nautilus_checkpoint.hdf5"
     digest_path = out / "target_digest.txt"
     tally_path = out / "nautilus_tally.json"
-    want = str(getattr(pipe, "target_digest", "") or "")
+    want = str(getattr(pipe, "target_digest", "") or "") + ("|warm" if warm else "|cold")
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
         if not ckpt.exists():
@@ -143,9 +227,9 @@ def main() -> None:
         have = digest_path.read_text().strip() if digest_path.exists() else ""
         if have != want:
             raise RuntimeError(f"nautilus resume refused: {ckpt.name} belongs to a different "
-                               f"target (digest {have[:16] or '<absent>'} vs this run's "
-                               f"{want[:16]}). Restore the original target or use a fresh "
-                               "output directory.")
+                               f"target (digest {have[:16] or '<absent>'}... {have[-5:]} vs "
+                               f"this run's {want[:16]}... {want[-5:]}). Restore the original "
+                               "target or use a fresh output directory.")
     elif ckpt.exists():
         raise FileExistsError(f"{ckpt} exists: set RESUME=1 to continue it, or point "
                               "SMC_RETRIEVAL_OUT_DIR at a fresh directory.")
@@ -157,7 +241,10 @@ def main() -> None:
     digest_path.write_text(want + "\n")
 
     tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
-    like = make_loglike(pipe, n_batch, tally)
+    anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
+    if anchors is not None:
+        log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
+    like = make_loglike(pipe, n_batch, tally, anchors)
 
     def loglike_saved(Z):
         L = like(Z)
@@ -194,9 +281,12 @@ def main() -> None:
     summary = {
         "logZ_box": float(sampler.log_z), "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff), "n_live": n_live, "n_batch": n_batch,
-        "rejections": tally, "preset": preset, "seed": int(cfg.seed),
+        "starts": "anchored warm (growing)" if warm else "cold",
+        "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection); "
-                         "compare with an SMC run's logZ_box",
+                         "compare with an SMC run's logZ_box"
+                         + ("; approximate at the convergence tolerance (warm starts)"
+                            if warm else ""),
         "medians": {n: float(np.median(theta_eq[:, i])) for i, n in enumerate(pipe.names)},
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
