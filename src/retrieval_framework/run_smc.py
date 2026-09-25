@@ -393,13 +393,25 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg, preset = make_config(Path(args.run_dir))
+    ckpt_path = cfg.out_dir / "smc_checkpoint.npz"
+    resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
+    # SMC_RESUME=1 means "continue a killed run": a missing checkpoint raises
+    # before anything is written, the log included, rather than silently
+    # starting a multi-hour job from scratch.
+    if resume and not ckpt_path.exists():
+        raise FileNotFoundError(
+            f"SMC_RESUME=1 but no checkpoint at {ckpt_path}. Refusing to silently "
+            "start a fresh run; unset SMC_RESUME to start over, or point out_dir "
+            "at the killed run's directory.")
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
+    # a RESUME appends: the killed job's log survives, also when the target
+    # digest check below refuses the checkpoint
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[logging.StreamHandler(),
-                  logging.FileHandler(cfg.out_dir / "run.log", mode="w")],
+                  logging.FileHandler(cfg.out_dir / "run.log", mode="a" if resume else "w")],
         force=True,
     )
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={cfg.out_dir}")
@@ -437,16 +449,7 @@ def main() -> None:
     # recorded identity, which is exactly the state a certificate cannot detect
     # from the npz copies alone (they all still agree with each other).
     from retrieval_framework import certificate as _cert
-    ckpt_path = cfg.out_dir / "smc_checkpoint.npz"
-    resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
-        # SMC_RESUME=1 means "continue a killed run": a missing checkpoint
-        # raises rather than silently starting a multi-hour job from scratch.
-        if not ckpt_path.exists():
-            raise FileNotFoundError(
-                f"SMC_RESUME=1 but no checkpoint at {ckpt_path}. Refusing to silently "
-                "start a fresh run; unset SMC_RESUME to start over, or point out_dir "
-                "at the killed run's directory.")
         refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
 
     write_config_json(cfg, pipe, preset)

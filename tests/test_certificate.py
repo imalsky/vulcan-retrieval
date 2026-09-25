@@ -582,6 +582,22 @@ def test_resume_is_refused_before_the_run_directory_is_written(
         refuse_mismatched_resume(ck, want)
 
 
+def test_resume_without_a_checkpoint_writes_nothing(tmp_path, monkeypatch):
+    """SMC_RESUME=1 into a directory with no checkpoint refuses before any write:
+    the previous job's run.log survives untouched and nothing is added."""
+    from retrieval_framework import run_smc
+    (tmp_path / "run.log").write_text("the killed job's log\n")
+    run_dir = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
+    for k, v in (("SMC_RETRIEVAL_PRESET", "smoke"), ("SMC_RETRIEVAL_OUT_DIR", str(tmp_path)),
+                 ("SMC_RESUME", "1"), ("VULCAN_JAX_SOLVER", "fast")):
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr("sys.argv", ["run_smc", str(run_dir)])
+    with pytest.raises(FileNotFoundError, match="no checkpoint"):
+        run_smc.main()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["run.log"]
+    assert (tmp_path / "run.log").read_text() == "the killed job's log\n"
+
+
 def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
     """`git diff HEAD` cannot see an untracked module, but importing one changes
     the code that defines the target."""
