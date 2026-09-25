@@ -99,7 +99,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # smoke preset builds on a cap-exit warm-up (longdy~0.11 at nz=30) and
     # passes its gradient checks. A failure only flags a configuration that
     # may not converge (vulcan-forward notes §2).
-    if bool(getattr(cfg, "run_inference", False)) and not bool(
+    if bool(cfg.run_inference) and not bool(
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
             "the chemistry warm-up solve failed its check (see the [chem] "

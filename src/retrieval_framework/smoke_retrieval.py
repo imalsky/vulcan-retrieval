@@ -153,7 +153,7 @@ def main() -> int:
     #     a config change, so this regime is the bench's, never production's.
     from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
-    lanes = int(getattr(cfg, "cold_lanes", 0) or 0)
+    lanes = int(cfg.cold_lanes)
     queued = lanes > 0
     rule = (f"cold_lanes={lanes}: the staged evaluator QUEUES and the block "
             f"reference is the per-particle solo solve, so the gate is the "

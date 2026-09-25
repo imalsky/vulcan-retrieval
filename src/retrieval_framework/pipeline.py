@@ -1256,7 +1256,7 @@ def _init_draw_count(pipe: Pipeline, n_target: int) -> int:
     n_target = int(n_target)
     if not getattr(pipe, "has_chem_state", False):
         return n_target
-    over = float(getattr(pipe.cfg, "init_oversample", 2.0))  # matches the schema default
+    over = float(pipe.cfg.init_oversample)
     return max(n_target, int(math.ceil(n_target * over)))
 
 
@@ -1322,7 +1322,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
 
     # ---- phase 1: cold likelihood over the full (oversampled) draw ----
     t0 = time.perf_counter()
-    lanes = int(getattr(pipe.cfg, "cold_lanes", 0) or 0)
+    lanes = int(pipe.cfg.cold_lanes)
     width = (f"{min(lanes, M)} lanes refilled from the draw queue (wall time = "
              "total work / lanes)" if lanes > 0 else
              "one lockstep batch (wall time = the slowest draw)")
@@ -1372,7 +1372,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         raise RuntimeError(
             f"only {n_alive}/{M} cold draws converged; need {target_n}. The "
             "reject-and-cull ran out of survivors: raise init_oversample (currently "
-            f"{float(getattr(pipe.cfg, 'init_oversample', 2.0)):g}), tighten the prior, "
+            f"{float(pipe.cfg.init_oversample):g}), tighten the prior, "
             "or raise count_max. This is a systemic prior/config problem, not a few hard "
             "corners.")
 
@@ -1392,7 +1392,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     # phase 2 evaluates a few SPARE survivors beyond target_n (width is ~free in the
     # lockstep chemistry) so marginal columns that cannot RE-certify warm can be
     # culled and backfilled instead of killing the run (NAS jobs 64854/64897)
-    spare = int(getattr(pipe.cfg, "init_phase2_spare", 8)) if has_diag else 0
+    spare = int(pipe.cfg.init_phase2_spare) if has_diag else 0
     n_phase2 = min(n_alive, target_n + spare)
     sel = jnp.asarray(alive[:n_phase2])
     U_keep = jnp.asarray(U)[sel]
@@ -1427,7 +1427,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         # certified likelihood and eval-zeroed gradient entries (its first
         # MALA move starts with prior-only drift),
         # and raise only above the systematic-breakage backstop.
-        frac_tol = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
+        frac_tol = float(pipe.cfg.smc_tangent_bad_max_frac)
         thr_bad = int(math.ceil(frac_tol * n_phase2))
         bad2 = np.asarray(jax.device_get(stats2.bad_grad), bool)
         if n_bad > thr_bad:
@@ -1678,7 +1678,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
 
     sweep_jit = jax.jit(sweep_rwm if kernel == "rwm" else sweep)
 
-    max_frac = float(getattr(pipe.cfg, "smc_tangent_bad_max_frac", 0.25))
+    max_frac = float(pipe.cfg.smc_tangent_bad_max_frac)
 
     def mutate(key, U, Y, refs, L, G, beta, step, scale,
                where: str = "mutation", dump_dir=None, dump_tag: str = "",
