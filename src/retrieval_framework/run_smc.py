@@ -449,6 +449,13 @@ def main() -> None:
     ckpt_path = cfg.out_dir / "smc_checkpoint.npz"
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
+        # SMC_RESUME=1 means "continue a killed run": a missing checkpoint
+        # raises rather than silently starting a multi-hour job from scratch.
+        if not ckpt_path.exists():
+            raise FileNotFoundError(
+                f"SMC_RESUME=1 but no checkpoint at {ckpt_path}. Refusing to silently "
+                "start a fresh run; unset SMC_RESUME to start over, or point out_dir "
+                "at the killed run's directory.")
         refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
 
     write_config_json(cfg, pipe, preset)
@@ -481,13 +488,6 @@ def main() -> None:
                  f"mcmc_steps={cfg.smc_num_mcmc_steps}, kernel={kernel_label})...")
         ckpt = ckpt_path
         if resume:
-            # SMC_RESUME=1 means "continue a killed run". If the checkpoint is missing,
-            # fail loud rather than silently restarting a multi-hour job from scratch.
-            if not ckpt.exists():
-                raise FileNotFoundError(
-                    f"SMC_RESUME=1 but no checkpoint at {ckpt}. Refusing to silently "
-                    "start a fresh run; unset SMC_RESUME to start over, or point out_dir "
-                    "at the killed run's directory.")
             log.info(f"SMC_RESUME=1: continuing the ladder from {ckpt}")
         t0 = time.perf_counter()
         res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(int(cfg.seed)), progress=True,
