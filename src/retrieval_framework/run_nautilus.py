@@ -14,9 +14,20 @@ and each later solve continues from its nearest anchor (the pipeline's warm
 map at the cold count_max) instead of the cold two-stage solve; batches before
 the first certified column run cold. The certified state is start-dependent at
 the convergence tolerance (<= 5 ppm on 15 of 16 CPU-screen targets, one 48 ppm,
-against ~69 ppm noise; vulcan-retrieval notes 2.14), so with warm starts the
-likelihood depends on the evaluation order at that level and the posterior and
-evidence are approximate there (the maintainer's choice, for ~3-5x fewer steps).
+against ~69 ppm noise; vulcan-retrieval notes 2.14), and so is WHICH draws are
+rejected (a warm continuation certifies or fails on its own: 16/16 certified
+warm against 14/16 cold in that screen). With warm starts the likelihood and
+the rejection set depend on the evaluation order, so the posterior and
+evidence are approximate and the evidence is NOT an SMC run's logZ_box (the
+maintainer's choice, for ~3-5x fewer steps); use NAUTILUS_WARM=0 for an
+evidence claim. NAUTILUS_WARM=0 is the cold map on the lane queue, the same
+map class as an SMC run's (a draw's column depends on its batch at the
+convergence scale).
+
+Anchors are written inside the likelihood call, before nautilus checkpoints
+the batch: a job killed in between resumes by redrawing that batch, which then
+starts from its own columns (and the tally counts it twice). The set is never
+pruned: ~44 KB per certified column, on disk and in memory.
 
 nautilus samples the unit cube; z -> u = logit(z) is the retrieval's own
 u-space (pipeline.make_uspace), so theta = theta_from_u(u) follows the box
@@ -82,7 +93,11 @@ class Anchors:
 
     def add(self, z, Y, refs):
         if len(z):
-            np.savez(self.folder / f"anchors_{len(self.parts):05d}.npz", z=z, Y=Y, refs=refs)
+            f = self.folder / f"anchors_{len(self.parts):05d}.npz"
+            tmp = f.with_name(f".{f.name}.part")
+            with open(tmp, "wb") as fh:
+                np.savez(fh, z=z, Y=Y, refs=refs)
+            os.replace(tmp, f)
             self._append(z, Y, refs)
 
     def nearest(self, zq):
@@ -143,15 +158,18 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             acc = np.asarray(jax.device_get(acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(conv), bool)[:m]
             tp_out = ~np.asarray(jax.device_get(tp_ok(Uj)), bool)[:m]
-            nonfinite = ~np.isfinite(L) | (L <= P.REJECT_BELOW)
+            # solver state first: the warm evaluator already floors L on a
+            # stalled or exhausted exit, which is not a non-finite forward
             exhausted = ~tp_out & (acc >= count_max)
-            stalled = ~tp_out & ~conv & ~exhausted & ~nonfinite
-            dead = tp_out | nonfinite | exhausted | stalled
+            stalled = ~tp_out & ~exhausted & ~conv
+            nonfinite = (~tp_out & ~exhausted & conv
+                         & (~np.isfinite(L) | (L <= P.REJECT_BELOW)))
+            dead = tp_out | exhausted | stalled | nonfinite
             out[i:i + m] = np.where(dead, -np.inf, L)
             mode = "warm" if warm else "cold"
             for key, v in (("n_eval", m), ("tp_out", tp_out.sum()),
                            ("exhausted", exhausted.sum()), ("stalled", stalled.sum()),
-                           ("nonfinite", (nonfinite & ~tp_out & ~exhausted).sum()),
+                           ("nonfinite", nonfinite.sum()),
                            (f"n_{mode}", m), (f"{mode}_certified", (~dead).sum()),
                            (f"{mode}_steps_certified", acc[~dead].sum())):
                 tally[key] = tally.get(key, 0) + int(v)
@@ -214,11 +232,14 @@ def main() -> None:
     obs_save = set_observations(cfg, pipe, P, obs_path)
 
     # resume identity before anything in the run directory is written; the
-    # start policy is part of the target, so a resume cannot switch it
+    # start policy, the batch width (the lane queue's composition) and n_live
+    # (nautilus does not restore it) are part of the target, so a resume
+    # cannot switch them
     ckpt = out / "nautilus_checkpoint.hdf5"
     digest_path = out / "target_digest.txt"
     tally_path = out / "nautilus_tally.json"
-    want = str(getattr(pipe, "target_digest", "") or "") + ("|warm" if warm else "|cold")
+    want = (f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
+            f"|n_batch={n_batch}|n_live={n_live}")
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
         if not ckpt.exists():
@@ -227,12 +248,13 @@ def main() -> None:
         have = digest_path.read_text().strip() if digest_path.exists() else ""
         if have != want:
             raise RuntimeError(f"nautilus resume refused: {ckpt.name} belongs to a different "
-                               f"target (digest {have[:16] or '<absent>'}... {have[-5:]} vs "
-                               f"this run's {want[:16]}... {want[-5:]}). Restore the original "
-                               "target or use a fresh output directory.")
-    elif ckpt.exists():
-        raise FileExistsError(f"{ckpt} exists: set RESUME=1 to continue it, or point "
-                              "SMC_RETRIEVAL_OUT_DIR at a fresh directory.")
+                               f"target ({have or '<absent>'} vs this run's {want}). Restore "
+                               "the original target and settings or use a fresh output "
+                               "directory.")
+    elif ckpt.exists() or any((out / "anchors").glob("anchors_*.npz")):
+        raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
+                              "set RESUME=1 to continue it, or point SMC_RETRIEVAL_OUT_DIR "
+                              "at a fresh directory.")
     write_config_json(cfg, pipe, preset)
     if obs_save is not None:
         P.save_npz(obs_path, **obs_save)
@@ -248,7 +270,9 @@ def main() -> None:
 
     def loglike_saved(Z):
         L = like(Z)
-        tally_path.write_text(json.dumps(tally, indent=2) + "\n")
+        tmp = tally_path.with_name(f".{tally_path.name}.part")
+        tmp.write_text(json.dumps(tally, indent=2) + "\n")
+        os.replace(tmp, tally_path)
         return L
 
     sampler = nautilus.Sampler(lambda z: z, loglike_saved, n_dim=pipe.n_dim, n_live=n_live,
@@ -283,10 +307,11 @@ def main() -> None:
         "n_eff": float(sampler.n_eff), "n_live": n_live, "n_batch": n_batch,
         "starts": "anchored warm (growing)" if warm else "cold",
         "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
-        "evidence_note": "zero-filled box evidence (log L = -inf on every rejection); "
-                         "compare with an SMC run's logZ_box"
-                         + ("; approximate at the convergence tolerance (warm starts)"
-                            if warm else ""),
+        "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
+                         + ("; APPROXIMATE: warm starts move the likelihood and which draws "
+                            "are rejected, so this is not an SMC logZ_box (NAUTILUS_WARM=0 "
+                            "for an evidence claim)" if warm
+                            else "; compare with an SMC run's logZ_box"),
         "medians": {n: float(np.median(theta_eq[:, i])) for i, n in enumerate(pipe.names)},
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")

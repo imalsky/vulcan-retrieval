@@ -48,8 +48,9 @@ def _stub_pipe():
         th, L, acc, conv = common(U)
         return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], _Diag(acc, conv)
 
-    def warm(U, Y, refs):          # hands back the column it started from
-        _, L, acc, conv = common(U)
+    def warm(U, Y, refs):          # hands back the column it started from; like the
+        _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
+        L = jnp.where(conv & (acc < COUNT_MAX), L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
     return SimpleNamespace(batch_eval_cold_l_diag=cold,
@@ -84,9 +85,15 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     L1 = like(z1)                                # no anchors yet: cold
     assert len(anchors) == np.isfinite(L1).sum() > 0 and tally["n_cold"] == 16
     z_a, code_a = anchors.z.copy(), anchors.columns(np.arange(len(anchors)))[0][:, 0, 0]
-    L2 = like(rng.uniform(0.02, 0.98, (16, D)))  # warm from the first batch's anchors
+    z2 = rng.uniform(0.02, 0.98, (16, D))
+    L2 = like(z2)                                # warm from the first batch's anchors
     new = np.arange(len(z_a), len(anchors))
     assert tally["n_warm"] == 16 and len(new) == np.isfinite(L2).sum()
+    # a stalled warm exit is tallied as stalled, not as a non-finite forward
+    z = np.concatenate([z1, z2])                 # theta = z on the unit box
+    live = (z[:, 2] <= 0.7) & (z[:, 0] <= 0.6)
+    assert (live & (z[:, 1] < 0.35))[16:].any()
+    assert tally["stalled"] == (live & (z[:, 1] < 0.35)).sum() and tally["nonfinite"] == 0
     want = code_a[((anchors.z[new, None, :] - z_a[None]) ** 2).sum(-1).argmin(1)]
     assert np.array_equal(anchors.columns(new)[0][:, 0, 0], want)
     assert len(Anchors(tmp_path, 2)) == len(anchors)   # reloads on resume

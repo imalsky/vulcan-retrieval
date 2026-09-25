@@ -1,7 +1,0 @@
-{
-  "_note": "timing calibration, one sweep at 288 particles (case default 144; init draws are 2.5x); the init gate is raised so the run reaches the sweep at the current attrition (notes 1.1) -- calibrations time steps, they do not certify a target",
-  "smc_num_mcmc_steps": 1,
-  "smc_mcmc_kernel": "rwm",
-  "init_max_nonconverged_frac": 0.5,
-  "smc_num_particles": 288
-}

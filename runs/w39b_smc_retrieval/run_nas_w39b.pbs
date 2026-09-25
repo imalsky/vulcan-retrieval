@@ -24,9 +24,11 @@
 #
 # Expected layout on /nobackup (git pull for code, scp/cp for data -- see CLAUDE.md):
 #   ${PROJECT_ROOT}/VULCAN-JAX/                                  (chemistry repo)
-#   ${PROJECT_ROOT}/vulcan-retrieval/                             (THIS repo; data/ + output/ at its root)
+#   ${PROJECT_ROOT}/vulcan-forward/                               (forward engine)
+#   ${PROJECT_ROOT}/vulcan-retrieval/                             (THIS repo; data/ at its root)
 #   ${PROJECT_ROOT}/vulcan-retrieval/runs/w39b_smc_retrieval/     (THIS case dir)
-#   (CO ExoMol + H2-H2/H2-He CIA cache lives in the repo data/: no other dependency needed)
+#   (the ExoMolOP k-tables and the H2-H2/H2-He CIA live in the repo data/;
+#   validate_env names anything missing)
 #
 # Submit (from this case dir, or export PROJECT_ROOT):
 #   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval/runs/w39b_smc_retrieval
@@ -53,9 +55,9 @@
 #                           fixed-step benches) in ONE job, in order, each in its own
 #                           subshell; a failing arm
 #                           is recorded and the chain goes on. Path relative to this
-#                           dir; format in overrides/calibration_chain.txt. Per-arm
+#                           dir; format in overrides/speed_repair_chain.txt. Per-arm
 #                           table: logs/chain_<jobid>.tsv, summary at the end of the log.
-#     qsub -v CALIBRATE_CHAIN=overrides/calibration_chain.txt run_nas_w39b.pbs
+#     qsub -v CALIBRATE_CHAIN=overrides/speed_repair_chain.txt run_nas_w39b.pbs
 #   CALIBRATE_COUNT_MAX=1   measure the real accept_count distribution (calibrate_count_max.py);
 #                           CALIBRATE_N_DRAWS (default 48), CALIBRATE_COUNT_MAX_PROBE (default
 #                           20000), CALIBRATE_SEED_OFFSET (default 0)
@@ -64,8 +66,8 @@
 #                           step-cost bench, primal or gradient; pair with NSYS=1
 #                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step
 #                           CALIBRATE_LANES=<k>: run the cold batch on k lanes with
-#                           refill (cfg.cold_lanes; the config's default is 144, the
-#                           production width; 0 = one lockstep batch, the reference
+#                           refill (cfg.cold_lanes; the gpu preset's default is the
+#                           device's SM count, 132 on the GH200; 0 = one lockstep batch, the reference
 #                           arm) -- the lane-count arm of the bench, same draws and
 #                           seed. A fixed-step bench runs lockstep on its own.
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
@@ -121,14 +123,14 @@ else
   echo "ERROR: set PROJECT_ROOT or submit from .../vulcan-retrieval/runs/w39b_smc_retrieval"
   exit 1
 fi
-REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"                            # repo root (data/ + output/ live here)
+REPO_DIR="${PROJECT_ROOT}/vulcan-retrieval"                            # repo root (data/ lives here)
 SMC_DIR="${REPO_DIR}/runs/w39b_smc_retrieval"         # this case
 if [ ! -f "${SMC_DIR}/case.py" ] || [ ! -f "${REPO_DIR}/src/retrieval_framework/run_smc.py" ]; then
   echo "ERROR: case.py / retrieval framework not found under PROJECT_ROOT=${PROJECT_ROOT}"
   exit 1
 fi
 export PROJECT_ROOT
-export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes config.py / zco_lib.py portable
+export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes forward/config.py portable
 
 # --- stream everything to a tail-able log (PBS .o appears only at job end) ----
 LOG_DIR="${SMC_DIR}/logs"
@@ -140,7 +142,7 @@ echo "Live log: tail -f ${LOG_FILE}"
 echo "Job ${PBS_JOBID:-?} started $(date) on $(hostname) ($(uname -m))"
 echo "PROJECT_ROOT=${PROJECT_ROOT}"
 
-# --- NAS proxy (only needed if HITRAN line lists must be (re)downloaded) ------
+# --- NAS proxy (only for a download; validate_env requires the data on disk) --
 export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
 export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
 
@@ -199,6 +201,10 @@ set_xla_flags() {
   esac
 }
 set_xla_flags || exit 1
+case "${SAMPLER:-smc}" in
+  smc|nautilus) ;;
+  *) echo "ERROR: SAMPLER=${SAMPLER}: expected smc or nautilus"; exit 1 ;;
+esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 # Production solver: `ffi`, the CUDA block-Thomas kernel (the maintainer's
 # decision, notes 2.13). Pinned here, not left to config_schema.choose_solver(),
