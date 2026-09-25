@@ -23,7 +23,8 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
   6. exojax imports and matches the pyproject pin;
   7. required data files under <PROJECT_ROOT>/vulcan-retrieval/data/ (real
      spectrum CSVs, the ExoMolOP k-tables, H2-H2 + H2-He CIA);
-  8. exogibbs imports and meets the floor the equilibrium cold seed needs.
+  8. exogibbs imports and meets the floor the equilibrium cold seed needs;
+  9. nautilus (nautilus-sampler) imports: run_nautilus needs it.
 
 Usage:
     python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
@@ -243,6 +244,19 @@ def _check_exogibbs() -> None:
         _ok(f"exogibbs {got}")
 
 
+def _check_nautilus() -> None:
+    """run_nautilus (PBS SAMPLER=nautilus) imports nautilus after the pipeline
+    build, minutes into a job; catch a missing install here."""
+    try:
+        import nautilus
+    except Exception as e:  # noqa: BLE001
+        _err(f"nautilus failed to import: {e!r}. Install it: "
+             'pip install --user "nautilus-sampler==1.0.6" "h5py>=3" '
+             "(tools/bootstrap_nas_env.pbs does).")
+        return
+    _ok(f"nautilus {getattr(nautilus, '__version__', '?')}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path)
@@ -272,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         _check_exojax()
         _check_data_tree(root, production_molecules(root))
         _check_exogibbs()
+        _check_nautilus()
 
     print()
     if _ERRORS:
