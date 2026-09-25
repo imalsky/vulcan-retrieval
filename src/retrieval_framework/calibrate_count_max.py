@@ -184,7 +184,8 @@ def main() -> None:
             replace(cfg, count_min=1, count_max=1, warm_count_max=1), capture=False)
         t_first, t_steady, out, U = _timed(cfg, capture=True)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
-        # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
+        # outer_loop._real_terminate), so a capped lane stops after exactly K+1
+        # accepted steps.
         # A cold solve runs one such loop per stage, two stages.
         n_acc = K + 1
         n_stages = 2
@@ -243,15 +244,17 @@ def main() -> None:
 
     pipe, U, Y0, refs0 = _setup(cfg)
     log.info("Running batched cold two-stage init at the probe count_max "
-             "(single lockstep while_loop bounded by the SLOWEST draw -- this can "
-             "legitimately take a while if the probe cap is high and a corner is hard)...")
+             "(on the lane queue with cold_lanes > 0, else one lockstep while_loop "
+             "bounded by the SLOWEST draw -- this can legitimately take a while if "
+             "the probe cap is high and a corner is hard)...")
     t0 = time.perf_counter()
     fn = jax.jit(pipe.batch_eval_cold_l_diag)
     L, _Y, _refs, cd = fn(U, Y0, refs0)
     jax.block_until_ready(L)
     dt = time.perf_counter() - t0
     log.info(f"done in {dt:.1f}s ({dt / max(1, int(args.n_draws)):.3f}s/draw amortized; "
-             "NOT per-draw cost -- wall time is set by the single slowest draw)")
+             "NOT per-draw cost -- the wall is total work / lanes on the queue, "
+             "the slowest draw in one lockstep batch)")
 
     wa = np.asarray(jax.device_get(cd.accept_count), np.int64)
     Lnp = np.asarray(jax.device_get(L), np.float64)

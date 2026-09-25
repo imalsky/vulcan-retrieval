@@ -20,7 +20,7 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      engine every retrieval path imports;
   5. cross-repo pin: the installed vulcan-jax satisfies vulcan-retrieval's
      declared requirement (skipped with a warning if `packaging` is absent);
-  6. exojax imports and matches the pyproject pin;
+  6. exojax imports and matches vulcan-forward's pin;
   7. required data files under <PROJECT_ROOT>/vulcan-retrieval/data/ (real
      spectrum CSVs, the ExoMolOP k-tables, H2-H2 + H2-He CIA);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs;
@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 SUPPORTED_PYTHON = (3, 10)
-EXOJAX_PIN = "2.2.3"  # keep in lockstep with pyproject.toml dependencies
+EXOJAX_PIN = "2.2.3"  # keep in lockstep with vulcan-forward's pyproject.toml
 EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan_jax.ini_abun.eq_seed
 
 _ERRORS: list[str] = []
@@ -179,7 +179,7 @@ def _check_exojax() -> None:
         return
     if exojax.__version__ != EXOJAX_PIN:
         _err(
-            f"exojax {exojax.__version__} != pinned {EXOJAX_PIN} (pyproject). "
+            f"exojax {exojax.__version__} != pinned {EXOJAX_PIN} (vulcan-forward). "
             "Re-run the bootstrap; the pin is deliberate (see requirements-hpc.txt)."
         )
     else:

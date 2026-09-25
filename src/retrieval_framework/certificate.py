@@ -236,7 +236,7 @@ def _scalar(z, key, default=None):
 
 
 def _survival_fractions(extra) -> dict:
-    """f_c1 (cold init) and f_c2 (phase-2 warm recertification), separately.
+    """f_c1 (cold init, phase 1) and f_c2 (phase-2 re-certification), separately.
 
     ``evidence_report`` only exports their product; the raw counts ride in the
     npz as init_stats. RC-06 requires both fractions in the certificate, because
@@ -658,7 +658,7 @@ def collect(out_dir: Path) -> dict:
             "log_conv_attrition_err": _scalar(
                 extra, "smc_log_conv_attrition_err"),
             # BOTH survival fractions, not only their product: the cold-init and
-            # the phase-2 warm-recertification culls remove different regions and
+            # the phase-2 re-certification culls remove different regions and
             # a combined number hides which solver stage did it.
             **_survival_fractions(extra),
         },
@@ -885,7 +885,7 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
                 "measured on the same run")
     if ev.get("f_c1") is None or ev.get("f_c2") is None:
         problems.append(
-            "the cold-init and warm-recertification survival fractions are not "
+            "the phase-1 and phase-2 (re-certification) survival fractions are not "
             "both recorded: their product alone does not say which solver stage "
             "removed the prior mass")
 
@@ -1174,7 +1174,7 @@ def render(cert: dict, problems: list[str], warnings: list[str] = ()) -> str:
         f"| ln f_support +- err | {ev['log_support_fraction']} +- "
         f"{ev['log_support_fraction_err']} |",
         f"| survival: cold init f_c1 | {ev.get('f_c1')} |",
-        f"| survival: warm recert f_c2 | {ev.get('f_c2')} |",
+        f"| survival: phase-2 recert f_c2 | {ev.get('f_c2')} |",
         "",
         "`smc_logZ` is conditional on the OPERATIONAL prior support "
         "(box AND T-P window AND converged, renormalized). `smc_logZ_box` is "

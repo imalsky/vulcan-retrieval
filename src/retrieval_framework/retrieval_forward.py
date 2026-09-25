@@ -180,9 +180,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         NOT a convergence test (stall fallback / hybrid phase-flip exits sit well
         under the cap); gate on ``conv_normal`` too.
 
-        THE cold solve on the SMC init's likelihood-only phase AND on the cold
-        GRADIENT path: pipeline._make_batch_eval jvp's straight through this, so a
-        non-converged cold proposal is rejected exactly as a warm one is. Every
+        The scalar cold solve (native_depth_aux: the scalar likelihood and the
+        block gradient); the batched evaluators run its twin
+        chem_solve_cold_diag_batch and jvp through the stage twins, and reject a
+        non-converged cold proposal exactly as a warm one is rejected. Every
         ConvDiag field rides the runner's primal carry, so reading it costs
         nothing; the pipeline stop_gradients + casts the packed diag inside the
         jvp chain."""
@@ -227,7 +228,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         (``vulcan_chem.converged_y_queue``): a lane that certifies takes the
         next draw inside the same while loop, so wall time follows total work /
         lanes instead of the slowest draw. One route per config, so a narrow
-        replay agrees with the run. The default 0 keeps the single lockstep
+        replay agrees with the run. cold_lanes = 0 keeps the single lockstep
         batch, call for call."""
         return chem_stage2_diag_batch(C, chem_stage1_batch(C))
 

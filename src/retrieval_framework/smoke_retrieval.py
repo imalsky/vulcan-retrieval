@@ -126,7 +126,7 @@ def main() -> int:
     # reverse-mode RT vjp, RT lax.map-chunked). TWO regimes, and which one is in
     # force is printed:
     #
-    #   cold_lanes == 0 (production default): the two routes are the same runner
+    #   cold_lanes == 0 (the lockstep reference): the two routes are the same runner
     #     CADENCE CLASS, but the block reference is the scalar runner, so the tight
     #     gate -- dval < 1e-6 relative (floor 1), dgrad < 1e-5 norm-relative -- is
     #     EMPIRICAL on these probe draws, not an identity: a lockstep lane keys
@@ -140,7 +140,8 @@ def main() -> int:
     #     the gates sit ~20x above the worst and still leave five orders of margin
     #     against the wiring bug this check exists to catch.
     #
-    #   cold_lanes > 0: the staged evaluator runs the lane QUEUE while
+    #   cold_lanes > 0 (production: the gpu preset runs one lane per
+    #     particle): the staged evaluator runs the lane QUEUE while
     #     value_and_grad_block is the per-particle SOLO solve, so a refilled draw
     #     enters the loop at the tick its lane was freed at and the two are
     #     DIFFERENT MAPS by design -- they can only agree at the convergence
@@ -149,8 +150,7 @@ def main() -> int:
     #     warm-vs-cold likelihood gate) and max|dG| / max(max|G_block|, 1) <
     #     DLOGL_MAX_PASS (the same 0.1, norm-relative with an absolute-1 scale
     #     floor -- what validate_warm holds the re-solved u-space gradient to).
-    #     The measured sizes at cold_lanes = 2 are in notes 2.13; a lane count is
-    #     a config change, so this regime is the bench's, never production's.
+    #     The measured sizes at cold_lanes = 2 are in notes 2.13.
     from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
     lanes = int(cfg.cold_lanes)

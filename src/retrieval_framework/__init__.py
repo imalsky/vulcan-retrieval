@@ -20,7 +20,7 @@ Module map (the import chain is heavy-import-safe top to bottom):
 
     config_schema      Config dataclass + ParamSpec + specs_from_config (no jax)
     observations       observed-spectrum loading + exact linear binning/offset operators
-    tp_profile         differentiable ExoJax Guillot / power-law T-P evaluators
+    tp_profile         differentiable ExoJax Guillot T-P evaluator
     retrieval_forward  theta -> native transit depth (live VULCAN-JAX chemistry + ExoJax RT)
     pipeline           u-space posterior, staged batched evaluators, SMC core, MALA kernel
     run_smc            case-directory driver (presets, overrides, outputs, PPC)

@@ -280,9 +280,10 @@ class Config:
     # systematic AD breakage rather than the known theta-corner class and raises.
     smc_tangent_bad_max_frac: float = 0.25
     # "cold": the published solve-from-baseline (two-stage) map for EVERY
-    #         evaluation. The likelihood is then a FIXED, DETERMINISTIC function
-    #         of theta -- the target MALA, SMC tempering, and a quoted Bayesian
-    #         evidence all assume. THE DEFAULT.
+    #         evaluation. The likelihood then never depends on sampler history
+    #         -- what MALA, SMC tempering and a quoted Bayesian evidence assume
+    #         -- up to the lane queue's refill tick, which moves a refilled
+    #         draw's column at the convergence scale (notes §2.13). THE DEFAULT.
     # "warm": every proposal re-converges by continuation from the particle's
     #         carried column. It is cheaper, but a likelihood evaluation depends on
     # the particle's CARRIED chemistry column, hence on sampler history, at the

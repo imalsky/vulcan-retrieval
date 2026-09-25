@@ -88,7 +88,7 @@ def smoke_config(**overrides: Any) -> Config:
         combo=("G395H",),          # single group -> no offsets in the smoke
         infer_offsets=False,
         obs_wl_lo=2.28, obs_wl_hi=2.36,             # overlap the cached CO band
-        tp_infer_gamma=False,      # 5-D smoke: lnZ, c_o, lnKzz, Tirr, log10kappa (+lnR0)
+        tp_infer_gamma=False,      # 8-D smoke: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud
         generate_synthetic_data=True,               # smoke always self-tests on an injection
         smc_num_particles=12, smc_num_mcmc_steps=4, smc_max_steps=8,
         smc_target_ess_frac=0.5,
@@ -130,33 +130,41 @@ def gpu_config(**overrides: Any) -> Config:
         combo=("NIRISS", "G395H"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         generate_synthetic_data=False,
-        # N = the lane count = one kernel wave of the card (132 on the GH200;
-        # 144, the pre-0.24.0 width, off the GPU): every particle's chemistry
-        # runs in one wave and the queue never waits on a late starter. Both
-        # divide into exact RT-vjp chunks of 4.
+        # N = the lane count = one kernel wave of the card (132 on the GH200,
+        # 144 off the GPU): every particle's chemistry runs in one wave and the
+        # queue never waits on a late starter. Both divide into exact RT-vjp
+        # chunks of 4.
         # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
-        # fresh budget and the stage index continues). 40 sits right at the edge
-        # of what a 10-D ladder at target_ess_frac=0.6 needs, and exhausting it
-        # yields a TEMPERED cloud the certificate refuses; an unused stage costs
-        # nothing, so the governor is left as the real limit.
+        # fresh budget and the stage index continues). Exhausting it yields a
+        # TEMPERED cloud the certificate refuses and an unused stage costs
+        # nothing, so it sits well above the expected stage count and the
+        # governor is the real limit.
         smc_num_particles=lanes, cold_lanes=lanes, smc_max_steps=80,
-        # Draw 360 cold candidates and reserve 48 phase-2 spares. The 192-column
-        # phase-2 pool can cull 25% and still return N=144; peak memory remains set
-        # by the fixed RT-vjp chunk, not the number of serialized chunks.
+        # Draw 2.5 N cold candidates (330 at N = 132) and reserve 48 phase-2
+        # spares: the N + 48 pool can cull 48 (27% at N = 132) and still return
+        # N. Peak memory remains set by the fixed RT-vjp chunk, not the number
+        # of serialized chunks.
         init_oversample=2.5,
         init_phase2_spare=48,
         # DECLARED convergence attrition. The cold reject fraction is a gate, not a
         # warning (pipeline._init_state raises above it), because conditioning on
-        # convergence removes part of the declared prior. 0.35 covers the measured
-        # 29% with margin. It is NOT a claim that the removed region is negligible:
+        # convergence removes part of the declared prior. 0.35 covers the rates
+        # measured so far (notes §1.2) with margin. It is NOT a claim that the
+        # removed region is negligible:
         # the certificate WARNS above CONV_ATTRITION_WARN (10%) until that region
         # is shown to carry negligible posterior mass.
         init_max_nonconverged_frac=0.35,
         # COLD chemistry. Every likelihood evaluation uses the published
-        # solve-from-baseline map, so the target is a fixed deterministic
-        # function of theta -- what MALA, SMC tempering, and the evidence
-        # integral all assume. Under "warm" the likelihood depends on each
-        # particle's carried column, hence on sampler history, at the
+        # solve-from-baseline map, so a draw's column never depends on the
+        # sampler's history. It is NOT exactly a function of theta on the lane
+        # queue: a draw that refills a lane enters at the tick that lane was
+        # freed at, which moves its column at the convergence scale. The init
+        # refills (phase 1 runs 2.5 N draws on N lanes, phase 2 N + spares), and
+        # so does every run_nautilus batch (2 x lanes); a sweep's N proposals
+        # all start at tick 0 and do not. The maintainer accepted this as the
+        # same class of difference the lockstep batch already carries against
+        # the solo solve (notes §2.13). Under "warm" the likelihood depends on
+        # each particle's carried column, hence on sampler history, at the
         # convergence tolerance; the resulting logZ is approximate in a way
         # diagnostics cannot repair.
         smc_chem_mode="cold",

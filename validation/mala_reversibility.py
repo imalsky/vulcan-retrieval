@@ -11,12 +11,11 @@ measures that directly on a finished run's checkpointed cloud:
   * pick K nearest-neighbor particle pairs (i, j) in u-space;
   * warm-solve theta_j FROM particle i's carried column, and theta_i FROM
     particle j's (the two directions of one virtual move);
-  * classify each direction (converged-within-cap / capped) and compare the
-    reached likelihoods.
+  * classify each direction (converged within the cap / capped or stalled).
 
-PASS: no asymmetric convergence classification (one direction capped, the other
-not) and |L(fwd) - L(carried)| consistent with validate_warm's gate. Any
-asymmetric pair is listed -- if they appear at production settings, either raise
+PASS: no asymmetric classification (one direction rejected, the other not). The
+reached likelihoods are not compared here; validate_warm gates the warm-vs-cold
+likelihood. Any asymmetric pair is listed -- if they appear at production settings, either raise
 warm_count_max or run the final ladder stages with smc_chem_mode="cold".
 
     SMC_RETRIEVAL_PRESET=gpu python validation/mala_reversibility.py runs/w39b_smc_retrieval

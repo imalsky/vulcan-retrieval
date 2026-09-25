@@ -34,7 +34,8 @@ uses STAGED batched evaluators that split the chain at the chemistry/RT boundary
   * offsets / noise-inflation: analytic (unchanged).
 
 `smc_chem_mode="cold"` (the default) re-solves every proposal cold with the published
-two-stage map, so the target is a fixed function of theta. `"warm"` instead carries
+two-stage map, so the target never depends on sampler history (a draw that refills a
+lane of the queue moves at the convergence scale, notes §2.13). `"warm"` instead carries
 each particle's converged column and re-converges each proposal from it with
 incremental lnZ/C-O scaling: far fewer steps, but a history-dependent target
 (CLAUDE.md).
@@ -1227,8 +1228,9 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     the target number of particles (ESS preserved). Non-convergence at extreme prior
     corners (hot + extreme-Kzz) is EXPECTED for a full-kinetics forward, not a bug --
     _init_state raises only if fewer than target_n survive (a systemic prior/config
-    problem). Wall time is one lockstep max over the draws, count_max-bounded; widening
-    the draw to oversample is ~free because the slowest draw dominates regardless.
+    problem). On the lane queue (cold_lanes > 0) the wall is total work / lanes, so
+    the oversampled draws cost their own steps; in one lockstep batch it is the
+    slowest draw, count_max-bounded.
 
     Phase 2 -- gradient pass on the target_n SURVIVORS ONLY (the expensive jvp/vjp
     lanes are never paid on a rejected draw), through the SAME map every subsequent
@@ -1339,9 +1341,9 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             "attrition rate silently changes the target. Raise the knob in the case "
             "(and justify it) or tighten the prior / raise count_max.")
 
-    # phase 2 evaluates a few SPARE survivors beyond target_n (width is ~free in the
-    # lockstep chemistry) so marginal columns that cannot RE-certify warm can be
-    # culled and backfilled instead of killing the run (NAS jobs 64854/64897)
+    # phase 2 evaluates a few SPARE survivors beyond target_n so marginal columns
+    # that cannot RE-certify can be culled and backfilled instead of killing the
+    # run
     spare = int(pipe.cfg.init_phase2_spare) if has_diag else 0
     n_phase2 = min(n_alive, target_n + spare)
     sel = jnp.asarray(alive[:n_phase2])
@@ -1402,7 +1404,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     if acc2_np is not None:
         cmax2 = int(pipe.fwd.chem.count_max)
         # a dead phase-2 particle is a re-certification failure (cull + backfill)
-        # if its warm solve exhausted count_max OR exited without the canonical
+        # if its solve exhausted count_max OR exited without the canonical
         # certification (stall fallback -- an unsettled state the eval gate now
         # floors to -1e30); anything else dead is a genuine RT/AD blow-up (raise)
         recert_fail = dead2 & ((acc2_np >= cmax2) | ~conv2_np)
@@ -1412,13 +1414,13 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     if np.any(rt_dead):
         raise RuntimeError(
             f"{int(rt_dead.sum())}/{n_phase2} phase-2 particle(s) produced a "
-            f"non-finite forward on a certified, NON-exhausted warm solve (indices "
+            f"non-finite forward on a certified, NON-exhausted solve (indices "
             f"{np.flatnonzero(rt_dead).tolist()}) -- a genuine RT/AD problem, not a "
             "convergence cull; refusing to start the SMC on a crippled cloud.")
     if np.any(recert_fail):
         logger.warning(
             f"init 2/2: culled {int(recert_fail.sum())}/{n_phase2} marginal "
-            f"survivor(s) that certify cold but cannot RE-certify warm within "
+            f"survivor(s) that certified in phase 1 but cannot RE-certify within "
             f"count_max -- or only stall-certify (indices "
             f"{np.flatnonzero(recert_fail).tolist()}); "
             "backfilling from spares. A repeatable class (oscillating/stall-fallback "
@@ -1430,7 +1432,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             f"only {int(alive2.size)}/{n_phase2} phase-2 particles are healthy; need "
             f"{target_n}. Spares exhausted -- raise init_phase2_spare (currently "
             f"{spare}) or init_oversample, or investigate why so many survivors "
-            "cannot re-certify warm.")
+            "cannot re-certify.")
     sel2 = jnp.asarray(alive2[:target_n])
     U_keep, L, G, Y, refs = U_keep[sel2], L[sel2], G[sel2], Y[sel2], refs[sel2]
     if not np.all(np.isfinite(np.asarray(jax.device_get(G)))):
@@ -1558,9 +1560,10 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         # theta-corner where the class concentrates
         # (notes.md §2.5, the badgrad class).
         # The validity argument needs the zero PATTERN to be a deterministic
-        # function of theta: true in COLD mode (the solve is a fixed map of
-        # theta), NOT in warm, where it depends on the carried column and hence
-        # on sampler history. Production is cold; do not port this to a warm run.
+        # function of theta: true in COLD mode while every proposal starts at
+        # tick 0 of the queue (particles <= lanes, the production preset), NOT
+        # in warm, where it depends on the carried column and hence on sampler
+        # history. Production is cold; do not port this to a warm run.
         # Kept loud:
         # badgrad= per sweep, forensics dumps, and the
         # smc_tangent_bad_max_frac backstop raise in _check_mutation_health.

@@ -23,8 +23,8 @@ function. Scope of that consistency, stated precisely:
     the photolysis cross-section T-interpolation remains baked at the baseline T
     (host-side upstream step; a documented second-order approximation);
   * the ExoJax side builds its own hydrostatic transit geometry from the SAME T(P)
-    and the chemistry MMW, interpolated per interp_map (constant-VMR clamp above the
-    chemistry top, reported loudly at build).
+    and the chemistry MMW, interpolated per interp_map (the chemistry grid reaches
+    the ART top, so nothing is extrapolated).
 Physical interpretation caveat: f = config_schema.GUILLOT_F = 1/4, the GLOBAL-average
 irradiation convention -- an analytic-shape choice, not a terminator measurement, so
 retrieved (Tirr, kappa, gamma) are flexible shape parameters of the limb profile
