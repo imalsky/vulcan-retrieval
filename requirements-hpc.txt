@@ -6,7 +6,7 @@
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
 # TestPyPI; THIS file carries the exact validated chemistry commit -- bump the
 # pins deliberately and keep them at or above those floors
-# (vulcan-jax>=0.16.0, vulcan-forward>=0.25.0).
+# (vulcan-jax>=0.17.0, vulcan-forward>=0.27.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
 # ExoJax is a plain pip dependency; the opacity data (k-tables, CIA) are

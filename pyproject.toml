@@ -36,15 +36,18 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.12",
     # The forward-model engine (chemistry + ExoJAX RT) is a shared distribution,
-    # so it -- not this package -- owns the exojax==2.2.3 pin. >=0.25.0: the
-    # correlated-k-only engine (it refuses any opacity_mode but 'exomolop'),
+    # so it -- not this package -- owns the exojax==2.2.3 pin. >=0.27.0: the
+    # equilibrium seed is the only cold start (this package no longer sends
+    # cold_seed) and the refused cold_seed / abundance_mode /
+    # reanchor_atom_ini keys; before it, the correlated-k-only engine,
     # converged_y_queue (cfg.cold_lanes), warm_cap with per-lane references
     # (the batched warm solve), the explicit p_ref_bar, and the correlated-k
     # fold as one lax.scan.
-    "vulcan-forward>=0.25.0",
-    # >=0.16.0: OuterLoop.run_queue (converged_y_queue calls it), the in-graph
+    "vulcan-forward>=0.27.0",
+    # >=0.17.0: the floor vulcan-forward 0.27.0 needs (conv_normal,
+    # validate_overrides); before it, OuterLoop.run_queue, the in-graph
     # equilibrium cold seed ini_abun.eq_seed, finite forward tangents under vmap.
-    "vulcan-jax>=0.16.0",
+    "vulcan-jax>=0.17.0",
 ]
 
 [project.urls]
