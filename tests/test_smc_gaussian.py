@@ -310,9 +310,9 @@ def test_resume_refuses_a_checkpoint_with_no_target_digest(tmp_path):
 
 def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
     """The init-level checkpoint (written right after _init_state, last_step=-1)
-    must survive a stage-0 death and let RESUME skip the init entirely (NAS job
-    65200: a bad-gradient raise at stage 0 threw away a 2.1 h init because the
-    only checkpoint was per-stage)."""
+    must survive a stage-0 death and let RESUME skip the init entirely (with
+    only per-stage checkpoints a bad-gradient raise at stage 0 throws away an
+    hours-scale init)."""
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     ck = tmp_path / "ck.npz"
@@ -382,11 +382,10 @@ def test_tangent_blown_proposal_zero_drift_not_fatal(tmp_path, monkeypatch):
     """A finite-likelihood/non-finite-tangent proposal WITHIN the backstop is
     handled as a ZERO-DRIFT MALA move (zeroed gradient entries used consistently
     in both proposal densities; the certified likelihood decides acceptance),
-    its forensics are dumped, and the RUN COMPLETES. The NAS 65815 lesson: the
-    class is theta-DEPENDENT (dense in the high-Z/low-C-O corner the posterior
-    favors), so the pre-65815 MH-reject-with-floored-L handling was a
-    theta-correlated suppression of the posterior bulk AND its 5% per-sweep
-    abort tripped with near-certainty over a full ladder."""
+    its forensics are dumped, and the RUN COMPLETES. The class is
+    theta-DEPENDENT (dense in the high-Z/low-C-O corner the posterior favors),
+    so MH-rejecting it with a floored L suppresses the posterior bulk
+    (notes §2.5)."""
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=32,
                    num_chains=1)   # default backstop 0.25 -> 8/sweep
@@ -425,12 +424,12 @@ def test_tangent_blown_over_threshold_raises(tmp_path, monkeypatch):
 
 
 def test_calibrate_benchmarks_stage0_conditions(tmp_path):
-    """Regression for NAS job 64961: calibrate() must benchmark the mutation at the
-    ladder's own stage-0 conditions (ESS-bisected first beta, stage-0 resample,
-    cloud-width preconditioner, clamped step). The old hard-coded
-    (beta=0.5, step=C.MALA_STEP0, scale=1) proposal made drift moves
-    ~step*beta*|G| with prior-cloud gradients -- proposals the production ladder
-    never launches -- and aborted the calibration on a spurious AD-pathology raise."""
+    """calibrate() must benchmark the mutation at the ladder's own stage-0
+    conditions (ESS-bisected first beta, stage-0 resample, cloud-width
+    preconditioner, clamped step). A hard-coded (beta=0.5, step=C.MALA_STEP0,
+    scale=1) proposal makes drift moves ~step*beta*|G| with prior-cloud
+    gradients -- proposals the production ladder never launches -- and aborts
+    the calibration on a spurious AD-pathology raise."""
     from retrieval_framework import run_smc
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=3,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1,

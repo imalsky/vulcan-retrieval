@@ -1,7 +1,6 @@
 # vulcan-retrieval: the SMC / forward-mode-MALA atmospheric-retrieval
 # framework. The differentiable VULCAN-JAX -> ExoJAX forward model it runs on
-# is the shared `vulcan-forward` distribution (extracted 2026-07-29), not part
-# of this package. EDITABLE install is the supported dev mode (pip install -e . --no-deps
+# is the shared `vulcan-forward` distribution, not part of this package. EDITABLE install is the supported dev mode (pip install -e . --no-deps
 # in a checkout of this repo); a site-packages/TestPyPI install
 # works for the code but must set VULCAN_PROJECT_ROOT so the repo data/ tree
 # (observations + opacity caches) resolves -- see forward/config.py.
@@ -36,28 +35,15 @@ dependencies = [
     "jax>=0.6.2",
     "numpy>=1.26",
     "scipy>=1.12",
-    # The forward-model engine (chemistry + ExoJAX RT) is a shared distribution
-    # since 2026-07-29, so it -- not this package -- owns the exojax==2.2.3 pin.
-    # 0.1.0 is the extraction release: same physics, engine-owned data-root
-    # contract, required planet geometry, injectable molecule table.
-    # >=0.11.0: the engine is correlated-k only and REFUSES the retired profile
-    # keys (nu_pts, broadening, dit_grid_resolution, the Mie deck, any
-    # opacity_mode other than 'exomolop'); this schema no longer emits them.
-    # (0.4.0 was the p_ref_bar floor: config_schema pins p_ref_bar explicitly,
-    # and an older engine would silently anchor the radius at the grid bottom.)
-    # >=0.23.0: converged_y_queue, the cold batch on a fixed number of lanes
-    # with refill, which cfg.cold_lanes routes to.
-    # >=0.24.0: warm_cap + per-lane lnZ_ref/c_o_ref on converged_y_batch and
-    # converged_y_queue, which the batched WARM mutation solve needs.
-    # >=0.25.0: the correlated-k fold as one lax.scan (the RT vjp at a third of
-    # the memory); an engine this new refuses rt_band_tiles, which this schema
-    # no longer emits.
+    # The forward-model engine (chemistry + ExoJAX RT) is a shared distribution,
+    # so it -- not this package -- owns the exojax==2.2.3 pin. >=0.25.0: the
+    # correlated-k-only engine (it refuses any opacity_mode but 'exomolop'),
+    # converged_y_queue (cfg.cold_lanes), warm_cap with per-lane references
+    # (the batched warm solve), the explicit p_ref_bar, and the correlated-k
+    # fold as one lax.scan.
     "vulcan-forward>=0.25.0",
-    # >=0.16.0: OuterLoop.run_queue, which vulcan-forward 0.23.0's
-    # converged_y_queue calls. (>=0.15.0 was the in-graph cold equilibrium seed,
-    # ini_abun.eq_seed, ExoGibbs on VULCAN's NASA-9 data, called directly by
-    # vulcan-forward 0.22.0; >=0.3.5 the first with finite forward tangents
-    # under vmap, which this sampler's chemistry gradient needs.)
+    # >=0.16.0: OuterLoop.run_queue (converged_y_queue calls it), the in-graph
+    # equilibrium cold seed ini_abun.eq_seed, finite forward tangents under vmap.
     "vulcan-jax>=0.16.0",
 ]
 

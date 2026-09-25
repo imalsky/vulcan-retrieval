@@ -49,7 +49,7 @@ def test_invalid_observations_raise():
             P.validate_observations(GOOD_DEPTH, s, N, np.float64)
 
 
-# --- production preflight (RC-01) --------------------------------------------
+# --- production preflight -----------------------------------------------------
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 
@@ -93,7 +93,7 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
         pipe.sample_prior_u(jax.random.PRNGKey(0), 1)[0]))
     assert np.isfinite(logl) and logl > -1e29, f"non-finite/rejected likelihood: {logl}"
 
-    # The RC-02 opacity screen selects its states from this same pipe, and its
+    # The opacity leave-one-out screen selects its states from this same pipe, and its
     # first run costs GH200 hours -- prove the selection here, on the real object.
     sys.path.insert(0, str(RUN_DIR.parent.parent / "validation"))
     from opacity_leave_one_out import states_for

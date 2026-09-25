@@ -209,8 +209,8 @@ def _cuda_profiler(on: bool) -> None:
     """cudaProfilerStart / cudaProfilerStop around the timed mutation sweep when
     NSYS_CAPTURE_API=1, so an ``nsys profile --capture-range=cudaProfilerApi``
     wrapper records exactly that sweep. A fixed ``--delay`` window is blind to
-    where the sweep falls (job 78814's 3600 s window landed inside a 62-min
-    init). No-op unless the variable is set; a missing libcudart is logged."""
+    where the sweep falls (a 3600 s window can land inside a 62-min init).
+    No-op unless the variable is set; a missing libcudart is logged."""
     if os.environ.get("NSYS_CAPTURE_API") != "1":
         return
     import ctypes
@@ -259,7 +259,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     N = int(cfg.smc_num_particles)
     # Derive U exactly as run_smc_loop does, from the run's own seed, so the timing
     # gate exercises the same prior corners the production init will hit (a PRNGKey(0)
-    # pilot cloud let job 64073's >16 h worst-corner init slip past calibration).
+    # pilot cloud let a >16 h worst-corner init slip past calibration).
     key = jax.random.PRNGKey(int(cfg.seed))
     # oversampled cold-init draw (rejected corners culled back to N healthy in _init_state)
     U = pipe.sample_prior_u(jax.random.fold_in(key, P._INIT_KEY),
@@ -275,10 +275,10 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
     # Stage-0 conditions, not an arbitrary proposal. Under MALA the drift term is
     # step*scale^2*beta*G, and a prior-like cloud carries |L| (hence |G|) up to ~1e6 --
-    # the old hard-coded (beta=0.5, step=MALA_STEP0, scale=1) benchmark launched
-    # proposals so far off the converged map that their tangents went non-finite, and
-    # _check_mutation_health aborted the calibration on an "AD pathology" the ladder's
-    # tiny adaptive first beta can never produce (NAS job 64961: 8 bad grads/sweep at
+    # a hard-coded (beta=0.5, step=MALA_STEP0, scale=1) benchmark launches
+    # proposals so far off the converged map that their tangents go non-finite, and
+    # _check_mutation_health aborts the calibration on an "AD pathology" the ladder's
+    # tiny adaptive first beta can never produce (8 bad grads per sweep at
     # accept=0.00). The rwm kernel has no drift, so that rationale does not apply to
     # it -- but the beta still comes from the ESS bisection either way, because the
     # point is to reproduce run_smc_loop's stage 0 rather than a synthetic one.
@@ -345,9 +345,8 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     for k, v in proj.items():
         log.info(f"  {k:32s} {v}")
     budget = float(cfg.walltime_seconds)
-    # REFUSE, don't warn. A projection that does not fit used to be a log line
-    # in a job whose next step was a 24 h production submit, so the information
-    # arrived after the budget was spent. Cold chemistry (the default) is
+    # REFUSE, don't warn. A log line in a job whose next step is a 24 h
+    # production submit delivers the information after the budget is spent. Cold chemistry (the default) is
     # ~10-30x more chemistry per sweep, which makes this the normal case to hit
     # rather than an exotic one.
     proj["fits_walltime_budget"] = (

@@ -92,7 +92,7 @@ GRAD_REL_FAIL = 0.1
 # construction. So promoting this threshold to a hard gate WITHOUT excluding
 # those rows would fail every run containing a single badgrad particle -- which
 # is most runs, since the class is posterior-concentrated (6.5% of certified
-# proposals at job 65815). The gate would then be measuring "did badgrad occur",
+# proposals in the measured ladder, notes §2.5). The gate would then be measuring "did badgrad occur",
 # a question already answered by its own counter, instead of "does warm
 # continuation reproduce the cold drift".
 #
@@ -220,7 +220,7 @@ def main() -> None:
     # Re-solve the cloud COLD in host-side sub-batches. The cold chemistry solve is
     # a full-width vmap over all N particles (batch_eval_cold_l_diag; only its RT
     # sub-step is chunked internally) -- the single largest allocation in this tool.
-    # A full-N call OOMed on a partially-occupied GPU (NAS job 66291) even though
+    # A full-N call OOMed on a partially-occupied GPU even though
     # init phase 1 batches MORE draws on a fresh, fully-free pool. Chunking bounds
     # the peak; results are identical at cold_lanes = 0 (sub-batches are
     # concatenated, no vmap padding) and at the convergence scale when the

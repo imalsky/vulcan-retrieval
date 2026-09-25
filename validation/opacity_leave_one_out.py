@@ -44,8 +44,8 @@ GATE_SIGMA_FRAC = 0.1
 def unscreened_candidates(prod_mols):
     """Every molecule with an INSTALLED k-table that production does not radiate.
 
-    Inventoried at run time, not listed here: RC-02 asks for the omitted set to
-    be discovered, and a hard-coded list silently stops testing a species the
+    Inventoried at run time, not listed here: the omitted set must be
+    discovered, and a hard-coded list silently stops testing a species the
     day someone installs its table. A table whose species the network does not
     solve makes build_pipeline raise, which is the intended loud failure.
     """
@@ -60,8 +60,8 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
     Always includes the nominal state (u=0, the centre of every declared box).
     ``n_prior`` adds that many T-P-valid prior draws; ``posterior_path`` adds the
     SAME number again from a finished run's posterior_samples.npz (4 when
-    n_prior is 0). RC-02 requires the screen over a prior/posterior state set,
-    not one state.
+    n_prior is 0). The screen runs over a prior/posterior state set, not one
+    state.
     """
     import jax
     import jax.numpy as jnp

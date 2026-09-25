@@ -3,7 +3,7 @@
 cold two-stage init across many independent prior draws, so count_max can be set from
 data instead of a guess.
 
-Why this exists: a single baseline warm-up convergence (2667 steps, job 64144) and
+Why this exists: a single baseline warm-up convergence (2667 steps) and
 a qualitative "typical ~5k" claim are not a percentile over the actual prior. This
 script draws ``--n-draws`` samples from the SAME prior the production run uses (same
 seed derivation as run_smc.py's calibrate()), runs the batched full-width cold

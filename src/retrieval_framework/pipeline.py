@@ -131,10 +131,9 @@ def _proposal_converged(cd_vec):
 
     Current predicate: the runner's own canonical two-branch certification
     recomputed at the exit state (``conv_normal``). A stall-fallback or budget
-    exit reads False even when longdy sits under yconv_min -- the class that
-    passed the old accept-count-only gate on NAS job 65200 (16/864 warm
-    proposals: primal certified, tangent never settled -> non-finite gradient).
-    Measurement backing the choice: notes.md §2.4 (job 65200).
+    exit reads False even when longdy sits under yconv_min -- the class an
+    accept-count-only gate lets through (primal certified, tangent never
+    settled -> non-finite gradient). Measurement: notes.md §2.4.
     """
     return cd_vec[:, 4] > 0.5
 
@@ -274,8 +273,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     n_chem_tp = 3 + fwd.n_tp
     # The chem+T-P prefix is unpacked by fixed position (theta[0:3]=chem,
     # theta[3:3+n_tp]=T-P). Assert the layout EXACTLY, not just "chem/tp appear in
-    # the prefix": dropping a chem toggle shortens the block, and the old subset
-    # check passed when all nuisances were also off, silently truncating the
+    # the prefix": dropping a chem toggle shortens the block, and a subset
+    # check passes when all nuisances are also off, silently truncating the
     # vector. config_schema.validate_config refuses that config at the boundary;
     # this is the backstop for any path that builds specs without it.
     if (names[:3] != ["lnZ", "c_o", "lnKzz"]
@@ -617,7 +616,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # SURVIVORS re-certify from their own converged columns -- proven-convergent
         # states, not disposable proposals -- and a marginal survivor can need more
         # than warm_count_max steps to re-certify; run them under the cold count_max
-        # (NAS job 64854: the cap gated 5/96 healthy survivors -> spurious raise).
+        # (the cap gated 5 of 96 healthy survivors into a spurious raise).
         # A COLD solve is never warm-capped whatever mutation_cap says: it runs the
         # two-stage map against count_max, so gating it at warm_count_max would
         # reject every cold proposal.
@@ -630,9 +629,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # finite-but-unsettled column whose jvp/RT-vjp tangents are garbage. The
             # cold init rejects such draws BEFORE its gradient pass (phase-1 diag);
             # here the warm solve's ConvDiag rides the jvp'd chain itself -- every
-            # field is part of the runner's primal carry, so reading it is FREE (an
-            # earlier version ran a second primal-only while_loop just for the
-            # accept count, doubling the chemistry wall time per sweep). The diag is
+            # field is part of the runner's primal carry, so reading it is FREE (a
+            # second primal-only while_loop just for the accept count would
+            # double the chemistry wall time per sweep). The diag is
             # packed into one stop-gradient'd float vector to keep the jvp output
             # pytree all-float (longdy/longdydt DO carry tangents otherwise).
             # eval_batch rejects an exhausted OR non-certified proposal (-inf L, MH
@@ -797,7 +796,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 #              exit): the primal may look settled while the jvp
                 #              tangent -- which relaxes through the same
                 #              while_loop with no stopping criterion of its own --
-                #              has not (NAS job 65200's 16/864 bad gradients).
+                #              has not (16 of 864 measured bad gradients).
                 # Both classes apply in cold mode too (cold proposals are capped
                 # at count_max, not warm_count_max -- see wcmax above).
                 ACC = CD[:, 0].astype(jnp.int32)
@@ -1243,7 +1242,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     warm_count_max): typical survivors re-certify in a few hundred
     steps, but a marginal one (slow phase-1 converger / stall-fallback certification)
     can need more than the mutation cap, and it is a proven-convergent particle, not a
-    disposable proposal (NAS job 64854: the cap gated 5/96 healthy survivors).
+    disposable proposal (the cap gated 5 of 96 healthy survivors).
 
     Survivors are fully converged, so phase 2 must be SOUND -- there is no MH rejection
     to absorb failures here. A non-finite likelihood or flagged gradient pathology on a
@@ -1290,7 +1289,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     # per-particle rejection (real pipes only): non-finite forward, count_max-
     # exhausted, OR stall-certified (the exit was not the runner's canonical
     # certification -- a state whose likelihood/tangents describe an unsettled
-    # column; the class behind NAS job 65200's non-finite mutation gradients)
+    # column; the class behind non-finite mutation gradients)
     L0_np = np.asarray(jax.device_get(L0), np.float64)
     nonfinite = ~np.isfinite(L0_np) | (L0_np <= REJECT_BELOW)
     if has_diag:
@@ -1487,14 +1486,14 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     theta, accept counts, longdy, chemistry-vs-RT attribution) to
     ``dump_dir/bad_grad_<dump_tag>_sweep<j>.npz`` as it happens, and a sweep
     beyond the systematic-breakage backstop fails FAST at that sweep (not
-    after the whole stage; NAS job 65200 burned 2 h of a doomed stage 0). The
+    after the whole stage, which can be hours of a doomed stage 0). The
     per-sweep device sync costs microseconds against ~20-minute GPU sweeps.
 
     Under smc_chem_mode="cold" (the default) every proposal is the full cold
     two-stage solve; under "warm" it re-converges from the particle's carried
     column Y (refs = the (lnZ, c_o) that column was converged at), capped at
     warm_count_max so a proposal in a non-convergent corner is rejected there
-    instead of dragging the lockstep batch to count_max (job 64745). Either way
+    instead of dragging the lockstep batch to count_max. Either way
     the whole cloud's chemistry is ONE batched solve, and only the memory-heavy
     RT is lax.map-chunked.
 
@@ -1718,7 +1717,7 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
             f"{n_bad} finite-likelihood/non-finite-gradient event(s) during {where} "
             f"exceed the systematic-breakage backstop ({threshold} = "
             f"ceil({max_frac:g} x {n_particles})) -- far beyond the measured "
-            "theta-dependent tangent class (job 65815: max 7.6% in one sweep); "
+            "theta-dependent tangent class (max 7.6% in one sweep, notes §2.5); "
             "this looks like systematic AD breakage in the chemistry tangents "
             "or RT vjp; refusing to continue (loud-error rule)." + detail)
     logger.warning(
@@ -1727,7 +1726,7 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
         f"moves (gradient entries zeroed consistently in both proposal "
         f"densities; certified likelihood decides acceptance; within the "
         f"backstop {threshold} = ceil({max_frac:g} x {n_particles})). Expected "
-        "to track the high-Z/low-C-O corner (job 65815 forensics); a broad "
+        "to track the high-Z/low-C-O corner (notes §2.5); a broad "
         "theta-INDEPENDENT rate is the anomaly to investigate." + detail)
 
 
@@ -1746,8 +1745,8 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
     ``last_step=-1`` marks the INIT-LEVEL checkpoint (written right after
     _init_state, before any tempering stage): betas=[0.0] and empty histories,
     so the resume path enters the ladder at stage 0 exactly like a fresh
-    post-init run -- a stage-0 death no longer throws away the hours-scale
-    two-phase init (NAS job 65200)."""
+    post-init run -- a stage-0 death does not throw away the hours-scale
+    two-phase init."""
     U_np = np.asarray(jax.device_get(U), np.float64)
     theta_ck = np.asarray(jax.device_get(jax.vmap(pipe.theta_from_u)(U)), np.float64)
     tmp = Path(checkpoint_path).with_suffix(".tmp.npz")
@@ -1759,8 +1758,8 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
              unique_particles=np.asarray(uniq_hist, np.int64),
              warm_capped=np.asarray(capped_hist, np.int64),
              warm_stalled=np.asarray(stalled_hist, np.int64),
-             # key name from before the zero-drift rework (badgrad events are
-             # counted, not rejected); renaming it would change every checkpoint
+             # per-stage badgrad counts (the events are counted, not rejected;
+             # the name is kept so every checkpoint reads the same)
              tangent_rejected=np.asarray(badgrad_hist, np.int64),
              # lower-triangular Cholesky factor of the proposal covariance
              scale_chol=np.asarray(scale),
@@ -1952,10 +1951,10 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         # ABSOLUTE stage index: `i` restarts at 0 on every resume, `betas` does not.
         # Every random draw below is fold_in(seed_key, stage), so (a) a resumed run
         # never REPLAYS the resample offsets and MALA noise of the stages the killed
-        # job already ran -- the old split-chain restarted with the run's own seed --
+        # job already ran -- a split chain would restart from the run's own seed --
         # and (b) a chained run is bit-identical to an uninterrupted one. It is also
-        # what labels the checkpoints, logs and badgrad dumps, so a second job no
-        # longer overwrites the first job's stage000 forensics.
+        # what labels the checkpoints, logs and badgrad dumps, so a second job does
+        # not overwrite the first job's stage000 forensics.
         stage = len(betas) - 1
         k_res, k_mut = jax.random.split(jax.random.fold_in(key, stage))
         # (1) carried likelihood at current particles -> (2) next temperature via ESS
@@ -2096,7 +2095,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         init_stats=init_stats,
         warm_capped=np.asarray(capped_hist, np.int64),
         warm_stalled=np.asarray(stalled_hist, np.int64),
-        # legacy key name (pre-zero-drift-rework): per-stage badgrad counts
+        # per-stage badgrad counts
         tangent_rejected=np.asarray(badgrad_hist, np.int64),
         step_size_history=np.asarray(step_hist), unique_particles=np.asarray(uniq_hist, np.int64),
         theta_draws=theta_draws,

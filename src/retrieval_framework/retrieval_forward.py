@@ -269,9 +269,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         detect a warm proposal that is NOT actually at a certified steady state --
         warm_count_max-exhausted OR stall-fallback/budget-terminated (conv_normal
         False) -- and reject it before trusting its jvp; the warm-side analogue of
-        chem_solve_cold_diag. This closes the residual where a non-steady warm
-        proposal was fed straight into the tangent/RT-vjp lanes (garbage or
-        non-finite gradient -> the NAS job 65200 n_bad_grad raise: 16/864 proposals
+        chem_solve_cold_diag. Without it a non-steady warm proposal would feed
+        the tangent/RT-vjp lanes (garbage or non-finite gradient: proposals
         certified by accept_count alone while their tangents had not settled).
 
         THE warm solve on the SMC gradient path: pipeline._make_batch_eval jvp's
@@ -291,8 +290,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         columns -- proven-convergent states, not disposable proposals -- and a
         marginal survivor (slow phase-1 converger, stall-fallback certification) can
         legitimately need more than warm_count_max accepted steps to re-certify.
-        Capping them mislabels healthy particles as blown forwards (NAS job 64854:
-        5/96 survivors gated at 1500 -> spurious 'RT/AD problem' RuntimeError)."""
+        Capping them mislabels healthy particles as blown forwards (5 of 96
+        survivors gated at 1500 -> a spurious 'RT/AD problem' RuntimeError)."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=False)

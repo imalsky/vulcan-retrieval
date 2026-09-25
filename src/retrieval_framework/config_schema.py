@@ -308,8 +308,7 @@ class Config:
     # queue through that many lanes, a sweep's particles all start at once.
     # Below smc_num_particles a sweep's proposals queue, slowest first
     # (pipeline._make_mutation); the preset keeps particles = lanes (notes
-    # register 92). The schema default is the width the presets used before
-    # 0.24.0.
+    # §2.13). The schema default is the off-GPU width.
     cold_lanes: int = 144
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.

@@ -133,8 +133,8 @@ def test_init_state_culls_extra_survivors_to_exactly_target_n():
 
 def test_init_state_rejects_stall_certified_draws():
     """A draw whose cold solve exits under the cap WITHOUT the canonical
-    certification (conv_normal False: the stall-fallback class behind NAS job
-    65200's non-finite mutation gradients) is rejected in phase 1 exactly like a
+    certification (conv_normal False: the stall-fallback class behind
+    non-finite mutation gradients) is rejected in phase 1 exactly like a
     count_max exhaustion."""
     pipe = _chem_like_pipe(count_max=100)
     # 10 draws: draws 0 and 3 stall-certify (first coord == 0.5), rest healthy

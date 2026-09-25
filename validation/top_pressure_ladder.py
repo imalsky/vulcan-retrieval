@@ -10,7 +10,7 @@ solves the chemistry there, and compares the R=100 binned depth with production.
 
 PASS gate: |Delta binned depth| < 5 ppm. The former one-decade constant-VMR
 clamp above a 1e-7 bar chemistry top measured 73.47 ppm against chemistry
-solved there (2026-08-27 artifact) and was replaced by extending the grid.
+solved there and was replaced by extending the grid.
 """
 from __future__ import annotations
 

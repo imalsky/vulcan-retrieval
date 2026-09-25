@@ -107,15 +107,14 @@ def test_offset_design_groups():
     assert np.array_equal(O[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
 
 
-# --- posterior predictive (RC-05) --------------------------------------------
+# --- posterior predictive -----------------------------------------------------
 
 def test_replicates_carry_the_likelihood_conditional_variance():
     """The saved predictive band must be replicated DATA, not model curves.
 
-    run_smc used to store deterministic model curves, label them "PPC 5-95%" and
-    report a reduced chi2 against the RAW sigma -- while inferring a
-    noise-inflation parameter that neither object used. A predictive replicate
-    must carry sigma * b, and must widen when b does.
+    Deterministic model curves labelled "PPC 5-95%", with a reduced chi2
+    against the RAW sigma, ignore the inferred noise inflation. A predictive
+    replicate must carry sigma * b, and must widen when b does.
     """
     from retrieval_framework.run_smc import predictive_replicates
     rng = np.random.default_rng(0)

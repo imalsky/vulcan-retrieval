@@ -101,7 +101,7 @@ CONV_ATTRITION_JUSTIFY = 0.01
 # as the in-run systematic-breakage backstop (smc_tangent_bad_max_frac).
 BADGRAD_FRAC_FAIL = 0.25
 # Per-stage diagnostics describe the SAME stages, so they must be equal length
-# and finite. Mismatched lengths used to silently disable the rejection gate.
+# and finite: mismatched lengths would silently disable the rejection gate.
 _PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
                    "warm_capped", "warm_stalled", "badgrad")
 
@@ -239,8 +239,8 @@ def _survival_fractions(extra) -> dict:
     """f_c1 (cold init, phase 1) and f_c2 (phase-2 re-certification), separately.
 
     ``evidence_report`` only exports their product; the raw counts ride in the
-    npz as init_stats. RC-06 requires both fractions in the certificate, because
-    the two culls remove different regions of the declared prior.
+    npz as init_stats. The certificate records both, because the two culls
+    remove different regions of the declared prior.
     """
     if extra is None or "init_stats_keys" not in extra.files:
         return {"f_c1": None, "f_c2": None, "init_stats": None}
@@ -713,7 +713,7 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
     if not cert["resolved_config"]:
         problems.append("no config.json: the resolved configuration is unknown")
 
-    # --- target identity (RC-03): one digest, carried by all three artifacts --
+    # --- target identity: one digest, carried by all three artifacts --------
     tgt_ident = cert["target"]
     dig = {k: (str(tgt_ident.get(k) or "") or None)
            for k in ("digest", "digest_samples", "digest_checkpoint",

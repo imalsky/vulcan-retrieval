@@ -3,8 +3,8 @@
 
 A warm_count_max-exhausted (non-converged) warm MALA proposal must be REJECTED (-1e30
 L, dropped from n_bad_grad), NOT fed into the jvp/RT-vjp as a finite-likelihood MH
-candidate -- the pre-fix behavior that surfaced as a spurious n_bad_grad RuntimeError
-(or a NaN gradient) at SMC stage 0 and made the timing calibration fail. See CLAUDE.md
+candidate, which surfaces as a spurious n_bad_grad RuntimeError (or a NaN
+gradient) at SMC stage 0 and fails the timing calibration. See CLAUDE.md
 "Init / mutation handling".
 
 Also covers the warm-cap plumbing: the warm solvers run a TWIN runner
@@ -86,8 +86,8 @@ def test_move_vg_rejects_nonconverged_without_raising(smoke):
 def test_init_eval_is_uncapped(smoke):
     """The INIT gradient path must NOT run under the mutation cap: a phase-1 survivor
     that needs more than warm_count_max steps to re-certify is a healthy particle, not
-    a doomed proposal (NAS job 64854 regression: 5/96 survivors gated at the warm cap
-    -> spurious 'crippled cloud' RuntimeError). chem_solve_warm_diag_full must run the
+    a doomed proposal (5 of 96 survivors gated at the warm cap raise a spurious
+    'crippled cloud' RuntimeError). chem_solve_warm_diag_full must run the
     UNCAPPED runner: from the baseline column (which cannot certify in either budget
     here) the capped solve stops at WARM_CMAX while the full solve marches on to the
     cold cap."""
@@ -107,12 +107,11 @@ def test_gate_is_load_bearing(smoke):
     """The rejected proposals have a perfectly FINITE forward -- the gate, not a
     blown solve, is what rejects them.
 
-    Both batched evaluators gate now (the primal-only one is the FD reference for
+    Both batched evaluators gate (the primal-only one is the FD reference for
     the gradient, the certificate's cold replay, and validate_warm's comparison
-    arm, so it has to be the same likelihood function the sampler targets). That
-    removes the old ungated-vs-gated comparison, so the load-bearing claim is
-    made directly instead: run the RAW warm map, show its spectrum is finite, and
-    show both evaluators reject it anyway."""
+    arm, so it has to be the same likelihood function the sampler targets), so
+    the load-bearing claim is made directly: run the RAW warm map, show its
+    spectrum is finite, and show both evaluators reject it anyway."""
     pipe = smoke["pipe"]
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)
     Theta = jax.vmap(pipe.theta_from_u)(U)

@@ -238,8 +238,8 @@ def main() -> int:
     print(f"[smoke] warm-continuation gradient FD check [{time.time()-t0:.0f}s] "
           f"-> {'OK' if ok_warm else 'FAIL'}", flush=True)
 
-    # ---- inventory-response liveness (regression guard for the 2026-07-05 finding:
-    # perturbing the cold EQ init under a retrieved T-P erased the lnZ/c_o response;
+    # ---- inventory-response liveness (regression guard: perturbing the cold EQ
+    # init under a retrieved T-P erases the lnZ/c_o response;
     # the two-stage solve restores it -- these gradients must be alive, not ~1e-20) ----
     ok_live = True
     for nm in ("lnZ", "c_o"):

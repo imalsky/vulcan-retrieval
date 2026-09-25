@@ -78,9 +78,9 @@ RSTAR_CM = 0.932 * R_SUN_CM
 #
 # Two non-obvious requirements, both about keeping the forward-mode tangent valid:
 #   * Photochemistry must be ON (validated: jvp vs re-converged FD <0.1% at nz=150).
-#     NOT because the photo-off tangent is "under-relaxed/unstable" -- that reason was
-#     retracted 2026-07-15 (notes.md item 53); photo-off the forward model itself does
-#     not settle on a comparable state, so no method certifies there.
+#     NOT because the photo-off tangent is "under-relaxed/unstable": photo-off the
+#     forward model itself does not settle on a comparable state, so no method
+#     certifies there.
 #   * Let convergence happen naturally (default count_min/count_max). Do NOT pin a fixed
 #     step count -- forcing dt to dt_max drives the Ros2 step's forward tangent singular.
 SMOKE = {

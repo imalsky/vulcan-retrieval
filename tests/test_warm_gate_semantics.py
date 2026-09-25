@@ -5,8 +5,8 @@ whose warm drift was zeroed by the badgrad handling. That exclusion is what
 makes the gate mean anything: a zeroed warm row against a finite cold row
 reads rel exactly 1.0 by construction, so a naive hard gate at 0.1 would fail
 every run containing a single badgrad particle -- which is most runs, since
-the class is posterior-concentrated (6.5% of certified proposals at job
-65815). The gate would then be re-measuring "did badgrad occur" rather than
+the class is posterior-concentrated (6.5% of certified proposals in the
+measured ladder, notes §2.5). The gate would then be re-measuring "did badgrad occur" rather than
 "does warm continuation reproduce the cold drift". The zeroed fraction gets
 its own separate ceiling instead.
 

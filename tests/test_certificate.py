@@ -169,7 +169,7 @@ _REFUSALS = [
     ("cold_replay_failed", _passing_cert, _noop, lambda: _replay(passed=False), ("cold replay MISMATCH",)),
     ("support_fraction_err_missing", _passing_cert, _set("evidence", "log_support_fraction_err", value=None), _replay,
      ("no log_support_fraction_err recorded",)),
-    ("survival_fraction_missing", _passing_cert,        # the product hides WHICH cull removed prior mass (RC-06)
+    ("survival_fraction_missing", _passing_cert,        # the product hides WHICH cull removed prior mass
      _set("evidence", "f_c2", value=None), _replay, ("survival fractions",)),
     ("particle_degeneracy", _passing_cert,             # a handful of distinct states still draws a smooth corner plot
      _set("diagnostics", "unique_particles", value=[140, 120, 9]), _replay, ("particle degeneracy",)),
@@ -189,7 +189,7 @@ _REFUSALS = [
      ("does not match",)),
     ("warm_axis_unmeasured", lambda: _warm_cert(grad_rel_max_gated=float("nan")), _noop, _replay,  # NaN is not within-gate
      ("not measured",)),
-    ("warm_inventory_drift", lambda: _warm_cert(atom_ratio_rel_max=1.0), _noop, _replay,  # collected since v2, gated since the 2026-09-11 audit
+    ("warm_inventory_drift", lambda: _warm_cert(atom_ratio_rel_max=1.0), _noop, _replay,
      ("elemental inventory",)),
     ("warm_validated_on_survivors", lambda: _warm_cert(validated_frac=0.04), _noop, _replay,  # 96 of 100 lost their cold reference
      ("UNVALIDATED",)),
@@ -376,7 +376,7 @@ def test_certificate_keeps_science_hashes_only_under_target(tmp_path, monkeypatc
     assert cert["target"]["science_data"] == expected
 
 
-# --- target identity (RC-03/RC-04): what a checkpoint's numbers belong to -----
+# --- target identity: what a checkpoint's numbers belong to --------------------
 
 def _digest_pipe():
     """Minimal stand-in carrying exactly what target_manifest reads."""
@@ -559,7 +559,7 @@ def test_a_fresh_ladder_artifact_is_accepted():
     assert not certificate.artifact_warnings(c)
 
 
-# --- run-directory identity (RC-03): a refused resume must not rewrite it -----
+# --- run-directory identity: a refused resume must not rewrite it -------------
 
 @pytest.mark.parametrize("stored, want, refused", [
     ("a" * 64, "a" * 64, False),   # same target: resume proceeds

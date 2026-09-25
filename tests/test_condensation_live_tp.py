@@ -145,10 +145,9 @@ def chem_iso(stack):
         return jnp.zeros_like(jnp.asarray(p_bar)) + tp[0]
 
     # Skip ONLY on a missing-data environment. A blanket
-    # `except Exception: pytest.skip(...)` used to sit here, and it converted a
-    # real TypeError -- vulcan_chem calling a VULCAN-JAX private method whose
-    # signature had changed, which broke EVERY fresh forward run -- into a green
-    # skip. Only three tests in the workspace build the chem model for real
+    # `except Exception: pytest.skip(...)` here would convert a real TypeError
+    # -- e.g. vulcan_chem calling a VULCAN-JAX private method whose signature
+    # changed, which breaks EVERY fresh forward run -- into a green skip. Only three tests in the workspace build the chem model for real
     # (this one, test_warm_reject and test_cold_reject, which reach it through
     # build_pipeline), so swallowing their failures hides the defect from CI.
     try:
@@ -392,13 +391,13 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
                f"{fd_smooth[i]:.6e} (rel {rel:.3f}) -- exceeds 15%")
         # The FD is step-stable to 0.03% and the jvp matches it on aarch64 (the
         # certified platform); on x86 the tangent through the pinned state is
-        # platform-dependent (1.3-2.4x, notes.md failed-approaches #77).
+        # platform-dependent (1.3-2.4x, notes.md §9).
         if rel >= 0.15 and platform.machine() not in ("arm64", "aarch64"):
-            pytest.xfail(msg + " [x86 tangent, register #77]")
+            pytest.xfail(msg + " [x86 tangent, notes §9]")
         assert rel < 0.15, msg
 
     # The gas/condensate SPLIT is jump-dominated -- do NOT assert on it per
-    # species. Centred FD on the S8 gas column, measured 2026-07-29:
+    # species. Centred FD on the S8 gas column, measured:
     #   dT   4.0 -> +8.99e14   2.0  -> +1.47e15   1.0   -> +2.35e15
     #        0.5 -> -4.87e13   0.25 -> +6.32e15   0.125 -> +1.71e16
     # i.e. FD ~ 1/dT: a fixed-size discontinuity (the pin captures at a discrete
