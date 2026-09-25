@@ -378,12 +378,14 @@ class Config:
             gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
             p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
         )
-        if self.count_min:
+        # `is not None`, not truthiness: an explicit 0 must reach the engine,
+        # never fall back to the vulcan_cfg value while the banner prints 0
+        if self.count_min is not None:
             p["count_min"] = int(self.count_min)
-        if self.count_max:
+        if self.count_max is not None:
             p["count_max"] = int(self.count_max)
         p["warm_count_max"] = int(self.warm_count_max)
-        if self.dt_max:
+        if self.dt_max is not None:
             p["dt_max"] = float(self.dt_max)
         if self.vulcan_cfg_name:
             p["vulcan_cfg_name"] = str(self.vulcan_cfg_name)
