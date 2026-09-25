@@ -54,7 +54,7 @@ class Config:
     # XLA preallocation is set by the PBS env. Neither is a Config field.
 
     # ---- forward-model fidelity (the "profile" dict consumed by vulcan_chem /
-    #      exojax_rt; see config.FULL in the parent package) --------------------
+    #      exojax_rt; the photo-on requirement: forward/config.py) ----------------
     nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
     # Convergence uses the VULCAN-master canonical W39b criteria: yconv_cri=0.01 (NOT the
@@ -422,7 +422,7 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
             raise ValueError(f"log10_uniform prior needs positive bounds for {name}")
         specs.append(ParamSpec(name, label, prior_type, float(lo), float(hi), float(truth), kind))
 
-    # --- chemistry (order matters: converged_ymix expects [lnZ, c_o, lnKzz, <tp...>]) ---
+    # --- chemistry (order matters: converged_y expects [lnZ, c_o, lnKzz, <tp...>]) ---
     if cfg.infer_lnZ:
         add("lnZ", r"$\ln Z$", *cfg.prior_lnZ, cfg.truth_lnZ, "chem")
     if cfg.infer_c_o:
@@ -687,7 +687,7 @@ def validate_config(cfg: Config) -> None:
         # not fatal, but the forward-mode tangent is only validated photo-on.
         import warnings
         warnings.warn("use_photo=False: the forward-mode tangent is only validated with "
-                      "photochemistry ON (see config.FULL notes). Proceed with caution.")
+                      "photochemistry ON. Proceed with caution.")
     if str(cfg.opacity_mode) != "exomolop":
         raise ValueError(
             f"opacity_mode={cfg.opacity_mode!r} is not available: the sampled "

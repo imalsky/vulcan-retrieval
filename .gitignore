@@ -5,35 +5,17 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# Internal working documents. README.md carries the published reference set
-# (forward model, gradients and sampler, WASP-39 b case, limitations,
-# validation, data provenance) as sections; /notes.md is the local-only
-# development diary, which also holds the merged negative-results register
-# (§9 negative-results register) and incident post-mortems; /todo.md is the
-# maintainer's local work list (2026-09-09): kept
-# locally, not shipped to consumers.
-# CLAUDE.md is untracked here too (2026-08-14), matching VULCAN-JAX and
-# jwst-transit-authority: agent instructions are not part of a collaborator bundle.
-# It used to be tracked so it would version with the code it governs; if that
-# matters again, drop the line below and `git add -f CLAUDE.md`.
+# Local-only docs: agent instructions, notes and the maintainer's work list.
 CLAUDE.md
 /notes.md
 /todo.md
-examples/notes.md
 runs/*/notes.md
-scripts/zco_information/notes.md
-validation/notes.md
 
 
-# Large opacity/line-list caches -- NOT tracked. ExoJax downloads HITRAN line lists
-# and CIA tables on first use (via the NAS proxy on HPC; see run_nas_w39b.pbs), and
-# the ExoMol CO cache regenerates the same way. Total ~360 MB that git should not carry.
-data/exojax_linelists/
+# Opacity caches (CIA tables) and the ExoMolOP k-tables (~389 MB/species;
+# python -m vulcan_forward.fetch_exomolop). Regenerable, 6+ GB total; note
+# data/*.npz below does NOT match files inside these subdirectories.
 data/opacity_cache/
-
-# ExoMolOP k-tables (~389 MB/species; python -m vulcan_forward.fetch_exomolop)
-# and the retired HITRAN-built correlated-k cache. Regenerable, 6+ GB total;
-# note data/*.npz below does NOT match files inside these subdirectories.
 data/exomolop/
 
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
@@ -45,9 +27,7 @@ runs/**/plots/
 runs/*/*.o[0-9]*
 *.nsys-rep
 
-# Generated npz caches (sensitivity/zco jacobians/walk) -- scientifically versioned
-# by the code that writes them, regenerable, and easy to leave stale in git (the
-# tracked set was deleted as stale 2026-07-11); never re-track them.
+# Generated npz caches: regenerable and easy to leave stale in git; never track them.
 data/*.npz
 
 # Editor / OS noise
@@ -59,13 +39,8 @@ data/*.npz
 build/
 dist/
 
-# jwst_tool runtime caches (model spectra + pandeia results) -- regenerated per run
-data/jwst_tool/model_cache/
-data/jwst_tool/noise_cache/
-
-# Generated outputs (example/validation/zco npz caches) -- config.OUTPUTS
-output/*
-!output/.gitkeep
+# Local scratch output
+output/
 
 # Local production-ladder overrides stay out of the repo (the running job's config is
 # recorded in notes §5); calibration overrides are tracked so a pull brings the chain's inputs.

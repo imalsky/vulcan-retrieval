@@ -792,7 +792,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
                 ONE batched call in either chem mode -- the cold two-stage map,
                 or the warm continuation of every particle's carried column at
-                its own reference composition under the mutation cap -- so the
+                its own reference composition (under the mutation cap unless
+                ``mutation_cap=False``) -- so the
                 solver's while loop sits ABOVE the lane vmap, where the
                 photolysis and geometry-refresh cadences follow the loop tick
                 instead of firing on every lane every iteration (a lax.cond
@@ -938,7 +939,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         value_and_grad_naive=_value_and_grad_naive, value_and_grad_block=_value_and_grad_block,
         # staged batched evaluators (the SMC hot path)
         has_chem_state=True, chem_mode=chem_mode, y_baseline=y_baseline,
-        # exposed for the split-vs-legacy A/B only (split_stage1=False)
+        # also called directly by run_nautilus (the uncapped warm map) and
+        # smoke_retrieval
         _make_batch_eval=_make_batch_eval,
         batch_eval_cold_vg=_make_batch_eval("cold", True),
         batch_eval_cold_l=_make_batch_eval("cold", False),
@@ -1420,7 +1422,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         # The tangent-blown class also occurs on the init phase-2 warm
         # re-certifications, and it is theta-dependent, so culling or raising
         # on it would bias the initial importance sample against that corner
-        # (README.md, Limitations; blown-tangent class). Consistent with the
+        # (notes.md §2.5, the badgrad class). Consistent with the
         # mutation kernel's zero-drift handling: keep the particle with its
         # certified likelihood and eval-zeroed gradient entries (its first
         # MALA move starts with prior-only drift),
@@ -1442,7 +1444,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             f"likelihood but a non-finite forward-mode tangent (indices "
             f"{np.flatnonzero(bad2).tolist()}) -- kept with zeroed gradient "
             "entries (zero-drift first move; expected in the high-Z/low-C-O "
-            "corner, see README.md, Limitations).")
+            "corner).")
 
     # cull re-certification failures; raise on true RT/AD deaths
     L_np = np.asarray(jax.device_get(L), np.float64)
@@ -1604,7 +1606,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         # PROPOSAL, not the target), so the certified likelihood decides
         # acceptance unbiasedly; forcing rejection instead biases against the
         # theta-corner where the class concentrates
-        # (README.md, Limitations; blown-tangent class).
+        # (notes.md §2.5, the badgrad class).
         # The validity argument needs the zero PATTERN to be a deterministic
         # function of theta: true in COLD mode (the solve is a fixed map of
         # theta), NOT in warm, where it depends on the carried column and hence
@@ -1736,7 +1738,7 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
     state has no primal-side predicate and is theta-dependent (dense in the
     high-Z/low-C-O corner the posterior favors), so the sweep handles it as a
     ZERO-DRIFT MALA move rather than a rejection -- see the sweep comment and
-    README.md (Limitations). ``forensics`` (per-particle device
+    notes.md §2.5. ``forensics`` (per-particle device
     arrays) is dumped to ``dump_path`` and summarized in the log on EVERY
     occurrence. A single sweep exceeding ceil(max_frac * n_particles) events
     is far beyond the measured physical class -- that is systematic AD

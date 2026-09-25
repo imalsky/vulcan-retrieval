@@ -1,5 +1,5 @@
 """The binning MATRIX must reproduce the d(lambda)-weighted trapezoidal bin average
-(zco_lib.bin_to_obs's operation) exactly -- that equivalence is what makes the binned
+exactly -- that equivalence is what makes the binned
 depth's jvp exact and free."""
 from types import SimpleNamespace
 
@@ -13,7 +13,7 @@ _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
 
 def _reference_bin(wl_model, y, lo_all, hi_all):
-    """Trapezoidal bin average, the zco_lib.bin_to_obs operation."""
+    """Trapezoidal bin average, computed directly."""
     order = np.argsort(wl_model)
     wl = wl_model[order]
     Y = y[order]

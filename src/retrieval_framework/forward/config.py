@@ -8,17 +8,9 @@ The forward-model ENGINE lives in the ``vulcan-forward`` distribution, so the
 physics constants and the molecule/opacity table below are re-exported from
 ``vulcan_forward.constants`` rather than defined twice.
 What stays genuinely local: this repo's filesystem layout, the WASP-39 b case
-constants, the run profiles, and the parameter-vector labels. This module also
-hands the engine its data root (see the paths section), so the opacity caches and
-line lists live in this repo's data/ tree.
-
-The demo chains the *live* VULCAN-JAX chemistry forward model into an ExoJax
-``ArtTransPure`` transmission model and propagates forward-mode tangents from four
-physical parameters -- (ln Z, C/O, ln Kzz, dT) -- all the way to the transit
-spectrum, so every wavelength can be colored by d(transit_depth)/d(parameter).
-
-Planet: WASP-39b (matches the validated jax_paper sensitivity scripts + the JWST
-SO2/CO2 metallicity story).
+constants and the SMOKE profile. This module also hands the engine its data
+root (see the paths section), so the opacity caches live in this repo's data/
+tree.
 """
 from __future__ import annotations
 
@@ -35,15 +27,7 @@ from vulcan_forward import paths as _fwd_paths
 
 MOLECULES = _fwd.MOLECULES
 ATOM_COLS = _fwd.ATOM_COLS
-ATOMIC_MASSES = _fwd.ATOMIC_MASSES
 BULK_H2_VULCAN = _fwd.BULK_H2_VULCAN
-CLOUD_NUC0 = _fwd.CLOUD_NUC0
-# Value copies for reading. Rebinding one here does NOT reach the engine:
-# build_rt_model resolves the ART bounds from the profile
-# (profile["art_ptop_bar"] / ["art_pbtm_bar"]), falling back to
-# vulcan_forward.constants. Pass an override through the profile.
-ART_PTOP_BAR = _fwd.ART_PTOP_BAR
-ART_PBTM_BAR = _fwd.ART_PBTM_BAR
 T_OPA_MIN_K = _fwd.T_OPA_MIN_K
 T_OPA_MAX_K = _fwd.T_OPA_MAX_K
 
@@ -69,10 +53,7 @@ if not (REPO_DIR / "data" / "cm24_wasp39b").is_dir():    # tracked marker, in ev
         "install cannot infer it). Large caches (data/opacity_cache, data/exomolop) "
         "are seeded separately -- see the repo README data policy.")
 
-JP = PROJECT_ROOT / "jax_paper"  # for _common.apply_style (house figure style)
-DATA_DIR = REPO_DIR / "data"                                    # INPUTS: observed spectra + opacity caches
-OUTPUTS = REPO_DIR / "output"                                   # GENERATED: npz caches from examples/validation/zco
-FIGS = JP / "figures"                                           # manuscript figures stay in jax_paper/figures
+DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 
 # Hand the shared engine this repo's data tree (exomolop/ + opacity_cache/,
 # exactly what data/ already holds), so the engine never infers
@@ -92,7 +73,7 @@ RP_CM = 1.279 * 7.1492e9   # planet radius (cm) at the bottom pressure P_b
 GS_CGS = 422.0             # surface gravity (cm/s^2), held fixed (incl. under lnR0)
 RSTAR_CM = 0.932 * R_SUN_CM
 
-# Run profiles
+# Run profile (the condensation test's SMOKE column)
 # Wavenumbers in cm^-1. wavelength(um) = 1e4 / nu.
 #
 # Two non-obvious requirements, both about keeping the forward-mode tangent valid:
@@ -105,13 +86,13 @@ RSTAR_CM = 0.932 * R_SUN_CM
 SMOKE = {
     "use_photo": True,
     # The published demo/figure caches were built under the legacy "masks"
-    # initialization; pinned here (in all three presets) so a fresh run
-    # reproduces them. The engine default is "elemental" (production).
+    # initialization; pinned here so a fresh run reproduces them. The engine
+    # default is "elemental" (production).
     "abundance_mode": "masks",
     "nz": 40,                  # coarse column -> cheaper warm-up + jvps
     "yconv_cri": 1.0e-3,
     "molecules": ["CO"],       # fully offline
-    "nu_min": 4280.0,          # ~2.31-2.34 um, the cached CO 2-0 band (matches smc.py)
+    "nu_min": 4280.0,          # ~2.31-2.34 um, the cached CO 2-0 band
     "nu_max": 4360.0,
     "opacity_mode": "exomolop",
     "art_nlayer": 20,
@@ -120,44 +101,3 @@ SMOKE = {
     # different planet).
     "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
 }
-FULL = {
-    "use_photo": True,         # photo ON -> SO2 chemistry (WASP-39b story)
-    "abundance_mode": "masks",  # legacy pin, see SMOKE
-    "nz": 188,                 # canonical W39b grid: 19 layers/decade over 1e-9..7.6 bar
-    "yconv_cri": 1.0e-3,
-    "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
-    "nu_min": 1923.0,          # ~5.2 um
-    "nu_max": 3450.0,          # ~2.9 um  (NIRSpec G395H/PRISM red: CH4 3.3, SO2 4.0, CO2 4.3, CO 4.7)
-    "opacity_mode": "exomolop",
-    "art_nlayer": 67,
-    # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a forgotten key would silently model a
-    # different planet).
-    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
-}
-# Wide-band overview: 1-15 um (the supported window -- H2-H2 CIA stops at 1 um / 10000
-# cm-1 on the short side; the ExoMolOP tables reach 50 um). Computed on the tables'
-# R=1000 band grid and displayed at R=100. Used for BOTH the transmission and emission
-# figures.
-WIDE = {
-    "use_photo": True,
-    "abundance_mode": "masks",  # legacy pin, see SMOKE
-    "nz": 188,
-    "yconv_cri": 1.0e-3,
-    "molecules": ["H2O", "CO2", "CO", "CH4", "SO2"],
-    "nu_min": 667.0,           # 15 um
-    "nu_max": 10000.0,         # 1 um  (H2-H2 CIA upper edge)
-    "opacity_mode": "exomolop",
-    "art_nlayer": 67,
-    "display_R": 100,
-    # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a forgotten key would silently model a
-    # different planet).
-    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
-}
-
-# Parameter vector order: theta = [lnZ, c_o_pert, lnKzz, dT_K]. theta[3] is a
-# UNIFORM additive temperature offset applied to every layer -- historically
-# (mis)labeled "T_int"; it is not an interior/intrinsic temperature.
-THETA_LABELS = ["lnZ", "C/O", "lnKzz", "dT"]
-THETA0 = [0.0, 0.0, 0.0, 0.0]   # baseline (no perturbation)

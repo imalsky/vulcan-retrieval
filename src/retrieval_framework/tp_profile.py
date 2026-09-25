@@ -41,12 +41,12 @@ from typing import Any
 from retrieval_framework.forward import config as _pkg_config   # pure constants (T_OPA_MIN_K/MAX_K, GS_CGS)
 import jax.numpy as jnp
 
-# The premodit opacity table is baked for [T_OPA_MIN_K, T_OPA_MAX_K]; outside it the RT
-# would extrapolate. We DO NOT clip the profile into this range (a clip silently invents a
+# [T_OPA_MIN_K, T_OPA_MAX_K] is the engine's valid RT window (vulcan_forward.constants;
+# the k-tables themselves span 100-3400 K and clamp at their edges). We DO NOT clip the profile into this range (a clip silently invents a
 # fake isothermal wall and a zero-gradient plateau). Instead these bounds define the
 # MODELABLE window, and the pipeline rejects any drawn profile with a layer outside it
 # (rejection-sampled at init, -inf likelihood for a MALA proposal) -- see pipeline.tp_valid.
-# The 20 K inset keeps us off the exact table edge where premodit accuracy degrades.
+# The 20 K inset keeps draws off the window's edge: the retrieval window is [320, 2980] K.
 _T_MIN = float(_pkg_config.T_OPA_MIN_K) + 20.0
 _T_MAX = float(_pkg_config.T_OPA_MAX_K) - 20.0
 

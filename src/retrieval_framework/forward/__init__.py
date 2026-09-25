@@ -5,8 +5,8 @@ The forward-model ENGINE lives in the ``vulcan-forward`` distribution:
 and are shared with jwst-transit-authority, so neither application depends on the
 other. What remains here is this repo's own:
 
-- ``config``      -- this repo's paths + WASP-39 b case constants + run
-                     profiles + parameter-vector labels; re-exports the shared
+- ``config``      -- this repo's paths + WASP-39 b case constants + the
+                     SMOKE profile; re-exports the shared
                      physics constants from ``vulcan_forward.constants`` so the
                      two distributions cannot drift, and hands the engine its
                      data root. No heavy imports; always safe to import first.

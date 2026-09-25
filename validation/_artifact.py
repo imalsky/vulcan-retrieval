@@ -13,8 +13,8 @@ accuracy:
 A verdict printed to a terminal and lost is not evidence, and
 "the script exists" is not the same as "the check passed at production
 settings". This module gives each script one `emit()` call that writes a JSON
-artifact plus a short Markdown summary under `validation/results/`, carrying
-enough provenance to tie the number to an exact code and data state.
+artifact under `validation/results/`, carrying enough provenance to tie the
+number to an exact code and data state.
 
 Nothing here imports jax, exojax, or the chemistry stack, so it stays cheap and
 cannot perturb the measurement.
@@ -35,8 +35,7 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the certificate module
-from retrieval_framework.certificate import (  # noqa: F401
-    _git, _repo_states, _sha256, science_data_identity)
+from retrieval_framework.certificate import _repo_states, science_data_identity
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -46,7 +45,6 @@ def production_config():
 
     jax/chemistry are imported lazily so this module stays cheap at import.
     """
-    import os
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
     from retrieval_framework import run_smc as _R
     cfg, preset = _R.make_config(REPO / "runs" / "w39b_smc_retrieval")
@@ -61,12 +59,8 @@ def production_profile(**overrides):
     """The forward profile the PRODUCTION case actually runs.
 
     A ladder must measure the model production uses, not a hand-copied
-    approximation of it. The shipped artifacts were built from
-    `forward.config.FULL` plus a few overrides; FULL carries yconv_cri=1e-3
-    while the retrieval schema default (and so production) is 1e-2, and the
-    molecule list was copied by hand -- so both ladders certified a different
-    convergence behaviour and a different opacity model than any real run.
-    Deriving from the case's own Config.profile() removes that whole class.
+    approximation of it, so the profile comes from the case's own
+    Config.profile().
 
     jax/chemistry are imported lazily so this module stays cheap at import.
     """
@@ -203,56 +197,10 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
     return prov
 
 
-def _md(name: str, payload: dict) -> str:
-    prov = payload["provenance"]
-    verdict = payload["verdict"]
-    lines = [
-        f"# {payload['title']}",
-        "",
-        f"**VERDICT: {verdict['status']}** -- {verdict['summary']}",
-        "",
-        f"Generated {prov['generated_utc']} by `{prov['command']}`.",
-        "",
-        "## Measurements",
-        "",
-        "| quantity | value | gate |",
-        "|---|---|---|",
-    ]
-    for m in payload["measurements"]:
-        # measurement names carry |Delta| style math, which would split the cell
-        esc = str(m["name"]).replace("|", "\\|")
-        val = str(m["value"]).replace("|", "\\|")
-        gate = str(m.get("gate", "--")).replace("|", "\\|")
-        lines.append(f"| {esc} | {val} | {gate} |")
-    lines += ["", "## Provenance", "", "| key | value |", "|---|---|"]
-    for repo, state in prov["repos"].items():
-        if state is None:
-            lines.append(f"| {repo} | MISSING |")
-            continue
-        mark = " (DIRTY)" if state["dirty"] else ""
-        lines.append(f"| {repo} | {state['commit'][:12]}{mark} |")
-    for k in ("jax", "jaxlib", "numpy", "exojax", "python"):
-        lines.append(f"| {k} | {prov['versions'].get(k)} |")
-    lines.append(f"| devices | {', '.join(prov['jax_devices']) or 'none'} |")
-    lines.append(f"| host | {prov['hardware']['hostname']} "
-                 f"({prov['hardware']['platform']}) |")
-    data = prov.get("data", {})
-    for sub in ("opacity_cache", "exomolop"):
-        d = data.get(sub)
-        if isinstance(d, dict):
-            lines.append(f"| {sub} | {d['files']} files, {d['bytes']} bytes, "
-                         f"newest {d['newest_mtime_utc']} |")
-    if prov.get("resolved_config_sha256"):
-        lines.append(f"| resolved config sha256 | "
-                     f"{prov['resolved_config_sha256'][:16]}... |")
-    lines += ["", f"Machine-readable: `{name}.json`", ""]
-    return "\n".join(lines)
-
-
 def emit(name: str, title: str, measurements: list[dict], status: str,
          summary: str, resolved_config: dict | None = None,
          out_dir: Path | None = None) -> Path:
-    """Write `<name>.json` and `<name>.md` under validation/results/.
+    """Write `<name>.json` under validation/results/.
 
     `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate,
     such as the air-vs-H2/He A/B, whose output is a decision input rather than a
@@ -271,7 +219,5 @@ def emit(name: str, title: str, measurements: list[dict], status: str,
     }
     jpath = out_dir / f"{name}.json"
     jpath.write_text(json.dumps(payload, indent=2, default=str) + "\n")
-    (out_dir / f"{name}.md").write_text(_md(name, payload))
     print(f"\n[artifact] wrote {jpath}")
-    print(f"[artifact] wrote {out_dir / (name + '.md')}")
     return jpath

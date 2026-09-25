@@ -114,8 +114,3 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-
-[tool.ruff.lint.per-file-ignores]
-# env-before-import contract: vulcan_forward.vulcan_chem sets the VULCAN_JAX_*
-# import-frozen env vars (and jax x64) BEFORE importing jax/vulcan_jax, so
-# callers import it ahead of other modules.

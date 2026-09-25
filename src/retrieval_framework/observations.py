@@ -8,8 +8,8 @@ inside the jitted likelihood:
     B  (n_bin, n_native)   bin-averaging matrix: binned_depth = B @ native_depth. The
                            binning is a d(lambda)-weighted trapezoidal average
                            expressed as a matrix so its forward-mode/JVP derivative is
-                           exact and free (numerically identical to zco_lib.bin_to_obs,
-                           the reference implementation it was validated against).
+                           exact and free (tests/test_binning.py checks it against
+                           a direct trapezoidal average).
     O  (n_bin, G-1)        instrument-offset design: bin i in group g>0 gets a flat
                            depth offset. depth_with_offset = binned + O @ (offset_ppm*1e-6).
 
@@ -204,7 +204,7 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     """Linear bin-averaging matrix. Returns (keep_mask (n_bin,), B (n_keep, n_native)).
 
     B[b] are the native-grid weights whose dot with the native depth equals the
-    d(lambda)-weighted trapezoidal bin average of zco_lib.bin_to_obs -- exact, so the
+    d(lambda)-weighted trapezoidal bin average -- exact, so the
     JVP of a binned depth is B @ (JVP of native depth).
 
     NO INSTRUMENT LINE-SPREAD FUNCTION is applied: this is a pure cell average.

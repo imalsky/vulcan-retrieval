@@ -9,8 +9,8 @@
 # ~10 min GH200 check of VULCAN-JAX's CUDA block-Thomas kernel: refresh the three
 # editable installs (a version bump leaves validate_env stale until pip re-runs),
 # build the kernel with nvcc, run tests/test_solver_fast.py on the GPU twice (plain,
-# then under run_nas_w39b.pbs's XLA_CMDBUF=2 command-buffer flags), the
-# cold-seed method bench, and vulcan-forward's fold test on the GPU.
+# then under run_nas_w39b.pbs's XLA_CMDBUF=2 command-buffer flags), and
+# vulcan-forward's fold test on the GPU.
 # Resubmit after every change to the kernel. From the speed tree's
 # vulcan-retrieval root (or its tools/ dir):
 #   qsub -v VULCAN_SCRATCH=/nobackup/$USER/.vulcan-speed tools/gpu_kernel_test.pbs
@@ -98,10 +98,6 @@ VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -
 # compatible, so capture must meet them here first, not inside a bench.
 XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" \
   VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
-# --- cold-seed method bench: which exogibbs solve_profile method is cheapest on
-# this GPU at the production lane width. Fails the job if it fails (no || true).
-cd "${REPO_DIR}"
-python tools/bench_seed_methods.py
 # --- vulcan-forward's correlated-k fold on the GPU: the lax.scan fold must stay
 # the unrolled loop's op sequence (bitwise on CPU; this is where the GPU says).
 # Last, so a GPU-only difference cannot stop the steps above.

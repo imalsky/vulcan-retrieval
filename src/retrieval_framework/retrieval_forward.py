@@ -2,12 +2,12 @@
 spectrum, composing the *live* VULCAN-JAX chemistry with the ExoJax RT.
 
     depth(chem_theta, lnR0) = transmission_depth_r(
-        bridge( VULCAN.converged_ymix(chem_theta) ),           # VMR(nz, ni) -> ART grid
+        bridge( VULCAN.converged_y(chem_theta) ),              # VMR(nz, ni) -> ART grid
         T_art = Guillot(chem_theta[3:]),                        # same T-P on the ART grid
         lnR0 )                                                  # reference-radius nuisance
 
 ``chem_theta = [lnZ, dln(C/O), lnKzz, <T-P params>]`` is exactly what the (tp_eval-hooked)
-``vulcan_chem.converged_ymix`` consumes; the T-P sub-vector ``chem_theta[3:3+n_tp]`` is
+``vulcan_chem.converged_y`` consumes; the T-P sub-vector ``chem_theta[3:3+n_tp]`` is
 evaluated by the SAME ExoJax profile on both the VULCAN pressure grid (inside the
 chemistry) and the ART grid (here, for the RT), so one self-consistent T(P) drives both.
 
@@ -49,8 +49,8 @@ def _refuse_condense_inference(chem, cfg) -> None:
     condensation is actually active), so gating on it closes that bypass. The
     pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD
     on pinned species) and gradient-MALA is the default mutation kernel, so an
-    inference run would sample against unreliable gradients. See
-    ``../VULCAN-JAX/README.md`` (Differentiability).
+    inference run would sample against unreliable gradients (VULCAN-JAX
+    notes §2.5-2.6).
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
@@ -65,8 +65,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
             "(run_inference=False), or set allow_condense_inference=True only "
             "with an independently validated gradient. This gate reads the "
             "resolved conden_spec, so it also catches use_condense=True inherited "
-            "from the base config (cfg_overrides need not restate it). See "
-            "VULCAN-JAX README.md (Differentiability)."
+            "from the base config (cfg_overrides need not restate it)."
         )
 
 
@@ -91,7 +90,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     # Condensation is a FORWARD-model capability only; refuse inference on the
     # RESOLVED config (closes the base-config bypass of the early cfg_overrides
-    # gate). See VULCAN-JAX README.md (Differentiability).
+    # gate). VULCAN-JAX notes §2.5-2.6.
     _refuse_condense_inference(chem, cfg)
 
     # Surface a failed warm-up check. NOT a refusal: nothing consumes the
@@ -225,8 +224,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         the loop's iteration tick (agreement at the convergence scale, 5.4e-5
         over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). The cold
         GRADIENT path takes the same route, one ``jax.jvp`` per direction
-        through the stage twins below; only the WARM continuation still runs
-        per particle.
+        through the stage twins below, and so do the batched WARM
+        continuations (``chem_solve_warm_diag_batch``).
 
         With ``cfg.cold_lanes`` above 0 EVERY cold batch -- both stages, any
         width -- runs on ``min(cold_lanes, draws)`` lanes with refill
@@ -355,7 +354,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         solve. Reading the diag is free: every field rides the primal carry.
 
         ``cloud`` is None (off) or a (2,) array [log10 kappac0, alphac] for the
-        ExoJax powerlaw_clouds term (see exojax_rt / config.CLOUD_NUC0)."""
+        ExoJax powerlaw_clouds term (see exojax_rt /
+        vulcan_forward.constants.CLOUD_NUC0)."""
         chem_theta = jnp.asarray(chem_theta)
         y, cd = chem_solve_cold_diag(chem_theta)                   # (nz, ni) absolute
         ok = ((jnp.asarray(cd.conv_normal) > 0.5)

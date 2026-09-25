@@ -9,8 +9,8 @@
 # (vulcan-jax>=0.16.0, vulcan-forward>=0.25.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
-# ExoJax is a plain pip dependency; it downloads HITRAN line lists / CIA tables
-# into the repo data/ caches on first use.
+# ExoJax is a plain pip dependency; the opacity data (k-tables, CIA) are
+# seeded into the repo data/ tree, not fetched at run time.
 # NOTE the PBS preflight installs the SYNCED trees editable instead (git pull is
 # the code-deploy mechanism); use this file for a standalone reproduction env.
 # NOT INSTALLABLE AS WRITTEN on linux-aarch64 (the GH200): the pinned vulcan-jax
