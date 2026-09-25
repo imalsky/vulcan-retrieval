@@ -430,7 +430,7 @@ def main() -> None:
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter()-t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names} "
              f"| {pipe.n_bin} bins | groups={pipe.groups} "
-             f"| dtype={pipe.dtype.__name__} two_stage_z={cfg.two_stage_z}")
+             f"| dtype={pipe.dtype.__name__}")
 
     # ---- observations (set exactly once, BEFORE any jitted likelihood call) ----
     # NOTHING is written to the run directory until the resume identity is

@@ -89,12 +89,6 @@ class Config:
     # and sum(n) != M init are documented in vulcan_chem. See chem.audit_init.
     abundance_mode: str = "elemental"
     reanchor_atom_ini: bool = True     # masks-mode only (elemental always re-anchors exactly)
-    # Two-stage solve (REQUIRED for a live lnZ/C-O response when the T-P is retrieved):
-    # stage 1 converges the column at (T(theta), Kzz(theta)) with BASELINE composition;
-    # stage 2 applies lnZ/C-O to that T-consistent state and re-converges warm.
-    # Starting the composition perturbation before the large T displacement can erase
-    # its inventory response; the second stage preserves it.
-    two_stage_z: bool = True
     # Where a COLD solve starts: "eq" = the network's own Gibbs equilibrium at
     # the proposal's own T-P and elemental composition (end-to-end JAX, no host
     # callback; the upstream VULCAN start); "baseline" = the build's baseline
@@ -757,7 +751,7 @@ def describe_config(cfg: Config, preset: str = "", specs: Optional[List[ParamSpe
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
-        f"   co_mode={cfg.co_mode}   two_stage_z={'on' if cfg.two_stage_z else 'off'}   cold_seed={cfg.cold_seed}"
+        f"   co_mode={cfg.co_mode}   cold_seed={cfg.cold_seed}"
         f"   cold batch: {lanes}"
         f"   reanchor_atom_ini={'on' if cfg.reanchor_atom_ini else 'off'}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),

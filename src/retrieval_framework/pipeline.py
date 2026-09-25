@@ -612,7 +612,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return val, g, bad_grad
 
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
-                         mutation_cap: bool = True, split_stage1: bool = True):
+                         mutation_cap: bool = True):
         """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, n_bad_grad, stats)
         when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new, stats)
         -- or (L, Y_new, refs_new, per-particle ConvDiag) when diag; all
@@ -631,11 +631,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         caller can detect a count_max-exhausted OR stall-certified
         (not-actually-converged) cold solve instead of silently carrying it into L.
 
-        ``split_stage1`` (cold two-stage gradient path only) runs the two stages as
-        two explicit jvps, so stage 1 carries only the lnKzz + T-P directions (the
-        lnZ / c_o tangents are identically zero there); False is the single-chain
-        jvp, kept for the A/B test that pins the two routes together -- not a
-        physics knob."""
+        The cold gradient runs the two stages as two explicit jvps, so stage 1
+        carries only the lnKzz + T-P directions (the lnZ / c_o tangents are
+        identically zero there); tests/test_stage_split.py pins it against the
+        single-chain jvp of the same map."""
         warm = (mode == "warm")
         assert not (diag and (warm or want_grad)), "diag is cold+no-grad only"
         # Convergence gate for the warm grad. mutation_cap=True (the MALA proposal
@@ -726,55 +725,42 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                         lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
                     return AUX, DAUX, Y_l[0], CD_l[0]
             else:
-                if bool(fwd.two_stage) and split_stage1:
-                    eye_h = eye_c[2:]                      # lnKzz + T-P directions
+                eye_h = eye_c[2:]                      # lnKzz + T-P directions
 
-                    def _stage2_chain(C_, Y1):
-                        Y, cd = fwd.chem_stage2_diag_batch(C_, Y1)
-                        return _aux_batch(Y, C_), Y, _pack_cd_batch(cd)
+                def _stage2_chain(C_, Y1):
+                    Y, cd = fwd.chem_stage2_diag_batch(C_, Y1)
+                    return _aux_batch(Y, C_), Y, _pack_cd_batch(cd)
 
-                    def _pad_dy1(dy1):
-                        # directions 0,1 (lnZ, c_o): no y_relaxed tangent
-                        return jnp.zeros((n_chem_tp,) + dy1.shape[1:],
-                                         dy1.dtype).at[2:].set(dy1)
+                def _pad_dy1(dy1):
+                    # directions 0,1 (lnZ, c_o): no y_relaxed tangent
+                    return jnp.zeros((n_chem_tp,) + dy1.shape[1:],
+                                     dy1.dtype).at[2:].set(dy1)
 
-                    def _chem_batch(C_, Y, refs):
-                        """Cold two-stage chemistry for a whole chunk, stages SPLIT.
+                def _chem_batch(C_, Y, refs):
+                    """Cold two-stage chemistry for a whole chunk, stages SPLIT.
 
-                        Directions 0 and 1 carry a zero stage-1 tangent (their theta
-                        tangent is killed by the .at[:, 0].set(0).at[:, 1].set(0)
-                        inside stage 1); directions 2..n_chem_tp-1 carry the stage-1
-                        tangent that flows inline into stage 2's warm_y in the
-                        single-chain route. The split feeds the same (e_i, dy1) pair
-                        explicitly, so the primal is the same program and the
-                        tangents differ at most by XLA fusion. Y/refs are unused on
-                        the cold path (as in the single-chain route).
-                        """
-                        Y1_l, dY1 = jax.vmap(lambda v: jax.jvp(
-                            fwd.chem_stage1_batch, (C_,), (_bcast(v, C_),)))(eye_h)
-                        Y1 = Y1_l[0]                       # direction-independent primal
-                        (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
-                            lambda v, dY: jax.jvp(_stage2_chain, (C_, Y1),
-                                                  (_bcast(v, C_), dY))
-                        )(eye_c, _pad_dy1(dY1))
-                        AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
-                        # (D, N, ...) -> the (N, D, ...) per-particle layout the RT
-                        # stage reads
-                        DAUX = jax.tree_util.tree_map(
-                            lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
-                        return AUX, DAUX, Y_l[0], CD_l[0]
-                else:
-                    def _chain(C_):
-                        Y, cd = fwd.chem_solve_cold_diag_batch(C_)
-                        return _aux_batch(Y, C_), Y, _pack_cd_batch(cd)
-
-                    def _chem_batch(C_, Y, refs):
-                        (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
-                            lambda v: jax.jvp(_chain, (C_,), (_bcast(v, C_),)))(eye_c)
-                        AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
-                        DAUX = jax.tree_util.tree_map(
-                            lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
-                        return AUX, DAUX, Y_l[0], CD_l[0]
+                    Directions 0 and 1 carry a zero stage-1 tangent (their theta
+                    tangent is killed by the .at[:, 0].set(0).at[:, 1].set(0)
+                    inside stage 1); directions 2..n_chem_tp-1 carry the stage-1
+                    tangent that flows inline into stage 2's warm_y in the
+                    single-chain route. The split feeds the same (e_i, dy1) pair
+                    explicitly, so the primal is the same program and the
+                    tangents differ at most by XLA fusion. Y/refs are unused on
+                    the cold path (as in the single-chain route).
+                    """
+                    Y1_l, dY1 = jax.vmap(lambda v: jax.jvp(
+                        fwd.chem_stage1_batch, (C_,), (_bcast(v, C_),)))(eye_h)
+                    Y1 = Y1_l[0]                       # direction-independent primal
+                    (AUX_l, Y_l, CD_l), (DAUX_l, _dY, _dCD) = jax.vmap(
+                        lambda v, dY: jax.jvp(_stage2_chain, (C_, Y1),
+                                              (_bcast(v, C_), dY))
+                    )(eye_c, _pad_dy1(dY1))
+                    AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
+                    # (D, N, ...) -> the (N, D, ...) per-particle layout the RT
+                    # stage reads
+                    DAUX = jax.tree_util.tree_map(
+                        lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
+                    return AUX, DAUX, Y_l[0], CD_l[0]
 
             def _chem_map(C_, Y, refs):
                 return _map_chunks(lambda a: _chem_batch(*a),
@@ -942,6 +928,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # also called directly by run_nautilus (the uncapped warm map) and
         # smoke_retrieval
         _make_batch_eval=_make_batch_eval,
+        # the RT half of the gradient evaluators; tests/test_stage_split.py
+        # builds its single-chain reference on it
+        _rt_val_grad=_rt_val_grad,
         batch_eval_cold_vg=_make_batch_eval("cold", True),
         batch_eval_cold_l=_make_batch_eval("cold", False),
         batch_eval_cold_l_diag=_make_batch_eval("cold", False, diag=True),

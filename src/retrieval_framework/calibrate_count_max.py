@@ -185,10 +185,9 @@ def main() -> None:
         t_first, t_steady, out, U = _timed(cfg, capture=True)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
         # outer_loop.py:957), so a capped lane stops after exactly K+1 accepted steps.
-        # A cold solve runs one such loop per stage: two with two_stage_z (the default),
-        # one under overrides/onestage.json.
+        # A cold solve runs one such loop per stage, two stages.
         n_acc = K + 1
-        n_stages = 2 if cfg.two_stage_z else 1
+        n_stages = 2
         n_step = n_stages * n_acc
         n_extra = n_stages * (K - 1)   # accepted steps this bench adds over the K=1 baseline
         # Timing first: it is the point of the job and must land in the log even if

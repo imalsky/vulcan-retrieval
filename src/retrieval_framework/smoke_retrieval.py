@@ -193,25 +193,6 @@ def main() -> int:
           f"-> {'OK' if ok_staged else 'FAIL'}", flush=True)
     assert np.all(np.isfinite(Yb)) and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)
 
-    # ---- stage-split vs legacy single-chain cold jvp ----
-    # The cold two-stage gradient path runs its two stages as two explicit
-    # jvps. That is the SAME program regrouped, so the primal must be
-    # bit-identical and the gradient may differ only by XLA fusion: the two
-    # routes batch the stage-1 tangent at different widths, measured 1.1e-10
-    # norm-relative on these three points, and the gate sits ~90x above that.
-    t0 = time.time()
-    legacy = jax.jit(pipe._make_batch_eval("cold", True, split_stage1=False))
-    Ll, Gl, Yl, _rl, nbad_l, _sl = legacy(U_test, Y0, refs0)
-    assert int(nbad_l) == 0
-    Ll = np.asarray(Ll); Gl = np.asarray(Gl)
-    same_y = bool(np.array_equal(np.asarray(Yb), np.asarray(Yl)))
-    same_l = bool(np.array_equal(Lb, Ll))
-    dg_split = float(np.max(np.abs(Gb2 - Gl)) / max(float(np.max(np.abs(Gl))), 1e-300))
-    ok_split = same_y and same_l and (dg_split < 1e-8)
-    print(f"[smoke] split-vs-legacy: Y bit-equal={same_y} L bit-equal={same_l} "
-          f"dgrad={dg_split:.2e} [{time.time()-t0:.0f}s] "
-          f"-> {'OK' if ok_split else 'FAIL'}", flush=True)
-
     # ---- warm-continuation gradient (the mutation-kernel map) vs FD of the same map ----
     # State = the converged columns from the cold batch above; evaluate the move
     # gradient at a DIFFERENT point (a realistic MCMC proposal) and FD the identical
@@ -267,10 +248,10 @@ def main() -> int:
             alive = gi > 1e-3
             ok_live &= alive
             print(f"[smoke] liveness {nm:4s}: |dL/d{nm}|={gi:.3e}  "
-                  f"{'OK' if alive else 'FAIL (inventory response dead -- check two_stage_z)'}",
+                  f"{'OK' if alive else 'FAIL (inventory response dead)'}",
                   flush=True)
 
-    ok = ok_bn and ok_fd and ok_staged and ok_split and ok_warm and ok_live
+    ok = ok_bn and ok_fd and ok_staged and ok_warm and ok_live
     print(f"[smoke] TOTAL {time.time()-t_all:.0f}s  ->  {'ALL CHECKS PASSED' if ok else 'FAILURES'}",
           flush=True)
     return 0 if ok else 1

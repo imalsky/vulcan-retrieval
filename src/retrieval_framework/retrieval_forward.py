@@ -142,17 +142,13 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     gas_mask = jnp.asarray(_gas)
     p_art_bar_j = jnp.asarray(rt.p_art_bar)
 
-    two_stage = bool(cfg.two_stage_z)
-
     def chem_solve_cold(chem_theta):
-        """Converged ABSOLUTE column y (nz, ni) from the baked baseline init. Default
-        two-stage: (1) converge at the retrieved T-P/Kzz with BASELINE composition (the
-        violent T-relaxation, which measurably erases init-inventory perturbations);
-        (2) apply the lnZ / C-O scaling to that converged column and re-converge warm
-        (gentle -> inventory survives; also the validated warm-started-jvp pattern).
-        See config_schema.two_stage_z."""
-        if not two_stage:
-            return chem.converged_y(chem_theta)
+        """Converged ABSOLUTE column y (nz, ni), in two stages: (1) converge at the
+        retrieved T-P/Kzz with BASELINE composition (the violent T-relaxation, which
+        measurably erases init-inventory perturbations); (2) apply the lnZ / C-O
+        scaling to that converged column and re-converge warm (gentle -> inventory
+        survives; also the validated warm-started-jvp pattern). A one-stage solve
+        loses the lnZ/C-O response under a retrieved T-P (notes §2.1, §2.12)."""
         th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)        # baseline lnZ, c_o
         y_relaxed = chem.converged_y(th_relax)                     # stage 1 (nz, ni) abs
         return chem.converged_y(chem_theta, warm_y=y_relaxed,
@@ -189,8 +185,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ConvDiag field rides the runner's primal carry, so reading it costs
         nothing; the pipeline stop_gradients + casts the packed diag inside the
         jvp chain."""
-        if not two_stage:
-            return chem.converged_y(chem_theta, return_conv_diag=True)
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
     def _chem_batch_route(C, **kw):
@@ -234,8 +228,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         lanes instead of the slowest draw. One route per config, so a narrow
         replay agrees with the run. The default 0 keeps the single lockstep
         batch, call for call."""
-        if not two_stage:
-            return _chem_batch_route(C)
         return chem_stage2_diag_batch(C, chem_stage1_batch(C))
 
     def chem_stage1_batch(C):
@@ -382,7 +374,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_stage2_diag=chem_stage2_diag,
         chem_stage1_batch=chem_stage1_batch,
         chem_stage2_diag_batch=chem_stage2_diag_batch,
-        two_stage=two_stage,
         chem_solve_warm=chem_solve_warm,
         chem_solve_warm_diag=chem_solve_warm_diag,
         chem_solve_warm_diag_full=chem_solve_warm_diag_full,

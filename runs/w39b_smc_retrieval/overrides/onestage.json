@@ -1,4 +1,0 @@
-{
-  "_note": "A/B arm: single-stage cold solve from the equilibrium seed at the proposal's own ratios (upstream's start) instead of the two-stage baseline-then-rescale map; step counts via CALIBRATE_COUNT_MAX, liveness via smoke_retrieval",
-  "two_stage_z": false
-}

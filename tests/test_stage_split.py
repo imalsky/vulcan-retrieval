@@ -4,7 +4,9 @@ pipeline._make_batch_eval runs the cold two-stage chemistry as two explicit jvps
 (stage 1 at baseline composition on the lnKzz/T-P directions only, then stage 2
 warm-started from it). That is the single-chain jvp regrouped, not a different
 map: the primal (Y, L) must be bit-identical and the gradient may differ only by
-XLA fusion.
+XLA fusion. The single-chain reference lives here: one jvp per chemistry
+direction through the whole cold map (fwd.chem_solve_cold_diag_batch), then the
+pipeline's own RT stage.
 
 Builds the REAL smoke pipeline (chemistry + RT, fully offline) at the case's own
 caps, so it costs minutes and SKIPS cleanly when the stack or its data is absent.
@@ -43,8 +45,6 @@ def smoke():
     # handler reports a real forward-model break as a green skip.
     except (FileNotFoundError, OSError, ImportError) as e:
         pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
-    if not bool(pipe.fwd.two_stage):
-        pytest.skip("case is single-stage: there is no stage-1 result to split out")
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
     # the same three probe particles smoke_retrieval uses: u0 and u0 +- du
     u0 = jnp.asarray(np.linspace(-0.35, 0.4, pipe.n_dim))
@@ -52,15 +52,38 @@ def smoke():
     return pipe, jnp.stack([u0, u0 + du, u0 - du])
 
 
+def _single_chain_vg(pipe, U):
+    """(L, G, Y) with the cold two-stage chemistry differentiated as ONE chain:
+    each chemistry direction's tangent runs through stage 1 and on into stage 2
+    inside the same jvp; then the pipeline's RT vjp, chained to u-space."""
+    fwd = pipe.fwd
+    Theta = jax.vmap(pipe.theta_from_u)(U)
+    _, dTh = jax.vmap(lambda u: jax.jvp(pipe.theta_from_u, (u,), (jnp.ones_like(u),)))(U)
+    C_ = Theta[:, :pipe.n_chem_tp]
+
+    def chain(c):
+        Y, _cd = fwd.chem_solve_cold_diag_batch(c)
+        return jax.vmap(fwd.aux_from_y)(Y, c), Y
+
+    (AUX_l, Y_l), (DAUX_l, _dY) = jax.vmap(
+        lambda v: jax.jvp(chain, (C_,), (jnp.broadcast_to(v, C_.shape),))
+    )(jnp.eye(pipe.n_chem_tp, dtype=pipe.dtype))
+    AUX = jax.tree_util.tree_map(lambda x: x[0], AUX_l)
+    DAUX = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
+    L, g, _bad = jax.vmap(pipe._rt_val_grad)((AUX, DAUX, Theta))
+    return L, g * dTh, Y_l[0]
+
+
 def test_stage_split_matches_single_chain(smoke):
     pipe, U = smoke
     Y0, refs0 = P._blank_state(pipe, int(U.shape[0]))
-    legacy = jax.jit(pipe._make_batch_eval("cold", True, split_stage1=False))
     L_new, G_new, Y_new, _r, n_bad, _s = jax.jit(pipe.batch_eval_cold_vg)(
         U, Y0, refs0)
-    L_ref, G_ref, Y_ref, _rr, _nb, _sr = legacy(U, Y0, refs0)
+    L_ref, G_ref, Y_ref = jax.jit(lambda U_: _single_chain_vg(pipe, U_))(U)
 
     assert int(n_bad) == 0
+    # certified probe draws, or the comparison below is between two rejections
+    assert np.all(np.asarray(L_new) > P.REJECT_BELOW)
 
     Y_new, Y_ref = np.asarray(Y_new), np.asarray(Y_ref)
     if not np.array_equal(Y_new, Y_ref):
@@ -79,4 +102,5 @@ def test_stage_split_matches_single_chain(smoke):
     # bug it exists to catch (the repo's staged-vs-block gate is 1e-5).
     G_new, G_ref = np.asarray(G_new), np.asarray(G_ref)
     dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), 1e-300))
-    assert dg < 1e-8, f"split-vs-legacy gradient disagrees at {dg:.3e}"
+    print(f"split-vs-single-chain max|dG|/max|G| = {dg:.3e}")
+    assert dg < 1e-8, f"split-vs-single-chain gradient disagrees at {dg:.3e}"
