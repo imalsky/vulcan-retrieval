@@ -4,9 +4,15 @@ Same case, preset, overrides and observations as run_smc; a different sampler.
 Every likelihood call goes through the pipeline's batched chemistry + RT on the
 lane queue at ``cfg.cold_lanes`` with the SMC init's rejection rule: a
 non-finite forward, a T-P draw outside the window, a count_max-exhausted solve
-or a stall-certified exit gets log L = -inf. The evidence is therefore the
-ZERO-FILLED box evidence, the quantity an SMC run reports as ``logZ_box`` --
-not its ``logZ`` (pipeline.evidence_report).
+or a stall-certified exit gets log L = -inf. The evidence is therefore a
+ZERO-FILLED box evidence, the kind of quantity an SMC run reports as
+``logZ_box`` -- not its ``logZ`` (pipeline.evidence_report) -- but not the
+identical one. nautilus gates each draw on the PRIMAL solve's certificate
+only; SMC gates on the certificate of the jvp'd program, and its init also
+culls primal survivors that fail that phase-2 re-certification (SMC's
+``logZ_box`` carries the cull as f_c2). There is no phase-2 cull here, so the
+two box evidences agree only when the phase-2 flip rate is negligible: report
+SMC's f_c2 next to any comparison.
 
 Warm starts (default; NAUTILUS_WARM=0 turns them off): every certified column
 becomes an anchor, keyed by its chemistry + T-P coordinates in the unit cube,
@@ -20,9 +26,9 @@ warm against 14/16 cold in that screen). With warm starts the likelihood and
 the rejection set depend on the evaluation order, so the posterior and
 evidence are approximate and the evidence is NOT an SMC run's logZ_box (the
 maintainer's choice, for ~3-5x fewer steps); use NAUTILUS_WARM=0 for an
-evidence claim. NAUTILUS_WARM=0 is the cold map on the lane queue, the same
-map class as an SMC run's (a draw's column depends on its batch at the
-convergence scale).
+evidence claim. NAUTILUS_WARM=0 is the cold primal map on the lane queue (a
+draw's column depends on its batch at the convergence scale); its evidence
+compares with SMC's only as stated above.
 
 Anchors are written inside the likelihood call, before nautilus checkpoints
 the batch: a job killed in between resumes by redrawing that batch, which then
@@ -314,7 +320,8 @@ def main() -> None:
                          + ("; APPROXIMATE: warm starts move the likelihood and which draws "
                             "are rejected, so this is not an SMC logZ_box (NAUTILUS_WARM=0 "
                             "for an evidence claim)" if warm
-                            else "; compare with an SMC run's logZ_box"),
+                            else "; compares with an SMC run's logZ_box only "
+                                 "when that run's f_c2 (phase-2 cull) is near 1"),
         "medians": {n: float(np.median(theta_eq[:, i])) for i, n in enumerate(pipe.names)},
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
