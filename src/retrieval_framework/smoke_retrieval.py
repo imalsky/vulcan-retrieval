@@ -43,6 +43,25 @@ from retrieval_framework import pipeline as P
 import jax
 import jax.numpy as jnp
 
+# Gates; the measurements behind each: notes §1.8.
+BLOCK_NAIVE_MAX = 1e-7     # block vs naive gradient, max|dg| / max|g|
+# FD check: relative agreement, or absolute agreement against the dominant
+# gradient component in weak directions. 5% is what the correlated-k path
+# needs (ckd.overlap's resort-rebin has dense kinks, so AD is the a.e.
+# derivative and a central difference averages across them): not a bug and
+# not a gate to tighten (CLAUDE.md "Opacity: correlated-k", notes §1.9).
+FD_REL_TOL = 5e-2
+FD_ABS_FRAC = 1e-4
+STAGED_DVAL_MAX = 1e-6     # staged vs block at cold_lanes == 0, relative (floor 1)
+STAGED_DGRAD_MAX = 1e-5    # staged vs block at cold_lanes == 0, max|dg| / max|g|
+LIVENESS_MIN = 1e-3        # |dL/dlnZ| and |dL/dc_o| must exceed this
+
+
+def _fd_check(ad, fd, gmax):
+    """(rel, ok) for one AD-vs-central-FD component under the FD gate."""
+    rel = abs(ad - fd) / max(abs(fd), 1e-12)
+    return rel, (rel < FD_REL_TOL) or (abs(ad - fd) < FD_ABS_FRAC * gmax)
+
 
 def main() -> int:
     t_all = time.time()
@@ -90,7 +109,7 @@ def main() -> int:
     rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, 1e-300))
     rel_cw = float(np.max(np.abs(gb - gn)
                           / np.maximum(np.abs(gn), 1e-12 * scale_g + 1e-30)))
-    ok_bn = bool(rel_bn < 1e-7) and ok_val
+    ok_bn = bool(rel_bn < BLOCK_NAIVE_MAX) and ok_val
     print(f"[smoke] block-vs-naive max|d| / max|g| = {rel_bn:.2e} "
           f"(componentwise {rel_cw:.2e})  -> {'OK' if ok_bn else 'FAIL'}", flush=True)
     for i, nm in enumerate(pipe.names):
@@ -108,15 +127,7 @@ def main() -> int:
         Lm = float(pipe.log_likelihood_u(u0 - jnp.asarray(e)))
         fd = (Lp - Lm) / (2 * h)
         ad = gb[i]
-        rel = abs(ad - fd) / max(abs(fd), 1e-12)
-        # weak directions: absolute agreement relative to the dominant gradient scale.
-        # 5e-2 is also what the correlated-k path needs: ckd.overlap's resort-rebin
-        # is continuous but its derivative has dense kinks, so AD returns the
-        # almost-everywhere derivative while a central difference averages across
-        # them. Measured ~1.5e-2 in temperature (h-independent from 10 K to 0.1 K)
-        # and 1e-9 in an order-preserving all-species scaling. Not a bug, and not a
-        # gate to tighten -- see CLAUDE.md, "Opacity: correlated-k".
-        ok_i = (rel < 5e-2) or (abs(ad - fd) < 1e-4 * gmax)
+        rel, ok_i = _fd_check(ad, fd, gmax)
         ok_fd &= ok_i
         print(f"    {pipe.names[i]:12s} ad={ad:+12.5e}  fd={fd:+12.5e}  rel={rel:.2e} "
               f"[{time.time()-t0:.0f}s]  {'OK' if ok_i else 'FAIL'}", flush=True)
@@ -135,8 +146,8 @@ def main() -> int:
             f"max|dG|/max(max|G|,1) < {DLOGL_MAX_PASS}" if queued else
             "cold_lanes=0: same runner cadence class, but the block reference is "
             "the SCALAR runner, so the tight pair is empirical on these probe "
-            "draws: gate dval < 1e-6 (relative, floor 1) and dgrad < 1e-5 "
-            "(norm-relative)")
+            f"draws: gate dval < {STAGED_DVAL_MAX:g} (relative, floor 1) and dgrad < "
+            f"{STAGED_DGRAD_MAX:g} (norm-relative)")
     print(f"[smoke] staged-vs-block regime -- {rule}", flush=True)
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
     U_test = jnp.stack([u0, u0 + du, u0 - du])
@@ -159,7 +170,7 @@ def main() -> int:
             ok_r = ((dv_abs < DLOGL_MAX_PASS)
                     and (dgmax / max(gmax, 1.0) < DLOGL_MAX_PASS))
         else:
-            ok_r = (dv < 1e-6) and (dg < 1e-5)
+            ok_r = (dv < STAGED_DVAL_MAX) and (dg < STAGED_DGRAD_MAX)
         ok_staged &= ok_r
         print(f"[smoke] staged-vs-block row {r}: dval={dv:.2e} dgrad={dg:.2e} "
               f"(|dlogL|={dv_abs:.2e}) {'OK' if ok_r else 'FAIL'}", flush=True)
@@ -204,8 +215,7 @@ def main() -> int:
         Lm = float(move_l(U1 - jnp.asarray(E), Y_w, refs_w)[0][0])
         fd = (Lp - Lm) / (2 * h)
         ad = g_warm[i]
-        rel = abs(ad - fd) / max(abs(fd), 1e-12)
-        ok_i = (rel < 5e-2) or (abs(ad - fd) < 1e-4 * gmax_w)
+        rel, ok_i = _fd_check(ad, fd, gmax_w)
         ok_warm &= ok_i
         print(f"    warm {pipe.names[i]:12s} ad={ad:+12.5e}  fd={fd:+12.5e}  rel={rel:.2e} "
               f"{'OK' if ok_i else 'FAIL'}", flush=True)
@@ -219,7 +229,7 @@ def main() -> int:
     for nm in ("lnZ", "c_o"):
         if nm in pipe.names:
             gi = abs(gb[pipe.names.index(nm)])
-            alive = gi > 1e-3
+            alive = gi > LIVENESS_MIN
             ok_live &= alive
             print(f"[smoke] liveness {nm:4s}: |dL/d{nm}|={gi:.3e}  "
                   f"{'OK' if alive else 'FAIL (inventory response dead)'}",
