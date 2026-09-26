@@ -23,7 +23,7 @@ SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", -8.0, 8.0, float(M[i]), "chem")
          for i in range(3)]
 
 
-def _dying_make_mutation(pipe_, n_mcmc):
+def _dying_make_mutation(_pipe, n_mcmc):
     """A mutation kernel that dies before its first sweep (a stage-0 death)."""
     def mutate(*a, **k):
         raise RuntimeError("simulated stage-0 death")
