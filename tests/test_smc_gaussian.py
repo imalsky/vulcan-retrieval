@@ -12,6 +12,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from conftest import stub_pipeline  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
@@ -30,19 +31,9 @@ def _dying_make_mutation(pipe_, n_mcmc):
 
 
 def _stub_pipe(cfg):
-    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)
     m = jnp.asarray(M)
     s = jnp.asarray(S)
-
-    def log_likelihood_u(u):
-        th = theta_from_u(u)
-        return -0.5 * jnp.sum(((th - m) / s) ** 2)
-
-    return P.Pipeline(
-        cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
-        theta_from_u=theta_from_u, log_prior_u=log_prior_u, sample_prior_u=sample_prior_u,
-        log_likelihood_u=log_likelihood_u, loglik_fwd=log_likelihood_u,
-    )
+    return stub_pipeline(cfg, SPECS, lambda th: -0.5 * jnp.sum(((th - m) / s) ** 2))
 
 
 def test_smc_recovers_gaussian_posterior(tmp_path):
@@ -94,26 +85,19 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
     sd = np.array([0.40, 0.60, 0.25])
     corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
     sig = corr * np.outer(sd, sd)
-    lo, hi = -8.0, 8.0
-    specs = [ParamSpec(f"p{i}", f"p{i}", "uniform", lo, hi, float(M[i]), "chem")
-             for i in range(3)]
+    lo, hi = SPECS[0].lo, SPECS[0].hi
     lnz_exact = (0.5 * 3 * math.log(2 * math.pi)
                  + 0.5 * float(np.linalg.slogdet(sig)[1]) - 3 * math.log(hi - lo))
-
-    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(specs, jnp.float64)
     sigi, mu = jnp.asarray(np.linalg.inv(sig)), jnp.asarray(M)
 
-    def loglik(u):
-        d = theta_from_u(u) - mu
+    def loglik(th):
+        d = th - mu
         return -0.5 * (d @ sigi @ d)
 
     cfg = C.Config(smc_num_particles=384, smc_num_mcmc_steps=n_sweeps, smc_max_steps=60,
                    smc_target_ess_frac=0.6, num_samples=384, num_chains=1,
                    smc_mcmc_kernel=kernel)
-    pipe = P.Pipeline(cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
-                      theta_from_u=theta_from_u, log_prior_u=log_prior_u,
-                      sample_prior_u=sample_prior_u,
-                      log_likelihood_u=loglik, loglik_fwd=loglik)
+    pipe = stub_pipeline(cfg, SPECS, loglik)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(100), progress=False)
     assert res["reached_beta1"]
 

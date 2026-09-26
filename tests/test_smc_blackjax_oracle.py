@@ -34,6 +34,7 @@ import jax  # noqa: E402
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from conftest import stub_pipeline  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
@@ -53,17 +54,10 @@ def _loglik_theta(th):
 
 
 def _repo_lnz(seed):
-    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)
     cfg = C.Config(smc_num_particles=N_PART, smc_num_mcmc_steps=N_MCMC,
                    smc_max_steps=60, smc_target_ess_frac=ESS_FRAC,
                    num_samples=N_PART, num_chains=1)
-    pipe = P.Pipeline(
-        cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=3,
-        theta_from_u=theta_from_u, log_prior_u=log_prior_u,
-        sample_prior_u=sample_prior_u,
-        log_likelihood_u=lambda u: _loglik_theta(theta_from_u(u)),
-        loglik_fwd=lambda u: _loglik_theta(theta_from_u(u)),
-    )
+    pipe = stub_pipeline(cfg, SPECS, _loglik_theta)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(seed), progress=False)
     assert res["reached_beta1"]
     return float(res["logZ"])

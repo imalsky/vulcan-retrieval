@@ -5,8 +5,9 @@ non-editable install (pip install . or a wheel) shadows the checkout, so the sui
 would silently test stale code. Fail collection loudly instead (same convention as
 VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 
-Also the one real smoke pipeline the two rejection-gate files share (built once
-per session, per xdist worker).
+Also the shared pipeline builders: a chemistry-free stub for the SMC-core tests
+and the real smoke pipeline (the session fixture the two rejection-gate files
+share is built once per session, per xdist worker).
 """
 import dataclasses
 import os
@@ -31,13 +32,26 @@ CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays fi
 CAPPED_WARM_CMAX = 5    # well below the cold cap, so the warm cap is what binds
 
 
-@pytest.fixture(scope="session")
-def capped_smoke_pipe():
-    """The REAL smoke pipeline (chemistry + RT, offline) at count_max=50 and
-    warm_count_max=5, in WARM chem mode, observations set to zeros/ones. No
-    solve can certify at these caps. test_cold_reject reads its cold
-    evaluators (chem-mode independent), test_warm_reject its warm ones.
-    Skips only when the stack or its data is absent."""
+def stub_pipeline(cfg, specs, loglik_theta):
+    """A chemistry-free Pipeline on the box prior ``specs`` with log-likelihood
+    ``loglik_theta(theta)``: the SMC core runs through its real code path
+    without the forward stack."""
+    import jax.numpy as jnp
+    import numpy as np
+
+    from retrieval_framework import pipeline as P
+    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(specs, jnp.float64)
+    return P.Pipeline(
+        cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=len(specs),
+        theta_from_u=theta_from_u, log_prior_u=log_prior_u,
+        sample_prior_u=sample_prior_u,
+        log_likelihood_u=lambda u: loglik_theta(theta_from_u(u)))
+
+
+def build_smoke_pipe(**overrides):
+    """The REAL smoke pipeline (chemistry + RT, offline) with Config fields
+    ``overrides`` replaced and observations set to zeros/ones. Skips only when
+    the stack or its data is absent."""
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
     import jax
@@ -52,13 +66,20 @@ def capped_smoke_pipe():
         cfg, preset = R.make_config(RUN_DIR)
         if preset != "smoke":
             pytest.skip(f"preset resolved to {preset!r}, not smoke")
-        cfg = dataclasses.replace(cfg, count_max=CAPPED_COLD_CMAX,
-                                  warm_count_max=CAPPED_WARM_CMAX,
-                                  smc_chem_mode="warm")
-        pipe = P.build_pipeline(cfg)
+        pipe = P.build_pipeline(dataclasses.replace(cfg, **overrides))
     # Skip ONLY on a missing-data or missing-dependency environment; a broader
     # handler reports a real forward-model break as a green skip.
     except (FileNotFoundError, OSError, ImportError) as e:
         pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
     return pipe
+
+
+@pytest.fixture(scope="session")
+def capped_smoke_pipe():
+    """The smoke pipeline at count_max=50 and warm_count_max=5, in WARM chem
+    mode. No solve can certify at these caps. test_cold_reject reads its cold
+    evaluators (chem-mode independent), test_warm_reject its warm ones."""
+    return build_smoke_pipe(count_max=CAPPED_COLD_CMAX,
+                            warm_count_max=CAPPED_WARM_CMAX,
+                            smc_chem_mode="warm")

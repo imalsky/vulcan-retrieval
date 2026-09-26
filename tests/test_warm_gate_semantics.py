@@ -22,6 +22,8 @@ from retrieval_framework.validate_warm import (
     GRAD_REL_FAIL, GRAD_ZEROED_FRAC_FAIL, compare_grad,
 )
 
+ROUNDOFF_REL = 1e-15   # identical inputs: the relative discrepancy is round-off only
+
 
 def _grads(n=10, d=4, seed=0):
     rng = np.random.default_rng(seed)
@@ -32,9 +34,15 @@ def _grads(n=10, d=4, seed=0):
 def test_identical_gradients_pass_the_gate():
     Gw, Gc = _grads()
     gs = compare_grad(Gw, Gc, np.ones(len(Gc), bool))
+    assert gs["rel_max"] < ROUNDOFF_REL and gs["cos_min"] == pytest.approx(1.0)
     assert gs["rel_max_gated"] < GRAD_REL_FAIL
     assert gs["n_zeroed"] == 0
     assert gs["n_gated"] == len(Gc)
+    # a uniformly 10%-longer cold gradient: rel = 0.1/1.1 (symmetric
+    # denominator), direction identical
+    s2 = compare_grad(Gw, 1.1 * Gc, np.ones(len(Gc), bool))
+    assert s2["rel_max"] == pytest.approx(0.1 / 1.1)
+    assert s2["cos_min"] == pytest.approx(1.0)
 
 
 def test_zeroed_row_reads_rel_one_but_is_excluded_from_the_gate():
@@ -43,8 +51,8 @@ def test_zeroed_row_reads_rel_one_but_is_excluded_from_the_gate():
     Gw[3] = 0.0                                   # badgrad zero-drift handling
     gs = compare_grad(Gw, Gc, np.ones(len(Gc), bool))
 
-    # the raw statistic sees it, and reads exactly 1.0 ...
-    assert gs["rel"][3] == pytest.approx(1.0)
+    # the raw statistic sees it, and reads exactly 1.0 (cosine undefined) ...
+    assert gs["rel"][3] == pytest.approx(1.0) and np.isnan(gs["cos"][3])
     assert gs["rel_max"] == pytest.approx(1.0)
     # ... which would have failed a naive gate at 0.1
     assert gs["rel_max"] >= GRAD_REL_FAIL
@@ -60,6 +68,7 @@ def test_a_real_disagreement_still_fails_the_gate():
     Gw, Gc = _grads()
     Gw[5] = -Gc[5]                                # sign-flipped drift
     gs = compare_grad(Gw, Gc, np.ones(len(Gc), bool))
+    assert gs["rel"][5] == pytest.approx(2.0) and gs["cos"][5] == pytest.approx(-1.0)
     assert gs["n_zeroed"] == 0
     assert gs["rel_max_gated"] >= GRAD_REL_FAIL
     assert gs["cos_min"] < 0.0                    # drift points the wrong way
@@ -92,4 +101,5 @@ def test_excluded_particles_are_ignored_entirely():
     ok[1] = False                                  # cold-nonconverged particle
     gs = compare_grad(Gw, Gc, ok)
     assert gs["n_ok"] == len(Gc) - 1
-    assert gs["rel_max_gated"] < GRAD_REL_FAIL
+    assert np.isnan(gs["rel"][1]) and np.isnan(gs["cos"][1])
+    assert gs["rel_max"] < ROUNDOFF_REL

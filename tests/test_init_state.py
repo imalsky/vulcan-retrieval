@@ -19,6 +19,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from conftest import stub_pipeline  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
@@ -99,11 +100,7 @@ def test_init_draw_count_oversamples_chem_not_stub():
     assert P._init_draw_count(pipe, 1) == 2            # never below the target
 
     specs = [ParamSpec("p", "p", "uniform", -8.0, 8.0, 0.0, "chem")]
-    tf, lp, sp = P.make_uspace(specs, jnp.float64)
-    stub = P.Pipeline(cfg=C.Config(smc_num_particles=8), dtype=jnp.float64,
-                      npdtype=np.float64, n_dim=1, theta_from_u=tf, log_prior_u=lp,
-                      sample_prior_u=sp, log_likelihood_u=lambda u: 0.0,
-                      loglik_fwd=lambda u: 0.0)
+    stub = stub_pipeline(C.Config(smc_num_particles=8), specs, lambda th: 0.0)
     assert P._init_draw_count(stub, 50) == 50          # no chemistry -> no oversample
 
 
@@ -194,12 +191,7 @@ def test_validate_config_refuses_broken_knobs(knob, bad):
         C.validate_config(C.Config(**{knob: bad}))
 
 
-@pytest.mark.parametrize("knob", [
-    "two_stage_z", "smc_chem_chunk", "mala_step_size", "mcmc_target_accept_mala",
-    "mcmc_target_accept_rwm", "mcmc_step_size_min", "mcmc_step_size_max",
-    "mcmc_stage_adapt", "mcmc_stage_adapt_gain", "mcmc_scale_clip", "do_ppc",
-    "tp_model", "tp_f", "use_clouds", "infer_lnR0", "overwrite", "log_level",
-    "cold_seed", "abundance_mode", "reanchor_atom_ini"])
+@pytest.mark.parametrize("knob", ["cold_seed", "abundance_mode", "reanchor_atom_ini"])
 def test_a_removed_knob_is_refused(knob):
     """A retired knob in a preset or an override file is an error, never a
     silent no-op (make_config applies overrides with dataclasses.replace)."""

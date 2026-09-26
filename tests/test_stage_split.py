@@ -11,9 +11,6 @@ pipeline's own RT stage.
 Builds the REAL smoke pipeline (chemistry + RT, fully offline) at the case's own
 caps, so it costs minutes and SKIPS cleanly when the stack or its data is absent.
 """
-import os
-from pathlib import Path
-
 import numpy as np
 import pytest
 import jax
@@ -21,31 +18,16 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from conftest import build_smoke_pipe  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
-from retrieval_framework import run_smc as R  # noqa: E402
 
 # SLOW: builds a real chemistry + RT pipeline (see CLAUDE.md, "Layout / entry points").
 pytestmark = pytest.mark.slow
 
-RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
-
-
 @pytest.fixture(scope="module")
 def smoke():
     """(pipe, U) from the real smoke pipeline at its own caps; built once."""
-    if not RUN_DIR.exists():
-        pytest.skip(f"run dir {RUN_DIR} not present")
-    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")
-    try:
-        cfg, preset = R.make_config(RUN_DIR)
-        if preset != "smoke":
-            pytest.skip(f"preset resolved to {preset!r}, not smoke")
-        pipe = P.build_pipeline(cfg)
-    # Skip ONLY on a missing-data or missing-dependency environment; a broader
-    # handler reports a real forward-model break as a green skip.
-    except (FileNotFoundError, OSError, ImportError) as e:
-        pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
-    pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
+    pipe = build_smoke_pipe()
     # the same three probe particles smoke_retrieval uses: u0 and u0 +- du
     u0 = jnp.asarray(np.linspace(-0.35, 0.4, pipe.n_dim))
     du = jnp.asarray(np.linspace(-0.06, 0.09, pipe.n_dim))
