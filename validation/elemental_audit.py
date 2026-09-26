@@ -24,12 +24,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 
 # PYTHONSAFEPATH strips the script's own directory from sys.path in some
 # sandboxes, so be explicit rather than relying on it.
-sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact  # noqa: E402
 
 # gates: the projection is exact up to the fixed-iteration
