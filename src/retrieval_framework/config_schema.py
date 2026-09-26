@@ -423,7 +423,7 @@ _FULL_RATE_FP64 = ("6.0", "7.0", "8.0", "9.0", "10.0")
 def hardware_profile() -> dict:
     """The hardware this process runs on, read from JAX and the OS: backend,
     device kind, host cores and RAM, and on a CUDA device its SM count,
-    compute capability, memory and FP64 class. run_smc prints it and records
+    compute capability, memory and FP64 class. run_smc logs it and records
     it in config.json."""
     import jax
 

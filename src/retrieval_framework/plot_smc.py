@@ -135,7 +135,7 @@ def main() -> None:
         fig.savefig(plots / "corner.png", dpi=DPI, bbox_inches="tight")
         plt.close(fig)
         print("[plot] corner.png")
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # pragma: no cover - one failed plot must not stop the rest
         print(f"[plot] corner failed: {e}")
 
     # ---------------- spectrum fit ----------------

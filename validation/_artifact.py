@@ -209,5 +209,5 @@ def emit(name: str, title: str, measurements: list[dict], status: str,
     }
     jpath = out_dir / f"{name}.json"
     jpath.write_text(json.dumps(payload, indent=2, default=str) + "\n")
-    logger.info(f"\n[artifact] wrote {jpath}")
+    logger.info(f"[artifact] wrote {jpath}")
     return jpath

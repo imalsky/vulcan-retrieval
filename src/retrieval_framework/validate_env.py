@@ -202,7 +202,8 @@ def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
     data = root / "vulcan-retrieval" / "data"
     cm24 = data / "cm24_wasp39b"
     if not any(cm24.glob("*.csv")):
-        _err(f"missing real spectrum CSVs in {cm24} (one-time data seed).")
+        _err(f"missing real spectrum CSVs in {cm24}: they are tracked in git; restore them "
+             "with `git checkout -- data/cm24_wasp39b`.")
     else:
         _ok(f"real spectrum CSVs present in {cm24}")
     # The engine's own path accessors, so the check reads the files the engine
