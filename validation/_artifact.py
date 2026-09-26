@@ -81,7 +81,7 @@ def _versions() -> dict:
     for mod in ("jax", "jaxlib", "numpy", "scipy", "exojax"):
         try:
             out[mod] = __import__(mod).__version__
-        except Exception:
+        except (ImportError, AttributeError):
             out[mod] = None
     return out
 
@@ -93,7 +93,7 @@ def _devices() -> list[str]:
         return []
     try:
         return [f"{d.platform}:{d.device_kind}" for d in jax.devices()]
-    except Exception:
+    except RuntimeError:
         return []
 
 
@@ -118,6 +118,7 @@ def _data_identity() -> dict:
         out["data_root_resolved"] = str(_fwd_paths.data_root())
         tree_dirs = {"opacity_cache": Path(_fwd_paths.opacity_cache_dir()),
                      "exomolop": Path(_fwd_paths.exomolop_dir())}
+    # broad: a provenance collector records any failure instead of raising
     except Exception as exc:                                # pragma: no cover
         out["engine_data_error"] = f"{type(exc).__name__}: {exc}"
         return out
@@ -165,7 +166,7 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
     }
     try:
         prov["user"] = getpass.getuser()
-    except Exception:
+    except (KeyError, OSError):
         prov["user"] = None
     if resolved_config is not None:
         blob = json.dumps(resolved_config, sort_keys=True, default=str)

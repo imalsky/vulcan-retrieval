@@ -1768,7 +1768,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         try:
             from tqdm.auto import tqdm
             it = tqdm(it, desc="adaptive tempered SMC", leave=True)
-        except Exception:
+        except ImportError:
             pass
 
     for i in it:

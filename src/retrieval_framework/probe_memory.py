@@ -27,7 +27,7 @@ from retrieval_framework import run_smc as R
 def _gib(x) -> str:
     try:
         return f"{float(x) / 2**30:9.2f}"
-    except Exception:
+    except (TypeError, ValueError):
         return "      ???"
 
 
@@ -68,6 +68,7 @@ def main() -> int:
                     f"{_gib(getattr(ma, 'argument_size_in_bytes', -1))} "
                     f"{_gib(getattr(ma, 'output_size_in_bytes', -1))} "
                     f"[{time.time()-t1:.0f}s compile]")
+        # broad: any compile failure becomes an ERROR row and a nonzero exit
         except Exception as e:
             line = f"{name:<44s} ERROR {type(e).__name__}: {e}"
         print(line, flush=True)

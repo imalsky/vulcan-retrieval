@@ -44,6 +44,7 @@ import platform
 import subprocess
 import sys
 import time
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import numpy as np
@@ -147,7 +148,7 @@ def _git_raw(repo: Path, *args: str):
     try:
         r = subprocess.run(["git", "-C", str(repo), *args],
                            capture_output=True, text=True, timeout=15)
-    except Exception:
+    except (OSError, subprocess.TimeoutExpired):
         return _GIT_FAILED
     return r.stdout.strip() if r.returncode == 0 else _GIT_FAILED
 
@@ -209,13 +210,12 @@ def _versions() -> dict:
     for mod in ("jax", "jaxlib", "numpy", "scipy", "exojax"):
         try:
             out[mod] = __import__(mod).__version__
-        except Exception:
+        except (ImportError, AttributeError):
             out[mod] = None
     for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval"):
         try:
-            from importlib.metadata import version
             out[dist] = version(dist)
-        except Exception:
+        except PackageNotFoundError:
             out[dist] = None
     return out
 
@@ -230,7 +230,7 @@ def _scalar(z, key, default=None):
     v = z[key]
     try:
         return v.item()
-    except Exception:
+    except (AttributeError, ValueError):
         return v
 
 
@@ -275,7 +275,7 @@ def _cia_identity() -> dict:
         from vulcan_forward import paths as _fwd_paths
         files = dict(zip(CIA_TABLES, (_fwd_paths.cia_h2h2_file(),
                                       _fwd_paths.cia_h2he_file())))
-    except Exception:                                       # pragma: no cover
+    except (ImportError, RuntimeError):                     # pragma: no cover
         files = {}
     out = {}
     for name in CIA_TABLES:
@@ -303,6 +303,7 @@ def science_data_identity(molecules) -> dict:
         for m in molecules:
             f = _exo.table_path(m)
             opa[str(m)] = _sha256(f) if f.is_file() else None
+    # broad: a provenance collector records any failure instead of raising
     except Exception as exc:                                # pragma: no cover
         opa["error"] = f"{type(exc).__name__}: {exc}"
     return {"opacity_sha256": opa,
@@ -354,6 +355,7 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
             if npath and npath.is_file():
                 ident["network_file"] = {"path": str(npath),
                                          "sha256": _sha256(npath)}
+    # broad: a provenance collector records any failure instead of raising
     except Exception as exc:                                # pragma: no cover
         ident["network_file_error"] = str(exc)
     return ident
@@ -475,7 +477,7 @@ def archived_manifest_digest(out_dir: Path) -> str | None:
     try:
         return hashlib.sha256(
             _canonical(json.loads(p.read_text())).encode()).hexdigest()
-    except Exception as exc:                                # pragma: no cover
+    except (OSError, ValueError) as exc:                    # pragma: no cover
         return f"unreadable: {type(exc).__name__}: {exc}"
 
 
@@ -490,7 +492,7 @@ def _validation_artifacts() -> dict:
             continue
         try:
             d = json.loads(p.read_text())
-        except Exception as exc:                            # pragma: no cover
+        except (OSError, ValueError) as exc:                # pragma: no cover
             out[name] = {"error": str(exc)}
             continue
         # the grid the artifact was measured on (top_pressure_ladder nests the
@@ -519,7 +521,7 @@ def _mala_reversibility_artifact(out_dir: Path) -> dict | None:
         return None
     try:
         payload = json.loads(path.read_text())
-    except Exception as exc:                                # pragma: no cover
+    except (OSError, ValueError) as exc:                    # pragma: no cover
         return {"status": "ERROR", "error": str(exc), "sha256": _sha256(path)}
     checkpoint = out_dir / "smc_checkpoint.npz"
     current_sha = _sha256(checkpoint) if checkpoint.is_file() else None
@@ -1282,6 +1284,7 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
         import jax.numpy as jnp
 
         from retrieval_framework import pipeline as P
+    # broad: validate() fails the certificate on any replay that did not run
     except Exception as exc:
         return {"ran": False, "reason": f"import failed: {exc}"}
 
@@ -1326,6 +1329,7 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
                        "(swapped k-table? stale editable install? different "
                        "network file?)"),
         }
+    # broad: validate() fails the certificate on any replay that did not run
     except Exception as exc:
         return {"ran": False, "reason": f"replay error: {exc!r}"}
 
