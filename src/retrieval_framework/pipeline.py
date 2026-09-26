@@ -88,8 +88,8 @@ class EvalStats(NamedTuple):
 
     n_capped     () int32   valid proposals cut off at the cap (MH-rejected)
     n_stalled    () int32   valid, under-cap proposals whose exit was NOT the
-                            runner's canonical certification (stall fallback /
-                            budget exit) -- MH rejections, not AD pathologies
+                            runner's canonical certification (e.g. a budget
+                            exit) -- MH rejections, not AD pathologies
     acc          (N,) int32 accept_count at exit
     longdy       (N,) f64   runner's convergence metric at exit
     conv_ok      (N,) bool  canonical-certification bit at exit
@@ -101,6 +101,8 @@ class EvalStats(NamedTuple):
     """
 
     n_capped: jnp.ndarray
+    # Named for the removed stall fallback; it counts uncertified under-cap
+    # exits. The name stays: checkpoints and outputs carry it.
     n_stalled: jnp.ndarray
     acc: jnp.ndarray
     longdy: jnp.ndarray
@@ -130,8 +132,8 @@ def _proposal_converged(cd_vec):
     tangents -- is trusted; kept in one place so the predicate is swappable.
 
     Current predicate: the runner's own canonical two-branch certification
-    recomputed at the exit state (``conv_normal``). A stall-fallback or budget
-    exit reads False even when longdy sits under yconv_min -- the class an
+    recomputed at the exit state (``conv_normal``). A budget exit reads
+    False even when longdy sits under yconv_min -- the class an
     accept-count-only gate lets through (primal certified, tangent never
     settled -> non-finite gradient). Measurement: notes.md §2.4.
     """
@@ -625,7 +627,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
         if want_grad:
             # A warm MALA proposal can continue into a non-convergent corner -- or
-            # stall-certify short of a real steady state -- and return a
+            # exit uncertified short of a real steady state -- and return a
             # finite-but-unsettled column whose jvp/RT-vjp tangents are garbage. The
             # cold init rejects such draws BEFORE its gradient pass (phase-1 diag);
             # here the warm solve's ConvDiag rides the jvp'd chain itself -- every
@@ -792,7 +794,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 #   capped  -- the warm solve hit the cap (warm_count_max on the
                 #              mutation path, count_max on init phase 2);
                 #   stalled -- under the cap, but the exit was NOT the runner's
-                #              canonical certification (stall fallback / budget
+                #              canonical certification (e.g. a budget
                 #              exit): the primal may look settled while the jvp
                 #              tangent -- which relaxes through the same
                 #              while_loop with no stopping criterion of its own --
@@ -1225,8 +1227,8 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
 
     Phase 1 -- cold LIKELIHOOD-ONLY pass over ALL len(U) draws at full width (one primal
     lane per particle, no tangents). Draws whose chemistry doesn't converge within
-    count_max, whose exit is not the runner's canonical certification (stall
-    fallback / budget exit -- not a certified steady state), or whose forward is
+    count_max, whose exit is not the runner's canonical certification (e.g. a
+    budget exit -- not a certified steady state), or whose forward is
     non-finite are REJECTED, and the first ``target_n`` survivors are kept. This is the best-practice handling of forward-model
     failures: petitRADTRANS / nested-sampling codes discard an invalid forward with -inf
     likelihood, and Herbst-Schorfheide SMC oversamples so the culled cloud still carries
@@ -1246,7 +1248,7 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     whose certification flips between the primal-only and the jvp'd program.
     Phase 2 runs UNCAPPED (batch_eval_init_vg, cold count_max, not
     warm_count_max): typical survivors re-certify in a few hundred
-    steps, but a marginal one (slow phase-1 converger / stall-fallback certification)
+    steps, but a marginal one (a slow phase-1 converger)
     can need more than the mutation cap, and it is a proven-convergent particle, not a
     disposable proposal (the cap gated 5 of 96 healthy survivors).
 
@@ -1410,8 +1412,8 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         cmax2 = int(pipe.fwd.chem.count_max)
         # a dead phase-2 particle is a re-certification failure (cull + backfill)
         # if its solve exhausted count_max OR exited without the canonical
-        # certification (stall fallback -- an unsettled state the eval gate now
-        # floors to -1e30); anything else dead is a genuine RT/AD blow-up (raise)
+        # certification (an unsettled state the eval gate floors to -1e30);
+        # anything else dead is a genuine RT/AD blow-up (raise)
         recert_fail = dead2 & ((acc2_np >= cmax2) | ~conv2_np)
         rt_dead = dead2 & ~recert_fail
     else:
@@ -1426,9 +1428,9 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
         logger.warning(
             f"init 2/2: culled {int(recert_fail.sum())}/{n_phase2} marginal "
             f"survivor(s) that certified in phase 1 but cannot RE-certify within "
-            f"count_max -- or only stall-certify (indices "
+            f"count_max -- or exit uncertified (indices "
             f"{np.flatnonzero(recert_fail).tolist()}); "
-            "backfilling from spares. A repeatable class (oscillating/stall-fallback "
+            "backfilling from spares. A repeatable class (oscillating "
             "columns), part of the operational prior -- report alongside the phase-1 "
             "reject fraction.")
     alive2 = np.flatnonzero(~dead2)
@@ -1473,8 +1475,8 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
 
     ``n_warm_capped`` totals the proposals rejected specifically because their warm
     solve hit warm_count_max; ``n_stalled`` those rejected because the solve exited
-    under the cap WITHOUT the runner's canonical certification (stall fallback /
-    budget exit -- an unsettled state whose tangents cannot be trusted). Both are
+    under the cap WITHOUT the runner's canonical certification (e.g. a budget
+    exit -- an unsettled state whose tangents cannot be trusted). Both are
     MH rejections (subsets of "rejected"), surfaced per sweep and per stage because
     a frequently-binding, possibly state-dependent rejection class is a
     detailed-balance risk the MH correction does not see -- keep both ~0 in the
@@ -1485,8 +1487,8 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     forward-jvp(chem)+vjp(RT) gradient; ``"rwm"`` is a primal-only
     full-covariance random-walk Metropolis on the SAME Cholesky preconditioner
     and the same step, whose symmetric proposal makes log q cancel. Sweeps run
-    as a HOST LOOP over a single-sweep jitted kernel (RNG identical to the former
-    lax.scan: the same pre-split keys, consumed in the same order). The host
+    as a HOST LOOP over a single-sweep jitted kernel, one pre-split key per
+    sweep. The host
     loop is what makes the run debuggable: each sweep's health is checked as it
     completes -- every badgrad event dumps its per-particle forensics (indices,
     theta, accept counts, longdy, chemistry-vs-RT attribution) to
@@ -1641,7 +1643,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     def mutate(key, U, Y, refs, L, G, beta, step, scale,
                where: str = "mutation", dump_dir=None, dump_tag: str = "",
                cost=None):
-        keys = jax.random.split(key, n_mcmc)   # same stream the lax.scan consumed
+        keys = jax.random.split(key, n_mcmc)   # one key per sweep
         n_prop = int(U.shape[0])
         if cost is None:
             cost = jnp.zeros((n_prop,), jnp.int32)

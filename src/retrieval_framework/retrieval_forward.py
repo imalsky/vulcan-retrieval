@@ -177,8 +177,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         a throwaway relaxation at baseline composition; its step count says nothing
         about whether the draw's own column converged, and gating on it rejected
         certified columns (notes §1.1, the nine-draw study). accept_count alone is
-        NOT a convergence test (stall fallback / hybrid phase-flip exits sit well
-        under the cap); gate on ``conv_normal`` too.
+        NOT a convergence test (runtime-budget, hybrid post-flip and non-finite
+        exits can sit well under the cap); gate on ``conv_normal`` too.
 
         The scalar cold solve (native_depth_aux: the scalar likelihood and the
         block gradient); the batched evaluators run its twin
@@ -267,7 +267,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     def chem_solve_warm_diag(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """chem_solve_warm + the warm solve's ``ConvDiag``, so the SMC mutation can
         detect a warm proposal that is NOT actually at a certified steady state --
-        warm_count_max-exhausted OR stall-fallback/budget-terminated (conv_normal
+        warm_count_max-exhausted OR ended without certifying (conv_normal
         False) -- and reject it before trusting its jvp; the warm-side analogue of
         chem_solve_cold_diag. Without it a non-steady warm proposal would feed
         the tangent/RT-vjp lanes (garbage or non-finite gradient: proposals
@@ -288,7 +288,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         count_max. For the INIT gradient pass only (pipeline._init_state phase 2):
         its inputs are phase-1 SURVIVORS re-certifying from their own converged
         columns -- proven-convergent states, not disposable proposals -- and a
-        marginal survivor (slow phase-1 converger, stall-fallback certification) can
+        marginal survivor (a slow phase-1 converger) can
         legitimately need more than warm_count_max accepted steps to re-certify.
         Capping them mislabels healthy particles as blown forwards (5 of 96
         survivors gated at 1500 -> a spurious 'RT/AD problem' RuntimeError)."""
