@@ -87,7 +87,8 @@ def main() -> int:
     L0 = float(pipe.log_likelihood_u(u0))
     t_primal = time.time() - t0
     print(f"[smoke] L(u0) = {L0:.4f}   ({t_primal:.1f} s primal, includes compile)", flush=True)
-    assert np.isfinite(L0), "likelihood non-finite at the prior center"
+    if not np.isfinite(L0):
+        raise RuntimeError("likelihood non-finite at the prior center")
 
     # ---- block vs naive gradient (must agree to fp precision) ----
     t0 = time.time()
@@ -149,7 +150,8 @@ def main() -> int:
     Y0, refs0 = P._blank_state(pipe, int(U_test.shape[0]))
     Lb, Gb2, Yb, refsb, nbad_b, _stats = jax.jit(pipe.batch_eval_cold_vg)(
         U_test, Y0, refs0)
-    assert int(nbad_b) == 0, "staged cold eval flagged gradient pathologies"
+    if int(nbad_b) != 0:
+        raise RuntimeError("staged cold eval flagged gradient pathologies")
     Lb = np.asarray(Lb); Gb2 = np.asarray(Gb2)
     ok_staged = True
     for r in range(int(U_test.shape[0])):
@@ -171,7 +173,10 @@ def main() -> int:
               f"(|dlogL|={dv_abs:.2e}) {'OK' if ok_r else 'FAIL'}", flush=True)
     print(f"[smoke] staged batched evaluator check done [{time.time()-t0:.0f}s] "
           f"-> {'OK' if ok_staged else 'FAIL'}", flush=True)
-    assert np.all(np.isfinite(Yb)) and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)
+    if not (np.all(np.isfinite(Yb))
+            and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)):
+        raise RuntimeError("staged cold eval returned a non-finite carried column "
+                           "or a mis-shaped refs array")
 
     # ---- warm-continuation gradient (the mutation-kernel map) vs FD of the same map ----
     # Warm-continuation gradient against FD of the same warm map (fixed carried
@@ -184,14 +189,16 @@ def main() -> int:
     move_vg = jax.jit(pipe._make_batch_eval("warm", True))
     move_l = jax.jit(pipe._make_batch_eval("warm", False))
     L1, G1, _, _, nbad_w, statsw = move_vg(U1, Y_w, refs_w)
-    assert int(nbad_w) == 0, "warm move eval flagged gradient pathologies"
+    if int(nbad_w) != 0:
+        raise RuntimeError("warm move eval flagged gradient pathologies")
     print(f"[smoke] warm move eval: L={np.asarray(L1).tolist()} accept="
           f"{np.asarray(statsw.acc).tolist()} conv_ok="
           f"{np.asarray(statsw.conv_ok).astype(int).tolist()} refs="
           f"{np.asarray(refs_w).round(4).tolist()}", flush=True)
-    assert float(np.asarray(L1)[0]) > P.REJECT_BELOW, (
-        "the warm proposal was REJECTED (capped / uncertified): the FD check "
-        "below would compare two rejections")
+    if not float(np.asarray(L1)[0]) > P.REJECT_BELOW:
+        raise RuntimeError(
+            "the warm proposal was REJECTED (capped / uncertified): the FD check "
+            "below would compare two rejections")
     g_warm = np.asarray(G1[0])
     ok_warm = True
     gmax_w = np.max(np.abs(g_warm))

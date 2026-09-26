@@ -583,7 +583,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         identically zero there); tests/test_stage_split.py pins it against the
         single-chain jvp of the same map."""
         warm = (mode == "warm")
-        assert not (diag and (warm or want_grad)), "diag is cold+no-grad only"
+        if diag and (warm or want_grad):
+            raise ValueError("diag is cold+no-grad only")
         # Cap of the convergence gate. mutation_cap=True (MALA proposals): warm
         # solves are capped at warm_count_max and an unconverged proposal is
         # rejected there. mutation_cap=False (init phase 2): survivors re-certify
