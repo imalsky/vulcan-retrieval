@@ -297,15 +297,16 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
              f"step={step_f:.3g} width=[{float(scale_w.min()):.3g}, {float(scale_w.max()):.3g}]")
     # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
+    k_compile, k_steady = jax.random.split(key)   # one key per pass
     t0 = time.perf_counter()
-    out = mutate(key, U, Y, refs, L, G, beta, step, scale,
+    out = mutate(k_compile, U, Y, refs, L, G, beta, step, scale,
                  where="calibration mutation (compile pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
     U2, Y2, refs2, L2, G2 = out[:5]
     _cuda_profiler(True)
     t0 = time.perf_counter()
-    out = mutate(key, U2, Y2, refs2, L2, G2, beta, step, scale,
+    out = mutate(k_steady, U2, Y2, refs2, L2, G2, beta, step, scale,
                  where="calibration mutation (steady-state pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut = time.perf_counter() - t0
