@@ -3,9 +3,8 @@
 #PBS -q gpu_long
 #PBS -W group_list=s2458
 #PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
-# 24 h wall: the gpu preset's SMC governor is 20 h, leaving ~4 h for build/compile,
-# init, PPC and plots (2026-07-09 sweep-cost rework projects the ladder well inside it;
-# an over-budget run still checkpoints every stage -- resume with RESUME=1).
+# 24 h wall: the gpu preset's governor is 20 h, leaving ~4 h for build, init, PPC
+# and plots; an over-budget run checkpoints every stage (resume with RESUME=1).
 #PBS -l walltime=24:00:00
 #PBS -j oe
 #PBS -m abe
@@ -15,14 +14,11 @@
 # NASA NAS GH200 node: adaptive-tempered SMC with a forward-mode-jvp MALA kernel
 # against the real Carter & May (2024) NIRISS+G395H spectrum.
 #
-# Same node/env pattern as the working SWAMPE WASP-43b retrieval PBS and the
-# VULCAN-JAX GPU benchmark PBS (shared conda env pyt2_8_gh, GH200 XLA knobs from
-# the validated benchmark). This job is READ-ONLY on the environment: all pip
-# installs live in the one-time tools/bootstrap_nas_env.pbs; the preflight here
-# only VALIDATES (retrieval_framework.validate_env) and hard-fails with a
-# pointer at the bootstrap if anything is missing or stale.
+# This job is read-only on the environment: installs live in the one-time
+# tools/bootstrap_nas_env.pbs; the preflight only validates
+# (retrieval_framework.validate_env) and fails with a pointer to the bootstrap.
 #
-# Expected layout on /nobackup (git pull for code, scp/cp for data -- see CLAUDE.md):
+# Expected layout on /nobackup (git pull for code, scp for data; notes §5):
 #   ${PROJECT_ROOT}/VULCAN-JAX/                                  (chemistry repo)
 #   ${PROJECT_ROOT}/vulcan-forward/                               (forward engine)
 #   ${PROJECT_ROOT}/vulcan-retrieval/                             (THIS repo; data/ at its root)
@@ -74,10 +70,8 @@
 #                           arm) -- the lane-count arm of the bench, same draws and
 #                           seed. A fixed-step bench runs lockstep on its own.
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
-#   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default: the WHILE
-#                           capture took the primal from ~255 to 132 ms per accepted step, jobs
-#                           78991 (XLA's default set) vs 78995. Opt-OUT, so an A/B is one -v
-#                           variable; the commas stay inside the script
+#   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default (notes
+#                           §1.4); the commas stay inside the script
 #   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
 #                           one-command minimum graph size: the arm that shows whether
 #                           the whole step loop is captured as one graph
@@ -105,9 +99,8 @@
 # warm-vs-cold validation (validate_warm; PASS gate max|dlogL| < 0.1; the verdict lands
 # in the log + validate_warm.npz) and mala_reversibility; the cold default needs neither.
 #
-# XLA A/B experiments (launch-overhead reduction; the GPU sits at ~300-390 W of 700 W,
-# so the solver is launch-bound and per-step overhead, not arithmetic, is the speed lever).
-# Judge purely by t_mutation_sweep_s in timing.json vs a baseline calibration:
+# XLA A/B experiments (launch-overhead reduction). Judge purely by
+# t_mutation_sweep_s in timing.json against a baseline calibration:
 #   qsub -v CALIBRATE_ONLY=1,XLA_FLAGS='--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=4' run_nas_w39b.pbs
 #   qsub -v CALIBRATE_ONLY=1,XLA_CMDBUF=0 run_nas_w39b.pbs
 #
@@ -173,8 +166,7 @@ source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-pyt2_8_gh}"
 
 # Per-interpreter userbase (matches tools/bootstrap_nas_env.pbs): a shared
-# userbase's bin/ is not python-version-scoped, which is how the pre-2026-07
-# flow got a dangling console script and a crashed in-job uninstall.
+# userbase's bin/ is not python-version-scoped.
 PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
 unset PYTHONNOUSERSITE
@@ -187,11 +179,9 @@ export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
-# Command buffers are the production default (they cut the primal loop from
-# ~255 to 132 ms per accepted step); XLA_CMDBUF=0 turns them OFF for an A/B or a
-# per-kernel profile. Off needs the EMPTY value: with no flag at all XLA keeps its
-# own default set (checked on jaxlib 0.6.2: the optimized HLO still carries
-# command_buffer computations), so the old "drop the flag" 0 was never off.
+# Command buffers are ON by default (notes §1.4); XLA_CMDBUF=0 turns them off for
+# an A/B or a per-kernel profile. Off needs the EMPTY value: with no flag at all
+# XLA keeps its own default set (register #93).
 # The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
 # while loop becomes one graph only if every op in its body is capturable.
 # A function, so a chain arm that sets its own XLA_CMDBUF gets its own flags.
@@ -209,8 +199,7 @@ case "${SAMPLER:-smc}" in
   *) echo "ERROR: SAMPLER=${SAMPLER}: expected smc or nautilus"; exit 1 ;;
 esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-# Production solver: `ffi`, the CUDA block-Thomas kernel (the maintainer's
-# decision, notes 2.13). Pinned here, not left to config_schema.choose_solver(),
+# Production solver: `ffi`, the CUDA block-Thomas kernel (notes §2.13). Pinned here, not left to config_schema.choose_solver(),
 # so the job script states the choice and a missing kernel build fails loudly
 # instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
 # still overrides it.
@@ -222,11 +211,8 @@ if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
 fi
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-# NO installs here (the pre-2026-07 per-job pip installs raced across concurrent
-# jobs on the shared userbase and crashed mid-uninstall). Validate-only: every
-# check the old inline preflight ran (packages editable + current, jax on GPU,
-# data seeds, exogibbs) now lives in retrieval_framework.validate_env, shared
-# verbatim with the bootstrap and runnable by hand on a front end.
+# No installs here: validate only (retrieval_framework.validate_env, shared with
+# the bootstrap and runnable by hand on a front end).
 python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu || {
   echo "ERROR: environment validation failed (or retrieval_framework is not installed)."
   echo "       One-time fix, then resubmit:"
@@ -261,11 +247,9 @@ echo "GPU monitor: ${GPU_MON_LOG}"
 #                whole thing is minutes-to-an-hour. Keep the traced job short (e.g.
 #                calibrate at a modest CALIBRATE_COUNT_MAX_PROBE) or the .nsys-rep gets
 #                large; the chemistry loop launches many tiny kernels.
-# Either mode: NSYS_GPU_METRICS=1 adds the GPU-metrics timeline, a sampled SM/DRAM
-#   hardware-counter timeline (the compact "how busy is the GPU, really" view that
-#   answers the 100%-util-at-200 W launch-bound question directly). The flag spelling
-#   changed across nsys versions (hardcoded below for the NAS nsys). The always-on
-#   nvidia-smi monitor above already logs util/power/clocks every 60 s for the whole run.
+# Either mode: NSYS_GPU_METRICS=1 adds the sampled SM/DRAM GPU-metrics timeline
+#   (flag spelling hardcoded below for the NAS nsys). The always-on nvidia-smi
+#   monitor above already logs util/power/clocks every 60 s for the whole run.
 # Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
 # or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
 # build_nsys_wrap reads NSYS* from the CURRENT environment, so a chain arm can rebuild
@@ -289,16 +273,10 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
     NSYS_WRAP+=(--cuda-graph-trace=node)
   fi
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
-    # 1 kHz keeps the metrics stream small enough for a multi-hour full trace (10 kHz
-    # over hours would be GBs); 10 ms resolution is plenty to see busy-vs-idle.
-    # nsys >= 2024.5 spells this --gpu-metrics-devices (plural); the deprecated
-    # singular is ignored with a warning and --gpu-metrics-frequency then aborts
-    # nsys before Python launches (jobs 66201/66202). A help-text probe for the
-    # plural spelling ALSO chose wrong on the compute nodes (66284-66289: the
-    # node's `nsys profile --help` does not print the switch), so the spelling is
-    # hardcoded for the NAS nsys (2025.6.3; documented values: GPU ID, all, none).
-    # NSYS_GPU_METRICS_DEV overrides the device list at qsub time if a future nsys
-    # changes syntax again -- no git round-trip needed.
+    # 1 kHz keeps the metrics stream small over hours; 10 ms resolution shows
+    # busy-vs-idle. nsys >= 2024.5 spells it --gpu-metrics-devices, hardcoded for
+    # the NAS nsys 2025.6.3 (the deprecated singular aborts nsys; notes §5).
+    # NSYS_GPU_METRICS_DEV overrides the device list (GPU ID, all, none).
     NSYS_WRAP+=(--gpu-metrics-devices="${NSYS_GPU_METRICS_DEV:-all}"
                 --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
     echo "nsys gpu-metrics: devices=${NSYS_GPU_METRICS_DEV:-all} frequency=${NSYS_GPU_METRICS_HZ:-1000} Hz"
@@ -308,7 +286,7 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   elif [ "${NSYS_CAPTURE_API:-0}" = "1" ]; then
     # The app marks the range: run_smc --calibrate calls cudaProfilerStart/Stop
     # around its timed mutation sweep, so the capture lands on the sweep wherever
-    # it falls (job 78814's fixed 3600 s window landed inside a 62-min init).
+    # it falls.
     NSYS_WRAP+=(--capture-range=cudaProfilerApi --capture-range-end=stop --kill=none)
     echo "nsys: CAPTURE-RANGE cudaProfilerApi (the timed sweep; gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
   else
@@ -334,7 +312,7 @@ if [ "${NCU:-0}" = "1" ]; then
   [ "${NSYS_CAPTURE_API:-0}" = "1" ] || { echo "ERROR: NCU=1 needs NSYS_CAPTURE_API=1 (the profiler range)"; exit 1; }
   [ "${NSYS:-0}${NSYS_FULL:-0}" = "00" ] || { echo "ERROR: NCU=1 and NSYS=1 exclude each other"; exit 1; }
   # By path, never `module load cuda` here: the module's ptxas breaks JAX's
-  # own CUDA compile (job 78981; 80074 died the same way at validate_env).
+  # own CUDA compile (notes §5).
   NCU_BIN="${NCU_BIN:-$(command -v ncu 2>/dev/null || ls /usr/local/cuda/bin/ncu /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)}"
   [ -x "${NCU_BIN:-}" ] || { echo "ERROR: NCU=1 but no ncu found (set NCU_BIN=<path>)"; exit 1; }
   export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
@@ -375,7 +353,7 @@ echo "preset=${SMC_RETRIEVAL_PRESET} overrides=${SMC_RETRIEVAL_OVERRIDES:-<none>
 cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
 
 # A windowed nsys (--kill=none) returns when its window closes and leaves the
-# app running (job 78814); every path that may run under the wrapper waits for
+# app running; every path that may run under the wrapper waits for
 # this tree's python before the next step touches the GPU or the job exits.
 wait_for_tree_python() {
   while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|run_nautilus|probe_memory|calibrate_count_max) ${SMC_DIR}" >/dev/null; do
@@ -398,7 +376,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # its CALIBRATE_N_DRAWS (default: the preset's particle count, the GPU's SM
   # count), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
   # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN_JAX_SOLVER passes through.
-  # Every override file is checked BEFORE the first arm runs (a missing one cost job 78648).
+  # Every override file is checked BEFORE the first arm runs.
   # Arms run in order, each in a subshell that exports its own env; the chain file is read
   # on fd 3 so an arm's process cannot swallow the remaining lines.
   CHAIN_FILE="${SMC_DIR}/${CALIBRATE_CHAIN}"
@@ -438,9 +416,8 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
         ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
       wrc=$?
-      # job 78814: a windowed nsys returned rc=0 after 3694 s with no timing.json
-      # and the orphan's 90% GPU preallocation made every later arm die at
-      # gpusolverDnCreate; wait before the next arm touches the GPU.
+      # A windowed nsys can return while the app still holds the GPU; wait
+      # before the next arm touches it (notes §5).
       wait_for_tree_python
       if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
         echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1
@@ -511,16 +488,9 @@ else
     echo "========== PLOTS =========="
     python -u -m retrieval_framework.plot_smc "${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}}" \
       || echo "WARNING: plotting failed (posterior npz files are still on disk)."
-    # Post-run validation. Since 2026-08-03 smc_chem_mode DEFAULTS TO COLD, so
-    # these apply to a run that explicitly opted into warm continuation -- and
-    # for such a run they are MANDATORY, not advisory.
-    #
-    # THE VALIDATION RESULT NOW PROPAGATES INTO THE JOB EXIT STATUS. Previously
-    # a FAIL or a crash printed a message and the job still exited 0, so a run
-    # whose warm bias was above the gate, or never measured at all, ended with a
-    # successful-looking production conclusion. The posterior stays on disk
-    # either way (it is forensically useful); what changes is that the job no
-    # longer claims success for it.
+    # Post-run validation: mandatory for a warm run (cold, the default, needs
+    # neither). A FAIL or a crash sets a nonzero job exit status; the posterior
+    # stays on disk.
     chem_mode="$(python -c 'import os,sys; sys.path.insert(0,"'"${SMC_DIR}"'");
 from retrieval_framework.run_smc import make_config
 from pathlib import Path
@@ -551,8 +521,8 @@ print(make_config(Path("'"${SMC_DIR}"'"))[0].smc_chem_mode)' 2>/dev/null || echo
 
       # MALA reversibility probe -- also mandatory for a warm run. The warm
       # kernel's forward and reverse proposal densities are evaluated at
-      # DIFFERENT carried states, which is exactly the failure mode the
-      # likelihood gate above cannot see.
+      # different carried states, a failure mode the likelihood gate above
+      # cannot see.
       mr_rc=0
       python -u validation/mala_reversibility.py "${SMC_DIR}" || mr_rc=$?
       if [ "${mr_rc}" -eq 0 ]; then
