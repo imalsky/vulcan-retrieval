@@ -14,6 +14,7 @@ Run on the GH200 via:  qsub -l walltime=02:00:00 -v PROBE_MEMORY=1 run_nas_w39b.
 """
 from __future__ import annotations
 
+import logging
 import math
 import sys
 import time
@@ -32,6 +33,7 @@ def _gib(x) -> str:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
     cfg, _preset = R.make_config(run_dir)
     from retrieval_framework import pipeline as P

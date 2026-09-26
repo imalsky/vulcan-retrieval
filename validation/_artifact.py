@@ -13,6 +13,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import logging
 import os
 import platform
 import socket
@@ -25,6 +26,7 @@ import numpy as np
 # one copy of the git/hash primitives, owned by the certificate module
 from retrieval_framework.certificate import _repo_states, science_data_identity
 
+logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -207,5 +209,5 @@ def emit(name: str, title: str, measurements: list[dict], status: str,
     }
     jpath = out_dir / f"{name}.json"
     jpath.write_text(json.dumps(payload, indent=2, default=str) + "\n")
-    print(f"\n[artifact] wrote {jpath}")
+    logger.info(f"\n[artifact] wrote {jpath}")
     return jpath

@@ -29,6 +29,7 @@ re-converges the VULCAN column).
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -67,6 +68,7 @@ def _fd_check(ad, fd, gmax):
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     t_all = time.time()
     run_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")

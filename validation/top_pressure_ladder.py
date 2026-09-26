@@ -12,6 +12,7 @@ PASS gate: |Delta binned depth| < 5 ppm.
 """
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from pathlib import Path
@@ -46,6 +47,7 @@ def binned_depth(chem, rt, constants, interp_map):
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     from vulcan_forward import constants
     from vulcan_forward import interp_map
     # import order matters: vulcan_chem before exojax

@@ -23,6 +23,7 @@ Exit code 0 = all gates pass.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -42,6 +43,7 @@ GATE_REPAIR_POSITIVE = 0.0
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30, help="prior draws to audit")
     ap.add_argument("--converge", action="store_true",

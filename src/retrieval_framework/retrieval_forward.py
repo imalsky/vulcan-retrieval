@@ -94,8 +94,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     if bool(cfg.run_inference) and not bool(
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
-            "the chemistry warm-up solve failed its check (see the [chem] "
-            "WARNING above for end_case/termination_reason/longdy). Its column is not "
+            "the chemistry warm-up solve failed its check (see the UserWarning from "
+            "vulcan_forward.vulcan_chem above, '[chem] the warm-up solve did not end "
+            "certified ...', for end_case/termination_reason/longdy). Its column is not "
             "used and every draw certifies itself, but this configuration may "
             "not converge: check the T-P window / Kzz / dt_max settings.")
 

@@ -35,6 +35,7 @@ vulcan-retrieval checkouts (same meaning as $VULCAN_PROJECT_ROOT).
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import sys
 from pathlib import Path
@@ -268,6 +269,7 @@ def _check_nautilus() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path)
     parser.add_argument("--require-gpu", action="store_true")

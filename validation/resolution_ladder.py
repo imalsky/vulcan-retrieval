@@ -27,6 +27,7 @@ and its Jacobian direction by < 1% where the depth response is significant.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -58,6 +59,7 @@ def production_pair(rungs, production_value, knob="art_nlayer"):
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("--jacobian", action="store_true",
                     help="also compare d(binned)/dlnZ per rung (jvp; expensive)")

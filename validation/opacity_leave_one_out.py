@@ -28,6 +28,7 @@ reads optimistic.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from dataclasses import replace
@@ -108,6 +109,7 @@ def deltas_at(pipe, theta, candidates):
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("--molecules", nargs="*", default=None,
                     help="candidates to test (default: every installed table "

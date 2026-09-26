@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -37,6 +38,7 @@ PAIRS = 24          # nearest-neighbor pairs probed
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", nargs="?", default="runs/w39b_smc_retrieval")
     args = ap.parse_args()
