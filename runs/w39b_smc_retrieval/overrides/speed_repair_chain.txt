@@ -1,18 +1,4 @@
-# Bench round for VULCAN-JAX 0.16.7 (the stage repair's tridiagonal solve as a
-# batched pivoting sweep in JAX instead of a cuSPARSE call per system): the
-# gradient step against 79534 / 79666 and the primal against 79666, on one GPU
-# in one job (CALIBRATE_CHAIN=overrides/speed_repair_chain.txt).
-# name|bench||out dir|KEY=VAL;KEY=VAL   (no overrides file: the gpu preset as shipped)
-# Each arm is the fixed-step bench (K=150 accepted steps per stage); the width is
-# set on every arm (the bench's default is the preset's particle count, the GPU's
-# SM count since 0.24.0, so the 144-lane reference arms say 144). Reference ms
-# per accepted step: gradient ffi 401.8 at 144 (79666) and 343 at 132 (79534),
-# fast 412.8 at 144 (79534); primal ffi 91.9 at 144 and 54.4 at 132 (79666). The profiled arm runs with the command buffers OFF
-# (register #91: node-level graph tracing under them crashed both 79666 arms), so
-# its kernel table gives shares and per-kernel ms, not a comparable step time:
-#   nsys stats -r cuda_gpu_kern_sum logs/nsys_<job>_prof_g_ffi_n132.nsys-rep
-# Read from it: no cuSPARSE gtsv2 kernels; the count and total ms per iteration of
-# the small XLA fusions the unrolled sweeps add. Gradient arms first.
+# name|bench||out dir|KEY=VAL;KEY=VAL   (fixed-step bench arms, no overrides file; see CALIBRATE_CHAIN in run_nas_w39b.pbs)
 g_ffi_n132|bench||data/rep_g_ffi_n132|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1;CALIBRATE_N_DRAWS=132
 g_ffi|bench||data/rep_g_ffi|VULCAN_JAX_SOLVER=ffi;XLA_CMDBUF=1;CALIBRATE_GRAD=1;CALIBRATE_N_DRAWS=144
 g_fast|bench||data/rep_g_fast|VULCAN_JAX_SOLVER=fast;XLA_CMDBUF=1;CALIBRATE_GRAD=1;CALIBRATE_N_DRAWS=144
