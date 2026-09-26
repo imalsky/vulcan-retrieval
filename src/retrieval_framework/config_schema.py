@@ -189,7 +189,7 @@ class Config:
     #      value, ignored for real-data runs -----------------------------------
     # lnZ is relative to the case's BASELINE composition (the vulcan cfg's <X>_H,
     # 10x solar here): lnZ=0 -> that baseline.
-    prior_lnZ: Tuple[float, float] = (-2.303, 2.303)     # ~1x .. ~100x solar
+    prior_lnZ: Tuple[float, float] = (-math.log(10.0), math.log(10.0))   # 1x-100x solar
     truth_lnZ: float = 0.0
     # dln(C/O) about the fixed-O baseline. UPPER BOUND CONSTRAINT: the fixed-O knob's
     # O-only compensation b_z must stay positive, which on the 10x-solar W39b column

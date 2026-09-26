@@ -52,7 +52,7 @@ _W39B = dict(
     #
     #   metallicity : Tsai nominal 10x solar (tested 5-20x); ERS ~10x solar. Kept WIDE
     #                 1-100x solar (lnZ rel. to the 10x baseline) so the data localizes it.
-    prior_lnZ=(-2.303, 2.303),          # 1x .. 100x solar
+    prior_lnZ=(-math.log(10.0), math.log(10.0)),   # 1x-100x solar
     #   C/O : Rustamkulov+2023 upper limit 0.7 (at 10x); Tsai tested 0.25-0.75; solar 0.55.
     #         dln(C/O) about the 0.549 baseline -> C/O in [0.10, 0.70]. Upper edge 0.24
     #         stays below the fixed-O b_z positivity bound (~0.566) too.
@@ -70,7 +70,7 @@ _W39B = dict(
     #         it slightly LOWERS the reject rate. Any residual out-of-window profile is
     #         REJECTED, not clipped (pipeline.tp_valid).
     prior_Tirr=(1100.0, 2200.0),        # K
-    prior_log10gamma=(-2.0, 0.301),     # gamma = kappa_v/kappa_th in [0.01, 2.0]
+    prior_log10gamma=(-2.0, math.log10(2.0)),      # gamma = kappa_v/kappa_th in [0.01, 2.0]
     # prior_log10kappa (IR opacity), prior_lnR0, cloud, and offset priors keep the
     # schema defaults (generic nuisances, not W39b-specific).
 )
