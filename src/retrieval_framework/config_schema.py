@@ -461,7 +461,9 @@ def hardware_profile() -> dict:
     dev = jax.devices()[0]
     prof = {"backend": jax.default_backend(), "device_kind": dev.device_kind,
             "n_devices": len(jax.devices()),
-            "host_cores": len(os.sched_getaffinity(0)),
+            # sched_getaffinity is Linux-only (absent on macOS)
+            "host_cores": (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
+                           else os.cpu_count()),
             "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE")
                                   * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
             "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
