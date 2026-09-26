@@ -1,16 +1,13 @@
 """Differentiable T-P profile built from ExoJax's own atmosphere built-ins.
 
-Per the retrieval design we use ExoJax's ``exojax.atm.atmprof`` profiles rather than
-rolling our own:
+Uses ExoJax's ``exojax.atm.atmprof`` profiles:
 
     atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f)
         the built-in Guillot (2010) irradiated analytic profile. ExoJax implements it
         with a plain ``jnp.exp`` (NOT the E2 exponential integral), so it is
         forward-mode-clean -- which matters because the same T(P) is pushed as a
-        forward-mode tangent through the VULCAN-JAX ``lax.while_loop``. (The Heng+14
-        exponential-integral pathology flagged in the atmosphere-differentiability
-        work lives in VULCAN's own ``build_atm``; we bypass it entirely by supplying
-        ``Tco`` directly.)
+        forward-mode tangent through the VULCAN-JAX ``lax.while_loop``. (VULCAN's
+        own ``build_atm`` is bypassed by supplying ``Tco`` directly.)
 
 ``build_tp_model(cfg)`` returns an object whose ``eval(tp_params, p_bar_grid)`` maps the
 *retrieved* T-P sub-vector + the fixed constants to a temperature array on ANY pressure

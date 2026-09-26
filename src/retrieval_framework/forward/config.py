@@ -22,11 +22,11 @@ from vulcan_forward import paths as _fwd_paths
 # (and, for HPC runs + manuscript figures, its siblings VULCAN-JAX/ and jax_paper/).
 # The explicit env var wins; otherwise the repo root is inferred from this file's
 # location inside an editable checkout. A bare site-packages install cannot infer
-# it and must set the env var -- checked loudly below, no silent fallbacks.
+# it and must set the env var (checked below).
 _env_root = os.environ.get("VULCAN_PROJECT_ROOT")
 if _env_root:
     PROJECT_ROOT = Path(_env_root).expanduser()
-    REPO_DIR = PROJECT_ROOT / "vulcan-retrieval"    # NAS clone dir name is load-bearing
+    REPO_DIR = PROJECT_ROOT / "vulcan-retrieval"    # the clone directory must have this name
 else:
     # this file lives at <repo>/src/retrieval_framework/forward/config.py,
     # so parents[3] is the repo root -- pinned to that tree layout.
@@ -42,7 +42,7 @@ if not (REPO_DIR / "data" / "cm24_wasp39b").is_dir():    # tracked marker, in ev
 DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 
 # Hand the shared engine this repo's data tree (exomolop/ + opacity_cache/,
-# exactly what data/ already holds), so the engine never infers
+# what data/ already holds), so the engine never infers
 # the location from its own __file__. It then owns every path INSIDE that tree:
 # ask paths.opacity_cache_dir / cia_h2h2_file / cia_h2he_file rather than
 # rebuilding them here, or the two copies drift and this one wins silently.
@@ -63,13 +63,11 @@ RSTAR_CM = 0.932 * R_SUN_CM
 # Run profile (the condensation test's SMOKE column)
 # Wavenumbers in cm^-1. wavelength(um) = 1e4 / nu.
 #
-# Two non-obvious requirements, both about keeping the forward-mode tangent valid:
-#   * Photochemistry must be ON (validated: jvp vs re-converged FD <0.1% at nz=150).
-#     NOT because the photo-off tangent is "under-relaxed/unstable": photo-off the
-#     forward model itself does not settle on a comparable state, so no method
-#     certifies there.
-#   * Let convergence happen naturally (default count_min/count_max). Do NOT pin a fixed
-#     step count -- forcing dt to dt_max drives the Ros2 step's forward tangent singular.
+# Two requirements for a valid forward-mode tangent:
+#   * Photochemistry ON (jvp vs re-converged FD < 0.1% at nz=150): photo-off, the
+#     forward model does not settle on a comparable state.
+#   * Default count_min/count_max: a pinned step count (dt forced to dt_max) drives
+#     the Ros2 step's forward tangent singular.
 SMOKE = {
     "use_photo": True,
     "nz": 40,                 # coarse column -> cheaper warm-up + jvps

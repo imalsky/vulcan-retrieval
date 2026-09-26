@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""calibrate_count_max.py -- measure the ACTUAL accept_count distribution of the SMC
-cold two-stage init across many independent prior draws, so count_max can be set from
-data instead of a guess.
+"""calibrate_count_max.py -- measure the accept_count distribution of the cold
+two-stage init over ``--n-draws`` draws from the production prior (same seed
+derivation as run_smc's calibrate), via ``pipeline.batch_eval_cold_l_diag``, so
+count_max is set from a percentile.
 
-Why this exists: a single baseline warm-up convergence (2667 steps) and
-a qualitative "typical ~5k" claim are not a percentile over the actual prior. This
-script draws ``--n-draws`` samples from the SAME prior the production run uses (same
-seed derivation as run_smc.py's calibrate()), runs the batched full-width cold
-two-stage solve via ``pipeline.batch_eval_cold_l_diag`` (the diagnostic evaluator
-for the count_max loud-failure check), and reports the empirical
-accept_count distribution -- so you can pick a count_max that actually covers a
-chosen fraction of the prior instead of guessing.
-
-IMPORTANT: this probes with ``--count-max-probe`` (default 20000), NOT the config's
+This probes with ``--count-max-probe`` (default 20000), NOT the config's
 own (possibly much lower) count_max -- otherwise every slow draw would just get
 truncated at the production cap and you'd never see how far past it they needed.
 Draws that still hit the PROBE cap are reported as right-censored (>= probe cap) --
@@ -32,7 +24,7 @@ Usage (mirrors run_smc.py's preset/override mechanism exactly)
         python -m retrieval_framework.calibrate_count_max runs/w39b_smc_retrieval \\
             --n-draws 200 --count-max-probe 20000
 
-Runs on the GH200 (real chemistry+RT build); not a local/CPU-friendly script.
+Needs the GPU build (real chemistry + RT); not for a CPU.
 """
 from __future__ import annotations
 
@@ -259,12 +251,10 @@ def main() -> None:
              f"{longdy_pct[2]:.3g}; stall-certified (not canonically certified) draws: "
              f"{int(np.sum(~conv_ok))}/{len(conv_ok)}")
 
-    # Exit element-budget drift (C23) per draw, with the exit model time t beside
-    # it ON PURPOSE: the molecular-diffusion boundary rows leak the column at a
-    # fixed rate (VULCAN-JAX notes P9, ~8e-18 /s for S), so a drift that grows
-    # linearly with t and only reaches the tolerance near t ~ 1e15 s is that known
-    # term, not geometry. Vetoes at long t with a constant drift/t = the boundary
-    # rows; a short-t, element-specific drift = geometry or a real leak.
+    # Exit element-budget drift (C23) per draw, with the exit time t: the
+    # molecular-diffusion boundary rows leak at a fixed rate (VULCAN-JAX notes
+    # §3.2 P9), so a constant drift/t at long t is that term; a short-t,
+    # element-specific drift is geometry or a real leak.
     drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
     atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
     t_exit = np.asarray(jax.device_get(cd.t), np.float64)
@@ -284,8 +274,8 @@ def main() -> None:
         log.warning(f"{n_censored}/{len(wa)} draw(s) still hadn't converged at the probe "
                      f"cap ({args.count_max_probe}) -- their true step count is unknown "
                      "(right-censored); rerun with a higher --count-max-probe for a clean "
-                     "read of the tail. Percentiles below TREAT them as exactly the probe "
-                     "cap, which UNDERSTATES the true value at high percentiles.")
+                     "read of the tail. Percentiles below count them at the probe "
+                     "cap (an underestimate of the tail).")
 
     qs = [50, 75, 90, 95, 99, 100]
     pct = {q: int(np.percentile(wa, q)) for q in qs}
@@ -306,13 +296,10 @@ def main() -> None:
                      f"(round up for margin; this sample has n={len(wa)} draws, so treat "
                      "single-draw percentile estimates as noisy)")
 
-    # What the production cold init would do at candidate caps. _init_state now REJECTS
-    # non-converged draws and OVERSAMPLES: it draws ceil(N*init_oversample) and keeps N
-    # healthy survivors, raising ONLY when the reject fraction leaves < N survivors, i.e.
-    # reject frac > 1 - 1/init_oversample. init_max_nonconverged_frac is a GATE:
-    # _init_state raises above it. A draw counts as non-converged at cap c when
-    # accept_count >= c (same
-    # convention as the censoring check above and _init_state's exhausted test).
+    # What the production cold init would do at candidate caps: it draws
+    # ceil(N*init_oversample), rejects draws with accept_count >= cap (the
+    # censoring convention above), and raises when fewer than N survive (reject
+    # frac > 1 - 1/init_oversample) or above init_max_nonconverged_frac.
     warn = float(cfg.init_max_nonconverged_frac)   # the gate, not a warning
     over = float(cfg.init_oversample)
     fail_frac = 1.0 - 1.0 / over    # reject frac above which oversampling can't fill N
@@ -375,9 +362,8 @@ def main() -> None:
         "conv_normal": conv_ok.tolist(), "longdy": longdy.tolist(),
         "budget_drift_max": drift.tolist(), "t_exit_s": t_exit.tolist(),
     }
-    # The lane count goes in the name: a multi-arm bench (cal_all / cal_l48 /
-    # cal_l16) runs several lane counts into ONE out_dir and would otherwise
-    # overwrite its own results.
+    # The lane count is in the file name, so a multi-arm bench sharing one out_dir
+    # does not overwrite itself.
     suffix = "" if int(args.seed_offset) == 0 else f"_seed{int(args.seed_offset)}"
     if int(cfg.cold_lanes) > 0:
         suffix += f"_lanes{int(cfg.cold_lanes)}"

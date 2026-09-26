@@ -4,8 +4,7 @@
 Jobs are READ-ONLY on the environment: all installs happen once in
 tools/bootstrap_nas_env.pbs (NAS) or a local editable install, and every PBS
 job runs this module first instead of pip. It aggregates ALL failures into one
-loud report (exit 1) that names the remedy, honoring the no-silent-fallbacks
-rule.
+report (exit 1) that names the remedy.
 
 Checks, in import-order-safe sequence (vulcan_jax / retrieval_framework BEFORE
 exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first):
@@ -181,17 +180,14 @@ def _check_exojax() -> None:
     if exojax.__version__ != EXOJAX_PIN:
         _err(
             f"exojax {exojax.__version__} != pinned {EXOJAX_PIN} (vulcan-forward). "
-            "Re-run the bootstrap; the pin is deliberate (see requirements-hpc.txt)."
+            "Re-run the bootstrap."
         )
     else:
         _ok(f"exojax {exojax.__version__}")
 
 
 def production_molecules(root: Path) -> tuple[str, ...]:
-    """The case's own molecule list. Never a copy of it: a hand-copied list is how
-    the validation ladders ended up certifying a different opacity model than
-    production ran (and how this preflight kept checking 8 tables for a 12-molecule
-    run)."""
+    """The case's own molecule list, read from case.py, never a copy."""
     import os
     from retrieval_framework import run_smc as _R
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
@@ -281,8 +277,8 @@ def main(argv: list[str] | None = None) -> int:
     if not (root / "vulcan-retrieval").is_dir() or not (root / "VULCAN-JAX").is_dir():
         _err(
             f"PROJECT_ROOT={root} must contain the vulcan-retrieval and "
-            "VULCAN-JAX checkouts (the VULCAN-JAX clone target name is "
-            "load-bearing; the GitHub repo is named jax-vulcan)."
+            "VULCAN-JAX checkouts (the clone directory must be named VULCAN-JAX; "
+            "the GitHub repo is jax-vulcan)."
         )
     else:
         _check_python()

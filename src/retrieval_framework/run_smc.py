@@ -7,7 +7,7 @@ tp_profile / retrieval_forward / pipeline); the planet lives in the case directo
 ``case.py`` (PRESETS dict of Config factories). This driver only: resolves the case +
 preset into a Config, sets up logging + output dir, builds the pipeline, loads real
 (or generates synthetic) observations, optionally calibrates timing, runs SMC, and
-writes the .npz bundles plot_smc.py reads. The layout deliberately mirrors the SWAMPE
+writes the .npz bundles plot_smc.py reads. The layout mirrors the SWAMPE
 MY_SWAMP/retrieval driver.
 
 Presets / overrides (env vars)
@@ -245,8 +245,7 @@ log = logging.getLogger("retrieval")
 def _cuda_profiler(on: bool) -> None:
     """cudaProfilerStart / cudaProfilerStop around the timed mutation sweep when
     NSYS_CAPTURE_API=1, so an ``nsys profile --capture-range=cudaProfilerApi``
-    wrapper records exactly that sweep. A fixed ``--delay`` window is blind to
-    where the sweep falls (a 3600 s window can land inside a 62-min init).
+    wrapper records that sweep; a fixed ``--delay`` window cannot target it.
     No-op unless the variable is set; a missing libcudart is logged."""
     if os.environ.get("NSYS_CAPTURE_API") != "1":
         return
@@ -285,8 +284,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
 
     Comparing the two kernels: ``t_state_init_s`` contains a FULL GRADIENT BATCH in
     BOTH arms -- init phase 2 runs the gradient evaluator whatever smc_mcmc_kernel
-    says, and that is deliberate (the checkpoint's grad_u and the cold certificate
-    come from it). Only ``t_mutation_sweep_s`` is the clean primal-vs-gradient
+    says (the checkpoint's grad_u and the cold certificate come from it). Only ``t_mutation_sweep_s`` is the clean primal-vs-gradient
     kernel comparison. Consequently the ``projected_hours_*`` fields for an rwm arm
     mix a gradient init with primal sweeps; difference the sweep times, not the
     projections. ``timing.json`` records the kernel, XLA_FLAGS, device kind, backend,
@@ -294,9 +292,8 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     solver-branch A/B can be attributed after the fact."""
     import jax.numpy as jnp
     N = int(cfg.smc_num_particles)
-    # Derive U exactly as run_smc_loop does, from the run's own seed, so the timing
-    # gate exercises the same prior corners the production init will hit (a PRNGKey(0)
-    # pilot cloud let a >16 h worst-corner init slip past calibration).
+    # Derive U as run_smc_loop does, from the run's own seed, so the timing covers
+    # the prior corners the production init will hit (notes §1.2).
     key = jax.random.PRNGKey(int(cfg.seed))
     # oversampled cold-init draw (rejected corners culled back to N healthy in _init_state)
     U = pipe.sample_prior_u(jax.random.fold_in(key, P._INIT_KEY),
@@ -310,15 +307,10 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
              f"| L range [{float(jnp.min(L)):.1f}, {float(jnp.max(L)):.1f}]")
 
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
-    # Stage-0 conditions, not an arbitrary proposal. Under MALA the drift term is
-    # step*scale^2*beta*G, and a prior-like cloud carries |L| (hence |G|) up to ~1e6 --
-    # a hard-coded (beta=0.5, step=MALA_STEP0, scale=1) benchmark launches
-    # proposals so far off the converged map that their tangents go non-finite, and
-    # _check_mutation_health aborts the calibration on an "AD pathology" the ladder's
-    # tiny adaptive first beta can never produce (8 bad grads per sweep at
-    # accept=0.00). The rwm kernel has no drift, so that rationale does not apply to
-    # it -- but the beta still comes from the ESS bisection either way, because the
-    # point is to reproduce run_smc_loop's stage 0 rather than a synthetic one.
+    # Benchmark at stage-0 conditions (ESS-bisected beta, resampled cloud, clamped
+    # step): an arbitrary large beta sends MALA proposals far off the converged map
+    # and their tangents go non-finite (register #10). rwm uses the same beta, to
+    # reproduce stage 0.
     L_np = np.asarray(jax.device_get(L), np.float64)
     dbeta = P._next_dbeta(L_np, 0.0, float(cfg.smc_target_ess_frac) * N)
     beta = jnp.asarray(dbeta, pipe.dtype)
@@ -384,10 +376,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     for k, v in proj.items():
         log.info(f"  {k:32s} {v}")
     budget = float(cfg.walltime_seconds)
-    # REFUSE, don't warn. A log line in a job whose next step is a 24 h
-    # production submit delivers the information after the budget is spent. Cold chemistry (the default) is
-    # ~10-30x more chemistry per sweep, which makes this the normal case to hit
-    # rather than an exotic one.
+    # Refuse, not warn: the projection must fail before a production submit.
     proj["fits_walltime_budget"] = (
         None if budget <= 0 else bool((CALIB_FIT_STAGES * per_stage) <= budget))
     (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
@@ -402,22 +391,14 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
             f"  governor budget      {budget / 3600.0:.2f} h\n"
             f"  stages per job       {proj['stages_per_job']}\n"
             f"  chem mode            {pipe.chem_mode}\n"
-            "A tempering ladder that cannot reach beta=1 inside the budget "
-            "produces no posterior, so this refuses rather than letting a "
-            "production job discover it after the fact.\n"
-            "Choose one:\n"
-            "  * chain jobs: submit with RESUME=1 and let the ladder continue "
-            "across several walls (the stage checkpoint makes this exact, and "
-            "the init-level checkpoint means a restart never re-pays the init) "
-            "-- this is the EXPECTED route for a cold production run;\n"
-            "  * cut sequential work: lower smc_num_mcmc_steps (the runner is "
-            "launch-bound, so batch WIDTH is nearly free and cutting particles "
-            "buys little wall time while costing statistics);\n"
-            "  * raise walltime_seconds if the queue allows a longer wall;\n"
-            "  * for exploration only, set smc_chem_mode='warm' and accept an "
-            "approximate, history-dependent target (every artifact is stamped "
-            "approximate_history_dependent_target and both post-run validators "
-            "become mandatory).\n"
+            "A ladder that cannot reach beta=1 in the budget produces no "
+            "posterior. Options:\n"
+            "  * chain jobs with RESUME=1 (the expected route for a cold "
+            "production run);\n"
+            "  * lower smc_num_mcmc_steps;\n"
+            "  * raise walltime_seconds;\n"
+            "  * exploration only: smc_chem_mode='warm' (approximate target; "
+            "both post-run validators become mandatory).\n"
             "Do NOT raise yconv_cri to make this fit: that buys speed by "
             "certifying a less-converged chemistry state.")
     log.info("projection fits the walltime budget (the in-run governor still guards it).")
@@ -473,11 +454,9 @@ def main() -> None:
     obs_save = set_observations(cfg, pipe, P)
 
     # ---- resume identity: BEFORE the run directory is touched ---------------
-    # pipeline.run_smc_loop refuses a mismatched checkpoint, but by then the
-    # driver had already overwritten config.json, observations.npz and the
-    # manifest -- leaving a killed run's samples beside a DIFFERENT run's
-    # recorded identity, which is exactly the state a certificate cannot detect
-    # from the npz copies alone (they all still agree with each other).
+    # Check the resume identity before writing: run_smc_loop's own refusal would
+    # come after config.json, observations.npz and the manifest were overwritten,
+    # leaving old samples beside a new identity.
     if resume:
         refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
 

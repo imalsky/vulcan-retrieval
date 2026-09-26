@@ -97,9 +97,7 @@ def main() -> int:
                 jax.ShapeDtypeStruct((w, nl), f8),
                 jax.ShapeDtypeStruct((w, nl), f8))
 
-    # the isolated rungs must include the PRODUCTION widths -- hardcoded rungs
-    # once left smc_rt_vjp_chunk=12 unprobed while the config comment claimed
-    # certification
+    # the isolated rungs include the production widths from the config
     for w in sorted({1, int(cfg.smc_rt_vjp_chunk)}):
         report(f"RT VJP x{w} particles", rt_vjp, _aux_sds(w),
                jax.ShapeDtypeStruct((w,), np.float64),
@@ -109,7 +107,7 @@ def main() -> int:
            jax.ShapeDtypeStruct((rt_pw,), np.float64),
            jax.ShapeDtypeStruct((rt_pw, 2), np.float64))
 
-    # ---- the full staged evaluators exactly as the SMC uses them ----
+    # ---- the full staged evaluators as the SMC uses them ----
     report(f"FULL cold_vg (rt_vjp_chunk={cfg.smc_rt_vjp_chunk})",
            pipe.batch_eval_cold_vg, U, Y0, refs0)
     # init phase 2 runs at N + init_phase2_spare width -- the WIDEST gradient eval

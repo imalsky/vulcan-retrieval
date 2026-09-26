@@ -1,45 +1,22 @@
 #!/usr/bin/env python3
-"""validate_warm.py -- measure the warm-continuation likelihood bias directly.
+"""validate_warm.py -- measure the warm-continuation bias of a finished warm run.
 
-The SMC mutation kernel warm-continues each particle's chemistry from its carried
-column, so the accepted likelihood is history-dependent at the convergence
-tolerance and the MALA kernel is only approximately invariant. This tool measures
-that bias where it matters: it re-solves a checkpointed particle cloud COLD (the
-published solve-from-baseline two-stage map, the same map that anchored the run's
-init and carries no history at all) and compares against the warm-carried
-log-likelihoods stored in the checkpoint. |dlogL| is the chi^2-weighted spectrum
-difference, i.e. exactly the quantity that enters MH acceptance and tempering
-weights -- if it is small relative to ~0.1 log-units, the warm kernel is
-posterior-exact for all practical purposes.
+Re-solves the checkpointed cloud cold (the two-stage map) and compares with the
+warm-carried log-likelihoods (|dlogL|, the quantity in MH acceptance and
+tempering weights), the binned spectrum, the elemental inventories and the
+u-space gradient (the MALA drift; VALIDATE_WARM_GRAD=0 disables it). Rows whose
+warm drift was zeroed by the badgrad handling are excluded from the gradient
+agreement gate and bounded separately (GRAD_ZEROED_FRAC_FAIL). Particles that do
+not cold-converge within count_max are counted separately.
 
-The cold re-solve also recomputes the u-space GRADIENT (the MALA drift) and
-compares it against the checkpoint's carried grad_u -- a likelihood/spectrum
-gate alone does not validate a gradient-driven kernel. That comparison is a
-FAIL axis, not warn-only, on two conditions: agreement measured over rows where
-both drifts are real (`GRAD_REL_FAIL`), and the fraction of the cloud whose drift was zeroed
-(`GRAD_ZEROED_FRAC_FAIL`). Rows zeroed by the badgrad handling are EXCLUDED from
-the agreement statistic -- they read rel = 1 by construction, so gating on them
-would fail essentially every run and would be measuring "did badgrad occur", not
-"does warm continuation reproduce the cold drift". Disable the whole gradient
-axis with VALIDATE_WARM_GRAD=0 to restore the cheaper likelihood-only re-solve.
-
-`smc_chem_mode` DEFAULTS TO COLD, so this tool is only needed
-for a run that explicitly opted into warm continuation -- where it, and
-`validation/mala_reversibility.py`, are both MANDATORY before the run's numbers
-may be reported.
-
-Run it on the GPU node against a finished run (the per-stage checkpoint IS the
-final cloud), with the SAME preset/overrides the run used:
+Needed only for a run with smc_chem_mode="warm", where it and
+validation/mala_reversibility.py are mandatory. Run it with the run's own
+preset/overrides:
 
     SMC_RETRIEVAL_PRESET=gpu python -m retrieval_framework.validate_warm runs/w39b_smc_retrieval
 
-Reads the run's own observations.npz (never regenerates) and smc_checkpoint.npz;
-writes validate_warm.npz next to them, logs a verdict, and exits 3 on a reached
-FAIL verdict (a crash before any verdict -- e.g. an OOM at the cold re-solve --
-exits 1 and writes no npz; the PBS wrapper distinguishes the two so a crash is
-never mislabeled as a gate FAIL). A particle that does not cold-converge within count_max
-(possible at posterior edges) is reported separately, never folded into the bias
-statistics. Cost: one cold init-phase-1-equivalent pass (~minutes on the GH200).
+Reads observations.npz and smc_checkpoint.npz; writes validate_warm.npz. Exit 0
+on PASS, 3 on a reached FAIL verdict, 1 on a crash (no npz).
 """
 from __future__ import annotations
 
@@ -82,24 +59,9 @@ COLD_NONCONV_WARN_FRAC = 0.10
 # sign-flipped or wildly wrong tangent lands >> 1.
 GRAD_REL_FAIL = 0.1
 
-# ZEROED-GRADIENT ROWS ARE EXCLUDED FROM THE GATE, AND COUNTED SEPARATELY.
-#
-# This is the subtlety that makes the gate implementable. The badgrad handling
-# deliberately ZEROES a non-finite warm tangent and takes the move with zero
-# drift -- a valid MH kernel, and the measured-correct choice (rejecting instead
-# biased the posterior bulk; see CLAUDE.md and the failed-approaches register in notes.md). But a
-# zeroed warm row against a finite cold row reads rel EXACTLY 1.0 by
-# construction. So promoting this threshold to a hard gate WITHOUT excluding
-# those rows would fail every run containing a single badgrad particle -- which
-# is most runs, since the class is posterior-concentrated (6.5% of certified
-# proposals in the measured ladder, notes §2.5). The gate would then be measuring "did badgrad occur",
-# a question already answered by its own counter, instead of "does warm
-# continuation reproduce the cold drift".
-#
-# So: the gate runs on rows where BOTH gradients are finite and nonzero, and the
-# zeroed fraction is reported separately with its own ceiling. A run that zeroes
-# a large fraction of its drifts is a real problem -- it just is not the problem
-# this threshold measures.
+# Rows whose warm drift was zeroed by the badgrad handling read rel = 1 by
+# construction. The GRAD_REL_FAIL gate runs on rows where both gradients are
+# real; the zeroed fraction has its own ceiling (notes §2.5).
 GRAD_ZEROED_FRAC_FAIL = Config.smc_tangent_bad_max_frac
 # Particles per cold re-solve chunk unless VALIDATE_WARM_CHUNK says otherwise.
 VALIDATE_WARM_CHUNK_DEFAULT = 48
@@ -140,8 +102,8 @@ def compare_grad(G_warm, G_cold, ok_mask) -> dict:
     two gradients (the MALA drift DIRECTION; 1 = identical, <0 = drift points
     the wrong way). Particles outside ok_mask are excluded. A zeroed warm
     gradient row (the badgrad zero-drift handling) against a finite cold one
-    reads rel=1, cos=0 -- deliberately loud, since that particle's proposal
-    drift ignored a real gradient.
+    reads rel=1 and an undefined cosine (NaN): that particle's proposal drift
+    ignored a real gradient.
     """
     Gw = np.asarray(G_warm, np.float64)
     Gc = np.asarray(G_cold, np.float64)
@@ -217,9 +179,7 @@ def main() -> None:
     # Re-solve the cloud COLD in host-side sub-batches. The cold chemistry solve is
     # a full-width vmap over all N particles (batch_eval_cold_l_diag; only its RT
     # sub-step is chunked internally) -- the single largest allocation in this tool.
-    # A full-N call OOMed on a partially-occupied GPU even though
-    # init phase 1 batches MORE draws on a fresh, fully-free pool. Chunking bounds
-    # the peak; results are identical at cold_lanes = 0 (sub-batches are
+    # Chunking bounds the peak; results are identical at cold_lanes = 0 (sub-batches are
     # concatenated, no vmap padding) and at the convergence scale when the
     # cold batch queues (a refilled lane's history follows the batch it is in).
     # Default 48; VALIDATE_WARM_CHUNK overrides the size, and an
@@ -396,11 +356,9 @@ def main() -> None:
             logger.error(
                 f"GRADIENT GATE FAILED: {gs['n_zeroed']} of {gs['n_ok']} "
                 f"particles ({gs['zeroed_frac']:.1%}) carried a ZEROED drift, "
-                f"at or above the {GRAD_ZEROED_FRAC_FAIL:.0%} ceiling. Zeroing "
-                "a non-finite tangent is a valid MH move and the measured-right "
-                "choice, but at this rate the cloud is largely drifting without "
-                "gradient information -- that is AD breakage, not the physical "
-                "theta-corner class.")
+                f"at or above the {GRAD_ZEROED_FRAC_FAIL:.0%} ceiling: the cloud "
+                "is largely drifting without gradient information (AD breakage, "
+                "not the theta-corner class).")
 
     ok = ok_logl and ok_spec and ok_atom and ok_grad
     logger.info(f"VERDICT: {'PASS' if ok else 'FAIL'} "
@@ -417,11 +375,8 @@ def main() -> None:
                    "yconv_cri or rerun with smc_chem_mode='cold' (the DEFAULT) "
                    "before publishing"))
     if not ok:
-        # Distinct exit code (3) so the PBS wrapper can tell a REACHED verdict that
-        # failed the gate (validate_warm.npz written; a science finding, with
-        # the PBS wrapper propagating a nonzero final job status)
-        # from a crash before any verdict (uncaught exception / OOM -> exit 1, no
-        # npz -- the bias is UNMEASURED). See run_nas_w39b.pbs.
+        # Exit 3 = a reached FAIL verdict (npz written); a crash exits 1 with no
+        # npz. run_nas_w39b.pbs tells them apart.
         sys.exit(3)
 
 

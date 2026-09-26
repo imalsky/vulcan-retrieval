@@ -14,21 +14,16 @@ culls primal survivors that fail that phase-2 re-certification (SMC's
 two box evidences agree only when the phase-2 flip rate is negligible: report
 SMC's f_c2 next to any comparison.
 
-Warm starts (default; NAUTILUS_WARM=0 turns them off): every certified column
-becomes an anchor, keyed by its chemistry + T-P coordinates in the unit cube,
-and each later solve continues from its nearest anchor (the pipeline's warm
-map at the cold count_max) instead of the cold two-stage solve; batches before
-the first certified column run cold. The certified state is start-dependent at
-the convergence tolerance (<= 5 ppm on 15 of 16 CPU-screen targets, one 48 ppm,
-against ~69 ppm noise; vulcan-retrieval notes 2.14), and so is WHICH draws are
-rejected (a warm continuation certifies or fails on its own: 16/16 certified
-warm against 14/16 cold in that screen). With warm starts the likelihood and
-the rejection set depend on the evaluation order, so the posterior and
-evidence are approximate and the evidence is NOT an SMC run's logZ_box (the
-maintainer's choice, for ~3-5x fewer steps); use NAUTILUS_WARM=0 for an
-evidence claim. NAUTILUS_WARM=0 is the cold primal map on the lane queue (a
-draw's column depends on its batch at the convergence scale); its evidence
-compares with SMC's only as stated above.
+Warm starts (default; NAUTILUS_WARM=0 disables them): every certified column
+becomes an anchor keyed by its unit-cube chemistry + T-P coordinates, and each
+later solve continues from its nearest anchor (the warm map at the cold
+count_max); batches before the first certified column run cold. The certified
+state and which draws are rejected then depend on the evaluation order at the
+convergence tolerance (notes §2.14), so the posterior and evidence are
+approximate and the evidence is not an SMC run's logZ_box. An evidence claim
+uses NAUTILUS_WARM=0, the cold primal map on the lane queue (a draw's column
+depends on its batch at the convergence scale), which compares with SMC's
+logZ_box only as stated above.
 
 Anchors are written inside the likelihood call, before nautilus checkpoints
 the batch: a job killed in between resumes by redrawing that batch, which then
@@ -51,7 +46,7 @@ unfinished; resubmit with RESUME=1.
     python -m retrieval_framework.run_nautilus <run_dir>
 Env: NAUTILUS_N_LIVE (default N_LIVE), NAUTILUS_N_EFF (default N_EFF),
 NAUTILUS_N_BATCH (default 2 x cold_lanes: each lane solves ~2 columns per batch;
-the SMC init already runs 2.5 x lanes columns in one call; with cold_lanes = 0,
+with cold_lanes = 0,
 one lockstep batch of config_schema.device_lane_count() columns), NAUTILUS_WARM
 (default 1).
 """

@@ -83,21 +83,16 @@ def main() -> None:
     tempered_tag = ("" if final_beta >= 1.0 - BETA_TOL
                     else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
-    # TARGET-EXACTNESS STAMP. A warm run's likelihood depends on
-    # sampler history, so its cloud is a sample from an APPROXIMATE target.
-    # Carried on every headline figure for the same reason as the tempered tag:
-    # a figure outlives the log that explained it.
+    # Target-exactness stamp: a warm run samples an approximate,
+    # history-dependent target; every headline figure carries it.
     approx_target = bool(int(s["approximate_history_dependent_target"]))
     if approx_target:
         tempered_tag += ("  [APPROXIMATE TARGET: warm continuation, "
                          "history-dependent likelihood]")
 
-    # SUPPORT STAMP. The beta=1 target is the posterior RESTRICTED to
-    # {T-P inside the modelable window} and {chemistry converges}, renormalized:
-    # pipeline returns the -1e30 sentinel for anything else and culls such draws
-    # at init. Every existing disclosure of that conditioning is scoped to logZ,
-    # so the SAMPLES carry it here -- the draws are conditioned too, not just
-    # the evidence.
+    # Support stamp: the beta=1 target is the posterior restricted to the T-P
+    # window and chemistry convergence, renormalized; the draws carry that
+    # conditioning too.
     xf = out / "smc_extra_fields.npz"
     if xf.exists():
         _x = np.load(xf, allow_pickle=True)
@@ -112,10 +107,8 @@ def main() -> None:
             tempered_tag += (f"  [CONDITIONED on modelable T-P (f_tp={_f_tp:.2f}) "
                              f"and converged chemistry (f_conv={_f_conv:.2f})]")
 
-    # A figure that says "posterior" when the ladder stopped early, or when the
-    # target was history-dependent, is the failure this refuses. Set
-    # PLOT_SMC_ALLOW_UNCERTIFIED=1 for forensic plotting of such a run; the
-    # stamps stay on the figures either way.
+    # Refuse "posterior" figures for a tempered or history-dependent run;
+    # PLOT_SMC_ALLOW_UNCERTIFIED=1 plots it as forensics (the stamps stay).
     if (final_beta < 1.0 - BETA_TOL or approx_target) and \
             os.environ.get("PLOT_SMC_ALLOW_UNCERTIFIED") != "1":
         raise SystemExit(

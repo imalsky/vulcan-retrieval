@@ -26,8 +26,8 @@ Module map (the import chain is heavy-import-safe top to bottom):
     run_smc            case-directory driver (presets, overrides, outputs, PPC)
     plot_smc           post-run figures from the .npz bundles (numpy+matplotlib only)
     forward/           this repo's case constants and data paths (config.py only); the
-                       engine lives in the vulcan-forward distribution -- import order is
-                       load-bearing there: vulcan_forward.vulcan_chem before anything
+                       engine lives in the vulcan-forward distribution -- import order
+                       matters there: vulcan_forward.vulcan_chem before anything
                        exojax (guard-enforced)
 
 This ``__init__`` stays import-light (no jax): run_smc and config_schema must be

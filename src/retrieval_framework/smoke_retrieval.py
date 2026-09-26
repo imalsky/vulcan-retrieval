@@ -8,8 +8,7 @@ synthetic observations, then:
      forward-mode gradient (they are algebraically identical; this catches wiring
      bugs in the block assembly),
   2. validates the gradient against a central finite difference of the re-converged
-     likelihood, dimension by dimension (the same check jax_paper's
-     scripts/retrieval/smoke_test.py runs for the sensitivity demo),
+     likelihood, dimension by dimension,
   3. asserts the STAGED batched evaluator (chemistry fwd-jvp lanes + ONE RT vjp,
      lax.map-chunked -- the SMC hot path) == the per-particle block gradient, to
      fp precision at cold_lanes=0 and to the convergence-scale standard
@@ -17,9 +16,8 @@ synthetic observations, then:
      lane queue and the two become different maps; the regime is printed, and
   4. FD-checks the WARM-continuation gradient (the mutation-kernel map: re-converge
      from a carried column with incremental lnZ/C-O) against central differences of
-     the same warm map. That pair is built explicitly for chem_mode "warm":
-     `smc_chem_mode` defaults to "cold", so the pipeline's own move evaluators
-     would be the cold ones and this check would never touch the warm map.
+     the same warm map, built explicitly for chem_mode "warm" (the default is
+     cold).
 
 Run it in the vulcan env before trusting any retrieval output (uses the case's
 "smoke" preset unless SMC_RETRIEVAL_PRESET says otherwise):
@@ -49,7 +47,7 @@ BLOCK_NAIVE_MAX = 1e-7     # block vs naive gradient, max|dg| / max|g|
 # gradient component in weak directions. 5% is what the correlated-k path
 # needs (ckd.overlap's resort-rebin has dense kinks, so AD is the a.e.
 # derivative and a central difference averages across them): not a bug and
-# not a gate to tighten (CLAUDE.md "Opacity: correlated-k", notes §1.9).
+# not a gate to tighten (notes §1.9).
 FD_REL_TOL = 5e-2
 FD_ABS_FRAC = 1e-4
 STAGED_DVAL_MAX = 1e-6     # staged vs block at cold_lanes == 0, relative (floor 1)
@@ -101,15 +99,8 @@ def main() -> int:
     print(f"[smoke] value block={float(vb):.6f} naive={float(vn):.6f} "
           f"| t_block={t_block:.1f}s t_naive={t_naive:.1f}s", flush=True)
     ok_val = abs(float(vb) - float(vn)) <= BLOCK_NAIVE_VAL_MAX * max(1.0, abs(float(vn)))
-    # Block and naive are the SAME chain rule regrouped, so any difference is
-    # floating-point accumulation and the right yardstick is the gradient's own
-    # scale, not each component's. A componentwise ratio is ill-posed in a weak
-    # direction: measured on the correlated-k path, every component agrees to
-    # <= 2.3e-6 ABSOLUTE while the dominant ones are ~1e3, yet dL/dc_o (|g| =
-    # 0.38, 2500x smaller) turns its 1.3e-6 into a 3.3e-6 "relative error" that
-    # says nothing about the wiring. Gate on the norm-relative figure and report
-    # both. It has read 1.9e-9 to 3e-8 as the converged column and the
-    # environment changed (notes §1.8); a dropped c_o block would read ~4e-4.
+    # Same chain rule regrouped, so compare by max|d| / max|g|: a componentwise
+    # ratio is ill-posed in a weak direction such as c_o (notes §1.8). Report both.
     scale_g = float(np.max(np.abs(gn)))
     rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, C.UNDERFLOW_DENOM))
     rel_cw = float(np.max(np.abs(gb - gn)
@@ -138,9 +129,9 @@ def main() -> int:
               f"[{time.time()-t0:.0f}s]  {'OK' if ok_i else 'FAIL'}", flush=True)
 
     # ---- staged batched evaluator (SMC hot path) vs per-particle block gradient ----
-    # cold_lanes == 0: same runner cadence class, a tight pair empirical on these probe draws;
-    # cold_lanes > 0: the staged side queues, a different map by design, gated at
-    # DLOGL_MAX_PASS. The regime is printed; thresholds and measurements: notes §1.8, §2.13.
+    # cold_lanes == 0: the tight STAGED_* pair; cold_lanes > 0: the staged side
+    # queues, a different map, gated at DLOGL_MAX_PASS. The regime is printed
+    # (notes §1.8, §2.13).
     from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
     lanes = int(cfg.cold_lanes)
@@ -184,19 +175,10 @@ def main() -> int:
     assert np.all(np.isfinite(Yb)) and np.asarray(refsb).shape == (int(U_test.shape[0]), 2)
 
     # ---- warm-continuation gradient (the mutation-kernel map) vs FD of the same map ----
-    # State = the converged columns from the cold batch above; evaluate the move
-    # gradient at a DIFFERENT point (a realistic MCMC proposal) and FD the identical
-    # warm map (fixed carried state) -- validates that the tangent relaxes through
-    # the warm-started while_loop (the continuation-jvp pattern).
-    #
-    # The WHOLE 3-particle cloud goes in, and each particle carries its own
-    # column AND its own reference composition (the refsb rows differ), so this
-    # also exercises the per-lane reference threading of the batched warm solve;
-    # with cold_lanes = 2 the three particles on two lanes make it refill. The
-    # evaluators are built for chem_mode "warm" explicitly: the pipeline's
-    # batch_eval_move_* follow cfg.smc_chem_mode, which defaults to "cold".
-    # Only row 0 is perturbed, so its own solve history is the same in both FD
-    # arms.
+    # Warm-continuation gradient against FD of the same warm map (fixed carried
+    # state), at a proposal away from the carried columns. All three particles
+    # carry their own column and reference, so the per-lane reference threading
+    # (and a refill at cold_lanes = 2) is exercised. Only row 0 is perturbed.
     t0 = time.time()
     U1 = U_test + 0.5 * du
     Y_w, refs_w = Yb, refsb

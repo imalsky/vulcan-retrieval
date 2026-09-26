@@ -59,8 +59,7 @@ _W39B = dict(
     prior_c_o=(-1.70, 0.24),
     #   Kzz : x0.1..x100 about the VULCAN W39b baseline profile. The lower edge
     #         is Tsai's tested x0.1: below it most columns do not certify within
-    #         count_max (12 of 15 prior draws under x0.03 rejected, against 12 of
-    #         102 in this range; notes §1.2). Every draw above x10 certified.
+    #         count_max (notes §1.5).
     prior_lnKzz=(math.log(0.1), math.log(100.0)),
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
@@ -118,11 +117,9 @@ def gpu_config(**overrides: Any) -> Config:
         # in or out. All have ExoMolOP k-tables, same path as the first five.
         # + NH3/OCS/SH/SO: each exceeds the min(5 ppm, 0.1 sigma) leave-one-out
         # gate at the nominal state. Omitting a produced absorber biases the
-        # abundances that must absorb its opacity.
-        # NOT YET SCREENED: 13 further species have both a solved abundance and an
-        # installed ExoMolOP table (CS N2O NO NS NH CN OH CH3 H2CO C2H4 CH C2
-        # H2O2). validation/opacity_leave_one_out.py measures them; a species may
-        # be dropped only with a recorded bound below the gate.
+        # abundances that must absorb its opacity. A species is omitted only with a
+        # recorded leave-one-out bound below the gate
+        # (validation/opacity_leave_one_out.py; the unscreened set: notes §3).
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S",
                    "NH3", "OCS", "SH", "SO"),
         # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
@@ -147,27 +144,14 @@ def gpu_config(**overrides: Any) -> Config:
         # of serialized chunks.
         init_oversample=2.5,
         init_phase2_spare=48,
-        # DECLARED convergence attrition. The cold reject fraction is a gate, not a
-        # warning (pipeline._init_state raises above it), because conditioning on
-        # convergence removes part of the declared prior. 0.35 covers the rates
-        # measured so far (notes §1.2) with margin. It is NOT a claim that the
-        # removed region is negligible:
-        # the certificate WARNS above CONV_ATTRITION_WARN (10%) until that region
-        # is shown to carry negligible posterior mass.
+        # Declared convergence attrition: pipeline._init_state raises above it.
+        # 0.35 covers the measured rates with margin (notes §1.2); the certificate
+        # warns above CONV_ATTRITION_WARN until the removed region is shown to carry
+        # negligible posterior mass.
         init_max_nonconverged_frac=0.35,
-        # COLD chemistry. Every likelihood evaluation uses the published
-        # solve-from-baseline map, so a draw's column never depends on the
-        # sampler's history. It is NOT exactly a function of theta on the lane
-        # queue: a draw that refills a lane enters at the tick that lane was
-        # freed at, which moves its column at the convergence scale. The init
-        # refills (phase 1 runs 2.5 N draws on N lanes, phase 2 N + spares), and
-        # so does every run_nautilus batch (2 x lanes); a sweep's N proposals
-        # all start at tick 0 and do not. The maintainer accepted this as the
-        # same class of difference the lockstep batch already carries against
-        # the solo solve (notes §2.13). Under "warm" the likelihood depends on
-        # each particle's carried column, hence on sampler history, at the
-        # convergence tolerance; the resulting logZ is approximate in a way
-        # diagnostics cannot repair.
+        # Cold chemistry: a draw's column never depends on sampler history, up to
+        # the lane queue's refill tick (convergence scale; notes §2.13). "warm" is
+        # history-dependent and its logZ approximate.
         smc_chem_mode="cold",
         # Four sequential cold sweeps preserve particle count but may require
         # multiple 24 h jobs. RESUME continues the absolute stage index from the
@@ -181,10 +165,8 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # RT-vjp width. The GH200 memory probe (12 absorbers, notes §1.3) reads
-        # 3.20 GiB per vjp lane, 12.57 at 4, against the ~81 GiB pool. A wider chunk fits but buys no time: the
-        # RT vjp costs at most ~1.5 s of a gradient evaluation (notes §1.4).
-        # Chunking is numerically identical at any width.
+        # RT-vjp chunk: memory is linear in this width (notes §1.3); a wider chunk
+        # buys no time (notes §1.4). Numerically identical at any width.
         smc_rt_vjp_chunk=4,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall
