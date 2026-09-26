@@ -29,7 +29,11 @@ def test_repo_version_parses_version_file(tmp_path: Path):
 PROD = ("H2O", "CO2", "SO2")
 
 
-def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path):
+def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path, monkeypatch):
+    from vulcan_forward import paths
+    # _check_data_tree sets the process-wide engine data root; restore it after
+    monkeypatch.setattr(paths, "_root_override", paths._root_override)
+    monkeypatch.delenv(paths.ENV_OPACITY_CACHE, raising=False)
     _reset()
     data = tmp_path / "vulcan-retrieval" / "data"
     (data / "cm24_wasp39b").mkdir(parents=True)

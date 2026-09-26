@@ -265,8 +265,8 @@ def _survival_fractions(extra) -> dict:
 CIA_TABLES = ("H2-H2_2011.cia", "H2-He_2011.cia")
 
 
-def _cia_identity(opacity_dir: Path | None = None) -> dict:
-    """Exact hashes of the two CIA tables.
+def _cia_identity() -> dict:
+    """Exact hashes of the two CIA tables, at the paths the engine reads.
 
     They are direct radiative-transfer inputs, small enough to hash exactly and
     too important to hide inside a directory file-count: a swapped H2-He table
@@ -275,16 +275,16 @@ def _cia_identity(opacity_dir: Path | None = None) -> dict:
     everything else (network, baseline T-P, Kzz, elemental abundances) is
     vendored in vulcan-jax and therefore bound by its commit.
     """
-    if opacity_dir is None:
-        try:
-            from retrieval_framework.forward import config as _fwd_config  # noqa: F401
-            from vulcan_forward import paths as _fwd_paths
-            opacity_dir = Path(_fwd_paths.opacity_cache_dir())
-        except Exception:                                   # pragma: no cover
-            opacity_dir = None
+    try:
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
+        from vulcan_forward import paths as _fwd_paths
+        files = dict(zip(CIA_TABLES, (_fwd_paths.cia_h2h2_file(),
+                                      _fwd_paths.cia_h2he_file())))
+    except Exception:                                       # pragma: no cover
+        files = {}
     out = {}
     for name in CIA_TABLES:
-        p = opacity_dir / name if opacity_dir is not None else None
+        p = files.get(name)
         out[name] = ({"path": str(p.resolve()), "sha256": _sha256(p),
                       "bytes": p.stat().st_size}
                      if p is not None and p.is_file() else None)

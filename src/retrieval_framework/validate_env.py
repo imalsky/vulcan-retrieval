@@ -21,8 +21,9 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
   5. cross-repo pin: the installed vulcan-jax satisfies vulcan-retrieval's
      declared requirement (skipped with a warning if `packaging` is absent);
   6. exojax imports and matches vulcan-forward's pin;
-  7. required data files under <PROJECT_ROOT>/vulcan-retrieval/data/ (real
-     spectrum CSVs, the ExoMolOP k-tables, H2-H2 + H2-He CIA);
+  7. required data under <PROJECT_ROOT>/vulcan-retrieval/data/: the real
+     spectrum CSVs, and the ExoMolOP k-tables and H2-H2 + H2-He CIA at the
+     paths vulcan_forward.paths resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs;
   9. nautilus (nautilus-sampler) imports: run_nautilus needs it.
 
@@ -199,15 +200,24 @@ def production_molecules(root: Path) -> tuple[str, ...]:
 
 
 def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
+    from vulcan_forward import paths
+
     data = root / "vulcan-retrieval" / "data"
     cm24 = data / "cm24_wasp39b"
     if not any(cm24.glob("*.csv")):
         _err(f"missing real spectrum CSVs in {cm24} (one-time data seed; see CLAUDE.md).")
     else:
         _ok(f"real spectrum CSVs present in {cm24}")
+    # The engine's own path accessors, so the check reads the files the engine
+    # reads ($VULCAN_FORWARD_OPACITY_CACHE included).
+    paths.set_data_root(data)
     # Correlated-k tables: the PRODUCTION opacity path. A missing table raises
     # deep inside the RT build, minutes into a job, so catch it in preflight.
-    ckdir = data / "exomolop"
+    try:
+        ckdir = paths.exomolop_dir()
+    except RuntimeError as e:
+        _err(str(e))
+        return
     missing_k = [m for m in prod if not (ckdir / f"{m}.ktable.h5").exists()]
     if missing_k:
         _err(
@@ -217,12 +227,16 @@ def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
         )
     else:
         _ok(f"ExoMolOP k-tables present for {len(prod)} molecules in {ckdir}")
-    codir = data / "opacity_cache"
-    for cia in ("H2-H2_2011.cia", "H2-He_2011.cia"):
-        if not (codir / cia).exists():
+    try:
+        cia_files = (paths.cia_h2h2_file(), paths.cia_h2he_file())
+    except RuntimeError as e:
+        _err(str(e))
+        return
+    for f in cia_files:
+        if not f.exists():
             _err(
-                f"missing {cia} under {codir} -- H2/He CIA is REQUIRED in every "
-                "RT call (exojax_rt raises without it)."
+                f"missing {f.name} under {f.parent} -- H2/He CIA is REQUIRED in "
+                "every RT call (exojax_rt raises without it)."
             )
 
 
