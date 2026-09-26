@@ -68,7 +68,8 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework import config_schema as C
-from retrieval_framework.run_smc import make_config, set_observations, write_config_json
+from retrieval_framework.run_smc import (
+    log_hardware, make_config, set_observations, setup_logging, write_run_identity)
 
 log = logging.getLogger("retrieval")
 
@@ -207,11 +208,7 @@ def main() -> None:
     cfg = replace(cfg, out_dir=cfg.out_dir.parent / f"{cfg.out_dir.name}_nautilus")
     out = cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.StreamHandler(), logging.FileHandler(out / "run.log", mode="a")],
-        force=True)
+    setup_logging(out / "run.log")
     n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
     n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
     lanes = int(cfg.cold_lanes)
@@ -227,19 +224,14 @@ def main() -> None:
     import jax
     import nautilus
 
-    from retrieval_framework import certificate as _cert
     from retrieval_framework import pipeline as P
     log.info(f"jax backend={jax.default_backend()} devices={jax.devices()} "
              f"nautilus {nautilus.__version__}")
-    hw = C.hardware_profile()
-    log.info(f"hardware: {hw}")
-    for w in C.hardware_warnings(hw):
-        log.warning(w)
+    log_hardware()
 
     t0 = time.perf_counter()
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names}")
-    obs_path = out / "observations.npz"
     obs_save = set_observations(cfg, pipe, P)
 
     # resume identity before anything in the run directory is written; the
@@ -266,10 +258,7 @@ def main() -> None:
         raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
                               "set RESUME=1 to continue it, or point SMC_RETRIEVAL_OUT_DIR "
                               "at a fresh directory.")
-    write_config_json(cfg, pipe, preset)
-    P.save_npz(obs_path, **obs_save)
-    (out / _cert.MANIFEST_FILE).write_text(json.dumps(
-        _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True, default=str) + "\n")
+    write_run_identity(cfg, pipe, preset, obs_save)
     digest_path.write_text(want + "\n")
 
     tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}

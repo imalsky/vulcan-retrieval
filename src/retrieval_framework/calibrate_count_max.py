@@ -46,7 +46,7 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework.run_smc import (   # the exact preset/override logic
-    _cuda_profiler, make_config, set_observations)
+    _cuda_profiler, make_config, set_observations, setup_logging)
 
 
 def main() -> None:
@@ -84,8 +84,7 @@ def main() -> None:
     if args.grad and int(args.fixed_steps) <= 0:
         ap.error("--grad requires --fixed-steps")
 
-    logging.basicConfig(level=logging.INFO,
-                         format="%(asctime)s | %(levelname)s | %(message)s")
+    setup_logging()
     log = logging.getLogger("calibrate_count_max")
 
     cfg, _preset = make_config(Path(args.run_dir))

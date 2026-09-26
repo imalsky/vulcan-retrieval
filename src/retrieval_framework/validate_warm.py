@@ -182,10 +182,9 @@ def main() -> None:
                     help="retrieval case directory containing case.py (default: cwd)")
     args = ap.parse_args()
 
-    from retrieval_framework.run_smc import make_config
+    from retrieval_framework.run_smc import make_config, setup_logging
     cfg, preset = make_config(Path(args.run_dir))
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s | %(levelname)s | %(message)s", force=True)
+    setup_logging()
     out = cfg.out_dir
     ck_path, obs_path = out / "smc_checkpoint.npz", out / "observations.npz"
     for p in (ck_path, obs_path):

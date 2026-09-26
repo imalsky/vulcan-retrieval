@@ -133,6 +133,39 @@ def make_config(run_dir: Path) -> Tuple[C.Config, str]:
     return cfg, preset
 
 
+def setup_logging(log_file: Path | None = None, mode: str = "a") -> None:
+    """INFO-level logging to stderr, and to ``log_file`` when given."""
+    handlers = [logging.StreamHandler()]
+    if log_file is not None:
+        handlers.append(logging.FileHandler(log_file, mode=mode))
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s | %(levelname)s | %(message)s",
+                        handlers=handlers, force=True)
+
+
+def log_hardware() -> None:
+    """Log the hardware profile and its warnings."""
+    hw = C.hardware_profile()
+    log.info(f"hardware: {hw}")
+    for w in C.hardware_warnings(hw):
+        log.warning(w)
+
+
+def write_run_identity(cfg: C.Config, pipe, preset: str, obs_save: dict) -> None:
+    """Write config.json, observations.npz and the canonical target manifest
+    into ``cfg.out_dir``. Call only after the resume-identity check."""
+    from retrieval_framework import certificate as _cert
+    from retrieval_framework import pipeline as P
+    write_config_json(cfg, pipe, preset)
+    P.save_npz(cfg.out_dir / "observations.npz", **obs_save)
+    # The canonical manifest, not only its hash: a refused resume names the
+    # differing class only if the two manifests can be diffed. The digest that
+    # binds the checkpoint is sha256 of exactly this document.
+    (cfg.out_dir / _cert.MANIFEST_FILE).write_text(json.dumps(
+        _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True,
+        default=str) + "\n")
+
+
 def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
     d = asdict(cfg)
     d.update(dict(
@@ -408,13 +441,7 @@ def main() -> None:
 
     # a RESUME appends: the killed job's log survives, also when the target
     # digest check below refuses the checkpoint
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.StreamHandler(),
-                  logging.FileHandler(cfg.out_dir / "run.log", mode="a" if resume else "w")],
-        force=True,
-    )
+    setup_logging(cfg.out_dir / "run.log", mode="a" if resume else "w")
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={cfg.out_dir}")
     # loud, up-front dump of the RESOLVED config so nothing (band, count_max, priors,
     # ...) is a surprise; shown BEFORE the ~minutes-long forward build.
@@ -425,10 +452,7 @@ def main() -> None:
     import jax
     log.info(f"jax backend={jax.default_backend()} devices={jax.devices()} "
              f"(x64 flips on during the VULCAN-JAX import inside build_pipeline)")
-    hw = C.hardware_profile()
-    log.info(f"hardware: {hw}")
-    for w in C.hardware_warnings(hw):
-        log.warning(w)
+    log_hardware()
 
     t0 = time.perf_counter()
     pipe = P.build_pipeline(cfg)
@@ -440,7 +464,6 @@ def main() -> None:
     # NOTHING is written to the run directory until the resume identity is
     # settled below: a refused resume must leave the killed run's archived
     # identity exactly as it was.
-    obs_path = cfg.out_dir / "observations.npz"
     obs_save = set_observations(cfg, pipe, P)
 
     # ---- resume identity: BEFORE the run directory is touched ---------------
@@ -449,19 +472,11 @@ def main() -> None:
     # manifest -- leaving a killed run's samples beside a DIFFERENT run's
     # recorded identity, which is exactly the state a certificate cannot detect
     # from the npz copies alone (they all still agree with each other).
-    from retrieval_framework import certificate as _cert
     if resume:
         refuse_mismatched_resume(ckpt_path, getattr(pipe, "target_digest", ""))
 
-    write_config_json(cfg, pipe, preset)
-    P.save_npz(obs_path, **obs_save)
-    log.info(f"Saved observations: {obs_path}")
-    # The CANONICAL manifest, not only its hash: a refused resume names the
-    # differing class only if the two manifests can be diffed. The digest that
-    # binds the checkpoint is sha256 of exactly this document.
-    (cfg.out_dir / _cert.MANIFEST_FILE).write_text(json.dumps(
-        _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True,
-        default=str) + "\n")
+    write_run_identity(cfg, pipe, preset, obs_save)
+    log.info(f"Saved observations: {cfg.out_dir / 'observations.npz'}")
 
     dspan = float(np.nanmax(pipe.obs_depth) - np.nanmin(pipe.obs_depth))
     smean = float(np.mean(pipe.obs_sigma))
