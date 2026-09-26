@@ -6,7 +6,7 @@ spectrum, composing the *live* VULCAN-JAX chemistry with the ExoJax RT.
         T_art = Guillot(chem_theta[3:]),                        # same T-P on the ART grid
         lnR0 )                                                  # reference-radius nuisance
 
-``chem_theta = [lnZ, dln(C/O), lnKzz, <T-P params>]`` is exactly what the (tp_eval-hooked)
+``chem_theta = [lnZ, dln(C/O), lnKzz, <T-P params>]`` is what the (tp_eval-hooked)
 ``vulcan_chem.converged_y`` consumes; the T-P sub-vector ``chem_theta[3:3+n_tp]`` is
 evaluated by the SAME ExoJax profile on both the VULCAN pressure grid (inside the
 chemistry) and the ART grid (here, for the RT), so one self-consistent T(P) drives both.
@@ -28,7 +28,7 @@ import numpy as np
 
 logger = logging.getLogger("retrieval")
 
-# import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
+# import order matters: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config  # noqa: F401  (hands the engine its data root)
 from vulcan_forward import constants
 from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
@@ -46,27 +46,20 @@ def _refuse_condense_inference(chem, cfg) -> None:
     The early ``cfg_overrides`` gate in ``config_schema.validate_config`` catches
     the common case, but a base VULCAN config can default ``use_condense=True``
     (e.g. ``Earth.yaml``) without the flag ever appearing in ``cfg_overrides``.
-    ``chem.conden_spec`` is the RESOLVED truth (``build_chem_model`` builds it iff
-    condensation is actually active), so gating on it closes that bypass. The
-    pinned condensation state is not reliably differentiable (0.91 rel jvp-vs-FD
-    on pinned species) and gradient-MALA is the default mutation kernel, so an
-    inference run would sample against unreliable gradients (VULCAN-JAX
-    notes §2.5-2.6).
+    ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
+    condensation is active), so gating on it closes that bypass. The pinned
+    condensation state is not reliably differentiable, and gradient MALA is the
+    default kernel (VULCAN-JAX notes §2.5-2.6).
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
             and not bool(getattr(cfg, "allow_condense_inference", False))):
         raise ValueError(
             "condensation is active in the RESOLVED VULCAN config "
-            f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}) but "
-            "run_inference=True: gradient-MALA inference through the "
-            "condensing+pinned steady state is not validated (the pinned-species "
-            "forward-mode tangent disagrees with finite differences at order "
-            "unity, 0.91 relative). Run condensation as a FORWARD model "
-            "(run_inference=False), or set allow_condense_inference=True only "
-            "with an independently validated gradient. This gate reads the "
-            "resolved conden_spec, so it also catches use_condense=True inherited "
-            "from the base config (cfg_overrides need not restate it)."
+            f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}) with "
+            "run_inference=True: gradient inference through the pinned condensing "
+            "state is not validated. Run it as a forward model "
+            "(run_inference=False) or set allow_condense_inference=True."
         )
 
 
@@ -95,12 +88,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # gate). VULCAN-JAX notes §2.5-2.6.
     _refuse_condense_inference(chem, cfg)
 
-    # Surface a failed warm-up check. NOT a refusal: nothing consumes the
-    # warm-up column (y_baseline is the pre-loop column, and cold solves start
-    # from the equilibrium seed), and every draw certifies itself; the offline
-    # smoke preset builds on a cap-exit warm-up (longdy~0.11 at nz=30) and
-    # passes its gradient checks. A failure only flags a configuration that
-    # may not converge (vulcan-forward notes §2).
+    # Warn, do not refuse: nothing consumes the warm-up column (cold solves start
+    # from the equilibrium seed) and every draw certifies itself; a failure only
+    # flags a configuration that may not converge (vulcan-forward notes §2).
     if bool(cfg.run_inference) and not bool(
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
@@ -135,8 +125,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # GAS-phase normalization: the network's condensed-phase reservoir columns
     # (*_l_s) are particles, not gas. Counting them dilutes every gas VMR and
     # inflates the RT mean molecular weight as if the condensate were vapor
-    # (S8_l_s carries ~256 g/mol). The condensate's aerosol OPACITY stays
-    # deliberately excluded -- that is the cloud deck's job.
+    # (S8_l_s carries ~256 g/mol). The condensate's aerosol opacity is excluded:
+    # that is the cloud deck's job.
     _gas = np.ones(int(np.asarray(species_masses).size))
     for _sp, _i in chem.sidx.items():
         if _sp.endswith("_l_s"):
@@ -203,19 +193,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         the whole batch instead of on every lane every iteration. Each lane
         freezes at its own exit, so a particle's column does not depend on the
         others, but it is NOT bit-identical to its solo solve: the cadence rides
-        the loop's iteration tick (agreement at the convergence scale, 5.4e-5
-        over ymix > 1e-10 on vulcan-jax's HD189 batch, its notes 2.9). The cold
-        GRADIENT path takes the same route, one ``jax.jvp`` per direction
-        through the stage twins below, and so do the batched WARM
-        continuations (``chem_solve_warm_diag_batch``).
-
-        With ``cfg.cold_lanes`` above 0 EVERY cold batch -- both stages, any
-        width -- runs on ``min(cold_lanes, draws)`` lanes with refill
-        (``vulcan_chem.converged_y_queue``): a lane that certifies takes the
-        next draw inside the same while loop, so wall time follows total work /
-        lanes instead of the slowest draw. One route per config, so a narrow
-        replay agrees with the run. cold_lanes = 0 keeps the single lockstep
-        batch, call for call."""
+        the loop's iteration tick (agreement at the convergence scale;
+        vulcan-jax notes §2.9). The cold gradient path takes the same route,
+        one ``jax.jvp`` per direction through the stage twins below, and so do
+        the batched warm continuations (``chem_solve_warm_diag_batch``). Every
+        batch goes through ``_chem_batch_route``."""
         return chem_stage2_diag_batch(C, chem_stage1_batch(C))
 
     def chem_stage1_batch(C):
@@ -254,10 +236,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         count_max. For the INIT gradient pass only (pipeline._init_state phase 2):
         its inputs are phase-1 SURVIVORS re-certifying from their own converged
         columns -- proven-convergent states, not disposable proposals -- and a
-        marginal survivor (a slow phase-1 converger) can
-        legitimately need more than warm_count_max accepted steps to re-certify.
-        Capping them mislabels healthy particles as blown forwards (5 of 96
-        survivors gated at 1500 -> a spurious 'RT/AD problem' RuntimeError)."""
+        marginal survivor (a slow phase-1 converger) can need more than
+        warm_count_max accepted steps to re-certify (notes §1.2)."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=False)

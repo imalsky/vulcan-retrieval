@@ -6,11 +6,7 @@
 Collects, from a completed run's own outputs, everything needed to decide
 whether its numbers may be reported -- and says so with one PASS/FAIL verdict.
 
-WHY. "An old run failed for reasons since fixed" and "the current code produces
-a posterior" are different claims, and only the second one licenses reporting
-numbers.
-
-WHAT IT GATES. Each check answers "would a reader be misled?":
+Gates:
 
   * code and data identity: all four repository commits, package versions, and
     the identity of the observation / opacity / CIA / network / config inputs;
@@ -56,18 +52,14 @@ from retrieval_framework.config_schema import Config
 
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
-# Canonical repository labels plus accepted checkout directory names.  The
-# public repository is jax-vulcan; the NAS deployment historically clones it
-# as VULCAN-JAX.  Provenance must work in either layout without misnaming the
-# repository in the certificate.
+# Canonical repository labels plus accepted checkout names: the repository is
+# jax-vulcan, the NAS clone directory is VULCAN-JAX.
 REPOSITORIES = {
     "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
     "vulcan-forward": ("vulcan-forward",),
     "vulcan-retrieval": ("vulcan-retrieval",),
-    # jwst-transit-authority is deliberately NOT here: it is not a dependency of a
-    # retrieval run (pyproject), and binding its commit/src_diff into the
-    # target manifest made validate() FAIL on a dirty planner checkout and
-    # refuse legitimate chained RESUMEs after unrelated planner edits.
+    # jwst-transit-authority is not a dependency of a retrieval run, so it is
+    # not bound.
 }
 
 # particles the certificate re-solves cold (cold_replay)
@@ -97,8 +89,8 @@ PRIOR_RAIL_FRAC = 0.02
 # Chemistry-convergence attrition: the fraction of the declared prior removed by
 # conditioning on "the solver converged". Surviving the run is not evidence that
 # the removed region carries negligible posterior mass. These two levels WARN
-# (attrition_warnings), they do not fail the run (maintainer's decision, notes
-# 2.12): past CONV_ATTRITION_WARN always, past CONV_ATTRITION_JUSTIFY when no
+# (attrition_warnings), they do not fail the run (notes §2.12): past
+# CONV_ATTRITION_WARN always, past CONV_ATTRITION_JUSTIFY when no
 # independent demonstration is named in cfg.attrition_justification.
 CONV_ATTRITION_WARN = 0.10
 CONV_ATTRITION_JUSTIFY = 0.01
@@ -118,13 +110,9 @@ _LATE_STAGES_SHOWN = 3
 _PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
                    "warm_capped", "warm_stalled", "badgrad")
 
-# The two production-fidelity artifacts. Their absence WARNS (artifact_warnings;
-# the maintainer's decision, notes 2.4): a check that was never run at production
-# settings is not a check that passed, and a reported few-ppm or evidence claim
-# carries the warning. Each certifies ONE resolved state, so every key it
-# recorded is compared against the run -- not a hand-picked three. A ladder measured at
-# a different chemistry tolerance, molecule list, pressure domain or code revision
-# measured a different model, whatever its grid says.
+# The two production-fidelity artifacts. Missing, not-PASS or drifted artifacts
+# warn (artifact_warnings; notes §2.4). Each certifies one resolved state, so
+# every key it recorded is compared against the run.
 REQUIRED_VALIDATION_ARTIFACTS = (
     "resolution_ladder",
     "top_pressure_ladder",
@@ -133,9 +121,8 @@ REQUIRED_VALIDATION_ARTIFACTS = (
 # An artifact records the forward PROFILE it measured (Config.profile()); the
 # certificate holds the flat Config. profile() renames the fields below, so a
 # freshly generated artifact would otherwise read as drifted on a key that is
-# only spelled differently. test_certificate pins that this map covers every
-# profile key with no Config counterpart -- add one and the test fails loudly
-# rather than every artifact being silently rejected.
+# only spelled differently. test_certificate pins that it covers every profile
+# key with no Config counterpart.
 _PROFILE_ALIASES = {"gs_cgs": "tp_gravity_cgs"}
 
 
@@ -202,12 +189,11 @@ def _repo_states(workspace: Path | None = None) -> dict:
             continue
         dirty = _git_raw(repo, "status", "--porcelain")
         failed = dirty is _GIT_FAILED
-        # Content hash of the uncommitted SOURCE state. Scoped to src/ on
-        # purpose: an uncommitted solver edit is a different target and must move
-        # the digest, while editing a PBS or plotting script mid-campaign must
-        # not break a chained resume. UNTRACKED src files are hashed too -- a new
-        # module that gets imported is invisible to `git diff HEAD`, so a
-        # diff-only hash lets two different source states collide.
+        # Content hash of the uncommitted SOURCE state, scoped to src/: an
+        # uncommitted solver edit is a different target and must move the
+        # digest, while editing a PBS or plotting script mid-campaign must not
+        # break a chained resume. Untracked src files are hashed too: a new
+        # imported module is invisible to `git diff HEAD`.
         diff = _src_state(repo)
         out[name] = {"commit": head,
                      "dirty": None if failed else bool(dirty),
@@ -307,9 +293,8 @@ def science_data_identity(molecules) -> dict:
     part of the target manifest a validation artifact can also record -- an
     artifact has no observations or priors, but it reads exactly these files, so
     binding them is what lets validate() refuse a ladder measured against
-    different opacity data. Tree summaries (file counts, newest mtime) are
-    deliberately NOT used: they churn on any cache write and would refuse every
-    artifact.
+    different opacity data. Tree summaries (counts, mtimes) are not used: they
+    churn on any cache write.
     """
     opa = {}
     try:
@@ -333,12 +318,8 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
                               "bytes": obs.stat().st_size}
                              if obs.is_file() else None)
 
-    # Resolve through the engine, never from $VULCAN_FORWARD_DATA: this repo
-    # hands the engine its tree programmatically and paths.set_data_root takes
-    # precedence over the variable, so the environment says nothing about what
-    # a run actually read. Both are recorded, under names that say which is
-    # which -- a resolved path filed under the variable's name would assert
-    # the environment was set when it was not.
+    # Resolve through the engine: paths.set_data_root takes precedence over
+    # $VULCAN_FORWARD_DATA. Both are recorded, each under its own name.
     ident["VULCAN_FORWARD_DATA"] = os.environ.get("VULCAN_FORWARD_DATA")
     root = None
     try:
@@ -357,8 +338,7 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     try:
         # find_spec, NOT import: importing vulcan_jax parses and import-locks
         # its reaction network, and this identity collector only needs the
-        # package path. The bare import here locked the process to the default
-        # network and broke every later SNCHO chem build in the same session.
+        # package path.
         import importlib.util
         spec = importlib.util.find_spec("vulcan_jax")
         if spec is None or not spec.origin:
@@ -688,8 +668,8 @@ def collect(out_dir: Path) -> dict:
         },
         # Every metric here is a max over the SURVIVING cold references, measured
         # against ONE checkpoint, so coverage and the checkpoint digest travel
-        # with them (mala_reversibility binds its own the same way). An npz
-        # predating the gate reads None, which validate() refuses.
+        # with them (mala_reversibility binds its own the same way). A missing
+        # key reads None, which validate() refuses.
         "warm_validation": (None if vwarm is None else {
             "dlogl_max": float(np.nanmax(np.abs(np.asarray(vwarm["dlogl"]))))
                          if "dlogl" in vwarm.files else None,
@@ -906,10 +886,8 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
             "used is unknown")
     elif opa != "exomolop":
         problems.append(
-            f"resolved config records opacity_mode={opa!r}: the sampled "
-            "line-by-line path was removed with vulcan-forward 0.11.0 and is "
-            "measurably biased on this band; only correlated-k ('exomolop') "
-            "runs are certifiable")
+            f"resolved config records opacity_mode={opa!r}, a removed opacity "
+            "path; only correlated-k ('exomolop') runs are certifiable")
     # --- cold replay --------------------------------------------------------
     if replay is not None and replay.get("ran"):
         if not replay.get("passed"):
@@ -955,9 +933,8 @@ def attrition_warnings(cert: dict) -> list[str]:
 
 def artifact_warnings(cert: dict) -> list[str]:
     """Warnings on the two production-fidelity artifacts: missing, not PASS,
-    or measured at a different state than this run. They do not fail the
-    certificate (maintainer's decision, notes 2.4): the maintainer decides by
-    hand when the validation is done."""
+    or measured at a different state than this run. They warn, never fail
+    (notes §2.4)."""
     out = []
     for name, art in cert["validation_artifacts"].items():
         if art is None:
@@ -986,7 +963,7 @@ def artifact_warnings(cert: dict) -> list[str]:
                 return json.dumps(v, sort_keys=True, default=str)
             drift = sorted(k for k, v in got.items()
                            if _norm(run_cfg.get(k)) != _norm(v))
-            # the artifact measured what the code of its day computed
+            # code identity of the artifact
             run_repos = cert.get("code", {}).get("repos") or {}
             drift += sorted(
                 f"code:{r}" for r, s in (art.get("repos") or {}).items()
@@ -1038,7 +1015,7 @@ def health_problems(diag: dict) -> list[str]:
     sweeps = int(diag.get("n_mcmc_steps") or 0)
 
     # Structure before values: a ragged or non-finite series cannot be gated, and
-    # skipping a gate because its inputs are malformed reads exactly like passing.
+    # skipping a gate because its inputs are malformed reads like passing.
     if n <= 0:
         out.append("n_particles missing or non-positive: the degeneracy, ESS and "
                    "late-ladder rejection gates cannot run (skipped, not passed)")
@@ -1290,7 +1267,7 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
     THIS config, reproduces the recorded numbers -- to the convergence scale,
     hence the DLOGL_MAX_PASS gate: with cold_lanes > 0 a recorded draw may
     have entered its lane on a refill, so its column moved with that tick
-    (notes §2.13). An environment or provenance mistake (a swapped line list,
+    (notes §2.13). An environment or provenance mistake (a swapped k-table,
     a stale editable install pointing at another checkout, a different
     network file) passes every internal consistency check and fails here.
     """
@@ -1346,7 +1323,7 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
                        f"max |dlogL| {worst:.3e} vs gate {DLOGL_MAX_PASS} -- "
                        "this environment does not reproduce the recorded "
                        "likelihoods, so the run's provenance is in doubt "
-                       "(swapped line list? stale editable install? different "
+                       "(swapped k-table? stale editable install? different "
                        "network file?)"),
         }
     except Exception as exc:

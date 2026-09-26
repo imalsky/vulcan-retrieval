@@ -21,7 +21,7 @@ original WASP-39b application; every case preset overrides what defines its plan
 
 All fields are overridable per preset via kwargs, and at run time via the
 ``SMC_RETRIEVAL_OVERRIDES`` / ``SMC_RETRIEVAL_OVERRIDES_FILE`` JSON hooks read by
-``retrieval.run_smc`` (identical mechanism to the SWAMPE driver).
+``retrieval_framework.run_smc``.
 """
 from __future__ import annotations
 
@@ -59,12 +59,9 @@ class Config:
     #      exojax_rt; the photo-on requirement: forward/config.py) ----------------
     nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
-    # Convergence uses the VULCAN-master canonical W39b criteria: yconv_cri=0.01 (NOT the
-    # 1e-3 the sensitivity demo used for tight jvps). The operative convergence gate is
-    # the loose branch (longdy<yconv_min=0.1) + photo-flux settling, so 1e-3 vs 0.01
-    # barely changes gradient quality but the looser value avoids grinding extra
-    # thousands of steps toward a criterion the run rarely reaches. slope_cri / yconv_min
-    # / flux_cri are NOT overridden -> they inherit the vulcan_cfg_W39b master defaults.
+    # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
+    # steps for no gradient gain, notes §1.1). slope_cri / yconv_min / flux_cri are not
+    # overridden: they inherit vulcan_cfg_W39b.
     yconv_cri: float = 0.01
     molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
     nu_min: float = 1923.0             # ~5.2 um
@@ -82,36 +79,23 @@ class Config:
     co_mode: str = "fixed_O"           # C/O GUESS construction (the engine repairs it exactly)
     count_min: Optional[int] = None
     count_max: Optional[int] = None
-    # Warm-continuation step cap for the MUTATION path (accepted steps). A proposal
-    # still unconverged at warm_count_max is rejected there (-inf L, same convention as
-    # the count_max reject, just a tighter threshold) instead of dragging the whole
-    # full-width lockstep while_loop to the cold cap. The conv_step=500 certification
-    # window sets the effective warm floor; 1500 keeps margin without paying count_max.
-    # Proposals needing more become ordinary MH rejections. Cold/two-stage solves keep
-    # count_max, and validate_config requires this cap not to exceed it.
+    # Warm mutation cap (accepted steps): a proposal unconverged here is an MH
+    # rejection. conv_step=500 sets the effective floor; 1500 leaves margin (notes
+    # §1.1). Cold solves keep count_max; validate_config requires
+    # warm_count_max <= count_max.
     warm_count_max: int = 1500
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
     # physically meaningless large-dt Ros2 oscillations without changing the canonical
     # convergence criteria.
     dt_max: Optional[float] = None
-    # Cold-init handling of prior draws whose chemistry doesn't converge within
-    # count_max (a real, expected minority at extreme prior corners -- hot + extreme-Kzz
-    # -- for a full-kinetics forward). Best practice (petitRADTRANS,
-    # nested-sampling codes, Herbst-Schorfheide SMC): REJECT the failed draw with -inf
-    # likelihood and OVERSAMPLE the init so the culled cloud still has N healthy
-    # particles. pipeline._init_state draws ceil(N*init_oversample), rejects the
-    # non-converged/non-finite draws, and keeps the first N survivors; it raises ONLY if
-    # fewer than N survive (a systemic prior/config problem, not a few hard corners).
-    #   init_oversample            -- draw factor for the cold init (>=1). 2.0 tolerates
-    #                                 up to 50% non-convergence before the floor bites.
-    #   init_max_nonconverged_frac -- GATE on the observed reject fraction: above it
-    #                                 _init_state RAISES. Conditioning on convergence
-    #                                 removes part of the DECLARED prior, so a run that
-    #                                 rejects heavily is sampling a different support.
-    #                                 This is the per-run floor; the certificate
-    #                                 WARNS at the tighter levels
-    #                                 (CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_WARN).
-    # Both only apply when has_chem_state (real pipelines); stubs draw exactly N.
+    # Cold init rejects draws that do not converge within count_max and oversamples
+    # (pipeline._init_state):
+    #   init_oversample            -- draw factor (>= 1); 2.0 tolerates up to 50%
+    #                                 non-convergence.
+    #   init_max_nonconverged_frac -- gate: _init_state raises above this reject
+    #                                 fraction (the certificate warns at the tighter
+    #                                 CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_WARN).
+    # Stubs draw exactly N.
     init_max_nonconverged_frac: float = 0.1
     init_oversample: float = 2.0
     # The independent demonstration that the region the solver rejected carries
@@ -126,10 +110,8 @@ class Config:
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
 
     # ---- planet identity (every case MUST set these; unset is a hard error) ----
-    # These defaults exist only so the dataclass is constructible; they are not
-    # fallbacks. validate_config REFUSES an unset value rather than substituting
-    # a shared-lib WASP-39b one, because silently modelling a different planet is
-    # the failure this repo most wants to make impossible.
+    # Placeholders so the dataclass is constructible; validate_config refuses an
+    # unset value.
     # VULCAN baseline config name for the chemistry pre-loop, loaded via
     # vulcan_jax.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
@@ -225,25 +207,17 @@ class Config:
     #         sigma (or the synthetic grid's), and fit that (recovery self-test).
     generate_synthetic_data: bool = False
 
-    # ---- inference: BlackJAX adaptive-tempered SMC + forward-mode-jvp MALA -----
+    # ---- inference: adaptive-tempered SMC (plain JAX) + forward-mode-jvp MALA --
     run_inference: bool = True
-    # Expert override: allow gradient-MALA inference with condensation ON. OFF by
-    # default because the default SMC mutation kernel is gradient-based MALA and the
-    # forward-mode gradient through a condensing+pinned steady state is NOT
-    # reliably differentiable -- the pinned S8 state's jvp disagrees with FD at
-    # O(1) (0.91 relative measured; tests/test_condensation_live_tp.py), the same
-    # reason Fisher-through-condensation is refused in jwst-transit-authority. Condensation
-    # FORWARD solves (run_inference=False, synthetic generation) are always allowed.
+    # Expert opt-in: gradient-MALA inference with condensation ON. Off by default:
+    # the tangent through the condensing+pinned state disagrees with FD at O(1)
+    # (notes §2.7). Condensation forward solves are always allowed.
     allow_condense_inference: bool = False
     smc_num_particles: int = 48
     smc_target_ess_frac: float = 0.6
-    # MALA sweeps per tempering stage. Each sweep costs one full batched gradient
-    # (chem jvp lanes + RT vjp) -- the dominant per-stage cost -- so this is a LINEAR
-    # wall-clock knob. Published practice for preconditioned-MALA-within-SMC is 3-10
-    # steps per stage (k=3 is Chopin & Ridgway's floor, called "very sub-optimal" only
-    # for HARD stages by Dau & Chopin; Buchholz+ 2018 adaptively stop near ~5 on
-    # well-preconditioned targets). With the absolute-std preconditioner + per-stage
-    # step adaptation here, 6 is the right planning number.
+    # MALA sweeps per stage: a linear wall-clock knob (each sweep is one batched
+    # gradient). Published MALA-within-SMC practice is 3-10 (Chopin & Ridgway; Dau &
+    # Chopin; Buchholz+ 2018).
     smc_num_mcmc_steps: int = 6
     # "mala": preconditioned MALA on the staged forward-jvp(chem)+vjp(RT)
     #         gradient; "rwm": full-covariance random-walk Metropolis on the SAME
@@ -251,48 +225,33 @@ class Config:
     #         cancels. Both read the step as the scale of the proposal
     #         covariance 2*step*C, so the step (seeded at MALA_STEP0), its clamps
     #         and the Robbins-Monro state are shared; only the target acceptance
-    #         differs (TARGET_ACCEPT). This is a DELIBERATE configured kernel, not
-    #         a fallback: under "mala" a flagged gradient pathology still raises.
+    #         differs (TARGET_ACCEPT).
     smc_mcmc_kernel: str = "mala"
     smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
-    # Per-sweep systematic-breakage BACKSTOP for the tangent-blown class
-    # (finite certified primal, non-finite forward-mode tangent). Such
-    # proposals are handled as ZERO-DRIFT MALA moves -- eval-zeroed gradient
-    # entries used consistently in both proposal densities, certified
-    # likelihood decides acceptance -- logged per sweep as badgrad= with
-    # per-particle forensics dumped. A sweep exceeding ceil(this * N) indicates
-    # systematic AD breakage rather than the known theta-corner class and raises.
+    # Per-sweep systematic-breakage backstop for the tangent-blown class (finite
+    # certified primal, non-finite tangent), which runs as zero-drift MALA moves
+    # logged as badgrad= with forensics. A sweep above ceil(this * N) raises.
     smc_tangent_bad_max_frac: float = 0.25
-    # "cold": the published solve-from-baseline (two-stage) map for EVERY
-    #         evaluation. The likelihood then never depends on sampler history
-    #         -- what MALA, SMC tempering and a quoted Bayesian evidence assume
-    #         -- up to the lane queue's refill tick, which moves a refilled
-    #         draw's column at the convergence scale (notes §2.13). THE DEFAULT.
-    # "warm": every proposal re-converges by continuation from the particle's
-    #         carried column. It is cheaper, but a likelihood evaluation depends on
-    # the particle's CARRIED chemistry column, hence on sampler history, at the
-    # convergence tolerance. A history-dependent target is not the fixed density
-    # the sampler/evidence assume. Warm runs are stamped approximate and require
-    # both post-run validators; cold is the publication default.
+    # "cold" (default): the two-stage map for every evaluation; the likelihood does
+    #         not depend on sampler history, up to the lane refill tick (notes §2.13).
+    # "warm": continuation from the carried column, cheaper but history-dependent;
+    #         stamped approximate and needs both post-run validators.
     smc_chem_mode: str = "cold"
     # Particles per lax.map chunk through the ExoJAX RT. 0 = one all-particle
-    # batch. RT VJP is the memory wall (notes 1.3); PROBE_MEMORY=1 reads the
+    # batch. RT VJP is the memory wall (notes §1.3); PROBE_MEMORY=1 reads the
     # peak when a width or the band grows a lot.
     smc_rt_chunk: int = 16              # primal-likelihood RT chunk
     # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
-    # random-overlap folds, so its memory is linear in this width (notes 1.3).
+    # random-overlap folds, so its memory is linear in this width (notes §1.3).
     smc_rt_vjp_chunk: int = 6
     # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
     # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
     # and refills a lane that certifies with the next draw inside the same
     # while loop (vulcan_forward.converged_y_queue), so wall time follows total
-    # work / k. The gpu preset sets it AND smc_num_particles to
-    # `device_lane_count()`, one kernel wave of the card (132 on the GH200;
-    # maintainer's decision, notes 2.13): the init phase's oversampled draws
-    # queue through that many lanes, a sweep's particles all start at once.
-    # Below smc_num_particles a sweep's proposals queue, slowest first
-    # (pipeline._make_mutation); the preset keeps particles = lanes (notes
-    # §2.13). The schema default is the off-GPU width.
+    # work / k. The gpu preset sets it and smc_num_particles to
+    # `device_lane_count()`, one kernel wave of the card (notes §2.13). Below
+    # smc_num_particles a sweep's proposals queue slowest first. The schema
+    # default is the off-GPU width.
     cold_lanes: int = OFF_GPU_LANES
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
@@ -440,8 +399,7 @@ def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     count (132 on a GH200 / H100 SXM, 108 on an A100), read from the PJRT
     device description's `core_count`. Both VULCAN-JAX block kernels take
     ~125 KB of shared memory and run one block per SM, so a width above the
-    SM count runs a second, mostly empty wave (144 lanes on 132 SMs: the
-    plain step 1.69x slower than at 132, VULCAN-JAX notes 2.9). Off the GPU
+    SM count runs a second, mostly empty wave (notes §1.4). Off the GPU
     the width is a statistics knob only: `fallback`."""
     import jax
 
@@ -491,8 +449,7 @@ def hardware_profile() -> dict:
 def choose_solver() -> str:
     """Set VULCAN_JAX_SOLVER for this process from the device, unless the user
     set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
-    the only card it is measured on (GH200: 1.24x on the primal, tied on the
-    gradient, vulcan-retrieval notes 1.4), and only when its CUDA library is
+    the only card it is measured on (notes §1.4), and only when its CUDA library is
     built; `fast` everywhere else (the kernel's 125 KB block does not fit
     sm_86/89 shared memory). Import-frozen by VULCAN-JAX, so this runs before
     the first vulcan_jax import (make_config calls it). Returns the choice and
@@ -528,24 +485,20 @@ def hardware_warnings(prof: dict) -> list:
     out = []
     if prof["backend"] == "cpu":
         out.append(
-            "running on CPU: the pipeline batches every lane in ONE process, which "
-            "used ~2 cores for 8 lanes on daw (390 ms per step, 49 ms per lane) "
-            "against ~30 ms per lane for one single-thread process per core "
-            "(vulcan-retrieval notes 1.4): about 12x below the machine. Use the "
-            "GPU for production runs.")
+            "running on CPU: the batched pipeline uses about 2 cores regardless of "
+            "lane count (vulcan-retrieval notes §1.4). Use the GPU for production "
+            "runs.")
     elif not prof.get("fp64_full_rate", True):
         out.append(
             f"{prof['device_kind']} (compute capability "
             f"{prof.get('compute_capability')}) runs FP64 at 1/32-1/64 of FP32 and "
-            "the chemistry is f64: one W39b column took 213 s on an RTX 6000 Ada "
-            "against 101 s on one CPU core (VULCAN-JAX notes 2.9). Production "
-            "belongs on a full-rate FP64 card (A100, H100, GH200).")
+            "the chemistry is f64; use a full-rate FP64 card (A100, H100, GH200).")
     if (prof["backend"] in ("gpu", "cuda")
             and "xla_gpu_enable_command_buffer" not in prof["xla_flags"]):
         out.append(
-            "XLA_FLAGS carries no --xla_gpu_enable_command_buffer: the NAS PBS "
-            "sets FUSION,CUBLAS,CUSTOM_CALL,WHILE, which ran the primal step 1.9x "
-            "faster on the GH200 (vulcan-retrieval CLAUDE.md, NAS section).")
+            "XLA_FLAGS carries no --xla_gpu_enable_command_buffer; "
+            "run_nas_w39b.pbs sets FUSION,CUBLAS,CUSTOM_CALL,WHILE "
+            "(vulcan-retrieval notes §1.4).")
     return out
 
 
@@ -577,27 +530,18 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
             f"{cfg.smc_mcmc_kernel!r}")
-    # Condensation forward solves are supported (on-graph rebuild from the live
-    # T(P)), but gradient-MALA INFERENCE through a condensing+pinned steady state
-    # is NOT validated: the fix_species pin captures the column at the first
-    # accepted step past stop_conden_time, so a T perturbation shifts the accepted
-    # step sequence and the forward-mode tangent for the pinned species disagrees
-    # with finite differences at O(1) (0.91 relative measured;
-    # tests/test_condensation_live_tp.py). The default mutation kernel is gradient
-    # MALA, so an inference run would sample against unreliable gradients. Refuse
-    # by default (loud-errors rule); allow_condense_inference=True is the explicit
-    # expert opt-in for anyone who has independently validated their column.
+    # Inference with condensation ON is refused by default: the fix_species pin
+    # captures the column at a discrete accepted step, so the pinned-species
+    # tangent disagrees with FD at O(1) (notes §2.7). allow_condense_inference=True
+    # is the opt-in.
     if (bool(cfg.cfg_overrides.get("use_condense", False))
             and cfg.run_inference and not cfg.allow_condense_inference):
         raise ValueError(
-            "use_condense=True with run_inference=True is refused: condensation "
-            "forward solves are supported, but gradient-MALA inference through the "
-            "condensing+pinned steady state is not validated (the pinned-species "
-            "forward-mode tangent disagrees with FD at O(1) -- 0.91 relative; the "
-            "same reason Fisher-through-condensation is disabled in jwst-transit-authority). "
-            "Run condensation as a FORWARD model (run_inference=False), or set "
-            "allow_condense_inference=True only if you have independently validated "
-            "the gradient on your column.")
+            "use_condense=True with run_inference=True is refused: gradient "
+            "inference through the condensing+pinned state is not validated. Run "
+            "condensation as a forward model (run_inference=False), or set "
+            "allow_condense_inference=True after validating the gradient on your "
+            "column.")
     if int(cfg.init_phase2_spare) < 0:
         raise ValueError("init_phase2_spare must be >= 0")
     if not (1.0 <= cfg.init_oversample <= INIT_OVERSAMPLE_MAX):
@@ -613,18 +557,10 @@ def validate_config(cfg: Config) -> None:
     if cfg.count_max is not None and int(cfg.warm_count_max) > int(cfg.count_max):
         raise ValueError(
             f"warm_count_max={cfg.warm_count_max} exceeds count_max={cfg.count_max}: "
-            "the warm mutation cap exists to reject doomed proposals EARLIER than the "
-            "cold cap, never later (build_chem_model enforces the same against the "
-            "vulcan_cfg default when count_max is inherited)")
-    # The chemistry block [lnZ, c_o, lnKzz] is LOAD-BEARING and POSITIONAL:
-    # pipeline.py / retrieval_forward.py / vulcan_forward.vulcan_chem unpack the
-    # parameter vector by fixed index (theta[0]=lnZ, theta[1]=c_o, theta[2]=lnKzz,
-    # theta[3:3+n_tp]=T-P) and assume a length-(3+n_tp) chem+T-P prefix. Dropping
-    # any one via specs_from_config shortens the vector and shifts every later
-    # index, so the forward path silently reinterprets the parameters (and the
-    # gradient path shape-errors). These three toggles were never meant to be
-    # flipped independently; refuse loudly here rather than sample a mislabeled
-    # posterior. There is deliberately no supported way to drop a chem dimension.
+            "the warm cap must be at most the cold cap")
+    # [lnZ, c_o, lnKzz] is unpacked by fixed position (theta[0:3] chem,
+    # theta[3:3+n_tp] T-P); dropping one shifts every later index, so all three
+    # must be inferred.
     if not (cfg.infer_lnZ and cfg.infer_c_o and cfg.infer_lnKzz):
         off = [n for n, on in (("infer_lnZ", cfg.infer_lnZ),
                                ("infer_c_o", cfg.infer_c_o),
@@ -635,18 +571,13 @@ def validate_config(cfg: Config) -> None:
             "disabling one shifts the T-P and nuisance indices and silently "
             "reinterprets the parameter vector. Keep all three inferred (use a "
             "tight prior range if you want one effectively fixed).")
-    # Planet identity must be declared explicitly by the case: without these the RT
-    # would silently normalize with the shared-lib WASP-39b radius/gravity and the
-    # chemistry would run WASP-39b's baseline column -- a silently-wrong retrieval of
-    # the wrong planet. Fail loud instead (the case's PRESETS must set them).
+    # Planet identity must be set by the case preset.
     if not str(cfg.vulcan_cfg_name).strip():
-        raise ValueError("vulcan_cfg_name is unset -- the case must name its VULCAN "
-                         "baseline config (e.g. 'W39b', loaded from vulcan_jax/configs/); "
-                         "refusing to silently fall back to the shared-lib WASP-39b default")
+        raise ValueError("vulcan_cfg_name is unset: the case must name its VULCAN "
+                         "baseline config (e.g. 'W39b', loaded from vulcan_jax/configs/)")
     if cfg.rp_cm is None or cfg.rstar_cm is None:
-        raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}) -- "
-                         "the case must set both (cm); refusing to silently normalize the "
-                         "transit depth with the shared-lib WASP-39b radii")
+        raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): "
+                         "the case must set both (cm)")
     if not cfg.use_photo:
         # not fatal, but the forward-mode tangent is only validated photo-on.
         import warnings
@@ -660,14 +591,11 @@ def describe_config(cfg: Config, preset: str = "") -> str:
     overrides) -- forward-model fidelity, convergence criteria, T-P handling, data
     source, SMC settings, and the full parameter/prior table. Every entry point logs
     this so the exact numbers a run uses (band, count_max, priors, ...)
-    are visible up front rather than buried in the code. Pure string formatting."""
-    # Offset parameters are named per non-REFERENCE group, and the reference is
-    # the wavelength-first group (see the combo field comment), NOT combo[0] --
-    # naming the banner's offsets from cfg.combo prints the WRONG parameter for
-    # any combo not already in wavelength order. Derive
-    # the order the pipeline will actually use by reading the product CSVs (cheap,
-    # numpy-only); band-edge bin drops can still differ slightly from the built
-    # pipeline, which logs its resolved groups after build.
+    are visible up front."""
+    # Offsets are named per non-reference group, and the reference is the
+    # wavelength-first group, not combo[0]; read the product CSVs (numpy-only) to
+    # get the pipeline's order. Band-edge drops can still differ; the built
+    # pipeline logs its resolved groups.
     groups = list(cfg.combo)
     if cfg.obs_dir and cfg.obs_products:
         from retrieval_framework import observations as OBS
