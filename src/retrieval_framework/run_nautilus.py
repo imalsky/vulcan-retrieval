@@ -2,7 +2,7 @@
 
 Same case, preset, overrides and observations as run_smc; a different sampler.
 Every likelihood call goes through the pipeline's batched chemistry + RT on the
-lane queue at ``cfg.cold_lanes`` with the SMC init's rejection rule: a
+lane queue (``lanes``, below) with the SMC init's rejection rule: a
 non-finite forward, a T-P draw outside the window, a count_max-exhausted solve
 or a stall-certified exit gets log L = -inf. The evidence is therefore a
 ZERO-FILLED box evidence, the kind of quantity an SMC run reports as
@@ -46,10 +46,13 @@ unfinished; resubmit with RESUME=1.
 
     python -m retrieval_framework.run_nautilus <run_dir>
 Env: NAUTILUS_N_LIVE (default N_LIVE), NAUTILUS_N_EFF (default N_EFF),
-NAUTILUS_N_BATCH (default 2 x cold_lanes: each lane solves ~2 columns per batch;
-with cold_lanes = 0,
-one lockstep batch of config_schema.device_lane_count() columns), NAUTILUS_WARM
-(default 1).
+NAUTILUS_N_BATCH (default the lane count, one column per lane per batch; with
+cold_lanes = 0, one lockstep batch of config_schema.device_lane_count() columns),
+NAUTILUS_WARM (default 1).
+
+Lanes: ``cfg.cold_lanes`` (one SM per lane in the gpu preset), times
+FFI_BLOCKS_PER_SM under the ffi solver, whose one-buffer kernels keep that many
+lanes resident per SM (396 lanes on a GH200).
 """
 from __future__ import annotations
 
@@ -71,6 +74,10 @@ log = logging.getLogger("retrieval")
 
 N_LIVE = 500        # live points
 N_EFF = 10_000      # effective posterior samples at which nautilus stops
+# ffi one-buffer blocks resident per SM at ni 89 on compute capability 9.0:
+# ~63 KB of shared memory each in the SM's 228 KB (VULCAN-JAX
+# block_thomas_cuda.cu, bt_choose picks that variant at this width).
+FFI_BLOCKS_PER_SM = 3
 
 
 class Anchors:
@@ -201,15 +208,18 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg, preset = make_config(Path(args.run_dir))
-    cfg = replace(cfg, out_dir=cfg.out_dir.parent / f"{cfg.out_dir.name}_nautilus")
+    lanes = int(cfg.cold_lanes)
+    if os.environ.get("VULCAN_JAX_SOLVER") == "ffi":   # set by make_config
+        lanes *= FFI_BLOCKS_PER_SM
+    cfg = replace(cfg, cold_lanes=lanes,
+                  out_dir=cfg.out_dir.parent / f"{cfg.out_dir.name}_nautilus")
     out = cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
     n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
-    lanes = int(cfg.cold_lanes)
     n_batch = int(os.environ.get(
-        "NAUTILUS_N_BATCH", str(2 * lanes if lanes > 0 else C.device_lane_count())))
+        "NAUTILUS_N_BATCH", str(lanes if lanes > 0 else C.device_lane_count())))
     warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_eff={n_eff} n_batch={n_batch} "
