@@ -11,7 +11,8 @@ synthetic observations, then:
      likelihood, dimension by dimension,
   3. asserts the STAGED batched evaluator (chemistry fwd-jvp lanes + ONE RT vjp,
      lax.map-chunked -- the SMC hot path) == the per-particle block gradient, to
-     fp precision at cold_lanes=0 and to the convergence-scale standard
+     the empirical tight pair (STAGED_DVAL_MAX, STAGED_DGRAD_MAX) at cold_lanes=0 and
+     to the convergence-scale standard
      (validate_warm.DLOGL_MAX_PASS) when cold_lanes>0 puts the staged side on the
      lane queue and the two become different maps; the regime is printed, and
   4. FD-checks the WARM-continuation gradient (the mutation-kernel map: re-converge

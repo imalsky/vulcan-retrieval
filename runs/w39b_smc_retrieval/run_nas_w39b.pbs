@@ -11,8 +11,9 @@
 #
 # =============================================================================
 # WASP-39b differentiable VULCAN-JAX -> ExoJax transmission retrieval on a
-# NASA NAS GH200 node: adaptive-tempered SMC with a forward-mode-jvp MALA kernel
-# against the real Carter & May (2024) NIRISS+G395H spectrum.
+# NASA NAS GH200 node against the real Carter & May (2024) NIRISS+G395H spectrum:
+# nested sampling (nautilus) by default, or adaptive-tempered SMC with a
+# forward-mode-jvp MALA kernel with SAMPLER=smc.
 #
 # This job is read-only on the environment: installs live in the one-time
 # tools/bootstrap_nas_env.pbs; the preflight only validates
@@ -41,7 +42,8 @@
 #   SMC_RETRIEVAL_PRESET    smoke | gpu | prod         (default gpu)
 #   SMC_RETRIEVAL_OVERRIDES JSON Config overrides      (optional)
 #   SMC_RETRIEVAL_OVERRIDES_FILE  JSON Config overrides file, relative to this dir (optional)
-#   SEED=<int>              independent SMC seed in its own out_dir (data/<preset>_seed<N>).
+#   SEED=<int>              independent seed in its own out_dir (data/<preset>_seed<N>;
+#                           nautilus appends _nautilus).
 #                           A SINGLE run's support-fraction error bar is NOT the
 #                           uncertainty on logZ or on the marginals; run >= 3 seeds
 #                           and quote the seed-to-seed spread (see the evidence_report
@@ -97,9 +99,10 @@
 #   qsub -v SEED=2,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 300.0}' run_nas_w39b.pbs
 # Report how far lnKzz and lnZ move against their own statistical widths.
 #
-# On a successful run the plots run automatically. Under smc_chem_mode="warm" so do the
-# warm-vs-cold validation (validate_warm; PASS gate max|dlogL| < 0.1; the verdict lands
-# in the log + validate_warm.npz) and mala_reversibility; the cold default needs neither.
+# With SAMPLER=smc, the plots run automatically on a successful run. Under
+# smc_chem_mode="warm" so do the warm-vs-cold validation (validate_warm; PASS gate
+# max|dlogL| < 0.1; the verdict lands in the log + validate_warm.npz) and
+# mala_reversibility; the cold default needs neither. The nautilus default runs none of them.
 #
 # XLA A/B experiments (launch-overhead reduction). Judge purely by
 # t_mutation_sweep_s in timing.json against a baseline calibration:

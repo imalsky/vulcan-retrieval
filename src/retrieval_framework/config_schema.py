@@ -4,18 +4,20 @@ This mirrors the SWAMPE ``pipeline.Config`` pattern: a single frozen dataclass, 
 per-planet ``*_config()`` PRESETS living in each run's ``case.py`` (see
 ``runs/w39b_smc_retrieval/case.py``), not here. The parameter vector is
 
-    theta = [ lnZ, dln(C/O), lnKzz,   <T-P params>,   lnR0,  offset_g ... ]
-            |------ VULCAN chemistry (3) ------|      radius   inter-instrument
-                                 + ExoJax Guillot T-P            offsets (G-1)
+    theta = [ lnZ, dln(C/O), lnKzz,  <T-P params>,  lnR0,
+              VULCAN chemistry (3)   Guillot T-P    radius
+              log10kappa_cloud, cloud_alpha,  offset_g ...,   noise_inflation ]
+              clouds (2)                      offsets (G-1)   optional
 
 The chemistry parameters (lnZ, dln(C/O), lnKzz) and the T-P parameters all require
 re-converging VULCAN and are the *expensive* directions of every forward-mode
-gradient; ``lnR0`` and the instrument offsets are applied analytically after the
-spectrum and are cheap.
+gradient; ``lnR0`` and the two cloud parameters enter only the RT (no chemistry
+solve), and the instrument offsets are applied analytically after the
+spectrum; all are cheap.
 
 Planet identity enters through explicit fields a case preset sets: the observed
 spectrum (``obs_dir`` + ``obs_products`` + ``combo``), the VULCAN baseline config
-module (``vulcan_cfg_name``), gravity/radii (``tp_gravity_cgs``, ``rp_cm``,
+YAML (``vulcan_cfg_name``), gravity/radii (``tp_gravity_cgs``, ``rp_cm``,
 ``rstar_cm``), and the priors. Field defaults document the shapes/scales of the
 original WASP-39b application; every case preset overrides what defines its planet.
 
@@ -61,7 +63,7 @@ class Config:
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
     # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
     # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
-    # overridden: they inherit vulcan_cfg_W39b.
+    # overridden: they inherit the vulcan_cfg_name config (vulcan_jax/configs/W39b.yaml).
     yconv_cri: float = 0.01
     molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
     nu_min: float = 1923.0             # ~5.2 um
@@ -138,7 +140,7 @@ class Config:
     obs_products: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     combo: Tuple[str, ...] = ("NIRISS", "G395H")   # 2 groups -> ONE offset (on the non-reference group)
     obs_wl_lo: float = 1.00            # um (H2-H2 CIA short edge)
-    obs_wl_hi: float = 5.28            # um (model band red edge)
+    obs_wl_hi: float = 5.28            # um (data-window red edge; bins past the band are dropped)
     # Drop product bins finer than this R before they reach the binning operator.
     # Published R100 products carry truncation remnants where a masked region cuts a
     # bin short: they are a few times narrower than the nominal grid, carry a much
@@ -315,9 +317,10 @@ GUILLOT_F = 0.25        # Guillot f: 1/4 = whole-planet average irradiation
 # The mutation step: seeded at MALA_STEP0, Robbins-Monro tuned once per stage
 # toward the kernel's TARGET_ACCEPT (0.234 is the d->inf optimal RWM rate; the
 # MALA target 0.55 sits below MALA's d->inf optimum 0.574) and clamped to
-# [STEP_MIN, STEP_MAX]. The preconditioner is the ABSOLUTE per-dim width of the
-# freshly resampled cloud, clipped to [SCALE_FLOOR, SCALE_CLIP], so the proposal
-# narrows with the tempering and the step only fine-tunes.
+# [STEP_MIN, STEP_MAX]. The preconditioner is the Cholesky factor of the freshly
+# resampled cloud's FULL covariance (shrunk toward the diagonal), with per-dim
+# widths clipped to [SCALE_FLOOR, SCALE_CLIP], so the proposal narrows with the
+# tempering and the step only fine-tunes.
 MALA_STEP0 = 0.2
 TARGET_ACCEPT = {"mala": 0.55, "rwm": 0.234}
 STEP_MIN, STEP_MAX = 1.0e-3, 3.0
@@ -397,9 +400,7 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
 def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     """Lanes for one kernel wave: the CUDA device's streaming-multiprocessor
     count (132 on a GH200 / H100 SXM, 108 on an A100), read from the PJRT
-    device description's `core_count`. Both VULCAN-JAX block kernels take
-    ~125 KB of shared memory and run one block per SM, so a width above the
-    SM count runs a second, mostly empty wave. Off the GPU
+    device description's `core_count`. Off the GPU
     the width is a statistics knob only: `fallback`."""
     import jax
 
@@ -450,8 +451,7 @@ def choose_solver() -> str:
     """Set VULCAN_JAX_SOLVER for this process from the device, unless the user
     set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
     the only card it is validated on, and only when its CUDA library is
-    built; `fast` everywhere else (the kernel's 125 KB block does not fit
-    sm_86/89 shared memory). Import-frozen by VULCAN-JAX, so this runs before
+    built; `fast` everywhere else. Import-frozen by VULCAN-JAX, so this runs before
     the first vulcan_jax import (make_config calls it). Returns the choice and
     why, for the log."""
     import importlib.util
@@ -508,7 +508,7 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("smc_target_ess_frac must be in (0, 1]")
     # Counts that silently produce a broken or empty run if they reach zero: a
     # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
-    # empty envelope. Chunk sizes are batch splits where 0 means "one batch".
+    # empty envelope. The RT chunk sizes are batch splits where 0 means "one batch".
     for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws",
                  "ppc_chunk_size", "cold_refill_chunk"):
         if int(getattr(cfg, name)) < 1:

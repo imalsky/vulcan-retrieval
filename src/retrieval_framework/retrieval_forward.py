@@ -13,7 +13,8 @@ chemistry) and the ART grid (here, for the RT), so one self-consistent T(P) driv
 
 Everything is pure JAX and supports forward-mode ``jvp`` end-to-end (the VULCAN runner's
 ``lax.while_loop`` supports jvp but not vjp -- forward-mode is the only route, which is
-also why the retrieval's MALA gradient is built from forward-mode jvps).
+also why the retrieval's MALA gradient takes forward-mode jvps through the chemistry
+and one reverse-mode vjp through the RT).
 
 Import order matters: ``vulcan_chem`` (env + jax x64) is imported before ``exojax_rt`` /
 ``tp_profile`` (which import ExoJax).
@@ -35,7 +36,7 @@ from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exoj
 import jax
 import jax.numpy as jnp
 
-from retrieval_framework import tp_profile   # ExoJax Guillot / power-law T-P
+from retrieval_framework import tp_profile   # ExoJax Guillot T-P
 from vulcan_forward import exojax_rt     # ExoJax ArtTransPure model
 from vulcan_forward import interp_map    # differentiable log-P bridge
 
@@ -45,7 +46,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
 
     The early ``cfg_overrides`` gate in ``config_schema.validate_config`` catches
     the common case, but a base VULCAN config can default ``use_condense=True``
-    (e.g. ``Earth.yaml``) without the flag ever appearing in ``cfg_overrides``.
+    without the flag ever appearing in ``cfg_overrides``.
     ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
     condensation is active), so gating on it closes that bypass. The pinned
     condensation state is not reliably differentiable, and gradient MALA is the
@@ -187,13 +188,14 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
         ``(y, ConvDiag)`` with a leading particle axis on every field.
 
-        Same map, run through the solver's BATCHED runner
-        (``vulcan_chem.converged_y_batch``): the while loop sits above the lane
-        vmap, so photolysis and the geometry refresh fire once per cadence for
-        the whole batch instead of on every lane every iteration. Each lane
-        freezes at its own exit, so a particle's column does not depend on the
-        others, but it is NOT bit-identical to its solo solve: the cadence rides
-        the loop's iteration tick (agreement at the convergence scale).
+        Same map, on the lane queue (``chem.converged_y_queue``) when
+        ``cfg.cold_lanes > 0``, else the lockstep batched runner
+        (``chem.converged_y_batch``). The while loop sits above the lane vmap,
+        so photolysis and the geometry refresh fire once per cadence for the
+        whole batch instead of on every lane every iteration. A lane is NOT
+        bit-identical to its solo solve: the cadence rides the loop's iteration
+        tick, and on the lane queue a refilled draw starts at the tick its lane
+        was freed at (agreement at the convergence scale).
         The cold gradient path takes the same route,
         one ``jax.jvp`` per direction through the stage twins below, and so do
         the batched warm continuations (``chem_solve_warm_diag_batch``). Every
@@ -233,7 +235,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     def chem_solve_warm_diag_full(chem_theta, y_warm, lnZ_ref, c_o_ref):
         """chem_solve_warm_diag WITHOUT the mutation cap: runs under the cold
-        count_max. For the INIT gradient pass only (pipeline._init_state phase 2):
+        count_max. The per-particle twin (for the tests) of
+        chem_solve_warm_diag_full_batch, the warm-mode INIT phase-2 solve:
         its inputs are phase-1 SURVIVORS re-certifying from their own converged
         columns -- proven-convergent states, not disposable proposals -- and a
         marginal survivor (a slow phase-1 converger) can need more than
@@ -259,7 +262,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref):
         """``chem_solve_warm_diag_batch`` WITHOUT the mutation cap (the cold
-        count_max): the INIT phase-2 pass, whose inputs are phase-1 survivors
+        count_max): run_nautilus's anchored warm starts and, in warm chem mode,
+        the INIT phase-2 pass, whose inputs are phase-1 survivors
         re-certifying from their own converged columns."""
         return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                  warm_cap=False)

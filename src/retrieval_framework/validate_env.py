@@ -3,8 +3,9 @@
 
 Jobs are READ-ONLY on the environment: all installs happen once in
 tools/bootstrap_nas_env.pbs (NAS) or a local editable install, and every PBS
-job runs this module first instead of pip. It aggregates ALL failures into one
-report (exit 1) that names the remedy.
+job runs this module first instead of pip. It aggregates check failures into one
+report (exit 1) that names the remedy; an exception while loading the case's
+molecule list ends the run with a traceback instead.
 
 Checks, in import-order-safe sequence (vulcan_jax / retrieval_framework BEFORE
 exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first):
@@ -14,11 +15,12 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
   3. vulcan_jax imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
      the installed dist version matches the checkout's _version.py (a mismatch
      means the editable install predates a metadata change -- re-bootstrap);
-  4. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
-  4b. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
+  4. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
      engine every retrieval path imports;
-  5. cross-repo pin: the installed vulcan-jax satisfies vulcan-retrieval's
-     declared requirement (skipped with a warning if `packaging` is absent);
+  4b. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
+  5. cross-repo pin: the installed vulcan-jax and vulcan-forward satisfy
+     vulcan-retrieval's declared requirements (skipped with a warning if
+     `packaging` is absent);
   6. exojax imports and matches vulcan-forward's pin;
   7. required data under <PROJECT_ROOT>/vulcan-retrieval/data/: the real
      spectrum CSVs, and the ExoMolOP k-tables and H2-H2 + H2-He CIA at the
@@ -257,8 +259,8 @@ def _check_exogibbs() -> None:
 
 
 def _check_nautilus() -> None:
-    """run_nautilus (PBS SAMPLER=nautilus) imports nautilus after the pipeline
-    build, minutes into a job; catch a missing install here."""
+    """run_nautilus (PBS SAMPLER=nautilus) imports nautilus inside the job,
+    after the config resolves; catch a missing install here."""
     try:
         import nautilus
     except Exception as e:  # noqa: BLE001

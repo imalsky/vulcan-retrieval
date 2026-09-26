@@ -19,8 +19,9 @@ depth = (rp/rs)^2 and sigma_depth = 2*(rp/rs)*sigma_rprs with the near-symmetric
 low/high errors averaged. A case with a different upstream format should convert its
 files to this layout once, next to the originals.
 
-For synthetic runs where no real bin overlaps the model band (the offline CO-only
-smoke), or when ``obs_dir`` is unset, a constant-R synthetic bin grid is generated.
+A constant-R synthetic bin grid is generated only for a synthetic run
+(generate_synthetic_data=True) with no observation source or fewer than MIN_REAL_BINS
+real bins inside the model band (the offline CO-only smoke); a real-data run raises.
 """
 from __future__ import annotations
 
@@ -115,7 +116,8 @@ def load_real_observations(cfg: Any) -> Dict[str, np.ndarray]:
 def _synthetic_bin_grid(wl_lo: float, wl_hi: float, R: int = SYNTH_R,
                         sigma_ppm: float = SYNTH_SIGMA_PPM) -> Dict[str, np.ndarray]:
     """A simple constant-R bin grid across [wl_lo, wl_hi] (single instrument group).
-    Used only when no real bin overlaps the model band (the CO-only smoke)."""
+    Used only by a synthetic run with no observation source or fewer than
+    MIN_REAL_BINS real bins in the model band (the CO-only smoke)."""
     edges = [wl_lo]
     while edges[-1] < wl_hi:
         edges.append(edges[-1] * (1.0 + 1.0 / R))

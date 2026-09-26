@@ -3,7 +3,7 @@
 SMC evaluator, on the current preset/overrides.
 
 Every probed case is jit-lower()ed and compile()d but never executed (only the
-pipeline build and the synthetic observation run one forward), so there is no
+pipeline build, and on a synthetic run the observation injection, run a forward), so there is no
 OOM risk from the cases themselves: XLA's buffer assignment (the same estimate behind the
 "Can't reduce memory use below ..." rematerialization warnings) is printed per
 case, at the widths the run actually uses. One job pinpoints which stage owns

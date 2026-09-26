@@ -1,5 +1,7 @@
-"""Result artifacts for the two production-fidelity ladders
-(`resolution_ladder.py`: art_nlayer; `top_pressure_ladder.py`: the model top).
+"""Shared helpers for the validation scripts: the production Config and profile,
+R-binning, and the JSON result artifact that the two production-fidelity ladders
+(`resolution_ladder.py`: art_nlayer; `top_pressure_ladder.py`: the model top)
+and `opacity_leave_one_out.py` emit.
 
 Each script's `emit()` writes a JSON artifact under `validation/results/` with
 the code and data provenance that ties the number to one state.
@@ -109,9 +111,10 @@ def _data_identity() -> dict:
     out = {}
     for env in ("VULCAN_FORWARD_DATA", "VULCAN_FORWARD_OPACITY_CACHE"):
         out[env] = os.environ.get(env)
-    # The env vars above are recorded for transparency only. This repo hands
-    # the engine its tree via paths.set_data_root, which takes precedence, so
-    # the trees must be resolved through the engine to be the ones a run read.
+    # The env vars above are recorded for transparency. This repo hands the
+    # engine its tree via paths.set_data_root, which overrides
+    # $VULCAN_FORWARD_DATA but not $VULCAN_FORWARD_OPACITY_CACHE, so the
+    # trees must be resolved through the engine to be the ones a run read.
     tree_dirs = {}
     try:
         # importing this module is what hands the engine this repo's data tree
@@ -176,9 +179,10 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         prov["resolved_config_sha256"] = hashlib.sha256(
             blob.encode()).hexdigest()
         # CONTENT identity of the opacity/CIA files this measurement read, in
-        # the same shape the run's target manifest records, so validate() can
-        # refuse an artifact measured against different data. The tree summary
-        # in prov["data"] cannot do that job -- it carries mtimes.
+        # the same shape the run's target manifest records, so the certificate
+        # (artifact_warnings) can warn on an artifact measured against
+        # different data. The tree summary in prov["data"] cannot do that
+        # job -- it carries mtimes.
         # top_pressure_ladder nests its two grids under "production"/"extended";
         # certificate._validation_artifacts unwraps the same way, so the molecule
         # list is found in both shapes rather than silently reading as empty.

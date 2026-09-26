@@ -42,8 +42,8 @@ if not (REPO_DIR / "data" / "cm24_wasp39b").is_dir():    # tracked marker, in ev
 DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 
 # Hand the shared engine this repo's data tree (exomolop/ + opacity_cache/,
-# what data/ already holds), so the engine never infers
-# the location from its own __file__. It then owns every path INSIDE that tree:
+# what data/ already holds); this takes precedence over $VULCAN_FORWARD_DATA,
+# and with neither set the engine raises. It then owns every path INSIDE that tree:
 # ask paths.opacity_cache_dir / cia_h2h2_file / cia_h2he_file rather than
 # rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
@@ -56,7 +56,7 @@ R_JUP_CM = 7.1492e9        # upstream VULCAN phy_const.r_jup
 # this anchoring is a convention; the retrieval's free lnR0 absorbs the offset,
 # which is why lnR0 must be interpreted as a pressure-radius normalization
 # nuisance rather than a physical radius (see transmission_depth_r).
-RP_CM = 1.279 * R_JUP_CM   # planet radius (cm) at the bottom pressure P_b
+RP_CM = 1.279 * R_JUP_CM   # planet radius (cm) at the ART grid bottom (7 bar)
 GS_CGS = 422.0             # surface gravity (cm/s^2), held fixed (incl. under lnR0)
 RSTAR_CM = 0.932 * R_SUN_CM
 
@@ -73,7 +73,7 @@ SMOKE = {
     "nz": 40,                 # coarse column -> cheaper warm-up + jvps
     "yconv_cri": 1.0e-3,
     "molecules": ["CO"],       # fully offline
-    "nu_min": 4280.0,          # ~2.31-2.34 um, the cached CO 2-0 band
+    "nu_min": 4280.0,          # ~2.29-2.34 um, the cached CO 2-0 band
     "nu_max": 4360.0,
     "opacity_mode": "exomolop",
     "art_nlayer": 20,

@@ -23,8 +23,8 @@ Presets / overrides (env vars)
 CLI
 ---
     python -m retrieval_framework.run_smc <run_dir>              # full run for the chosen preset
-    python -m retrieval_framework.run_smc <run_dir> --calibrate  # build + time 1 likelihood batch
-                                                       # and 1 MALA sweep, project, exit
+    python -m retrieval_framework.run_smc <run_dir> --calibrate  # build + time the state init
+                                                       # and one mutation call, project, exit
 
 Examples (from the repo root)
 ----------------------------------
@@ -164,7 +164,8 @@ def write_run_identity(cfg: C.Config, pipe, preset: str, obs_save: dict) -> None
     P.save_npz(cfg.out_dir / "observations.npz", **obs_save)
     # The canonical manifest, not only its hash: a refused resume names the
     # differing class only if the two manifests can be diffed. The digest that
-    # binds the checkpoint is sha256 of exactly this document.
+    # binds the checkpoint is the sha256 of this manifest's canonical form
+    # (certificate._canonical: compact, sorted keys), not of the indented file.
     (cfg.out_dir / _cert.MANIFEST_FILE).write_text(json.dumps(
         _cert.target_manifest(cfg, pipe), indent=2, sort_keys=True,
         default=str) + "\n")
@@ -270,13 +271,15 @@ def _cuda_profiler(on: bool) -> None:
     log.warning("NSYS_CAPTURE_API=1 but no libcudart could be loaded; nsys capture range not marked")
 
 def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
-    """Time the cold state initialization (one batched two-stage chemistry solve per
-    particle -- paid once per run) and one full mutation call (compile and warm
+    """Time the cold state initialization (the phase-1 cold two-stage solve over the
+    oversampled draw plus the phase-2 gradient pass -- paid once
+    per run) and one full mutation call (compile and warm
     steady-state separately), then project the SMC cost. Writes timing.json.
 
     The mutation is benchmarked at the ladder's OWN stage-0 conditions -- ESS-bisected
-    first beta from the carried likelihoods, stage-0 systematic resample, cloud-width
-    preconditioner, clamped step -- exactly what run_smc_loop's first stage will run,
+    first beta from the carried likelihoods, stage-0 systematic resample, cloud-covariance
+    preconditioner, clamped step -- the same procedure as run_smc_loop's first stage
+    (with different resample and MALA keys),
     so the timing is representative and the health check exercises the real kernel.
 
     Under the staged architecture a stage costs ~one mutation call: the tempering
@@ -320,12 +323,13 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     U, Y, refs, L, G = U[idx], Y[idx], refs[idx], L[idx], G[idx]
     scale_np = P._proposal_scale(np.asarray(jax.device_get(U)), cap=C.SCALE_CLIP)
     scale = jnp.asarray(scale_np, pipe.dtype)
-    scale_w = np.abs(np.diag(scale_np))        # per-dim proposal widths, for the log
+    scale_w = np.abs(np.diag(scale_np))        # Cholesky diagonal (conditional widths), for the log
     step_f = min(max(C.MALA_STEP0, C.STEP_MIN), C.STEP_MAX)
     step = jnp.asarray(step_f, pipe.dtype)
     log.info(f"calibration mutation at stage-0 conditions: beta={dbeta:.3e} "
              f"step={step_f:.3g} width=[{float(scale_w.min()):.3g}, {float(scale_w.max()):.3g}]")
-    # a bad-gradient event raises INSIDE mutate (per sweep, with forensics)
+    # a bad-gradient event warns and dumps forensics inside mutate (per sweep);
+    # a sweep above the systematic-breakage backstop raises
     k_compile, k_steady = jax.random.split(key)   # one key per pass
     t0 = time.perf_counter()
     out = mutate(k_compile, U, Y, refs, L, G, beta, step, scale,
@@ -434,7 +438,7 @@ def main() -> None:
     # ...) is a surprise; shown BEFORE the ~minutes-long forward build.
     log.info(C.describe_config(cfg, preset))
 
-    # pipeline import triggers VULCAN-JAX env setup + jax x64 (heavy)
+    # pipeline import is light; build_pipeline pulls in VULCAN-JAX (env setup + jax x64, heavy)
     from retrieval_framework import pipeline as P
     import jax
     log.info(f"jax backend={jax.default_backend()} devices={jax.devices()} "
@@ -448,7 +452,7 @@ def main() -> None:
              f"| dtype={pipe.dtype.__name__}")
 
     # ---- observations (set exactly once, BEFORE any jitted likelihood call) ----
-    # NOTHING is written to the run directory until the resume identity is
+    # Nothing but run.log is written to the run directory until the resume identity is
     # settled below: a refused resume must leave the killed run's archived
     # identity exactly as it was.
     obs_save = set_observations(cfg, pipe, P)

@@ -9,7 +9,7 @@ fit it (metallicity, C/O, the cloud deck, the instrument offsets).
 Leave-one-out on the PRODUCTION forward (`build_pipeline`, so the parametric T-P
 and the two-stage cold solve are the real ones): for each state, solve the
 chemistry ONCE, then take the engine's own leave-one-out observable
-(`transmission_depth_r(..., wo_mols=...)`, bit-identical to a from-scratch solve
+(`transmission_depth_r(..., wo_mols=...)`, bit-identical on the CPU to a from-scratch solve
 with that VMR zeroed but sharing the correlated-k fold prefix) and bin every row
 onto the real observation grid with the run's own binning matrix. Chemistry and
 continuum are untouched between rungs, so the difference is opacity alone.

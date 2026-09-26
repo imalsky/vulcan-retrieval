@@ -8,7 +8,7 @@ whether its numbers may be reported -- and says so with one PASS/FAIL verdict.
 
 Gates:
 
-  * code and data identity: all four repository commits, package versions, and
+  * code and data identity: all three repository commits, package versions, and
     the identity of the observation / opacity / CIA / network / config inputs;
   * the fully resolved config, hashed;
   * `reached_beta1` and a final beta of exactly 1 within tolerance -- a
@@ -268,7 +268,7 @@ def _cia_identity() -> dict:
     They are direct radiative-transfer inputs, small enough to hash exactly and
     too important to hide inside a directory file-count: a swapped H2-He table
     leaves the tree summary unchanged while changing the continuum the retrieval
-    fits. They are also the only target-affecting inputs NOT tracked in git --
+    fits. They and the ExoMolOP k-tables are the only target-affecting inputs NOT tracked in git --
     everything else (network, baseline T-P, Kzz, elemental abundances) is
     vendored in vulcan-jax and therefore bound by its commit.
     """
@@ -294,7 +294,7 @@ def science_data_identity(molecules) -> dict:
     The per-molecule k-tables plus the two CIA tables, by sha256. This is the
     part of the target manifest a validation artifact can also record -- an
     artifact has no observations or priors, but it reads exactly these files, so
-    binding them is what lets validate() refuse a ladder measured against
+    binding them is what lets artifact_warnings flag a ladder measured against
     different opacity data. Tree summaries (counts, mtimes) are not used: they
     churn on any cache write.
     """
@@ -468,8 +468,9 @@ def target_digest(cfg, pipe) -> str:
 def archived_manifest_digest(out_dir: Path) -> str | None:
     """Digest of the manifest ARCHIVED in a run directory, or None if absent.
 
-    The run directory is written before the sampler runs, so a refused resume
-    can leave a NEW manifest beside OLD samples. Re-hashing the archived
+    The run directory is written before the sampler runs, so a run started in
+    an old directory (a calibration, or a fresh run that dies before its first
+    checkpoint) can leave a NEW manifest beside OLD samples. Re-hashing the archived
     document is what detects that: the three npz copies agree with each other
     (they are all old) and only the manifest dissents.
     """
@@ -498,8 +499,8 @@ def _validation_artifacts() -> dict:
             out[name] = {"error": str(exc)}
             continue
         # the grid the artifact was measured on (top_pressure_ladder nests the
-        # production profile under "production"); validate() refuses a run
-        # whose grid differs, so a changed constant cannot ride on a stale PASS
+        # production profile under "production"); artifact_warnings warns on a run
+        # whose grid differs, so a changed constant cannot ride on a stale PASS unnoticed
         rc = d.get("provenance", {}).get("resolved_config") or {}
         rc = rc.get("production", rc)
         out[name] = {
@@ -583,7 +584,7 @@ def collect(out_dir: Path) -> dict:
     cfg_dict = json.loads(cfg_path.read_text()) if cfg_path.is_file() else {}
     cfg_blob = json.dumps(cfg_dict, sort_keys=True, default=str)
 
-    # These are the filenames written by run_smc.py.
+    # run_smc.py writes the first three; validate_warm writes validate_warm.npz.
     samples = _load_npz(out_dir / "posterior_samples.npz")
     extra = _load_npz(out_dir / "smc_extra_fields.npz")
     ckpt = _load_npz(out_dir / "smc_checkpoint.npz")
@@ -710,7 +711,7 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
     if not cert["resolved_config"]:
         problems.append("no config.json: the resolved configuration is unknown")
 
-    # --- target identity: one digest, carried by all three artifacts --------
+    # --- target identity: three npz digests and the re-hashed manifest agree ----
     tgt_ident = cert["target"]
     dig = {k: (str(tgt_ident.get(k) or "") or None)
            for k in ("digest", "digest_samples", "digest_checkpoint",

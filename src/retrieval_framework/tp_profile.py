@@ -17,8 +17,8 @@ function. Scope of that consistency, stated precisely:
   * the chemistry side rebuilds the rate table AND the T/composition-dependent
     atmospheric structure (hydrostatic geometry via the runner's in-loop refresh +
     seeded initial carry, Dzz/vm/vs on-graph) from this T(P) -- see vulcan_chem;
-    the photolysis cross-section T-interpolation remains baked at the baseline T
-    (host-side upstream step; a documented second-order approximation);
+    the photolysis cross sections are T-independent (vulcan_chem refuses a
+    non-empty T_cross_sp);
   * the ExoJax side builds its own hydrostatic transit geometry from the SAME T(P)
     and the chemistry MMW, interpolated per interp_map (the chemistry grid reaches
     the ART top, so nothing is extrapolated).

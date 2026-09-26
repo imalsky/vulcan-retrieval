@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """calibrate_count_max.py -- measure the accept_count distribution of the cold
-two-stage init over ``--n-draws`` draws from the production prior (same seed
-derivation as run_smc's calibrate), via ``pipeline.batch_eval_cold_l_diag``, so
+two-stage init over ``--n-draws`` draws from the production prior (seeded from
+cfg.seed + --seed-offset), via ``pipeline.batch_eval_cold_l_diag``, so
 count_max is set from a percentile.
 
 This probes with ``--count-max-probe`` (default 20000), NOT the config's
@@ -11,8 +11,8 @@ Draws that still hit the PROBE cap are reported as right-censored (>= probe cap)
 if too many are censored, rerun with a higher --count-max-probe.
 
 ``--fixed-steps K`` instead turns this into a step-cost BENCHMARK: count_min =
-count_max = K pins every lane at exactly K accepted steps per stage (two stages, no
-lane certifies), so the reported ms/step times the batched cold chemistry step at the
+count_max = K pins every lane at exactly K+1 accepted steps per stage (two stages, no
+lane can certify sooner), so the reported ms/step times the batched cold chemistry step at the
 production shape with convergence taken out of the measurement. ``--grad`` benchmarks
 the production cold gradient evaluator ``batch_eval_cold_vg`` instead of the primal
 ``batch_eval_cold_l_diag``.
@@ -88,7 +88,7 @@ def main() -> None:
     if args.n_draws is None:
         args.n_draws = int(cfg.smc_num_particles) if K > 0 else 200
     # count_min = count_max = K: the runner may only certify above count_min, so every
-    # lane runs exactly K accepted steps per stage and none certifies -- convergence is
+    # lane runs exactly K+1 accepted steps per stage and none certifies early -- convergence is
     # out of the timing. warm_count_max comes along only because validate_config
     # refuses warm_count_max > count_max; the bench runs cold evaluators, which are
     # never warm-capped.
@@ -159,7 +159,7 @@ def main() -> None:
 
     if K > 0:
         # Baseline at K=1 (the floor validate_config allows): the same seeds, RT and
-        # likelihood with one accepted step per stage. Its wall is everything that
+        # likelihood with two accepted steps per stage. Its wall is everything that
         # is NOT the solver loop (the equilibrium seed and the RT above all), so the
         # loop's cost is the difference between the two timed passes.
         _t1_first, t1_steady, _o1, _u1 = _timed(

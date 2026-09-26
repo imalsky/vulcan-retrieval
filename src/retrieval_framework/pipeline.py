@@ -5,9 +5,10 @@ mutation kernel.
 The SMC core is plain JAX (no BlackJAX dependency). The algorithm is the standard
 Del Moral (2006) resample-move SMC; each stage (1) picks the next inverse
 temperature by ESS bisection, (2) reweights and accumulates the log-evidence
-increment, (3) resamples systematically, (4) runs `num_mcmc_steps` preconditioned
-MALA sweeps at log_prior_u(u) + beta * loglik(u), (5) Robbins-Monro adapts the step
-and refreshes the full-covariance preconditioner, (6) checkpoints atomically.
+increment, (3) resamples systematically and refreshes the full-covariance
+preconditioner from the resampled cloud, (4) runs `smc_num_mcmc_steps` preconditioned
+MALA (or RWM) sweeps at log_prior_u(u) + beta * loglik(u), (5) Robbins-Monro adapts
+the step, (6) checkpoints atomically.
 
 The VULCAN-JAX runner's `lax.while_loop` supports jvp but not vjp, so the chemistry
 gradient is forward mode. The SMC hot path uses staged batched evaluators split at
@@ -58,7 +59,7 @@ REJECT_BELOW = -1.0e29
 _CD_CONV_NORMAL = 4
 # sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
 _PRIOR_Z_EPS = 1e-6
-# T-P window rejection sampling: candidates per round, and the candidate cap
+# T-P window rejection sampling: the floor on candidates per round, and the candidate cap
 # (max(factor * n, min)) above which it raises instead of looping on.
 _TP_DRAW_MIN = 16
 _TP_DRAW_CAP_FACTOR = 64
@@ -116,7 +117,7 @@ class EvalStats(NamedTuple):
 
 
 def _zero_eval_stats(n: int, dtype) -> EvalStats:
-    """All-healthy EvalStats for stub pipelines / cold gradient maps."""
+    """All-healthy EvalStats for stub pipelines and the base of the likelihood-only tail."""
     return EvalStats(
         n_capped=jnp.zeros((), jnp.int32),
         n_stalled=jnp.zeros((), jnp.int32),
@@ -129,7 +130,7 @@ def _zero_eval_stats(n: int, dtype) -> EvalStats:
 
 
 def _proposal_converged(cd_vec):
-    """Convergence predicate for a warm MALA proposal's solve, from the packed
+    """Convergence predicate for a gradient-path solve (warm or cold), from the packed
     per-particle ConvDiag vector ``[accept_count, longdy, longdydt,
     count_since_new_min, conv_normal]`` (see vulcan_forward.vulcan_chem.ConvDiag).
     The gate that decides whether a proposal's state, and so its jvp tangents, is
@@ -210,7 +211,7 @@ def _map_chunks(fn, args, chunk):
 
 def build_pipeline(cfg: C.Config) -> Pipeline:
     """Build the forward, observation operators, u-space prior/likelihood, and the
-    forward-mode-gradient likelihood wrapper. No inference, no file IO.
+    forward-mode-gradient likelihood wrapper. No inference, no run output written.
 
     Trace-time baking: the likelihood closes over ``pipe.obs_depth_jax`` /
     ``pipe.obs_sigma_jax``, which the first jitted call bakes in. Call
@@ -230,8 +231,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     # ---- T-P validity window (NO clipping) ----------------------------------
     # The Guillot profile is drawn raw (tp_profile does not clip). A draw whose T-P
     # leaves the modelable window [tp_model.T_min, tp_model.T_max] on the ART pressure
-    # grid (the widest P range; the chemistry grid is a subset) is REJECTED, not bent
-    # into range: rejection-sampled away at the prior (init redraw) and given -inf
+    # grid (inside the chemistry grid; make_to_art enforces it) is REJECTED, not bent
+    # into range: rejection-sampled away at the prior (init redraw) and given the REJECT_LOGL
     # likelihood as a MALA proposal. The chem+T-P block of theta is [lnZ, c_o, lnKzz,
     # <n_tp T-P params>], so the T-P sub-vector is theta[3:3+n_tp].
     n_tp = int(fwd.n_tp)
@@ -306,7 +307,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     # Draw from the box prior and REDRAW any particle whose Guillot T-P leaves the
     # modelable window. Cheap (Guillot only, no chemistry). The effective prior is
     # (box) INTERSECT (T-P in window); MALA stays inside it because an out-of-window
-    # proposal gets -inf likelihood (rejected) at every beta>0.
+    # proposal gets the REJECT_LOGL sentinel, which the MH gate rejects at every beta>0.
     _tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: tp_valid(theta_from_u(u)))(U))
 
     # Running tally of the T-P window rejection sampling: n_kept/n_drawn estimates the
@@ -368,8 +369,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     def observed_depth_model(theta):
         """Binned model depth, UNGATED: a plotting/diagnostic interface (truth
-        spectrum, posterior predictive). Every likelihood entry point goes through
-        _binned_ok and rejects an uncertified column."""
+        spectrum, posterior predictive). Every likelihood entry point rejects an
+        uncertified column."""
         return _binned_ok(theta)[0]
 
     observed_depth_model_jit = jax.jit(observed_depth_model)
@@ -404,7 +405,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             return jax.lax.cond(ok & jnp.all(jnp.isfinite(mu)),
                                 lambda: _gauss_loglik(mu, theta), _bad)
 
-        # short-circuit an out-of-window T-P to -inf WITHOUT running the forward
+        # short-circuit an out-of-window T-P to REJECT_LOGL WITHOUT running the forward
         return jax.lax.cond(tp_valid(theta), _good, _bad)
 
     # ---- forward-mode value-and-grad (no reverse tape through the VULCAN loop) ----
@@ -684,10 +685,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                         lambda x: jnp.swapaxes(x, 0, 1), DAUX_l)
                     return AUX, DAUX, Y_l[0], CD_l[0]
         else:
-            # Gated like the gradient path: this evaluator is the FD reference
-            # (smoke_retrieval), the certificate's cold replay and validate_warm's
-            # comparison arm, so it must be the same likelihood. The diag rides
-            # the primal carry.
+            # Gated like the gradient path unless ``diag`` (L stays ungated; the
+            # caller reads the ConvDiag): this evaluator is the FD reference
+            # (smoke_retrieval) and the certificate's cold replay, so it must be
+            # the same likelihood. The diag rides the primal carry.
             def _chem_primal(C_, Y, refs):
                 """Chemistry for the whole particle batch -> (AUX, Y_new, ConvDiag):
                 one batched call (the cold two-stage map, or the warm continuation
@@ -711,10 +712,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 lambda u: jax.jvp(theta_from_u, (u,), (jnp.ones_like(u),)))(U)
             C_ = Theta[:, :n_chem_tp]
             # per-particle T-P window mask (no clip): an out-of-window proposal is
-            # rejected (-inf L, state pinned to baseline) and is NOT flagged as an AD
+            # rejected (L = REJECT_LOGL, state pinned to baseline) and is NOT flagged as an AD
             # pathology (its gradient is irrelevant once MH rejects it).
             valid = jax.vmap(tp_valid)(Theta)
-            usable = valid   # narrowed to (valid & certified) on the warm gradient path
+            usable = valid   # narrowed to (valid & under cap & certified) except on the diag path
             if want_grad:
                 # Chemistry jvp directions: ONE batched solve for the whole
                 # cloud in either chem mode. The chemistry tangent lanes are
@@ -777,7 +778,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     acc=ACC, longdy=CDL.longdy.astype(dtype), conv_ok=conv_ok)
             L = jnp.where(jnp.isfinite(vals) & usable, vals, _REJECT)
             # a blown (-1e30, rejected/culled) solve -- non-finite forward, an
-            # out-of-window T-P, OR a non-converged warm proposal -- must not poison the
+            # out-of-window T-P, OR a capped or uncertified proposal -- must not poison the
             # carried state arithmetic: pin it to the baseline column. This is part of the
             # MH rejection mechanics, not an error path -- true failures surface through
             # the -1e30 likelihood (init raises) or n_bad_grad (host raises).
@@ -1066,9 +1067,9 @@ def _get_batch_evals(pipe: Pipeline):
     (uniform across the mutation-capped, init-uncapped, cold, and stub variants:
     per-batch n_capped/n_stalled tallies + per-particle acc/longdy/conv_ok/
     bad_grad/chem_tan_bad). Likelihood-only evaluators return
-    (L, Y_new, refs_new, stats) with the same EvalStats tail minus the gradient
-    fields, so the gradient-free mutation kernel reports the SAME rejection
-    classes the certificate gates.
+    (L, Y_new, refs_new, stats) with the same EvalStats tail, its gradient
+    fields (bad_grad, chem_tan_bad) all False, so the gradient-free mutation
+    kernel reports the SAME rejection classes the certificate gates.
     Real pipelines carry the staged chemistry+RT evaluators; stub pipes (unit tests,
     no chemistry) get a stateless adapter so the SMC/MALA core is exercised through
     the exact same code path."""
@@ -1148,7 +1149,7 @@ def _init_state(pipe: Pipeline, U, target_n: int):
     # Real (chem-backed) pipelines get the diag-threading cold evaluator so phase 1 can
     # detect a count_max-exhausted (not-actually-converged) particle and REJECT it; stub
     # pipes (unit tests, no chemistry) keep plain cold_l -- there is no while_loop to
-    # exhaust, so nothing is ever rejected there.
+    # exhaust, so only a non-finite or sentinel likelihood is rejected there.
     has_diag = bool(getattr(pipe, "has_chem_state", False))
     cold_l_init = pipe.batch_eval_cold_l_diag if has_diag else cold_l
 
@@ -1174,7 +1175,7 @@ def _init_state(pipe: Pipeline, U, target_n: int):
         L0, Y, refs, _ = pipe._init_l_jit(U, Y0, refs0)
     jax.block_until_ready(L0)
 
-    # per-particle rejection (real pipes only): non-finite forward, count_max-
+    # per-particle rejection: non-finite forward (all pipes); on real pipes also count_max-
     # exhausted, OR stall-certified (the exit was not the runner's canonical
     # certification -- a state whose likelihood/tangents describe an unsettled
     # column; the class behind non-finite mutation gradients)
@@ -1258,7 +1259,7 @@ def _init_state(pipe: Pipeline, U, target_n: int):
         acc2_np = None
     n_bad = int(jax.device_get(n_bad))
     if n_bad > 0:
-        # The tangent-blown class also occurs on the init phase-2 warm
+        # The tangent-blown class also occurs on the init phase-2
         # re-certifications, and it is theta-dependent, so culling or raising
         # on it would bias the initial importance sample against that corner
         # (the badgrad class). Consistent with the
@@ -1613,7 +1614,7 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
                  np.int64),
              init_stats_keys=np.asarray(list(init_stats.keys())),
              init_stats_vals=np.asarray(list(init_stats.values()), np.int64),
-             # carried per-particle state: resume warm-continues without re-init
+             # carried per-particle state: resume continues without re-init
              y_state=np.asarray(jax.device_get(Y), np.float64),
              chem_refs=np.asarray(jax.device_get(refs), np.float64),
              loglik=np.asarray(jax.device_get(L), np.float64),
@@ -1688,7 +1689,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         if ck["u_particles"].shape != (N, n_dim):
             raise ValueError(f"checkpoint particles {ck['u_particles'].shape} != ({N},{n_dim}); "
                              "resume requires the same smc_num_particles and parameter set")
-        # The checkpoint carries a TARGET-EXACTNESS STAMP (written below).
+        # The checkpoint carries a TARGET-EXACTNESS STAMP (written by _write_checkpoint).
         # Adopting betas/logZ/loglik across a target change would splice two
         # different densities into one evidence integral, and nothing
         # downstream could detect it -- the certificate reads the last job only.
@@ -1733,8 +1734,9 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                         f"beta={beta:.4f}, logZ={logZ:.2f}")
 
     if not state_loaded:
-        # one batched cold two-stage solve per particle: the ONLY solve-from-baseline
-        # work in the whole run (every mutation proposal warm-continues from here)
+        # two-phase init: a batched cold two-stage solve per draw, then the move-map
+        # gradient; in warm mode the only cold solve in the run (warm mutation
+        # proposals continue from here)
         t0 = time.perf_counter()
         U, L, G, Y, refs, init_stats = _init_state(pipe, U, target_n=N)
         jax.block_until_ready(L)

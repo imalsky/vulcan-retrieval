@@ -34,7 +34,8 @@ nautilus samples the unit cube; z -> u = logit(z) is the retrieval's own
 u-space (pipeline.make_uspace), so theta = theta_from_u(u) follows the box
 prior exactly and the posterior is stored in theta.
 
-Output directory: ``<out_dir>_nautilus`` (default runs/<case>/data/gpu_nautilus):
+Output directory: ``<out_dir>_nautilus`` (default runs/<case>/data/<preset>_nautilus;
+gpu_nautilus under the PBS):
 nautilus_checkpoint.hdf5 (rewritten every iteration), anchors/ (one npz of
 certified columns per batch, reloaded on resume), nautilus_tally.json
 (rejection and warm-start counts, summed over jobs), and when the run finishes

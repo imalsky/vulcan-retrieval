@@ -53,8 +53,9 @@ ATOM_REL_PASS = 1.0e-5
 COLD_NONCONV_WARN_FRAC = 0.10
 # FAIL gate on the warm-vs-cold u-space GRADIENT agreement (max over the cloud
 # of ||G_cold - G_warm|| / max(||G_cold||, ||G_warm||)). The gradient is what
-# steers every MALA proposal (drift = step*scale^2*beta*G), so likelihood/
-# spectrum agreement alone does not validate the kernel. 0.1 relative: a 10% drift error rescales the
+# steers every MALA proposal (drift = step*C*(grad log prior + beta*G),
+# C = scale @ scale.T), so likelihood/spectrum agreement alone does not validate
+# the kernel. 0.1 relative: a 10% drift error rescales the
 # proposal mean by ~10% of the step, well inside MALA's robustness, while a
 # sign-flipped or wildly wrong tangent lands >> 1.
 GRAD_REL_FAIL = 0.1
@@ -177,7 +178,7 @@ def main() -> None:
     N = int(U.shape[0])
     Y0, refs0 = P._blank_state(pipe, N)        # cold map: no history enters
     # Re-solve the cloud COLD in host-side sub-batches. The cold chemistry solve is
-    # a full-width vmap over all N particles (batch_eval_cold_l_diag; only its RT
+    # one batched call over all N particles (batch_eval_cold_vg by default; only its RT
     # sub-step is chunked internally) -- the single largest allocation in this tool.
     # Chunking bounds the peak; results are identical at cold_lanes = 0 (sub-batches are
     # concatenated, no vmap padding) and at the convergence scale when the

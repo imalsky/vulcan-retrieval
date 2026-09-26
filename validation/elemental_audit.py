@@ -53,9 +53,10 @@ def main() -> int:
 
     from vulcan_forward import vulcan_chem
 
-    # The production case IS the specification (same rule as the ladders):
-    # profile and prior box both come from it, so this audit can never
-    # measure a model production does not run.
+    # The production case supplies the profile and the chemistry prior box.
+    # The chemistry is built without the T-P hook, so every draw uses the
+    # VULCAN baseline T-P (fourth theta slot = 0 K shift), not production's
+    # Guillot T-P.
     cfg = _artifact.production_config()
     profile = _artifact.production_profile()
     chem = vulcan_chem.build_chem_model(profile)
