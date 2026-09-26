@@ -1,12 +1,13 @@
 # vulcan-retrieval: the SMC / forward-mode-MALA atmospheric-retrieval
 # framework. The differentiable VULCAN-JAX -> ExoJAX forward model it runs on
-# is the shared `vulcan-forward` distribution, not part of this package. EDITABLE install is the supported dev mode (pip install -e . --no-deps
-# in a checkout of this repo); a site-packages/TestPyPI install
-# works for the code but must set VULCAN_PROJECT_ROOT so the repo data/ tree
-# (observations + opacity caches) resolves -- see forward/config.py.
+# is the shared `vulcan-forward` distribution, not part of this package.
+# Editable install is the supported dev mode (pip install -e . --no-deps in a
+# checkout of this repo); a site-packages/TestPyPI install works for the code
+# but must set VULCAN_PROJECT_ROOT so the repo data/ tree (observations +
+# opacity caches) resolves -- see forward/config.py.
 #
-# NOTE the vulcan-jax dependency below is the TestPyPI release line. The exact
-# validated chemistry commit for HPC runs is pinned in requirements-hpc.txt (repo root).
+# The vulcan-jax dependency below is the TestPyPI release line. The exact
+# validated chemistry commit for HPC runs is pinned in requirements-hpc.txt.
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -16,9 +17,8 @@ name = "vulcan-retrieval"
 dynamic = ["version"]
 description = "Differentiable VULCAN-JAX photochemistry -> ExoJAX transmission forward model and SMC/forward-mode-MALA retrieval framework (WASP-39b)"
 readme = "README.md"
-# 3.10 floor is deliberate and load-bearing: the NAS GH200 deploy env (pyt2_8_gh)
-# is Python 3.10.18, the code is 3.10-clean (no 3.11-only stdlib/syntax), and the
-# HPC-validated jax/jaxlib 0.6.2 is the last jax line that supports 3.10.
+# requires-python >= 3.10: the NAS deploy env (pyt2_8_gh) is Python 3.10.18, and
+# jax/jaxlib 0.6.2 is the last jax line that supports 3.10.
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
@@ -35,18 +35,11 @@ dependencies = [
     "jax>=0.6.2",
     "numpy>=1.26",
     "scipy>=1.12",
-    # The forward-model engine (chemistry + ExoJAX RT) is a shared distribution,
-    # so it -- not this package -- owns the exojax==2.2.3 pin. >=0.27.0: the
-    # equilibrium seed is the only cold start (this package no longer sends
-    # cold_seed) and the refused cold_seed / abundance_mode /
-    # reanchor_atom_ini keys; before it, the correlated-k-only engine,
-    # converged_y_queue (cfg.cold_lanes), warm_cap with per-lane references
-    # (the batched warm solve), the explicit p_ref_bar, and the correlated-k
-    # fold as one lax.scan.
+    # The forward-model engine (chemistry + ExoJAX RT) owns the exojax==2.2.3
+    # pin. >=0.27.0: the equilibrium seed as the only cold start, refusing
+    # cold_seed / abundance_mode / reanchor_atom_ini.
     "vulcan-forward>=0.27.0",
-    # >=0.17.0: the floor vulcan-forward 0.27.0 needs (conv_normal,
-    # validate_overrides); before it, OuterLoop.run_queue, the in-graph
-    # equilibrium cold seed ini_abun.eq_seed, finite forward tangents under vmap.
+    # >=0.17.0: conv_normal and validate_overrides (vulcan-forward 0.27.0's floor).
     "vulcan-jax>=0.17.0",
 ]
 
@@ -72,7 +65,7 @@ dev = ["pytest>=7", "ruff>=0.11", "build>=1.2", "twine>=5", "blackjax>=1.3",
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-# No package data on purpose: every data file (observations, opacity caches,
+# No package data: every data file (observations, opacity caches,
 # run outputs) lives at the repo-root data/ tree, addressed via VULCAN_PROJECT_ROOT.
 include-package-data = false
 
@@ -86,18 +79,11 @@ version = { attr = "retrieval_framework._version.__version__" }
 testpaths = ["tests"]
 addopts = "-ra --tb=short"
 markers = [
-    # Integration tests that build a REAL chemistry + RT pipeline (ExoJAX RT
-    # model, line lists, chemistry converged to steady state). Five files
-    # carry it (test_cold_reject, test_condensation_live_tp,
-    # test_set_observations, test_stage_split, test_warm_reject) and are
-    # most of the suite's wall time.
-    #
-    # `pytest tests` STILL RUNS THEM -- the marker deselects nothing by
-    # default, deliberately: this repo treats a silently skipped test as a
-    # failure mode, not a convenience. It exists so a developer can opt into a
-    # fast inner loop with `pytest -m \"not slow\"` (~10 s), which is an
-    # explicit choice with a visible deselected count, and so CI can report the
-    # two groups separately.
+    # Integration tests that build a real chemistry + RT pipeline (five files:
+    # test_cold_reject, test_condensation_live_tp, test_set_observations,
+    # test_stage_split, test_warm_reject). `pytest tests` still runs them;
+    # `pytest -m "not slow"` is the explicit fast loop, with a visible
+    # deselected count.
     "slow: builds a real chemistry/RT pipeline; minutes, not seconds",
 ]
 
@@ -109,7 +95,7 @@ select = ["E4", "E7", "E9", "F"]
 # Semicolon-joined short statements (E702) are kept as written.
 ignore = ["E702"]
 
-# Import order is load-bearing: vulcan_chem (env + jax x64) must precede any
+# Import order matters: vulcan_chem (env + jax x64) must precede any
 # exojax import, and the two test modules set jax x64 before importing the
 # pipeline, so these module-level imports follow executable statements.
 [tool.ruff.lint.per-file-ignores]

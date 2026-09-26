@@ -37,7 +37,7 @@ jobs:
           pip install "jax>=0.6" numpy scipy pytest pyyaml
           pip install "nautilus-sampler==1.0.6"   # tests/test_run_nautilus.py
           pip install pandas   # exogibbs imports it; pandas needs its own deps (pytz, dateutil)
-          pip install --no-deps "exogibbs==0.6.0"   # vulcan-jax 0.15.0 seeds through it; its declared deps (pyfastchem...) are not needed
+          pip install --no-deps "exogibbs==0.6.0"   # vulcan-jax's eq_seed imports it; its declared deps (pyfastchem...) are not needed
           pip install --no-deps "vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@speed"
           pip install --no-deps "vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@speed"
           pip install --no-deps -e .
