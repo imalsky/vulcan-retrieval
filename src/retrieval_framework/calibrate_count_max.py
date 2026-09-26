@@ -254,7 +254,9 @@ def main() -> None:
     # Exit element-budget drift (the solver's cumulative element-budget gate)
     # per draw, with the exit time t: the molecular-diffusion boundary rows
     # leak at a fixed rate (they use g[0] / g[-1] for both densities of their
-    # interface), so a constant drift/t at long t is that term; a short-t,
+    # interface, inherited from VULCAN 2 op.py:1549-1558 at exoclime@80f75b9;
+    # VULCAN-JAX jax_step.py keeps them as bdry0_grav / bdry_top_grav), so a
+    # constant drift/t at long t is that term; a short-t,
     # element-specific drift is geometry or a real leak.
     drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
     atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
