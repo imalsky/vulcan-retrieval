@@ -8,9 +8,7 @@ solves the chemistry there, and compares the R=100 binned depth with production.
 
     python validation/top_pressure_ladder.py
 
-PASS gate: |Delta binned depth| < 5 ppm. The former one-decade constant-VMR
-clamp above a 1e-7 bar chemistry top measured 73.47 ppm against chemistry
-solved there and was replaced by extending the grid.
+PASS gate: |Delta binned depth| < 5 ppm.
 """
 from __future__ import annotations
 
@@ -49,7 +47,7 @@ def binned_depth(chem, rt, constants, interp_map):
 def main() -> int:
     from vulcan_forward import constants
     from vulcan_forward import interp_map
-    # import order is load-bearing: vulcan_chem before exojax
+    # import order matters: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
 

@@ -1,20 +1,8 @@
-"""Provenance-bearing result artifacts for the production-fidelity checks.
+"""Result artifacts for the two production-fidelity ladders
+(`resolution_ladder.py`: art_nlayer; `top_pressure_ladder.py`: the model top).
 
-The two convergence scripts (`resolution_ladder.py`, `top_pressure_ladder.py`)
-measure the two production choices that were made for reasons other than
-accuracy:
-
-  * `art_nlayer = 67` (the ART vertical grid; the spectral grid is fixed by the
-    ExoMolOP tables) was chosen for GPU gradient MEMORY, not from a convergence
-    result;
-  * the model top (ART_PTOP_BAR, both grids) was set by band saturation
-    before it was set by a convergence result.
-
-A verdict printed to a terminal and lost is not evidence, and
-"the script exists" is not the same as "the check passed at production
-settings". This module gives each script one `emit()` call that writes a JSON
-artifact under `validation/results/`, carrying enough provenance to tie the
-number to an exact code and data state.
+Each script's `emit()` writes a JSON artifact under `validation/results/` with
+the code and data provenance that ties the number to one state.
 
 Nothing here imports jax, exojax, or the chemistry stack, so it stays cheap and
 cannot perturb the measurement.
@@ -110,7 +98,7 @@ def _devices() -> list[str]:
 
 
 def _data_identity() -> dict:
-    """Identity of the line-list / opacity trees the RT actually reads.
+    """Identity of the opacity trees the RT reads.
 
     Hashing tens of gigabytes is off the table; the resolved real path plus a
     (count, total bytes, newest mtime) summary changes whenever a tree is
@@ -202,9 +190,8 @@ def emit(name: str, title: str, measurements: list[dict], status: str,
          out_dir: Path | None = None) -> Path:
     """Write `<name>.json` under validation/results/.
 
-    `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate,
-    such as the air-vs-H2/He A/B, whose output is a decision input rather than a
-    threshold). Returns the JSON path.
+    `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate).
+    Returns the JSON path.
     """
     if status not in ("PASS", "FAIL", "REPORT"):
         raise ValueError(f"status must be PASS/FAIL/REPORT, got {status!r}")

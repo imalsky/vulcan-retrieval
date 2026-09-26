@@ -120,7 +120,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    # import order is load-bearing: vulcan_chem sets the import-frozen env vars
+    # import order matters: vulcan_chem sets the import-frozen env vars
     from vulcan_forward import vulcan_chem  # noqa: F401
     from retrieval_framework.pipeline import build_pipeline
 

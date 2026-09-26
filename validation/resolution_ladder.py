@@ -10,8 +10,7 @@ WHICH KNOB THIS SWEEPS: the production RT is correlated-k on the tables' own
 R=1000 band grid and their own 16-point quadrature. There is no spectral
 resolution knob -- both come from the files -- so the remaining free numerical
 axis is the ART VERTICAL grid, ``art_nlayer``, and that is what the ladder
-sweeps. (The retired sampled-line-by-line alternative was measured NOT to
-converge on this band; the numbers are archived in notes.md.)
+sweeps.
 
 Method: converge the W39b chemistry ONCE (baseline theta), then rebuild the RT at
 each rung, bin every native spectrum onto the SAME R=100 bins, and compare
@@ -22,10 +21,8 @@ Run on the GPU node (primal RT only -- the vjp memory wall does not apply):
 
     python validation/resolution_ladder.py
 
-PASS gates (from the review): the production rung must change by < 5 ppm against
-the next rung, and its Jacobian direction by < 1% where the depth response is
-significant. Testing only the two finest rungs says nothing about whether the
-much coarser production rung is adequate.
+PASS gates: the production rung must change by < 5 ppm against the next rung,
+and its Jacobian direction by < 1% where the depth response is significant.
 """
 from __future__ import annotations
 
@@ -68,7 +65,7 @@ def main() -> int:
 
     from vulcan_forward import constants
     from vulcan_forward import interp_map
-    # import order is load-bearing: vulcan_chem before exojax
+    # import order matters: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
     import jax
@@ -163,8 +160,7 @@ def main() -> int:
     print(f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
           + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")
 
-    # A verdict printed to a terminal and lost is not evidence. Archive it with
-    # enough provenance to tie the number to an exact code and data state.
+    # Archive the verdict with its provenance.
     _artifact.emit(
         name="resolution_ladder",
         title="Vertical-grid (art_nlayer) convergence of the binned depth",

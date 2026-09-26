@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Elemental-inventory audit of the abundance map over random prior draws.
 
-For each draw theta = (lnZ, c_o, lnKzz) this verifies, at initialization, the four
-quantities the science review requires at every retrieval point:
+For each draw theta = (lnZ, c_o, lnKzz) this checks four initialization invariants:
 
     (1) column elemental ratios He/H, O/H, C/H, N/H, S/H == the exact theta targets
     (2) dln(C/O) achieved == c_o
@@ -12,7 +11,7 @@ quantities the science review requires at every retrieval point:
 plus the smallest elemental-repair factor (must stay > 0: a repair species driven
 negative would mean the guess left the physical simplex). With --converge it also
 re-converges each draw and reports the post-convergence drift of the column totals
-against atom_ini (the runner's own conservation metric, now anchored exactly).
+against atom_ini (the runner's own conservation metric).
 
 Run (GPU node or a patient workstation; ~minutes without --converge, chemistry-
 solve-bound with it):
@@ -88,7 +87,7 @@ def main() -> int:
 
         if args.converge:
             final, _init = chem.run_diag(np.asarray(th, np.float64))
-            # drift of the converged column totals vs the (now-exact) anchor --
+            # drift of the converged column totals vs the anchor --
             # the runner's own conservation metric atom_loss = (atoms - atom_ini)/atom_ini
             a_run = np.asarray(final.atom_loss, np.float64)
             print(f"      converged: accept={int(final.accept_count)} "
