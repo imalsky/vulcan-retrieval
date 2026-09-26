@@ -144,18 +144,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     gas_mask = jnp.asarray(_gas)
     p_art_bar_j = jnp.asarray(rt.p_art_bar)
 
-    def chem_solve_cold(chem_theta):
-        """Converged ABSOLUTE column y (nz, ni), in two stages: (1) converge at the
-        retrieved T-P/Kzz with BASELINE composition (the violent T-relaxation, which
-        measurably erases init-inventory perturbations); (2) apply the lnZ / C-O
-        scaling to that converged column and re-converge warm (gentle -> inventory
-        survives; also the validated warm-started-jvp pattern). A one-stage solve
-        loses the lnZ/C-O response under a retrieved T-P (notes §2.1, §2.12)."""
-        th_relax = chem_theta.at[0].set(0.0).at[1].set(0.0)        # baseline lnZ, c_o
-        y_relaxed = chem.converged_y(th_relax)                     # stage 1 (nz, ni) abs
-        return chem.converged_y(chem_theta, warm_y=y_relaxed,
-                                lnZ_ref=0.0, c_o_ref=0.0)          # stage 2 (warm)
-
     def chem_stage1(chem_theta):
         """Stage 1 of the cold two-stage map: the converged column at the
         retrieved (lnKzz, T-P) with baseline composition. A function of
@@ -171,23 +159,20 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                                 c_o_ref=0.0, return_conv_diag=True)
 
     def chem_solve_cold_diag(chem_theta):
-        """chem_solve_cold returning ``(y, ConvDiag)``.
+        """Converged absolute column y (nz, ni) and its ``ConvDiag``, in two
+        stages: (1) converge at the retrieved T-P/Kzz with baseline composition;
+        (2) apply the lnZ / C-O scaling to that column and re-converge warm. A
+        one-stage solve loses the lnZ/C-O response under a retrieved T-P (notes
+        §2.1, §2.12).
 
-        Every ConvDiag field, ``accept_count`` included, describes the FINAL stage
-        (stage 2 of the two-stage solve) -- the state ``y`` actually is. Stage 1 is
-        a throwaway relaxation at baseline composition; its step count says nothing
-        about whether the draw's own column converged, and gating on it rejected
-        certified columns (notes §1.1, the nine-draw study). accept_count alone is
-        NOT a convergence test (runtime-budget, hybrid post-flip and non-finite
-        exits can sit well under the cap); gate on ``conv_normal`` too.
+        Every ConvDiag field, ``accept_count`` included, describes the final
+        stage, the state ``y`` is; stage 1's step count says nothing about the
+        draw's own column (notes §1.1). accept_count alone is not a convergence
+        test; gate on ``conv_normal`` too.
 
-        The scalar cold solve (native_depth_aux: the scalar likelihood and the
-        block gradient); the batched evaluators run its twin
-        chem_solve_cold_diag_batch and jvp through the stage twins, and reject a
-        non-converged cold proposal exactly as a warm one is rejected. Every
-        ConvDiag field rides the runner's primal carry, so reading it costs
-        nothing; the pipeline stop_gradients + casts the packed diag inside the
-        jvp chain."""
+        Used by native_depth_aux (scalar likelihood and block gradient); the
+        batched evaluators use chem_solve_cold_diag_batch and reject a
+        non-converged cold proposal as a warm one is rejected."""
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
     def _chem_batch_route(C, **kw):
@@ -250,36 +235,16 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ConvDiag that certifies each draw."""
         return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
-    def chem_solve_warm(chem_theta, y_warm, lnZ_ref, c_o_ref):
-        """Converged ABSOLUTE column y (nz, ni) by warm continuation from a
-        previously-converged column ``y_warm`` whose inventory corresponds to
-        (lnZ_ref, c_o_ref). The lnZ / C-O scalings are applied INCREMENTALLY
-        (theta[0]-lnZ_ref, theta[1]-c_o_ref) -- the validated continuation pattern
-        (same map the SO2 Hessian campaign marched with). Used by the SMC mutation:
-        MCMC proposals move theta a little, so re-converging from the particle's own
-        column costs ~count_min steps instead of a full cold two-stage solve.
-
-        Runs under the warm_count_max cap (warm_cap=True): a proposal still not
-        converged at warm_count_max accepted steps is cut off there and rejected by the
-        pipeline gate -- it must not drag the whole lockstep batch to the cold cap."""
-        return chem.converged_y(chem_theta, warm_y=y_warm,
-                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, warm_cap=True)
-
     def chem_solve_warm_diag(chem_theta, y_warm, lnZ_ref, c_o_ref):
-        """chem_solve_warm + the warm solve's ``ConvDiag``, so the SMC mutation can
-        detect a warm proposal that is NOT actually at a certified steady state --
-        warm_count_max-exhausted OR ended without certifying (conv_normal
-        False) -- and reject it before trusting its jvp; the warm-side analogue of
-        chem_solve_cold_diag. Without it a non-steady warm proposal would feed
-        the tangent/RT-vjp lanes (garbage or non-finite gradient: proposals
-        certified by accept_count alone while their tangents had not settled).
-
-        THE warm solve on the SMC gradient path: pipeline._make_batch_eval jvp's
-        straight through this (every ConvDiag field rides the runner's primal carry
-        for free -- running a second primal-only while_loop just to read it doubled
-        the chemistry wall time per sweep). The pipeline stop_gradients + casts the
-        diag inside the jvp chain (longdy/longdydt are floats and DO carry a
-        tangent; accept_count does not)."""
+        """Converged absolute column y (nz, ni) and its ``ConvDiag`` by warm
+        continuation from a converged column ``y_warm`` whose inventory
+        corresponds to (lnZ_ref, c_o_ref); the lnZ / C-O scalings apply
+        incrementally (theta[0]-lnZ_ref, theta[1]-c_o_ref). Runs under the
+        warm_count_max cap (warm_cap=True). The ConvDiag lets a caller reject a
+        proposal that is not at a certified steady state (warm_count_max-exhausted
+        or a stall/budget exit) before trusting its jvp; it rides the primal
+        carry. The per-particle map for mala_reversibility and the tests; the
+        SMC runs chem_solve_warm_diag_batch."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=True)
@@ -369,11 +334,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     return SimpleNamespace(
         native_depth_aux=native_depth_aux,
         rt_depth=rt_depth,
-        chem_solve_cold=chem_solve_cold,
+        chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_stage1_batch=chem_stage1_batch,
         chem_stage2_diag_batch=chem_stage2_diag_batch,
-        chem_solve_warm=chem_solve_warm,
         chem_solve_warm_diag=chem_solve_warm_diag,
         chem_solve_warm_diag_full=chem_solve_warm_diag_full,
         chem_solve_warm_diag_batch=chem_solve_warm_diag_batch,

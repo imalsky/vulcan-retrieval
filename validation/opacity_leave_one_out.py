@@ -89,10 +89,9 @@ def _aux_for(pipe, theta):
     import jax.numpy as jnp
     th = jnp.asarray(theta)
     chem_theta = th[:pipe.n_chem_tp]
-    lnR0 = th[pipe.lnR0_idx] if pipe.lnR0_idx is not None else jnp.asarray(0.0)
-    cloud = (th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
-             if pipe.n_cloud else None)
-    y = pipe.fwd.chem_solve_cold(chem_theta)
+    lnR0 = th[pipe.lnR0_idx]
+    cloud = th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
+    y = pipe.fwd.chem_solve_cold_diag(chem_theta)[0]
     return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud
 
 
