@@ -303,9 +303,9 @@ def main() -> None:
                 f"max-over-bins ppm: p95={dppm_p95:.2f} max={dppm_max:.2f}")
 
     # ---- elemental-inventory comparison (column He/O/C/N/S totals per H) ----
-    from retrieval_framework.forward import config as _shared_cfg
+    from vulcan_forward.constants import ATOM_COLS
     compo = np.asarray(pipe.fwd.chem.compo_array, np.float64)
-    cols = [_shared_cfg.ATOM_COLS[e] for e in ("H", "He", "O", "C", "N", "S")]
+    cols = [ATOM_COLS[e] for e in ("H", "He", "O", "C", "N", "S")]
 
     def _ratios(Yst):
         A = np.einsum("nzi,ie->ne", np.asarray(Yst, np.float64), compo[:, cols])

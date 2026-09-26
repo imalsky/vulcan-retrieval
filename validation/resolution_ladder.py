@@ -66,7 +66,7 @@ def main() -> int:
     args = ap.parse_args()
     knob = "art_nlayer"
 
-    from retrieval_framework.forward import config
+    from vulcan_forward import constants
     from vulcan_forward import interp_map
     # import order is load-bearing: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
@@ -81,7 +81,7 @@ def main() -> int:
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)
     y0 = chem.converged_y(theta0)
-    he, h2 = chem.sidx["He"], chem.sidx[config.BULK_H2_VULCAN]
+    he, h2 = chem.sidx["He"], chem.sidx[constants.BULK_H2_VULCAN]
 
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
@@ -94,7 +94,7 @@ def main() -> int:
         def depth_of(y):
             ymix = y / jnp.sum(y, axis=1, keepdims=True)
             mmw = to_art(ymix @ chem.species_masses)
-            vmr = {k: to_art(ymix[:, chem.sidx[config.MOLECULES[k]["vulcan"]]])
+            vmr = {k: to_art(ymix[:, chem.sidx[constants.MOLECULES[k]["vulcan"]]])
                    for k in rt.molecules}
             T_art = to_art(jnp.asarray(chem.T_base))
             return rt.transmission_depth(vmr, to_art(ymix[:, h2]), T_art, mmw,

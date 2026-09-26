@@ -4,32 +4,18 @@ Pure constants + paths: NO heavy imports here (no jax, no vulcan_jax, no exojax)
 so this module is safe to import before the env-order-sensitive VULCAN-JAX setup
 runs.
 
-The forward-model ENGINE lives in the ``vulcan-forward`` distribution, so the
-physics constants and the molecule/opacity table below are re-exported from
-``vulcan_forward.constants`` rather than defined twice.
-What stays genuinely local: this repo's filesystem layout, the WASP-39 b case
-constants and the SMOKE profile. This module also hands the engine its data
-root (see the paths section), so the opacity caches live in this repo's data/
-tree.
+The shared physics constants and the molecule/opacity table live in
+``vulcan_forward.constants``; import them from there. What is local: this
+repo's filesystem layout, the WASP-39 b case constants and the SMOKE profile.
+Importing this module hands the engine its data root (see the paths
+section), so the opacity caches live in this repo's data/ tree.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-# Shared physics constants -- single source of truth is the engine package
-# Re-exported (not redefined) so this repo and jwst-transit-authority cannot drift
-# apart on molecule masses, opacity sources, the ART grid bounds, or the
-# composition tables. vulcan_forward.constants is stdlib-only, so importing it
-# here keeps this module import-light.
-from vulcan_forward import constants as _fwd
 from vulcan_forward import paths as _fwd_paths
-
-MOLECULES = _fwd.MOLECULES
-ATOM_COLS = _fwd.ATOM_COLS
-BULK_H2_VULCAN = _fwd.BULK_H2_VULCAN
-T_OPA_MIN_K = _fwd.T_OPA_MIN_K
-T_OPA_MAX_K = _fwd.T_OPA_MAX_K
 
 # Paths
 # VULCAN_PROJECT_ROOT = the directory CONTAINING the vulcan-retrieval/ checkout

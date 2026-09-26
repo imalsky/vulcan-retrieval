@@ -6,10 +6,9 @@ and are shared with jwst-transit-authority, so neither application depends on th
 other. What remains here is this repo's own:
 
 - ``config``      -- this repo's paths + WASP-39 b case constants + the
-                     SMOKE profile; re-exports the shared
-                     physics constants from ``vulcan_forward.constants`` so the
-                     two distributions cannot drift, and hands the engine its
-                     data root. No heavy imports; always safe to import first.
+                     SMOKE profile, and hands the engine its data root. No
+                     heavy imports; always safe to import first. The shared
+                     physics constants are ``vulcan_forward.constants``.
 
 IMPORT ORDER IS STILL LOAD-BEARING: ``vulcan_forward.vulcan_chem`` sets the
 VULCAN_JAX_* import-frozen env vars and jax x64 at import and must come before

@@ -28,11 +28,9 @@ jobs:
         # editable install would try (and fail) to resolve them there, and
         # their heavy trees (exojax, the full JAX stack) are not wanted here.
         #
-        # vulcan-forward IS needed, from GitHub: retrieval_framework.forward.
-        # config re-exports vulcan_forward.constants + paths at import time,
-        # so without it three test modules died at collection (red since
-        # 2026-07-15). Those two engine modules are stdlib-only; anything
-        # reaching vulcan_chem/exojax_rt still skips via importorskip.
+        # vulcan-forward is needed, from GitHub: config_schema and
+        # forward.config import its stdlib-only constants and paths at
+        # import; modules that need vulcan_chem/exojax_rt skip.
         run: |
           # pyyaml: vulcan-jax is installed --no-deps below but its
           # config loader imports yaml at collection time

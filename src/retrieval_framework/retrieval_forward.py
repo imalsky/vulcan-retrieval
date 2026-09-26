@@ -29,7 +29,8 @@ import numpy as np
 logger = logging.getLogger("retrieval")
 
 # import order is load-bearing: vulcan_chem (env + jax x64) before anything exojax
-from retrieval_framework.forward import config        # constants (MOLECULES, ...)
+from retrieval_framework.forward import config  # noqa: F401  (hands the engine its data root)
+from vulcan_forward import constants
 from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
 import jax
 import jax.numpy as jnp
@@ -127,8 +128,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     rt = exojax_rt.build_rt_model(profile)
     to_art = interp_map.make_to_art(chem.p_bar, rt.p_art_bar)
 
-    mol_cols = {key: chem.sidx[config.MOLECULES[key]["vulcan"]] for key in rt.molecules}
-    h2_col = chem.sidx[config.BULK_H2_VULCAN]
+    mol_cols = {key: chem.sidx[constants.MOLECULES[key]["vulcan"]] for key in rt.molecules}
+    h2_col = chem.sidx[constants.BULK_H2_VULCAN]
     he_col = chem.sidx["He"]          # H2-He CIA partner (He is inert in the network)
     species_masses = chem.species_masses
     # GAS-phase normalization: the network's condensed-phase reservoir columns

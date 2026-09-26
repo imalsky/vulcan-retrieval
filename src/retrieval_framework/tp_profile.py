@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from retrieval_framework.config_schema import GUILLOT_F
-from retrieval_framework.forward import config as _pkg_config   # pure constants (T_OPA_MIN_K/MAX_K, GS_CGS)
+from vulcan_forward.constants import T_OPA_MAX_K, T_OPA_MIN_K
 import jax.numpy as jnp
 
 # [T_OPA_MIN_K, T_OPA_MAX_K] is the engine's valid RT window (vulcan_forward.constants;
@@ -48,8 +48,8 @@ import jax.numpy as jnp
 # MODELABLE window, and the pipeline rejects any drawn profile with a layer outside it
 # (rejection-sampled at init, -inf likelihood for a MALA proposal) -- see pipeline.tp_valid.
 # The 20 K inset keeps draws off the window's edge: the retrieval window is [320, 2980] K.
-_T_MIN = float(_pkg_config.T_OPA_MIN_K) + 20.0
-_T_MAX = float(_pkg_config.T_OPA_MAX_K) - 20.0
+_T_MIN = float(T_OPA_MIN_K) + 20.0
+_T_MAX = float(T_OPA_MAX_K) - 20.0
 
 
 def build_tp_model(cfg: Any) -> SimpleNamespace:

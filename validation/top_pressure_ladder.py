@@ -29,13 +29,13 @@ BIN_R = 100.0
 BAND = (1900.0, 9900.0)
 
 
-def binned_depth(chem, rt, config, interp_map):
+def binned_depth(chem, rt, constants, interp_map):
     import jax.numpy as jnp
     to_art = interp_map.make_to_art(chem.p_bar, rt.p_art_bar)
     y = chem.converged_y(jnp.zeros(4, dtype=jnp.float64))
     ymix = y / jnp.sum(y, axis=1, keepdims=True)
-    he, h2 = chem.sidx["He"], chem.sidx[config.BULK_H2_VULCAN]
-    vmr = {k: to_art(ymix[:, chem.sidx[config.MOLECULES[k]["vulcan"]]])
+    he, h2 = chem.sidx["He"], chem.sidx[constants.BULK_H2_VULCAN]
+    vmr = {k: to_art(ymix[:, chem.sidx[constants.MOLECULES[k]["vulcan"]]])
            for k in rt.molecules}
     d = rt.transmission_depth(vmr, to_art(ymix[:, h2]),
                               to_art(jnp.asarray(chem.T_base)),
@@ -47,7 +47,7 @@ def binned_depth(chem, rt, config, interp_map):
 
 
 def main() -> int:
-    from retrieval_framework.forward import config
+    from vulcan_forward import constants
     from vulcan_forward import interp_map
     # import order is load-bearing: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
@@ -60,7 +60,7 @@ def main() -> int:
     chem = vulcan_chem.build_chem_model(prod)
     rt = exojax_rt.build_rt_model(prod)
     p_top, p_btm = float(np.min(chem.p_bar)), float(np.max(chem.p_bar))
-    wl, d = binned_depth(chem, rt, config, interp_map)
+    wl, d = binned_depth(chem, rt, constants, interp_map)
     b_prod = _artifact.bin_trapz(wl, d, edges)
     print(f"[topP] production: model top {p_top:.0e} bar, nz={prod['nz']}, "
           f"art_nlayer={prod['art_nlayer']}", flush=True)
@@ -73,7 +73,7 @@ def main() -> int:
     t0 = time.time()
     chem_x = vulcan_chem.build_chem_model(ext)
     rt_x = exojax_rt.build_rt_model(ext)
-    wl, d = binned_depth(chem_x, rt_x, config, interp_map)
+    wl, d = binned_depth(chem_x, rt_x, constants, interp_map)
     b_ext = _artifact.bin_trapz(wl, d, edges)
     print(f"[topP] extended: model top {ext['art_ptop_bar']:.0e} bar, nz={ext['nz']}, "
           f"art_nlayer={ext['art_nlayer']} ({time.time() - t0:.0f}s)", flush=True)
