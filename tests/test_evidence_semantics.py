@@ -62,9 +62,8 @@ def test_evidence_report_fields_and_identity():
 
 
 def test_logZ_error_lower_bound_tracks_ess_collapse():
-    """logZ had NO Monte Carlo error of any kind, so a sensitivity gate quoted in
-    'Monte Carlo standard errors' could not be evaluated. The ESS-based bound is
-    optimistic but must at least exist and grow as the ladder degrades.
+    """The ESS-based logZ error bound is optimistic but must exist and grow as the
+    ladder degrades.
 
     Exercises the PRODUCTION formula (pipeline.logz_err_lower_bound), not a
     local restatement of it."""

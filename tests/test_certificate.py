@@ -394,7 +394,7 @@ def _digest_pipe():
 ])
 def test_target_digest_moves_with_every_bound_class(field, value, monkeypatch):
     """Each manifest class must change the digest, or a resume could carry
-    numbers from a different density (the shipped stamp was chem_mode only)."""
+    numbers from a different density."""
     monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
     monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
     from retrieval_framework import config_schema as _C
@@ -414,7 +414,7 @@ def test_target_digest_moves_with_every_bound_class(field, value, monkeypatch):
 ])
 def test_target_digest_ignores_per_job_settings(field, value, monkeypatch):
     """A chained RESUME job legitimately changes these; binding them would refuse
-    the documented NAS chaining workflow for no scientific reason."""
+    the documented NAS chaining workflow."""
     monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
     monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
     from retrieval_framework import config_schema as _C
@@ -453,7 +453,7 @@ def test_convergence_attrition_warns(survived, justified, warned):
     c["evidence"].update(log_conv_attrition=math.log(survived),
                          f_c1=survived, f_c2=1.0)
     if justified:
-        c["resolved_config"]["attrition_justification"] = "job 65999 re-solve"
+        c["resolved_config"]["attrition_justification"] = "independent re-solve"
     assert not validate(c, _replay())
     assert bool(certificate.attrition_warnings(c)) is warned
 
@@ -520,8 +520,7 @@ def test_target_digest_binds_the_cia_tables(monkeypatch):
 def test_profile_aliases_cover_every_derived_key():
     """A validation artifact records Config.profile(); the certificate holds the
     flat Config. Any profile key with no Config counterpart must be aliased, or
-    validate() reads it as drift and rejects every freshly generated artifact --
-    which is exactly what an unaliased `gs_cgs` did.
+    validate() reads it as drift and rejects every freshly generated artifact.
     """
     from dataclasses import asdict
     from retrieval_framework import config_schema as _C

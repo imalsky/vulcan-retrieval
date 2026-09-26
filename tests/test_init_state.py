@@ -1,8 +1,7 @@
 """Unit tests for the cold-init reject-and-cull path (pipeline._init_state /
-_init_draw_count). Best practice for a full-kinetics forward: draws whose chemistry
-does not converge within count_max are REJECTED (not carried, not raised on), and the
-init OVERSAMPLES so the culled cloud still holds exactly N healthy particles. See
-CLAUDE.md.
+_init_draw_count): draws whose chemistry does not converge within count_max are
+REJECTED (not carried, not raised on), and the init OVERSAMPLES so the culled cloud
+still holds exactly N healthy particles.
 
 No VULCAN/ExoJax here -- a tiny chem-LIKE fake pipe (has_chem_state=True) provides the
 two batched evaluators _init_state calls, with count_max exhaustion made a deterministic

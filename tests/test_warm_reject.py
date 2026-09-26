@@ -2,15 +2,11 @@
 (pipeline._make_batch_eval, warm + want_grad; retrieval_forward.chem_solve_warm_diag).
 
 A warm_count_max-exhausted (non-converged) warm MALA proposal must be REJECTED (-1e30
-L, dropped from n_bad_grad), NOT fed into the jvp/RT-vjp as a finite-likelihood MH
-candidate, which surfaces as a spurious n_bad_grad RuntimeError (or a NaN
-gradient) at SMC stage 0 and fails the timing calibration. See CLAUDE.md
-"Init / mutation handling".
+L, dropped from n_bad_grad), not fed into the jvp/RT-vjp as a finite-likelihood MH
+candidate.
 
-Also covers the warm-cap plumbing: the warm solvers run a TWIN runner
-capped at warm_count_max < count_max, so a doomed proposal is cut off at the warm cap
-(here 5) instead of marching to the cold cap (here 50) -- asserted via the observed
-accept_count landing at the warm cap, far below the cold one.
+Also covers the warm cap: it rides the runner carry per lane, so a doomed
+proposal stops at warm_count_max (here 5), not at the cold cap (here 50).
 
 This uses the REAL smoke pipeline (CO-only, fully offline; conftest.capped_smoke_pipe)
 at warm_count_max=5, so every warm continuation from the baseline column is guaranteed
@@ -29,7 +25,7 @@ import jax.numpy as jnp  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 
 # SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
-# line lists, chemistry converged to steady state), so it costs
+# k-tables, chemistry converged to steady state), so it costs
 # minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
 # is the opt-in fast inner loop.
 pytestmark = pytest.mark.slow
@@ -58,7 +54,7 @@ def smoke(capped_smoke_pipe):
 
     ACC = np.asarray(jax.vmap(_ac)(C_, Y0, refs0))
     L_g, G, _Yn, _rn, n_bad, _stats = jax.jit(pipe.batch_eval_move_vg)(U, Y0, refs0)
-    L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]   # gated too, since this pass
+    L_u = jax.jit(pipe.batch_eval_move_l)(U, Y0, refs0)[0]   # the primal evaluator gates too
     return dict(pipe=pipe, cmax=int(pipe.fwd.chem.warm_count_max), ACC=ACC,
                 L_gated=np.asarray(L_g), G=np.asarray(G), n_bad=int(n_bad),
                 L_ungated=np.asarray(L_u))
@@ -86,8 +82,7 @@ def test_move_vg_rejects_nonconverged_without_raising(smoke):
 def test_init_eval_is_uncapped(smoke):
     """The INIT gradient path must NOT run under the mutation cap: a phase-1 survivor
     that needs more than warm_count_max steps to re-certify is a healthy particle, not
-    a doomed proposal (5 of 96 survivors gated at the warm cap raise a spurious
-    'crippled cloud' RuntimeError). chem_solve_warm_diag_full must run the
+    a doomed proposal (notes §1.2). chem_solve_warm_diag_full must run the
     UNCAPPED runner: from the baseline column (which cannot certify in either budget
     here) the capped solve stops at WARM_CMAX while the full solve marches on to the
     cold cap."""
@@ -110,7 +105,7 @@ def test_gate_is_load_bearing(smoke):
     Both batched evaluators gate (the primal-only one is the FD reference for
     the gradient, the certificate's cold replay, and validate_warm's comparison
     arm, so it has to be the same likelihood function the sampler targets), so
-    the load-bearing claim is made directly: run the RAW warm map, show its
+    the claim is made directly: run the RAW warm map, show its
     spectrum is finite, and show both evaluators reject it anyway."""
     pipe = smoke["pipe"]
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), N)

@@ -69,19 +69,9 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
     is not shared) biases the posterior SHAPE and the evidence, neither of which
     the uncorrelated test above can see. The gates are identical across kernels;
     only the sweep count differs, because a random walk needs more sweeps for the
-    same mixing.
-
-    MALA measured over 24 seeds at these settings: posterior-mean bias
-    (-0.006, -0.010, -0.001) sigma with per-seed std ~0.05, recovered correlations
-    (0.949, 0.316, 0.207) against the true (0.95, 0.30, 0.20), and
-    lnZ -9.6450 +/- 0.0245 against the analytic -9.6279 -- unbiased on all three.
-    The gates below are ~3-5 sigma of that measured single-seed scatter.
-
-    rwm at 24 sweeps, ONE SEED (100) only: bias (0.067, 0.111, -0.030) sigma,
-    correlations (0.9470, 0.3157, 0.2075), lnZ -9.5629, 384/384 unique, last-stage
-    acceptance 0.272 against the 0.234 rwm target -- worst gate use 44% (the mean
-    bias), against the MALA row's 69%. 16 sweeps also passes on this seed but
-    lands at 98% of the |corr02 - 0.30| < 0.15 gate, i.e. no margin."""
+    same mixing. The gates sit ~3-5 sigma of the measured single-seed scatter
+    (MALA over 24 seeds; rwm at 24 sweeps, the smallest count with margin;
+    readings in notes §2.3)."""
     sd = np.array([0.40, 0.60, 0.25])
     corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
     sig = corr * np.outer(sd, sd)
@@ -112,8 +102,7 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
 
 
 def test_proposal_scale_reduces_to_the_diagonal_at_full_shrinkage():
-    """shrink=1 must reproduce the previous per-dimension preconditioner exactly,
-    so the change is a strict generalization rather than a new kernel."""
+    """shrink=1 must reproduce the per-dimension (diagonal) preconditioner."""
     rng = np.random.default_rng(0)
     x = rng.normal(size=(200, 4)) @ np.array([[1.0, 0.9, 0.0, 0.0],
                                               [0.0, 0.5, 0.0, 0.0],
@@ -137,19 +126,11 @@ def test_walltime_governor_stops_cleanly(tmp_path):
 
 
 def test_resume_reproduces_an_uninterrupted_run(tmp_path):
-    """A killed-and-resumed ladder must be BIT-IDENTICAL to an uninterrupted one.
-
-    Production always seeds with PRNGKey(cfg.seed) and the stage loop restarts at
-    i=0 on resume, so a split-chain handed the resumed job the SAME
-    systematic-resample offsets and MALA noise the killed job had already used --
-    and chaining across 24 h walls is the documented route for a cold ladder.
-    Per-stage randomness is now fold_in(seed_key, ABSOLUTE stage index), which
-    makes chaining exactly equivalent to running through. That equivalence is the
-    real contract, and it is a far sharper gate than a single-seed posterior-mean
-    tolerance (the seed-to-seed spread of this stub's mean is ~0.08-0.16 sigma,
-    so such a gate passes or fails on key luck, not on correctness -- the
-    statistical claim is covered by test_smc_recovers_gaussian_posterior and by
-    tests/test_smc_blackjax_oracle.py)."""
+    """A killed-and-resumed ladder must be bit-identical to an uninterrupted one:
+    per-stage randomness is fold_in(seed_key, absolute stage index), so a resumed
+    job never replays a killed job's resample offsets or MALA noise. The
+    statistical claims are covered by test_smc_recovers_gaussian_posterior and
+    test_smc_blackjax_oracle.py."""
     cfg = C.Config(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=128, num_chains=1)
     key = jax.random.PRNGKey(11)              # the SAME seed on both legs
@@ -245,8 +226,7 @@ def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path, field, ba
 
     Adopting betas/logZ/loglik/gradients across a target change splices two
     densities into one evidence integral, and the certificate cannot detect it --
-    it reads the last job only. chem_mode alone was not enough: it let ANY
-    same-dimensional change to priors, data, opacity, tolerances or code resume.
+    it reads the last job only.
     """
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
@@ -274,7 +254,7 @@ def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path, field, ba
 
 
 def test_resume_refuses_a_checkpoint_with_no_target_digest(tmp_path):
-    """Checkpoints written before the digest existed are not resumable."""
+    """A checkpoint without a target digest is refused."""
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     key = jax.random.PRNGKey(3)

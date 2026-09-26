@@ -16,16 +16,11 @@ from types import SimpleNamespace
 
 import pytest
 
-# `retrieval_forward` imports vulcan_chem and exojax_rt at module scope, and that
-# order is LOAD-BEARING: `vulcan_forward.vulcan_chem` raises if exojax reached
-# sys.modules first (it has to own the first jax import to set x64 and the
-# VULCAN_JAX_* import-frozen env vars). So availability must be checked WITHOUT
-# importing -- `pytest.importorskip("exojax")` imports it and would break the
-# very contract this file tests, failing the whole suite at COLLECTION time.
-# `find_spec` answers the same question without executing the module.
+# Import order: vulcan_chem must precede exojax, so check availability with
+# find_spec; importorskip("exojax") would import it first and break collection.
 if importlib.util.find_spec("exojax") is None:                  # pragma: no cover
     pytest.skip(
-        "chemistry/RT stack (exojax) not installed; the CI here is deliberately "
+        "chemistry/RT stack (exojax) not installed; the CI here is "
         "stack-free. Run this integration test locally.",
         allow_module_level=True,
     )

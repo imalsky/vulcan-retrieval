@@ -1,14 +1,6 @@
-"""The warm gradient gate is implementable.
-
-The warm-vs-cold GRADIENT comparison is a FAIL gate, but it EXCLUDES rows
-whose warm drift was zeroed by the badgrad handling. That exclusion is what
-makes the gate mean anything: a zeroed warm row against a finite cold row
-reads rel exactly 1.0 by construction, so a naive hard gate at 0.1 would fail
-every run containing a single badgrad particle -- which is most runs, since
-the class is posterior-concentrated (6.5% of certified proposals in the
-measured ladder, notes §2.5). The gate would then be re-measuring "did badgrad occur" rather than
-"does warm continuation reproduce the cold drift". The zeroed fraction gets
-its own separate ceiling instead.
+"""validate_warm.compare_grad: the warm gradient gate excludes rows whose warm
+drift was zeroed by the badgrad handling (they read rel = 1 by construction)
+and bounds the zeroed fraction separately.
 
 Pure numpy; no jax, no chemistry stack.
 """
@@ -46,7 +38,7 @@ def test_identical_gradients_pass_the_gate():
 
 
 def test_zeroed_row_reads_rel_one_but_is_excluded_from_the_gate():
-    """The exact situation that made a naive hard gate unimplementable."""
+    """A zeroed warm row against a finite cold row."""
     Gw, Gc = _grads()
     Gw[3] = 0.0                                   # badgrad zero-drift handling
     gs = compare_grad(Gw, Gc, np.ones(len(Gc), bool))

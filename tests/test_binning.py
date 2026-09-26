@@ -113,12 +113,8 @@ def test_offset_design_groups():
 # --- posterior predictive -----------------------------------------------------
 
 def test_replicates_carry_the_likelihood_conditional_variance():
-    """The saved predictive band must be replicated DATA, not model curves.
-
-    Deterministic model curves labelled "PPC 5-95%", with a reduced chi2
-    against the RAW sigma, ignore the inferred noise inflation. A predictive
-    replicate must carry sigma * b, and must widen when b does.
-    """
+    """The saved predictive band is replicated data (mu + N(0, (sigma*b)^2)),
+    and must widen with the noise inflation b."""
     from retrieval_framework.run_smc import predictive_replicates
     rng = np.random.default_rng(0)
     n_draw = 20000

@@ -22,10 +22,10 @@ from conftest import build_smoke_pipe  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework.config_schema import UNDERFLOW_DENOM  # noqa: E402
 
-# SLOW: builds a real chemistry + RT pipeline (see CLAUDE.md, "Layout / entry points").
+# SLOW: builds a real chemistry + RT pipeline.
 pytestmark = pytest.mark.slow
 
-SPLIT_DG_MAX = 1e-8   # split vs single-chain gradient, max|dG| / max|G| (notes §1.8)
+SPLIT_DG_MAX = 1e-8   # split vs single-chain gradient, max|dG| / max|G|
 
 @pytest.fixture(scope="module")
 def smoke():
@@ -79,12 +79,9 @@ def test_stage_split_matches_single_chain(smoke):
                     f"max {ulp:.3g} ulp")
     assert np.array_equal(np.asarray(L_new), np.asarray(L_ref))
 
-    # Norm-relative, never componentwise (CLAUDE.md, "Opacity: correlated-k").
-    # CALIBRATED, not assumed: the two routes batch the stage-1 tangent at
-    # different widths (3 lanes vs 5), so XLA fuses the jvp'd while_loop
-    # differently. Measured 1.1e-10 on these three probe points; the gate sits
-    # ~90x above it and still leaves five orders of margin against the wiring
-    # bug it exists to catch (the repo's staged-vs-block gate is 1e-5).
+    # Norm-relative (notes §1.8). The routes batch the stage-1 tangent at
+    # different widths, so XLA fusion differs; measured 1.1e-10 (notes §2.13),
+    # the gate ~90x above.
     G_new, G_ref = np.asarray(G_new), np.asarray(G_ref)
     dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), UNDERFLOW_DENOM))
     print(f"split-vs-single-chain max|dG|/max|G| = {dg:.3e}")

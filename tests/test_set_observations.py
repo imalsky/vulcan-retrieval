@@ -60,15 +60,9 @@ RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
                            "(set RUN_PRODUCTION_PREFLIGHT=1)")
 def test_production_case_assembles_and_evaluates_one_finite_likelihood(
         monkeypatch, tmp_path):
-    """Assemble the EXACT shipped case and evaluate one likelihood.
-
-    The shipped gpu case could not build: one NIRISS order-1 bin is a truncation
-    remnant at R=464 against a model R=1000, and the binning operator is a pure
-    cell average with no LSF, so observations refused it -- after the batch job
-    had been submitted. No test caught it because the forward E2E never assembled
-    the production observation operator. This is that test: real products, real
-    binning and offset operators, one finite likelihood, before a submit.
-    """
+    """Assemble the shipped case (real products, binning and offset operators)
+    and evaluate one finite likelihood, so a product the binning operator
+    refuses fails here rather than after a submit."""
     from retrieval_framework import run_smc as R
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
@@ -93,8 +87,8 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
         pipe.sample_prior_u(jax.random.PRNGKey(0), 1)[0]))
     assert np.isfinite(logl) and logl > -1e29, f"non-finite/rejected likelihood: {logl}"
 
-    # The opacity leave-one-out screen selects its states from this same pipe, and its
-    # first run costs GH200 hours -- prove the selection here, on the real object.
+    # The opacity leave-one-out screen selects its states from this same pipe;
+    # prove the selection on the real object before a GPU run.
     sys.path.insert(0, str(RUN_DIR.parent.parent / "validation"))
     from opacity_leave_one_out import states_for
     st = states_for(pipe, n_prior=2)

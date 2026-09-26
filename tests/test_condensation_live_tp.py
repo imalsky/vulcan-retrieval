@@ -5,8 +5,8 @@ Validates the on-graph condensation rebuild end-to-end:
 * the ProfileVars conden arrays in a live solve correspond to the PROPOSED
   temperature, never the baseline structural one;
 * at theta whose T(P) equals the structural baseline, the rebuilt arrays are
-  bit-compatible with the host-baked CondenStatic (previous-isothermal parity:
-  identical runner input state => identical solve);
+  bit-compatible with the host-baked CondenStatic (identical runner input
+  state => identical solve);
 * an isothermal AND a Guillot-profile condensation run complete end-to-end
   (terminating at a physical runtime cap -- this anchor-free synthetic column
   has no reachable full thermochemical equilibrium; see _CFG_OVERRIDES), move
@@ -21,8 +21,7 @@ column on the production SNCHO network (its one condensation reaction is
 S8 -> S8_l_s), photochemistry off. Every solve starts from the cfg's
 const_mix column (``chem.y0``) as a continuation, not from the engine's cold
 equilibrium seed: at 400 K that seed holds S8 at ~1e-66 VMR, nothing
-condenses and the solve certifies at count_min (121 steps against 2175 to
-the cap).
+condenses and the solve certifies at count_min (notes §2.7).
 Convergence uses the upstream conden-window + whole-column fix_species pin
 (same methodology jwst_tool.forward.CONDEN_CFG ships): without the pin the
 steady state is transport-limited -- the upper S8 reservoir drains through
@@ -39,7 +38,7 @@ import numpy as np
 import pytest
 
 # SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
-# line lists, chemistry converged to steady state), so it costs
+# k-tables, chemistry converged to steady state), so it costs
 # minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
 # is the opt-in fast inner loop.
 pytestmark = [pytest.mark.slow,
@@ -100,16 +99,11 @@ _CFG_OVERRIDES = {
     # complete first: the certified S8 state is then deterministic
     # (end-of-window rainout, drizzle truncated at STOP_CONDEN).
     "trun_min": STOP_CONDEN,
-    # Physical integration cap. This anchor-free synthetic column (400 K,
-    # no photochemistry, no hot deep boundary) has NO reachable longdy
-    # steady state: after the pin, well-mixed CO2 at ~1.7e-8 VMR keeps
-    # creeping toward thermochemical equilibrium at ~18% per time-doubling
-    # even at t = 1.6e15 s (equilibration ~1e17+ s -- older than any
-    # planet; real columns are anchored by a hot interior or photolysis
-    # sources, cf. the converged WASP-107b tool run). Upstream VULCAN's own
-    # mechanism for such regimes is the runtime cap: integrate to a
-    # physically-sufficient time and take that state. 1e14 s (~3 Myr) is
-    # far beyond every transport/condensation timescale in the column.
+    # Physical integration cap: this anchor-free column (400 K, no
+    # photochemistry, no hot deep boundary) has no reachable longdy steady state
+    # (notes §2.7), so, as upstream VULCAN does, integrate to a physically
+    # sufficient time. 1e14 s (~3 Myr) is far past every transport/condensation
+    # timescale here.
     "runtime": 1.0e14,
 }
 
@@ -154,12 +148,8 @@ def chem_iso(stack):
     def tp_eval(tp, p_bar):
         return jnp.zeros_like(jnp.asarray(p_bar)) + tp[0]
 
-    # Skip ONLY on a missing-data environment. A blanket
-    # `except Exception: pytest.skip(...)` here would convert a real TypeError
-    # -- e.g. vulcan_chem calling a VULCAN-JAX private method whose signature
-    # changed, which breaks EVERY fresh forward run -- into a green skip. Only three tests in the workspace build the chem model for real
-    # (this one, test_warm_reject and test_cold_reject, which reach it through
-    # build_pipeline), so swallowing their failures hides the defect from CI.
+    # Skip only on missing data; a broader handler would report a real
+    # forward-model break (e.g. a changed private-API signature) as a green skip.
     try:
         return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval,
                                             n_tp_params=1)
@@ -210,8 +200,7 @@ def test_live_arrays_follow_proposed_temperature(stack, chem_iso):
 
 def test_baseline_T_parity_with_baked_static(chem_iso):
     """theta at the structural temperature reproduces the host-baked conden
-    arrays bit-compatibly => the runner input equals the pre-change isothermal
-    path and previous numerical parity is retained by construction."""
+    arrays bit-compatibly => the runner input equals the host-baked path."""
     baked = chem_iso._integ._conden_static
     pv = chem_iso.prep_pv(_theta(T_STRUCT))
     np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re),
@@ -252,11 +241,8 @@ def test_isothermal_condensation_converges_and_rains_out(stack, chem_iso):
     assert final_ratio < 2.0, f"gas must relax to ~saturation (got {final_ratio:.2f})"
 
 
-# The Guillot column (346-586 K, cold condensing top) caps dt at ~4e5 s
-# (measured; vs ~4e10 for the isothermal column -- a stiffness property of
-# the cold-top chemistry, identical in upstream's scheme), so the isothermal
-# model's 1e14 s runtime is unreachable. 1e9 s is still four decades past
-# the conden window + pin (1e5 s), which is what this test certifies.
+# The Guillot column's cold top caps dt at ~4e5 s (notes §2.7), so 1e14 s is
+# unreachable; 1e9 s is still four decades past the conden window + pin (1e5 s).
 GUILLOT_RUNTIME = 1.0e9
 GUILLOT_COUNT_MAX = 15000
 
@@ -371,10 +357,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
       smoothly -- its centred FD scales like 1/dT (sweep recorded below) and
       changes sign at particular step sizes, so a per-species sign assertion
       measures the step size, not the tangent. Only the total sulfur reservoir
-      has a derivative. This discreteness -- active-layer/cold-trap switches
-      plus pin-capture jitter -- is exactly why Fisher forecasts with
-      condensation stay loudly unsupported in jwst-transit-authority
-      (forward.canonical_params raises).
+      has a derivative.
     """
     _, jax, jnp = stack
     s8, s8_ls = _s8_cols(chem_iso)
@@ -411,16 +394,10 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
             pytest.xfail(msg + " [x86 tangent, notes §9]")
         assert rel < 0.15, msg
 
-    # The gas/condensate SPLIT is jump-dominated -- do NOT assert on it per
-    # species. Centred FD on the S8 gas column, measured:
-    #   dT   4.0 -> +8.99e14   2.0  -> +1.47e15   1.0   -> +2.35e15
-    #        0.5 -> -4.87e13   0.25 -> +6.32e15   0.125 -> +1.71e16
-    # i.e. FD ~ 1/dT: a fixed-size discontinuity (the pin captures at a discrete
-    # accepted step) divided by 2*dT, not a converging difference quotient. The
-    # dT=0.5 used here lands on a near-cancellation and even flips sign.
-    # The conserved RESERVOIR does have a derivative -- gas + condensate over
-    # that same sweep: -1.264e14 -1.276e14 -1.263e14 -1.339e14 -1.338e14
-    # -1.211e14, stable to ~5% across a 32x dT range, jvp -1.04e14 (18-22%).
+    # The gas/condensate split is jump-dominated (centred FD ~ 1/dT: a fixed
+    # discontinuity from the pin's discrete capture step), so it is not asserted
+    # per species. The conserved reservoir has a derivative: FD stable to ~5%
+    # over a 32x dT range, jvp within 18-22% (sweep: notes §2.7).
     jv_tot, fd_tot = float(jv_pin.sum()), float(fd_pin.sum())
     rel_tot = abs(jv_tot - fd_tot) / max(abs(fd_tot), 1e-300)
     assert rel_tot < 0.35, (
