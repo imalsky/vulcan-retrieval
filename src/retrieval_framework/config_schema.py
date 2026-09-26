@@ -36,6 +36,10 @@ from typing import Any, Dict, List, Optional, Tuple
 # keeps the schema import-light while the RT grid bottom stays single-sourced
 from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR
 
+# Lane count off the GPU, where the width is a statistics knob only
+# (device_lane_count); on a GH200 one kernel wave is 132.
+OFF_GPU_LANES = 144
+
 
 @dataclass(frozen=True)
 class Config:
@@ -289,7 +293,7 @@ class Config:
     # Below smc_num_particles a sweep's proposals queue, slowest first
     # (pipeline._make_mutation); the preset keeps particles = lanes (notes
     # §2.13). The schema default is the off-GPU width.
-    cold_lanes: int = 144
+    cold_lanes: int = OFF_GPU_LANES
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
@@ -350,15 +354,25 @@ class Config:
 # Fixed choices, not Config fields: no preset or override ever set them.
 GUILLOT_F = 0.25        # Guillot f: 1/4 = whole-planet average irradiation
 # The mutation step: seeded at MALA_STEP0, Robbins-Monro tuned once per stage
-# toward the kernel's TARGET_ACCEPT (0.234 is the d->inf optimal RWM rate,
-# MALA's is 0.574) and clamped to [STEP_MIN, STEP_MAX]. The preconditioner is
-# the ABSOLUTE per-dim width of the freshly resampled cloud, clipped to
-# [1e-3, SCALE_CLIP], so the proposal narrows with the tempering and the step
-# only fine-tunes.
+# toward the kernel's TARGET_ACCEPT (0.234 is the d->inf optimal RWM rate; the
+# MALA target 0.55 sits below MALA's d->inf optimum 0.574) and clamped to
+# [STEP_MIN, STEP_MAX]. The preconditioner is the ABSOLUTE per-dim width of the
+# freshly resampled cloud, clipped to [SCALE_FLOOR, SCALE_CLIP], so the proposal
+# narrows with the tempering and the step only fine-tunes.
 MALA_STEP0 = 0.2
 TARGET_ACCEPT = {"mala": 0.55, "rwm": 0.234}
 STEP_MIN, STEP_MAX = 1.0e-3, 3.0
+SCALE_FLOOR = 1.0e-3
 SCALE_CLIP = 20.0
+# Floor for a denominator or log argument that may be exactly zero.
+UNDERFLOW_DENOM = 1e-300
+# Largest cold-init draw factor validate_config accepts.
+INIT_OVERSAMPLE_MAX = 10.0
+# The CUDA compute capability the `ffi` block-Thomas kernel runs on (notes §1.4).
+FFI_COMPUTE_CAPABILITY = "9.0"
+# Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
+# only the banner's C/O range uses it.
+_BASELINE_C_TO_O = 0.549
 
 
 # Parameter specification (the ordered, active parameter list + priors)
@@ -421,7 +435,7 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     return specs
 
 
-def device_lane_count(fallback: int = 144) -> int:
+def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     """Lanes for one kernel wave: the CUDA device's streaming-multiprocessor
     count (132 on a GH200 / H100 SXM, 108 on an A100), read from the PJRT
     device description's `core_count`. Both VULCAN-JAX block kernels take
@@ -496,12 +510,14 @@ def choose_solver() -> str:
     cc = str(getattr(dev, "compute_capability", ""))
     spec = importlib.util.find_spec("vulcan_jax")
     lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"
-    if jax.default_backend() in ("gpu", "cuda") and cc == "9.0" and lib.is_file():
+    if (jax.default_backend() in ("gpu", "cuda") and cc == FFI_COMPUTE_CAPABILITY
+            and lib.is_file()):
         os.environ["VULCAN_JAX_SOLVER"] = "ffi"
         return f"ffi (compute capability {cc}, {lib.name} built)"
     os.environ["VULCAN_JAX_SOLVER"] = "fast"
     why = ("not a CUDA device" if jax.default_backend() not in ("gpu", "cuda") else
-           f"compute capability {cc} is not 9.0" if cc != "9.0" else
+           f"compute capability {cc} is not {FFI_COMPUTE_CAPABILITY}"
+           if cc != FFI_COMPUTE_CAPABILITY else
            f"{lib} is not built (python -c 'from vulcan_jax import solver_fast; "
            "solver_fast.build(cuda=True)' on the GPU host)")
     return f"fast ({why})"
@@ -584,9 +600,10 @@ def validate_config(cfg: Config) -> None:
             "the gradient on your column.")
     if int(cfg.init_phase2_spare) < 0:
         raise ValueError("init_phase2_spare must be >= 0")
-    if not (1.0 <= cfg.init_oversample <= 10.0):
-        raise ValueError("init_oversample must be in [1, 10] (draw factor for the cold "
-                         "init so the reject-and-cull leaves N healthy particles)")
+    if not (1.0 <= cfg.init_oversample <= INIT_OVERSAMPLE_MAX):
+        raise ValueError(f"init_oversample must be in [1, {INIT_OVERSAMPLE_MAX:g}] (draw "
+                         "factor for the cold init so the reject-and-cull leaves N "
+                         "healthy particles)")
     if not (0.0 <= cfg.init_max_nonconverged_frac <= 1.0):
         raise ValueError("init_max_nonconverged_frac must be in [0, 1]")
     if str(cfg.smc_chem_mode).strip().lower() not in ("warm", "cold"):
@@ -718,7 +735,8 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         pt = "log10U" if s.prior_type == "log10_uniform" else "U"
         note = ""
         if s.name == "c_o":
-            note = f"  [C/O {math.exp(s.lo) * 0.549:.2g}-{math.exp(s.hi) * 0.549:.2g}]"
+            note = (f"  [C/O {math.exp(s.lo) * _BASELINE_C_TO_O:.2g}-"
+                    f"{math.exp(s.hi) * _BASELINE_C_TO_O:.2g}]")
         elif s.name == "log10gamma":
             note = f"  [gamma {10 ** s.lo:.2g}-{10 ** s.hi:.2g}]"
         elif s.name == "lnKzz":

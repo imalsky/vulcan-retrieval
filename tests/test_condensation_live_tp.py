@@ -51,6 +51,8 @@ T_STRUCT = 400.0
 S8_VMR = 1.0e-4
 NZ = 32
 STOP_CONDEN = 1.0e5   # conden window end; S8/S8_l_s pinned whole-column after
+SAME_OPS_RTOL = 1e-14   # the same arithmetic on both sides (jit, vmap, a direct call)
+REBUILD_RTOL = 1e-12    # on-graph rebuild vs the host-baked arrays / a direct evaluation
 
 _CFG_OVERRIDES = {
     "atm_type": "isothermal",
@@ -198,8 +200,8 @@ def test_live_arrays_follow_proposed_temperature(stack, chem_iso):
     sat_430 = np.asarray(pv_430.c_sat_n_per_re[0])
     want_400 = np.asarray(_sat_n_s8(jnp, np.full(NZ, 400.0)))
     want_430 = np.asarray(_sat_n_s8(jnp, np.full(NZ, 430.0)))
-    np.testing.assert_allclose(sat_400, want_400, rtol=1e-14)
-    np.testing.assert_allclose(sat_430, want_430, rtol=1e-14)
+    np.testing.assert_allclose(sat_400, want_400, rtol=SAME_OPS_RTOL)
+    np.testing.assert_allclose(sat_430, want_430, rtol=SAME_OPS_RTOL)
     assert np.all(sat_430 > sat_400)  # warmer => higher saturation density
     # boundary moves: supersaturated layer count changes at fixed abundance
     y_s8 = S8_VMR * np.asarray(pv_400.n_0)
@@ -213,11 +215,11 @@ def test_baseline_T_parity_with_baked_static(chem_iso):
     baked = chem_iso._integ._conden_static
     pv = chem_iso.prep_pv(_theta(T_STRUCT))
     np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re),
-                               np.asarray(baked.sat_n_per_re), rtol=1e-14, atol=0.0)
+                               np.asarray(baked.sat_n_per_re), rtol=SAME_OPS_RTOL, atol=0.0)
     np.testing.assert_allclose(np.asarray(pv.c_Dg_per_re),
-                               np.asarray(baked.Dg_per_re), rtol=1e-12, atol=0.0)
+                               np.asarray(baked.Dg_per_re), rtol=REBUILD_RTOL, atol=0.0)
     np.testing.assert_allclose(np.asarray(pv.n_0),
-                               np.asarray(baked.n_0), rtol=1e-12, atol=0.0)
+                               np.asarray(baked.n_0), rtol=REBUILD_RTOL, atol=0.0)
 
 
 def test_isothermal_condensation_converges_and_rains_out(stack, chem_iso):
@@ -268,6 +270,9 @@ def chem_guillot(stack):
         from exojax.atm.atmprof import atmprof_Guillot
     except Exception as e:  # pragma: no cover - env-dependent
         pytest.skip(f"exojax unavailable: {e}")
+    from vulcan_jax.phy_const import G_grav
+
+    from retrieval_framework.forward.config import RP_CM
     gs_cgs = 1000.0
 
     def tp_eval(tp, p_bar):
@@ -280,8 +285,8 @@ def chem_guillot(stack):
             _profile(cfg_overrides=dict(_CFG_OVERRIDES,
                                         # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
                                         # to reproduce gs_cgs at the W39b radius.
-                                        Rp=1.279 * 7.1492e9,
-                                        Mp=gs_cgs * (1.279 * 7.1492e9) ** 2 / 6.67430e-8,
+                                        Rp=RP_CM,
+                                        Mp=gs_cgs * RP_CM ** 2 / G_grav,
                                         runtime=GUILLOT_RUNTIME),
                      count_max=GUILLOT_COUNT_MAX),
             tp_eval=tp_eval, n_tp_params=4)
@@ -311,7 +316,7 @@ def test_guillot_condensation_end_to_end(stack, chem_guillot):
     assert T_live.std() > 5.0, "Guillot profile must be genuinely non-isothermal"
     want_sat = np.asarray(_sat_n_s8(jnp, T_live))
     np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re[0]), want_sat,
-                               rtol=1e-12)
+                               rtol=REBUILD_RTOL)
     s8, s8_ls = _s8_cols(chem_guillot)
     final, _init = chem_guillot.run_diag(jnp.asarray(th),
                                          **_const_mix(chem_guillot))
@@ -337,12 +342,12 @@ def test_prep_jit_vmap_jvp_traceable(stack, chem_iso):
     sat_of = lambda th: chem_iso.prep_pv(th).c_sat_n_per_re  # noqa: E731
     jit_sat = jax.jit(sat_of)(th0)
     np.testing.assert_allclose(np.asarray(jit_sat), np.asarray(sat_of(th0)),
-                               rtol=1e-14)
+                               rtol=SAME_OPS_RTOL)
     batched = jax.vmap(sat_of)(jnp.stack([th0, th1]))
     np.testing.assert_allclose(np.asarray(batched[0]), np.asarray(sat_of(th0)),
-                               rtol=1e-14)
+                               rtol=SAME_OPS_RTOL)
     np.testing.assert_allclose(np.asarray(batched[1]), np.asarray(sat_of(th1)),
-                               rtol=1e-14)
+                               rtol=SAME_OPS_RTOL)
     e_T = jnp.zeros(4, dtype=jnp.float64).at[3].set(1.0)
     _, dsat = jax.jvp(sat_of, (th0,), (e_T,))
     dsat = np.asarray(dsat)

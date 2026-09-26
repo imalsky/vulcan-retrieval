@@ -54,6 +54,8 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework.certificate import _sha256  # the one file-digest helper
+from retrieval_framework.config_schema import UNDERFLOW_DENOM, Config
+from retrieval_framework.observations import PPM
 
 # PASS gate on max|logL_cold - logL_warm| over the cloud. 0.1 log-units is far
 # inside a 1-sigma contour shift for a ~10-D posterior (whose logL spans ~n_dim/2
@@ -98,7 +100,9 @@ GRAD_REL_FAIL = 0.1
 # zeroed fraction is reported separately with its own ceiling. A run that zeroes
 # a large fraction of its drifts is a real problem -- it just is not the problem
 # this threshold measures.
-GRAD_ZEROED_FRAC_FAIL = 0.25          # matches smc_tangent_bad_max_frac's default
+GRAD_ZEROED_FRAC_FAIL = Config.smc_tangent_bad_max_frac
+# Particles per cold re-solve chunk unless VALIDATE_WARM_CHUNK says otherwise.
+VALIDATE_WARM_CHUNK_DEFAULT = 48
 
 logger = logging.getLogger("retrieval")
 
@@ -144,10 +148,10 @@ def compare_grad(G_warm, G_cold, ok_mask) -> dict:
     ok = np.asarray(ok_mask, bool)
     nw = np.linalg.norm(Gw, axis=1)
     nc = np.linalg.norm(Gc, axis=1)
-    denom = np.maximum(np.maximum(nw, nc), 1e-300)
+    denom = np.maximum(np.maximum(nw, nc), UNDERFLOW_DENOM)
     rel = np.where(ok, np.linalg.norm(Gc - Gw, axis=1) / denom, np.nan)
     cos = np.where(ok & (nw > 0) & (nc > 0),
-                   np.einsum("nd,nd->n", Gw, Gc) / np.maximum(nw * nc, 1e-300),
+                   np.einsum("nd,nd->n", Gw, Gc) / np.maximum(nw * nc, UNDERFLOW_DENOM),
                    np.nan)
 
     # Rows whose WARM gradient was zeroed by the badgrad handling read rel == 1
@@ -221,7 +225,7 @@ def main() -> None:
     # Default 48; VALIDATE_WARM_CHUNK overrides the size, and an
     # explicit value <= 0 (or above N) restores a full-N solve.
     _raw = os.environ.get("VALIDATE_WARM_CHUNK", "").strip()
-    chunk = int(_raw) if _raw else min(N, 48)
+    chunk = int(_raw) if _raw else min(N, VALIDATE_WARM_CHUNK_DEFAULT)
     if chunk <= 0 or chunk > N:
         chunk = N
     # Gradient comparison (likelihood/spectrum gates alone do not validate a
@@ -295,7 +299,7 @@ def main() -> None:
         lambda a: _binned_from_state(*a), (ys, ths)))
     D_warm = np.asarray(jax.device_get(binned_fn(jnp.asarray(ck["y_state"], pipe.dtype), Theta)))
     D_cold = np.asarray(jax.device_get(binned_fn(Y_cold, Theta)))
-    dppm = 1.0e6 * np.abs(D_cold - D_warm)                # (N, n_bin)
+    dppm = (1.0 / PPM) * np.abs(D_cold - D_warm)          # (N, n_bin)
     dppm_max = float(np.max(dppm[ok_mask])) if ok_mask.any() else float("nan")
     dppm_p95 = float(np.percentile(dppm[ok_mask].max(axis=1), 95.0)) if ok_mask.any() else float("nan")
     logger.info(f"binned-spectrum warm-vs-cold done in {time.perf_counter() - t0:.1f}s | "

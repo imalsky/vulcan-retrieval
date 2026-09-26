@@ -48,14 +48,15 @@ DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 # rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
 
-# WASP-39b physical constants (from vulcan_jax/configs/W39b.yaml)
-R_SUN_CM = 6.957e10
+# WASP-39b geometry (cm): the Rp and r_star of vulcan_jax/configs/W39b.yaml.
+R_SUN_CM = 6.957e10        # = vulcan_jax.phy_const.r_sun (not imported: import-light)
+R_JUP_CM = 7.1492e9        # upstream VULCAN phy_const.r_jup
 # Planet radius ASSIGNED to the bottom pressure of the ART grid (7 bar). The
 # literature transit radius does not itself specify a 7-bar reference level, so
 # this anchoring is a convention; the retrieval's free lnR0 absorbs the offset,
 # which is why lnR0 must be interpreted as a pressure-radius normalization
 # nuisance rather than a physical radius (see transmission_depth_r).
-RP_CM = 1.279 * 7.1492e9   # planet radius (cm) at the bottom pressure P_b
+RP_CM = 1.279 * R_JUP_CM   # planet radius (cm) at the bottom pressure P_b
 GS_CGS = 422.0             # surface gravity (cm/s^2), held fixed (incl. under lnR0)
 RSTAR_CM = 0.932 * R_SUN_CM
 

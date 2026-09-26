@@ -47,7 +47,11 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from retrieval_framework import config_schema as C  # light import (no jax)
+from retrieval_framework.observations import PPM
 from retrieval_framework.certificate import _repo_states, refuse_mismatched_resume
+
+# calibrate() refuses unless a ladder of this many stages fits the governor.
+CALIB_FIT_STAGES = 15
 
 
 def _gpu_driver_version() -> str | None:
@@ -363,7 +367,8 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
         "t_mutation_compile_s": t_mut_compile, "t_mutation_sweep_s": t_mut,
         "mutation_accept_frac": float(jax.device_get(out[5])),
         "t_per_stage_s": per_stage,
-        "projected_hours_15_stages": (t_init + t_mut_compile + 15 * per_stage) / 3600.0,
+        f"projected_hours_{CALIB_FIT_STAGES}_stages":
+            (t_init + t_mut_compile + CALIB_FIT_STAGES * per_stage) / 3600.0,
         "projected_hours_40_stages": (t_init + t_mut_compile + 40 * per_stage) / 3600.0,
         f"projected_hours_{int(cfg.smc_max_steps)}_stages":
             (t_init + t_mut_compile + int(cfg.smc_max_steps) * per_stage) / 3600.0,
@@ -384,13 +389,14 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     # ~10-30x more chemistry per sweep, which makes this the normal case to hit
     # rather than an exotic one.
     proj["fits_walltime_budget"] = (
-        None if budget <= 0 else bool((15 * per_stage) <= budget))
+        None if budget <= 0 else bool((CALIB_FIT_STAGES * per_stage) <= budget))
     (cfg.out_dir / "timing.json").write_text(json.dumps(proj, indent=2))
-    if budget > 0 and (15 * per_stage) > budget:
+    if budget > 0 and (CALIB_FIT_STAGES * per_stage) > budget:
         raise SystemExit(
             "CALIBRATION: the projection does NOT fit the walltime budget.\n"
             f"  per-stage sweep      {per_stage / 3600.0:.2f} h\n"
-            f"  15 stages            {15 * per_stage / 3600.0:.2f} h\n"
+            f"  {CALIB_FIT_STAGES} stages            "
+            f"{CALIB_FIT_STAGES * per_stage / 3600.0:.2f} h\n"
             f"  smc_max_steps={int(cfg.smc_max_steps):<3d}      "
             f"{int(cfg.smc_max_steps) * per_stage / 3600.0:.2f} h\n"
             f"  governor budget      {budget / 3600.0:.2f} h\n"
@@ -480,7 +486,8 @@ def main() -> None:
 
     dspan = float(np.nanmax(pipe.obs_depth) - np.nanmin(pipe.obs_depth))
     smean = float(np.mean(pipe.obs_sigma))
-    log.info(f"Depth span {dspan*1e6:.0f} ppm | mean sigma {smean*1e6:.0f} ppm | span/sigma {dspan/smean:.1f}")
+    log.info(f"Depth span {dspan / PPM:.0f} ppm | mean sigma {smean / PPM:.0f} ppm | "
+             f"span/sigma {dspan / smean:.1f}")
 
     if args.calibrate:
         calibrate(cfg, pipe, P, jax)

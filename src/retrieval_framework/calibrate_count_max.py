@@ -48,6 +48,9 @@ import numpy as np
 from retrieval_framework.run_smc import (   # the exact preset/override logic
     _cuda_profiler, make_config, set_observations, setup_logging)
 
+# Caps the production-gate table always reports, beside the preset's and the probe's.
+COUNT_MAX_CANDIDATES = (5000, 10000)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -326,7 +329,7 @@ def main() -> None:
     log.info(f"  rejection classes at the probe cap: {int(ex_probe.sum())} exhausted, "
              f"{int((~conv_ok & ~ex_probe & ~nonfinite).sum())} stall-certified, "
              f"{int(nonfinite.sum())} non-finite / <= -1e29 likelihood, of {len(wa)} draws")
-    cands = sorted({int(c) for c in (preset_count_max, 5000, 10000,
+    cands = sorted({int(c) for c in (preset_count_max, *COUNT_MAX_CANDIDATES,
                                      int(args.count_max_probe)) if c})
     for cand in cands:
         if cand > int(args.count_max_probe):

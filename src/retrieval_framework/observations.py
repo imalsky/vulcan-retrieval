@@ -11,7 +11,7 @@ inside the jitted likelihood:
                            exact and free (tests/test_binning.py checks it against
                            a direct trapezoidal average).
     O  (n_bin, G-1)        instrument-offset design: bin i in group g>0 gets a flat
-                           depth offset. depth_with_offset = binned + O @ (offset_ppm*1e-6).
+                           depth offset. depth_with_offset = binned + O @ (offset_ppm*PPM).
 
 Product CSV format (the Carter & May 2024 / Zenodo convention): one header line, then
 rows of  [index, wave, wave_low, wave_hig, rp/rs, rp/rs_err_low, rp/rs_err_hih].
@@ -32,7 +32,14 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-OFFSET_UNIT = 1.0e-6   # offset parameter is in ppm -> fractional depth
+PPM = 1.0e-6   # one part per million of the transit depth (offsets, sigmas)
+# A real-data run needs at least this many observed bins inside the model band.
+MIN_REAL_BINS = 4
+# Synthetic bin grid (smoke runs with no overlapping real bins): resolving power,
+# per-bin sigma, and the fractional inset from the model band edges.
+SYNTH_R = 200
+SYNTH_SIGMA_PPM = 120.0
+SYNTH_BAND_PAD_FRAC = 0.001
 
 
 def _validated_model_wavelengths(wl_model_um: np.ndarray) -> np.ndarray:
@@ -105,8 +112,8 @@ def load_real_observations(cfg: Any) -> Dict[str, np.ndarray]:
                 group=group[o], groups=groups)
 
 
-def _synthetic_bin_grid(wl_lo: float, wl_hi: float, R: int = 200,
-                        sigma_ppm: float = 120.0) -> Dict[str, np.ndarray]:
+def _synthetic_bin_grid(wl_lo: float, wl_hi: float, R: int = SYNTH_R,
+                        sigma_ppm: float = SYNTH_SIGMA_PPM) -> Dict[str, np.ndarray]:
     """A simple constant-R bin grid across [wl_lo, wl_hi] (single instrument group).
     Used only when no real bin overlaps the model band (the CO-only smoke)."""
     edges = [wl_lo]
@@ -117,7 +124,7 @@ def _synthetic_bin_grid(wl_lo: float, wl_hi: float, R: int = 200,
     wl = 0.5 * (lo + hi)
     n = wl.size
     return dict(wl=wl, wl_lo=lo, wl_hi=hi,
-                depth=np.full(n, np.nan), sigma=np.full(n, sigma_ppm * 1e-6),
+                depth=np.full(n, np.nan), sigma=np.full(n, sigma_ppm * PPM),
                 group=np.array(["SYNTH"] * n), groups=["SYNTH"])
 
 
@@ -150,13 +157,13 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, n
         real = load_real_observations(cfg)
         real = restrict_to_model_band(real, wl)
         n_real = int(np.asarray(real["wl"]).size)
-        if n_real >= 4:
+        if n_real >= MIN_REAL_BINS:
             return real, True
         # source configured but the band clips out (nearly) all of it
         if not synthetic:
             raise ValueError(
                 f"only {n_real} of the configured observed bins fall inside the model "
-                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >=4) -- the model band "
+                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >={MIN_REAL_BINS}) -- the model band "
                 "does not overlap the data. Fix obs_wl_lo/hi or nu_min/nu_max; refusing "
                 "to silently fabricate a synthetic grid for a real-data run.")
         # synthetic run with a deliberately non-overlapping band (e.g. the CO smoke)
@@ -165,7 +172,7 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, n
                          "and generate_synthetic_data=False -- nothing to fit")
 
     # synthetic run: build a grid across the model span to inject onto
-    pad = 0.001
+    pad = SYNTH_BAND_PAD_FRAC
     grid = _synthetic_bin_grid(float(wl.min()) * (1 + pad), float(wl.max()) * (1 - pad))
     return grid, False
 

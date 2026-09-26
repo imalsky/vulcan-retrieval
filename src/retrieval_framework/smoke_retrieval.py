@@ -55,11 +55,16 @@ FD_ABS_FRAC = 1e-4
 STAGED_DVAL_MAX = 1e-6     # staged vs block at cold_lanes == 0, relative (floor 1)
 STAGED_DGRAD_MAX = 1e-5    # staged vs block at cold_lanes == 0, max|dg| / max|g|
 LIVENESS_MIN = 1e-3        # |dL/dlnZ| and |dL/dc_o| must exceed this
+BLOCK_NAIVE_VAL_MAX = 1e-8  # block vs naive log-likelihood, relative (floor 1)
+FD_STEP_U = 1e-3           # central-FD step in u-space
+FD_DENOM_FLOOR = 1e-12     # floor on |fd| in the FD relative error
+# Floors of the reported componentwise ratio: relative to max|g|, then absolute.
+CW_REL_FLOOR, CW_ABS_FLOOR = 1e-12, 1e-30
 
 
 def _fd_check(ad, fd, gmax):
     """(rel, ok) for one AD-vs-central-FD component under the FD gate."""
-    rel = abs(ad - fd) / max(abs(fd), 1e-12)
+    rel = abs(ad - fd) / max(abs(fd), FD_DENOM_FLOOR)
     return rel, (rel < FD_REL_TOL) or (abs(ad - fd) < FD_ABS_FRAC * gmax)
 
 
@@ -95,7 +100,7 @@ def main() -> int:
     gn = np.asarray(gn); t_naive = time.time() - t0
     print(f"[smoke] value block={float(vb):.6f} naive={float(vn):.6f} "
           f"| t_block={t_block:.1f}s t_naive={t_naive:.1f}s", flush=True)
-    ok_val = abs(float(vb) - float(vn)) <= 1e-8 * max(1.0, abs(float(vn)))
+    ok_val = abs(float(vb) - float(vn)) <= BLOCK_NAIVE_VAL_MAX * max(1.0, abs(float(vn)))
     # Block and naive are the SAME chain rule regrouped, so any difference is
     # floating-point accumulation and the right yardstick is the gradient's own
     # scale, not each component's. A componentwise ratio is ill-posed in a weak
@@ -106,9 +111,9 @@ def main() -> int:
     # both. It has read 1.9e-9 to 3e-8 as the converged column and the
     # environment changed (notes §1.8); a dropped c_o block would read ~4e-4.
     scale_g = float(np.max(np.abs(gn)))
-    rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, 1e-300))
+    rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, C.UNDERFLOW_DENOM))
     rel_cw = float(np.max(np.abs(gb - gn)
-                          / np.maximum(np.abs(gn), 1e-12 * scale_g + 1e-30)))
+                          / np.maximum(np.abs(gn), CW_REL_FLOOR * scale_g + CW_ABS_FLOOR)))
     ok_bn = bool(rel_bn < BLOCK_NAIVE_MAX) and ok_val
     print(f"[smoke] block-vs-naive max|d| / max|g| = {rel_bn:.2e} "
           f"(componentwise {rel_cw:.2e})  -> {'OK' if ok_bn else 'FAIL'}", flush=True)
@@ -116,7 +121,7 @@ def main() -> int:
         print(f"    {nm:12s} block={gb[i]:+12.5e}  naive={gn[i]:+12.5e}", flush=True)
 
     # ---- FD validation of the gradient (re-converged central differences) ----
-    h = 1e-3
+    h = FD_STEP_U
     print(f"[smoke] central FD check (h={h:g}, 2 re-converged solves per dim)...", flush=True)
     ok_fd = True
     gmax = np.max(np.abs(gb))
@@ -165,7 +170,7 @@ def main() -> int:
         # same norm-relative yardstick as the block-vs-naive check above
         gmax = float(np.max(np.abs(gr)))
         dgmax = float(np.max(np.abs(Gb2[r] - gr)))
-        dg = dgmax / max(gmax, 1e-300)
+        dg = dgmax / max(gmax, C.UNDERFLOW_DENOM)
         if queued:
             ok_r = ((dv_abs < DLOGL_MAX_PASS)
                     and (dgmax / max(gmax, 1.0) < DLOGL_MAX_PASS))

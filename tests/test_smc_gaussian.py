@@ -58,7 +58,7 @@ def test_smc_recovers_gaussian_posterior(tmp_path):
     assert res["unique_particles"][-1] > cfg.smc_num_particles // 4
     # betas strictly increasing to 1
     b = res["betas"]
-    assert np.all(np.diff(b) > 0) and abs(b[-1] - 1.0) < 1e-8
+    assert np.all(np.diff(b) > 0) and abs(b[-1] - 1.0) < P._BETA_DONE_TOL
 
 
 @pytest.mark.parametrize("kernel, n_sweeps", [("mala", 8), ("rwm", 24)])
@@ -119,8 +119,8 @@ def test_proposal_scale_reduces_to_the_diagonal_at_full_shrinkage():
                                               [0.0, 0.5, 0.0, 0.0],
                                               [0.0, 0.0, 2.0, 0.3],
                                               [0.0, 0.0, 0.0, 0.1]])
-    got = P._proposal_scale(x, cap=20.0, shrink=1.0)
-    assert np.allclose(got, np.diag(np.clip(x.std(axis=0), 1e-3, 20.0)))
+    got = P._proposal_scale(x, cap=C.SCALE_CLIP, shrink=1.0)
+    assert np.allclose(got, np.diag(np.clip(x.std(axis=0), C.SCALE_FLOOR, C.SCALE_CLIP)))
 
 
 def test_walltime_governor_stops_cleanly(tmp_path):
@@ -426,6 +426,6 @@ def test_calibrate_benchmarks_stage0_conditions(tmp_path):
     assert 0.0 < proj["calibration_beta_stage0"] <= 1.0
     assert C.STEP_MIN <= proj["calibration_step"] <= C.STEP_MAX
     # preconditioner is the resampled cloud's per-dim width, never unit scale
-    assert proj["calibration_scale_min"] >= 1e-3
+    assert proj["calibration_scale_min"] >= C.SCALE_FLOOR
     assert proj["calibration_scale_max"] <= C.SCALE_CLIP
     assert (tmp_path / "timing.json").exists()

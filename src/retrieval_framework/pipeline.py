@@ -53,6 +53,7 @@ import numpy as np
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
+from retrieval_framework.certificate import BETA_TOL
 # NOTE: retrieval_forward (-> vulcan_chem -> VULCAN-JAX env setup + chdir) is imported
 # LAZILY inside build_pipeline, so the SMC core + u-space machinery in this module can
 # be unit-tested (tests/test_smc_gaussian.py) without touching the heavy stack.
@@ -71,6 +72,29 @@ Pipeline = SimpleNamespace   # the attribute bag build_pipeline fills
 # below REJECT_BELOW is a rejection, never a likelihood.
 REJECT_LOGL = -1.0e30
 REJECT_BELOW = -1.0e29
+
+# Column of conv_normal in the packed per-particle ConvDiag vector (_pack_cd).
+_CD_CONV_NORMAL = 4
+# sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
+_PRIOR_Z_EPS = 1e-6
+# T-P window rejection sampling: candidates per round, and the candidate cap
+# (max(factor * n, min)) above which it raises instead of looping on.
+_TP_DRAW_MIN = 16
+_TP_DRAW_CAP_FACTOR = 64
+_TP_DRAW_CAP_MIN = 4096
+# ESS bisection for the next temperature: relative bracket tolerance, max steps.
+_DBETA_TOL = 1e-4
+_DBETA_BISECT_ITERS = 60
+# MALA preconditioner: shrinkage toward the diagonal, the variance floor before
+# the correlation matrix is formed, and the Cholesky jitter (relative to the
+# largest width squared).
+_COV_SHRINK = 0.1
+_VAR_FLOOR = 1e-30
+_CHOL_JITTER = 1e-12
+# Decimals at which two u-space particles count as the same state.
+_UNIQ_DECIMALS = 9
+# The ladder stops once beta is within this of 1; reached_beta1 uses BETA_TOL.
+_BETA_DONE_TOL = 1e-8
 
 
 def save_npz(path: Path, **arrays: Any) -> None:
@@ -137,7 +161,7 @@ def _proposal_converged(cd_vec):
     accept-count-only gate lets through (primal certified, tangent never
     settled -> non-finite gradient). Measurement: notes.md §2.4.
     """
-    return cd_vec[:, 4] > 0.5
+    return cd_vec[:, _CD_CONV_NORMAL] > 0.5
 
 
 def make_uspace(specs, dtype):
@@ -156,8 +180,8 @@ def make_uspace(specs, dtype):
     is_log10 = jnp.asarray([1.0 if s.prior_type == "log10_uniform" else 0.0 for s in specs],
                            dtype=dtype)
     lo_lin, span_lin = prior_lo, prior_hi - prior_lo
-    lo_log = jnp.log10(jnp.clip(prior_lo, 1e-300, None))
-    span_log = jnp.log10(jnp.clip(prior_hi, 1e-300, None)) - lo_log
+    lo_log = jnp.log10(jnp.clip(prior_lo, C.UNDERFLOW_DENOM, None))
+    span_log = jnp.log10(jnp.clip(prior_hi, C.UNDERFLOW_DENOM, None)) - lo_log
 
     def theta_from_u(u):
         u = jnp.asarray(u, dtype=dtype)
@@ -171,7 +195,7 @@ def make_uspace(specs, dtype):
         return jnp.sum(jax.nn.log_sigmoid(u) + jax.nn.log_sigmoid(-u))
 
     def sample_prior_u(rng_key, n_particles):
-        eps = jnp.asarray(1e-6, dtype=dtype)
+        eps = jnp.asarray(_PRIOR_Z_EPS, dtype=dtype)
         z = jax.random.uniform(rng_key, (n_particles, n_dim), dtype=dtype,
                                minval=eps, maxval=1.0 - eps)
         return jnp.log(z) - jnp.log1p(-z)
@@ -319,8 +343,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         n_particles = int(n_particles)
         key = rng_key
         kept, have, drawn = [], 0, 0
-        over = max(n_particles, 16)
-        max_draw = max(64 * n_particles, 4096)   # loud cap: fail rather than loop forever
+        over = max(n_particles, _TP_DRAW_MIN)
+        # loud cap: fail rather than loop forever
+        max_draw = max(_TP_DRAW_CAP_FACTOR * n_particles, _TP_DRAW_CAP_MIN)
         while have < n_particles:
             key, sub = jax.random.split(key)
             cand = sample_prior_u(sub, over)
@@ -362,7 +387,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                                                 _cloud_from(theta))
         binned = B_jax @ native                                # (n_bin,)
         if n_off > 0:
-            offs = jax.lax.dynamic_slice_in_dim(theta, off_lo, n_off) * OBS.OFFSET_UNIT
+            offs = jax.lax.dynamic_slice_in_dim(theta, off_lo, n_off) * OBS.PPM
             binned = binned + O_jax @ offs
         return binned, ok > 0.5
 
@@ -448,7 +473,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # mu = B @ native + O @ offsets  (identical to observed_depth_model)
         mu = B_jax @ d0
         if n_off > 0:
-            offs = theta[off_lo:off_lo + n_off] * OBS.OFFSET_UNIT
+            offs = theta[off_lo:off_lo + n_off] * OBS.PPM
             mu = mu + O_jax @ offs
 
         sig = _sigma_for(theta)
@@ -471,7 +496,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         for j, i in enumerate(rt_idx):
             g_theta = g_theta.at[i].set(jnp.dot(J_rt[:, j], Btw))
         if n_off > 0:
-            g_theta = g_theta.at[off_lo:off_lo + n_off].set(OBS.OFFSET_UNIT * (O_jax.T @ wres))
+            g_theta = g_theta.at[off_lo:off_lo + n_off].set(OBS.PPM * (O_jax.T @ wres))
         if noise_idx is not None:
             k = theta[noise_idx]
             sig0 = pipe.obs_sigma_jax
@@ -499,7 +524,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _mu_from_depth(depth, theta):
         mu = B_jax @ depth
         if n_off > 0:
-            mu = mu + O_jax @ (theta[off_lo:off_lo + n_off] * OBS.OFFSET_UNIT)
+            mu = mu + O_jax @ (theta[off_lo:off_lo + n_off] * OBS.PPM)
         return mu
 
     def _rt_val(args):
@@ -543,7 +568,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         g = g.at[lnR0_idx].set(r_bar)
         g = g.at[cloud_lo:cloud_lo + n_cloud].set(cloud_bar)
         if n_off > 0:
-            g = g.at[off_lo:off_lo + n_off].set(OBS.OFFSET_UNIT * (O_jax.T @ wres))
+            g = g.at[off_lo:off_lo + n_off].set(OBS.PPM * (O_jax.T @ wres))
         if noise_idx is not None:
             k = theta[noise_idx]
             sig0 = pipe.obs_sigma_jax
@@ -1013,7 +1038,8 @@ def _ess_from_incremental(L: np.ndarray, dbeta: float) -> float:
     return float(1.0 / np.sum(w * w))
 
 
-def _next_dbeta(L: np.ndarray, beta: float, target_ess: float, tol: float = 1e-4) -> float:
+def _next_dbeta(L: np.ndarray, beta: float, target_ess: float,
+                tol: float = _DBETA_TOL) -> float:
     """Bisection for the temperature increment so ESS(exp(dbeta*L)) = target_ess.
     Returns dbeta in (0, 1-beta]; jumps to 1-beta when even the full step keeps ESS high."""
     dmax = 1.0 - beta
@@ -1022,7 +1048,7 @@ def _next_dbeta(L: np.ndarray, beta: float, target_ess: float, tol: float = 1e-4
     if _ess_from_incremental(L, dmax) >= target_ess:
         return dmax
     lo, hi = 0.0, dmax
-    for _ in range(60):
+    for _ in range(_DBETA_BISECT_ITERS):
         mid = 0.5 * (lo + hi)
         if _ess_from_incremental(L, mid) >= target_ess:
             lo = mid
@@ -1040,7 +1066,7 @@ def _systematic_resample_idx(key, weights, N):
 
 
 def _proposal_scale(particles: np.ndarray, cap: float,
-                    shrink: float = 0.1) -> np.ndarray:
+                    shrink: float = _COV_SHRINK) -> np.ndarray:
     """Lower-triangular Cholesky factor L of the (resampled, uniformly-weighted)
     cloud covariance, used as the MALA preconditioner (C = L L^T).
 
@@ -1064,7 +1090,7 @@ def _proposal_scale(particles: np.ndarray, cap: float,
     cloud is degenerate enough that the factorization fails."""
     p = np.asarray(particles, np.float64)
     n_dim = p.shape[1]
-    sd = np.clip(p.std(axis=0), 1e-3, float(cap))
+    sd = np.clip(p.std(axis=0), C.SCALE_FLOOR, float(cap))
     if not np.all(np.isfinite(sd)):
         return np.eye(n_dim)
     if p.shape[0] <= n_dim + 1:      # too few particles for a covariance
@@ -1075,11 +1101,11 @@ def _proposal_scale(particles: np.ndarray, cap: float,
     cov = (1.0 - shrink) * cov + shrink * np.diag(np.diag(cov))
     # clip the WIDTHS the same way the diagonal preconditioner did, holding the
     # correlations fixed: cov -> D R D with D the clipped std
-    d0 = np.sqrt(np.clip(np.diag(cov), 1e-30, None))
+    d0 = np.sqrt(np.clip(np.diag(cov), _VAR_FLOOR, None))
     corr = cov / np.outer(d0, d0)
     cov = corr * np.outer(sd, sd)
     try:
-        return np.linalg.cholesky(cov + 1e-12 * np.eye(n_dim) * sd.max() ** 2)
+        return np.linalg.cholesky(cov + _CHOL_JITTER * np.eye(n_dim) * sd.max() ** 2)
     except np.linalg.LinAlgError:
         return np.diag(sd)
 
@@ -1894,7 +1920,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         n_stalled_f = int(n_stalled)
         n_bad_f = int(n_bad)
         U_np = np.asarray(jax.device_get(U), np.float64)
-        n_uniq = int(np.unique(np.round(U_np, 9), axis=0).shape[0])
+        n_uniq = int(np.unique(np.round(U_np, _UNIQ_DECIMALS), axis=0).shape[0])
         # (5) Robbins-Monro step-size trim toward the target acceptance (fine-tuning
         # only -- the width is carried by the absolute preconditioner above)
         if math.isfinite(acc_f):
@@ -1926,14 +1952,14 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
                               scale=scale, last_step=stage, logZ=logZ,
                               init_stats=init_stats, log_step=log_step)
 
-        if beta >= 1.0 - 1e-8:
+        if beta >= 1.0 - _BETA_DONE_TOL:
             break
         if walltime_seconds and elapsed > walltime_seconds:
             logger.warning(f"walltime budget {walltime_seconds/3600:.1f}h exceeded at stage {stage} "
                            f"(beta={beta:.3f}); stopping cleanly with partial posterior.")
             break
 
-    reached = beta >= 1.0 - 1e-6
+    reached = beta >= 1.0 - BETA_TOL
     # posterior draws: at beta=1 particles are equally weighted; sample with replacement.
     # When the ladder stopped early (walltime) these are TEMPERED (beta<1) draws, NOT
     # posterior samples -- reached_beta1/final_beta travel with every output and the

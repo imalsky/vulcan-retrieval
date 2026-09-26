@@ -490,7 +490,7 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
   ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} ${NCU_WRAP[@]+"${NCU_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
     --n-draws "${CALIBRATE_N_DRAWS:-48}" \
-    --count-max-probe "${CALIBRATE_COUNT_MAX_PROBE:-20000}" \
+    ${CALIBRATE_COUNT_MAX_PROBE:+--count-max-probe ${CALIBRATE_COUNT_MAX_PROBE}} \
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
     ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?

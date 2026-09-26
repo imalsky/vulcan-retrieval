@@ -29,9 +29,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from vulcan_forward.constants import ART_PBTM_BAR
+
+from retrieval_framework.certificate import BETA_TOL
 from retrieval_framework.config_schema import GUILLOT_F, TARGET_ACCEPT
+from retrieval_framework.observations import PPM
 
 DPI = 200
+_TO_PPM = 1.0 / PPM
+_BAR_TO_CGS = 1.0e6          # dyn cm^-2 per bar
+# T-P band pressure grid: log10 of its top (bar), down to ART_PBTM_BAR.
+TP_PLOT_LOG10_P_TOP = -8
+TP_PLOT_N_P = 120
 
 GROUP_COLORS = {"NIRISS": "#1f77b4", "G395H": "#d62728", "PRISM": "#2ca02c",
                 "NIRCam": "#9467bd", "SYNTH": "#7f7f7f"}
@@ -46,7 +55,7 @@ def _out_dir() -> Path:
 
 def guillot_T(p_bar, gravity, kappa, gamma, Tint, Tirr, f):
     """Guillot (2010) Eq. 29 -- numpy twin of exojax.atm.atmprof.atmprof_Guillot."""
-    tau = np.asarray(p_bar) * 1.0e6 * kappa / gravity
+    tau = np.asarray(p_bar) * _BAR_TO_CGS * kappa / gravity
     invsq3 = 1.0 / np.sqrt(3.0)
     fac = 2.0 / 3.0 + invsq3 * (1.0 / gamma + (gamma - 1.0 / gamma) * np.exp(-gamma * tau / invsq3))
     return (0.75 * Tint ** 4 * (2.0 / 3.0 + tau) + 0.75 * Tirr ** 4 * f * fac) ** 0.25
@@ -71,7 +80,7 @@ def main() -> None:
     # a governor-stopped run saves a TEMPERED cloud; stamp every headline figure so it
     # can never be mistaken for the posterior
     final_beta = float(s["final_beta"])
-    tempered_tag = ("" if final_beta >= 1.0 - 1e-6
+    tempered_tag = ("" if final_beta >= 1.0 - BETA_TOL
                     else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
     # TARGET-EXACTNESS STAMP. A warm run's likelihood depends on
@@ -107,13 +116,13 @@ def main() -> None:
     # target was history-dependent, is the failure this refuses. Set
     # PLOT_SMC_ALLOW_UNCERTIFIED=1 for forensic plotting of such a run; the
     # stamps stay on the figures either way.
-    if (final_beta < 1.0 - 1e-6 or approx_target) and \
+    if (final_beta < 1.0 - BETA_TOL or approx_target) and \
             os.environ.get("PLOT_SMC_ALLOW_UNCERTIFIED") != "1":
         raise SystemExit(
             "plot_smc: refusing to render posterior figures for an "
             "uncertified run.\n"
             + (f"  final beta = {final_beta:.4f} < 1: the cloud is TEMPERED, "
-               "not a posterior.\n" if final_beta < 1.0 - 1e-6 else "")
+               "not a posterior.\n" if final_beta < 1.0 - BETA_TOL else "")
             + ("  the target was warm/history-dependent, so these draws are "
                "not samples from the stated posterior.\n" if approx_target
                else "")
@@ -147,24 +156,24 @@ def main() -> None:
         ppc = np.load(ppc_path)
         o = np.argsort(np.asarray(ppc["wl"], float))
         wlm = np.asarray(ppc["wl"], float)[o]
-        ax.fill_between(wlm, 1e6 * np.asarray(ppc["pred_p05"], float)[o],
-                        1e6 * np.asarray(ppc["pred_p95"], float)[o],
+        ax.fill_between(wlm, _TO_PPM * np.asarray(ppc["pred_p05"], float)[o],
+                        _TO_PPM * np.asarray(ppc["pred_p95"], float)[o],
                         color="#ff7f0e", alpha=0.18, lw=0,
                         label="posterior predictive 5-95%", zorder=1)
-        ax.fill_between(wlm, 1e6 * np.asarray(ppc["model_p05"], float)[o],
-                        1e6 * np.asarray(ppc["model_p95"], float)[o],
+        ax.fill_between(wlm, _TO_PPM * np.asarray(ppc["model_p05"], float)[o],
+                        _TO_PPM * np.asarray(ppc["model_p95"], float)[o],
                         color="#ff7f0e", alpha=0.35, lw=0,
                         label="model (latent) 5-95%", zorder=2)
-        ax.plot(wlm, 1e6 * np.asarray(ppc["mu_at_median"], float)[o],
+        ax.plot(wlm, _TO_PPM * np.asarray(ppc["mu_at_median"], float)[o],
                 color="#ff7f0e", lw=1.4, label="model @ posterior median", zorder=3)
     for g in dict.fromkeys(group.tolist()):
         m = group == g
-        ax.errorbar(wl[m], 1e6 * depth[m], yerr=1e6 * sigma[m], fmt="o", ms=2.6,
+        ax.errorbar(wl[m], _TO_PPM * depth[m], yerr=_TO_PPM * sigma[m], fmt="o", ms=2.6,
                     lw=0.8, capsize=0, alpha=0.85, color=GROUP_COLORS.get(g, "k"),
                     label=f"{g} ({int(m.sum())} bins)", zorder=4)
     if synthetic and "flux_true" in obs.files:
         oo = np.argsort(wl)
-        ax.plot(wl[oo], 1e6 * np.asarray(obs["flux_true"], float)[oo], "k--", lw=0.9,
+        ax.plot(wl[oo], _TO_PPM * np.asarray(obs["flux_true"], float)[oo], "k--", lw=0.9,
                 label="injected truth", zorder=5)
     ax.set_xlabel("wavelength [$\\mu$m]"); ax.set_ylabel("transit depth [ppm]")
     ax.legend(fontsize=8, ncol=2, frameon=False)
@@ -177,7 +186,7 @@ def main() -> None:
     iT = names.index("Tirr"); ik = names.index("log10kappa")
     ig = names.index("log10gamma") if "log10gamma" in names else None
     gam_fix = float(cfgj["tp_gamma_fixed"])
-    p_bar = np.logspace(-8, np.log10(7.0), 120)
+    p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(ART_PBTM_BAR), TP_PLOT_N_P)
     rng = np.random.default_rng(3)
     sel = theta[rng.choice(theta.shape[0], size=min(300, theta.shape[0]), replace=False)]
     curves = np.stack([

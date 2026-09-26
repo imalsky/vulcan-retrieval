@@ -20,9 +20,12 @@ import jax.numpy as jnp  # noqa: E402
 
 from conftest import build_smoke_pipe  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
+from retrieval_framework.config_schema import UNDERFLOW_DENOM  # noqa: E402
 
 # SLOW: builds a real chemistry + RT pipeline (see CLAUDE.md, "Layout / entry points").
 pytestmark = pytest.mark.slow
+
+SPLIT_DG_MAX = 1e-8   # split vs single-chain gradient, max|dG| / max|G| (notes §1.8)
 
 @pytest.fixture(scope="module")
 def smoke():
@@ -70,8 +73,8 @@ def test_stage_split_matches_single_chain(smoke):
     Y_new, Y_ref = np.asarray(Y_new), np.asarray(Y_ref)
     if not np.array_equal(Y_new, Y_ref):
         d = np.abs(Y_new - Y_ref)
-        rel = float(np.max(d / np.maximum(np.abs(Y_ref), 1e-300)))
-        ulp = float(np.max(d / np.maximum(np.spacing(np.abs(Y_ref)), 1e-300)))
+        rel = float(np.max(d / np.maximum(np.abs(Y_ref), UNDERFLOW_DENOM)))
+        ulp = float(np.max(d / np.maximum(np.spacing(np.abs(Y_ref)), UNDERFLOW_DENOM)))
         pytest.fail(f"stage-split primal is NOT bit-exact: max rel {rel:.3e}, "
                     f"max {ulp:.3g} ulp")
     assert np.array_equal(np.asarray(L_new), np.asarray(L_ref))
@@ -83,6 +86,6 @@ def test_stage_split_matches_single_chain(smoke):
     # ~90x above it and still leaves five orders of margin against the wiring
     # bug it exists to catch (the repo's staged-vs-block gate is 1e-5).
     G_new, G_ref = np.asarray(G_new), np.asarray(G_ref)
-    dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), 1e-300))
+    dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), UNDERFLOW_DENOM))
     print(f"split-vs-single-chain max|dG|/max|G| = {dg:.3e}")
-    assert dg < 1e-8, f"split-vs-single-chain gradient disagrees at {dg:.3e}"
+    assert dg < SPLIT_DG_MAX, f"split-vs-single-chain gradient disagrees at {dg:.3e}"

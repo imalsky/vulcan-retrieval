@@ -80,7 +80,7 @@ def test_move_vg_rejects_nonconverged_without_raising(smoke):
     # a non-converged warm proposal is an MH rejection, not an AD pathology:
     assert smoke["n_bad"] == 0                       # ... it must not trip n_bad_grad
     assert np.all(np.isfinite(smoke["G"]))           # ... no NaN leaks into the gradient
-    assert np.all(smoke["L_gated"] <= -1.0e29)       # ... and it is rejected (MH -inf)
+    assert np.all(smoke["L_gated"] <= P.REJECT_BELOW)       # ... and it is rejected (MH -inf)
 
 
 def test_init_eval_is_uncapped(smoke):
@@ -127,5 +127,5 @@ def test_gate_is_load_bearing(smoke):
     depth = np.asarray(jax.vmap(_raw_depth)(C_, Theta, Y0, refs0))
     assert np.all(np.isfinite(depth)), "raw warm map blew up; this tests nothing"
     # ...and yet every one of them is rejected, by BOTH evaluators
-    assert np.all(smoke["L_gated"] <= -1.0e29)
-    assert np.all(smoke["L_ungated"] <= -1.0e29)
+    assert np.all(smoke["L_gated"] <= P.REJECT_BELOW)
+    assert np.all(smoke["L_ungated"] <= P.REJECT_BELOW)

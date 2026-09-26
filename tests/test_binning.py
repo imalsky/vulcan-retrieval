@@ -11,6 +11,9 @@ from retrieval_framework import observations as OBS
 # np.trapz was renamed np.trapezoid in NumPy 2.0 (and trapz removed); support both.
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
+BIN_RTOL, BIN_ATOL = 1e-12, 1e-14   # matrix vs direct trapezoid: round-off only
+ROW_SUM_ATOL = 1e-10                # each averaging row sums to 1
+
 
 def _reference_bin(wl_model, y, lo_all, hi_all):
     """Trapezoidal bin average, computed directly."""
@@ -50,7 +53,7 @@ def test_binning_matrix_matches_trapezoid_reference():
     for y in specs:
         ref = _reference_bin(wl_model, y, lo, hi)
         got = B @ y
-        assert np.allclose(got, ref[keep], rtol=1e-12, atol=1e-14)
+        assert np.allclose(got, ref[keep], rtol=BIN_RTOL, atol=BIN_ATOL)
 
 
 def test_binning_matrix_refuses_duplicate_model_coordinates():
@@ -78,9 +81,9 @@ def test_binning_matrix_on_real_cm24_bins():
     g = np.asarray(obs["group"])[keep]
     assert (g == "NIRISS").sum() >= 20 and (g == "G395H").sum() >= 50
     ref = _reference_bin(wl_model, y, np.asarray(obs["wl_lo"]), np.asarray(obs["wl_hi"]))
-    assert np.allclose(B @ y, ref[keep], rtol=1e-12, atol=1e-14)
+    assert np.allclose(B @ y, ref[keep], rtol=BIN_RTOL, atol=BIN_ATOL)
     # row weights of a bin average must sum to 1
-    assert np.allclose(B.sum(axis=1), 1.0, atol=1e-10)
+    assert np.allclose(B.sum(axis=1), 1.0, atol=ROW_SUM_ATOL)
 
 
 def test_binning_matrix_refuses_a_product_near_the_model_resolution():

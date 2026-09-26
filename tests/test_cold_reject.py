@@ -22,11 +22,11 @@ def test_every_entry_point_rejects_uncertified_finite_spectrum(capped_smoke_pipe
     theta = pipe.theta_from_u(u0)
     # precondition: the forward is finite -- the certificate, not a NaN, rejects
     assert np.all(np.isfinite(np.asarray(pipe.observed_depth_model_jit(theta))))
-    assert float(pipe.log_likelihood_u(u0)) <= -1e29
+    assert float(pipe.log_likelihood_u(u0)) <= P.REJECT_BELOW
     for vg in (pipe.value_and_grad_block, pipe.value_and_grad_naive):
         L, G = vg(u0)
-        assert float(L) <= -1e29 and np.all(np.asarray(G) == 0.0)
+        assert float(L) <= P.REJECT_BELOW and np.all(np.asarray(G) == 0.0)
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 2)
     Y0, refs0 = P._blank_state(pipe, 2)
     L = pipe.batch_eval_cold_l(U, Y0, refs0)[0]
-    assert np.all(np.asarray(L) <= -1e29)
+    assert np.all(np.asarray(L) <= P.REJECT_BELOW)

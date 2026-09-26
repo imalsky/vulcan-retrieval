@@ -9,6 +9,8 @@ import jax.numpy as jnp  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
 
+EDGE_ATOL = 1e-8   # theta at |u| = 40 sits within this of the box edge
+
 SPECS = [
     ParamSpec("a", "a", "uniform", -2.0, 3.0, 0.0, "chem"),
     ParamSpec("b", "b", "log10_uniform", 0.5, 3.0, 1.0, "noise"),
@@ -22,8 +24,8 @@ def test_bounds_and_midpoint():
     assert np.isclose(th0[1], np.sqrt(0.5 * 3.0))        # log10 midpoint = geometric mean
     th_lo = np.asarray(f(jnp.full(2, -40.0)))
     th_hi = np.asarray(f(jnp.full(2, 40.0)))
-    assert np.allclose(th_lo, [-2.0, 0.5], atol=1e-8)
-    assert np.allclose(th_hi, [3.0, 3.0], atol=1e-8)
+    assert np.allclose(th_lo, [-2.0, 0.5], atol=EDGE_ATOL)
+    assert np.allclose(th_hi, [3.0, 3.0], atol=EDGE_ATOL)
 
 
 def test_prior_samples_uniform_in_theta():

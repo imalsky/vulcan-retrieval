@@ -52,6 +52,8 @@ from pathlib import Path
 
 import numpy as np
 
+from retrieval_framework.config_schema import Config
+
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
 # Canonical repository labels plus accepted checkout directory names.  The
@@ -83,7 +85,7 @@ BETA_TOL = 1e-6
 # still has N rows, they are just copies of a handful of states.
 UNIQUE_FRAC_FAIL = 0.25        # distinct particles at the final stage, over N
 ESS_FRAC_FAIL = 0.20           # smallest per-stage ESS over N
-ACCEPT_LO, ACCEPT_HI = 0.05, 0.95
+ACCEPT_LO, ACCEPT_HI = 0.05, 0.95   # late-ladder acceptance band
 # warmcap + stalled are chemistry-convergence REJECTIONS the MH correction cannot
 # see. Some are expected early, while the cloud is still prior-wide; in the late
 # ladder they mean the posterior itself sits on the convergence cliff, which makes
@@ -103,7 +105,14 @@ CONV_ATTRITION_JUSTIFY = 0.01
 # Zero-drift (badgrad) proposals are a valid MH move, but a late ladder made
 # mostly of them is sampling with a drift that is largely fictitious. Same rate
 # as the in-run systematic-breakage backstop (smc_tangent_bad_max_frac).
-BADGRAD_FRAC_FAIL = 0.25
+BADGRAD_FRAC_FAIL = Config.smc_tangent_bad_max_frac
+# ln(f_c1 f_c2) must equal the recorded log_conv_attrition to this.
+LOG_ATTRITION_SUM_TOL = 1e-6
+# Drifted keys spelled out in one artifact warning.
+_DRIFT_SHOW = 8
+# Stages the report's "late warmcap + stalled" row sums (the gate uses
+# LATE_LADDER_FRAC).
+_LATE_STAGES_SHOWN = 3
 # Per-stage diagnostics describe the SAME stages, so they must be equal length
 # and finite: mismatched lengths would silently disable the rejection gate.
 _PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
@@ -875,7 +884,8 @@ def validate(cert: dict, replay: dict | None = None) -> list[str]:
         # numbers describes a different run. The attrition LEVEL is a warning
         # (attrition_warnings), not a gate.
         if (not bad_f and f1 is not None and f2 is not None
-                and abs(float(lca) - (math.log(f1) + math.log(f2))) > 1e-6):
+                and abs(float(lca) - (math.log(f1) + math.log(f2)))
+                > LOG_ATTRITION_SUM_TOL):
             problems.append(
                 f"log_conv_attrition {float(lca):.6f} does not equal "
                 f"ln(f_c1 f_c2) = {math.log(f1) + math.log(f2):.6f}: the "
@@ -1005,11 +1015,11 @@ def artifact_warnings(cert: dict) -> list[str]:
                 detail = ", ".join(
                     f"{k}: artifact={got.get(k)!r} run={run_cfg.get(k)!r}"
                     if not k.startswith("code:") else k
-                    for k in drift[:8])
+                    for k in drift[:_DRIFT_SHOW])
                 out.append(
                     f"validation artifact '{name}' was measured at a different "
                     f"state than this run ({len(drift)} difference(s): {detail}"
-                    f"{', ...' if len(drift) > 8 else ''}). It measured a "
+                    f"{', ...' if len(drift) > _DRIFT_SHOW else ''}). It measured a "
                     "different model; re-run it on the production manifest")
 
     return out
@@ -1218,7 +1228,7 @@ def render(cert: dict, problems: list[str], warnings: list[str] = ()) -> str:
           f"| final acceptance | {acc[-1]:.2f} |" if acc
           else "| final acceptance | None |",
           f"| late warmcap + stalled | "
-          f"{sum((diag.get('warm_capped') or [])[-3:]) + sum((diag.get('warm_stalled') or [])[-3:])} |",
+          f"{sum((diag.get('warm_capped') or [])[-_LATE_STAGES_SHOWN:]) + sum((diag.get('warm_stalled') or [])[-_LATE_STAGES_SHOWN:])} |",
           f"| badgrad total | {sum(diag.get('badgrad') or [])} |",
           "", "## Production-fidelity artifacts", "",
           "| artifact | status |", "|---|---|"]

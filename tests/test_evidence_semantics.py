@@ -14,6 +14,7 @@ import pytest
 
 from retrieval_framework.pipeline import evidence_report
 
+IDENTITY_REL = 1e-12   # exact identities, up to float round-off
 
 # toy measure: P(A)=0.5, P(C|A)=0.5, L=10 on A and C
 Z_OPER = 10.0                                        # E[L | A and C]
@@ -38,7 +39,7 @@ def test_zero_filled_box_evidence_is_the_exact_masked_integral():
     f_conv = mask.mean() / in_A.mean()               # P(C | A)
     z_box_via_report = z_oper * f_tp * f_conv
     z_box_direct = (L * mask).mean()                 # direct masked quadrature
-    assert z_box_via_report == pytest.approx(z_box_direct, rel=1e-12)
+    assert z_box_via_report == pytest.approx(z_box_direct, rel=IDENTITY_REL)
     # ...whereas the f_tp-only product misses the true A-integral: a support
     # fraction cannot reconstruct the likelihood on the non-converged set
     z_box_true_A = (L * in_A).mean()
@@ -54,10 +55,10 @@ def test_evidence_report_fields_and_identity():
     assert ev["f_tp"] == pytest.approx(0.5)
     assert ev["f_conv"] == pytest.approx(0.5)
     # zero-filled identity on the toy numbers: 10 * 0.5 * 0.5 = 2.5
-    assert math.exp(ev["logZ_box"]) == pytest.approx(Z_BOX_ZEROFILL, rel=1e-12)
+    assert math.exp(ev["logZ_box"]) == pytest.approx(Z_BOX_ZEROFILL, rel=IDENTITY_REL)
     # the support split is additive in logs
     assert ev["log_support_fraction"] == pytest.approx(
-        ev["log_support_physical"] + ev["log_conv_attrition"], rel=1e-12)
+        ev["log_support_physical"] + ev["log_conv_attrition"], rel=IDENTITY_REL)
 
 
 def test_logZ_error_lower_bound_tracks_ess_collapse():
