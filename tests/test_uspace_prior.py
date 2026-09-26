@@ -34,10 +34,10 @@ def test_prior_samples_uniform_in_theta():
     assert abs(TH[:, 0].mean() - 0.5) < 0.03
     assert abs(TH[:, 0].var() - 25.0 / 12.0) < 0.06
     # log10_uniform dim: log10(theta) uniform on [log10 lo, log10 hi]
-    l = np.log10(TH[:, 1])
+    lg = np.log10(TH[:, 1])
     lo, hi = np.log10(0.5), np.log10(3.0)
-    assert abs(l.mean() - 0.5 * (lo + hi)) < 0.01
-    assert abs(l.var() - (hi - lo) ** 2 / 12.0) < 0.01
+    assert abs(lg.mean() - 0.5 * (lo + hi)) < 0.01
+    assert abs(lg.var() - (hi - lo) ** 2 / 12.0) < 0.01
 
 
 def test_log_prior_gradient_finite():

@@ -205,11 +205,11 @@ def _costed_stub_pipe(cfg, position_dependent):
         L, G, Y2, r2, nb, st = evg(U, Y, refs)
         return L + pos(U), G, Y2, r2, nb, st._replace(acc=cost(U))
 
-    def l(U, Y, refs):
+    def lik(U, Y, refs):
         L, Y2, r2, st = el(U, Y, refs)
         return L + pos(U), Y2, r2, st._replace(acc=cost(U))
 
-    pipe._stub_evals = (vg, l)
+    pipe._stub_evals = (vg, lik)
     return pipe
 
 

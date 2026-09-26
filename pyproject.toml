@@ -103,3 +103,16 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# Semicolon-joined short statements (E702) are kept as written.
+ignore = ["E702"]
+
+# Import order is load-bearing: vulcan_chem (env + jax x64) must precede any
+# exojax import, and the two test modules set jax x64 before importing the
+# pipeline, so these module-level imports follow executable statements.
+[tool.ruff.lint.per-file-ignores]
+"src/retrieval_framework/retrieval_forward.py" = ["E402"]
+"tests/test_cold_reject.py" = ["E402"]
+"tests/test_run_nautilus.py" = ["E402"]

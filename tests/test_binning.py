@@ -102,9 +102,9 @@ def test_binning_matrix_refuses_a_product_near_the_model_resolution():
 def test_offset_design_groups():
     obs = dict(group=np.array(["NIRISS", "NIRISS", "G395H", "G395H", "G395H"]),
                groups=["NIRISS", "G395H"])
-    O = OBS.build_offset_design(obs)
-    assert O.shape == (5, 1)
-    assert np.array_equal(O[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
+    design = OBS.build_offset_design(obs)
+    assert design.shape == (5, 1)
+    assert np.array_equal(design[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
 
 
 # --- posterior predictive -----------------------------------------------------
@@ -118,7 +118,7 @@ def test_replicates_carry_the_likelihood_conditional_variance():
     """
     from retrieval_framework.run_smc import predictive_replicates
     rng = np.random.default_rng(0)
-    n_draw, n_bin = 20000, 3
+    n_draw = 20000
     sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])
     mu = np.tile(np.array([1e-2, 2e-2, 3e-2]), (n_draw, 1))
 

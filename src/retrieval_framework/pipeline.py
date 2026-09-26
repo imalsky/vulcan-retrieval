@@ -253,16 +253,16 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     for k in ("wl", "wl_lo", "wl_hi", "depth", "sigma", "group"):
         obs[k] = np.asarray(obs[k])[keep]
     obs["groups"] = list(dict.fromkeys(np.asarray(obs["group"]).tolist()))
-    O = OBS.build_offset_design(obs)
+    O_np = OBS.build_offset_design(obs)
     groups = list(obs["groups"])
     n_bin = int(B.shape[0])
     logger.info(f"Observations: {'REAL product bins' if real_bins else 'synthetic grid'} | "
-                f"{n_bin} bins | groups={groups} | offset cols={O.shape[1]}")
+                f"{n_bin} bins | groups={groups} | offset cols={O_np.shape[1]}")
     if n_bin < 2:
         raise RuntimeError(f"only {n_bin} usable observed bins in the model band; widen the band")
 
     B_jax = jnp.asarray(B, dtype=dtype)
-    O_jax = jnp.asarray(O, dtype=dtype)
+    O_jax = jnp.asarray(O_np, dtype=dtype)
 
     # ---- parameter layout ----
     specs = C.specs_from_config(cfg, groups=groups)
