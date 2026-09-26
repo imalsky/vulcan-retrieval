@@ -122,35 +122,9 @@ def main() -> int:
               f"[{time.time()-t0:.0f}s]  {'OK' if ok_i else 'FAIL'}", flush=True)
 
     # ---- staged batched evaluator (SMC hot path) vs per-particle block gradient ----
-    # Same chain rule, regrouped (fwd-jvp chemistry lanes contracted against ONE
-    # reverse-mode RT vjp, RT lax.map-chunked). TWO regimes, and which one is in
-    # force is printed:
-    #
-    #   cold_lanes == 0 (the lockstep reference): the two routes are the same runner
-    #     CADENCE CLASS, but the block reference is the scalar runner, so the tight
-    #     gate -- dval < 1e-6 relative (floor 1), dgrad < 1e-5 norm-relative -- is
-    #     EMPIRICAL on these probe draws, not an identity: a lockstep lane keys
-    #     photolysis and the geometry refresh to the loop tick instead of its own
-    #     accept count, which on a harder case can move the column at the
-    #     convergence scale. Tolerances CALIBRATED, not assumed: the two
-    #     routes batch and fuse differently, so the correlated-k RT's resort-rebin
-    #     (a 256-wide cumsum + interp per fold) accumulates visibly more floating
-    #     point than the sampled path did. Measured over the three probe points:
-    #     dval 4.8e-12 / 8.2e-11 / 3.8e-08, dgrad 1.7e-09 / 1.9e-08 / 5.4e-07, so
-    #     the gates sit ~20x above the worst and still leave five orders of margin
-    #     against the wiring bug this check exists to catch.
-    #
-    #   cold_lanes > 0 (production: the gpu preset runs one lane per
-    #     particle): the staged evaluator runs the lane QUEUE while
-    #     value_and_grad_block is the per-particle SOLO solve, so a refilled draw
-    #     enters the loop at the tick its lane was freed at and the two are
-    #     DIFFERENT MAPS by design -- they can only agree at the convergence
-    #     scale. The gate is then the repo's own convergence-scale standard:
-    #     |logL_staged - logL_block| < DLOGL_MAX_PASS (0.1 ABSOLUTE, validate_warm's
-    #     warm-vs-cold likelihood gate) and max|dG| / max(max|G_block|, 1) <
-    #     DLOGL_MAX_PASS (the same 0.1, norm-relative with an absolute-1 scale
-    #     floor -- what validate_warm holds the re-solved u-space gradient to).
-    #     The measured sizes at cold_lanes = 2 are in notes 2.13.
+    # cold_lanes == 0: same runner cadence class, a tight pair empirical on these probe draws;
+    # cold_lanes > 0: the staged side queues, a different map by design, gated at
+    # DLOGL_MAX_PASS. The regime is printed; thresholds and measurements: notes §1.8, §2.13.
     from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
     lanes = int(cfg.cold_lanes)
