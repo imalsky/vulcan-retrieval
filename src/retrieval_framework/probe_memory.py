@@ -42,10 +42,7 @@ def main() -> int:
     print(C.describe_config(cfg, f"{_preset}+PROBE_MEMORY"), flush=True)
     t0 = time.time()
     pipe = P.build_pipeline(cfg)
-    if cfg.generate_synthetic_data:
-        P.generate_observations(pipe, seed=int(cfg.seed))
-    else:
-        P.load_real_into_pipe(pipe)
+    R.set_observations(cfg, pipe, P)
     print(f"[probe] pipeline built in {time.time()-t0:.0f}s", flush=True)
 
     N = int(cfg.smc_num_particles)

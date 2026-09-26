@@ -193,10 +193,6 @@ def main() -> None:
             raise FileNotFoundError(f"{p} not found -- validate_warm runs against a "
                                     "finished run's output dir (same preset/overrides)")
     ck = np.load(ck_path)
-    needed = ("u_particles", "y_state", "chem_refs", "loglik", "betas")
-    if not all(k in ck.files for k in needed):
-        raise KeyError(f"{ck_path} predates the carried chemistry state "
-                       f"(needs {needed}); nothing to validate")
     final_beta = float(ck["betas"][-1])
     logger.info(f"validating checkpoint at beta={final_beta:.4f} "
                 f"({ck['u_particles'].shape[0]} particles, preset={preset})")
@@ -234,12 +230,8 @@ def main() -> None:
     # cold VALUE-AND-GRAD evaluator returns L, G, and Y in one pass, so the
     # marginal cost over a likelihood-only pass is the chem jvp lanes
     # (~the cost of one mutation sweep, minutes). VALIDATE_WARM_GRAD=0 restores
-    # the likelihood-only re-solve. Requires the checkpoint's carried grad_u
-    # (present in every state-carrying checkpoint).
-    want_grad = (os.environ.get("VALIDATE_WARM_GRAD", "1").strip() != "0"
-                 and "grad_u" in ck.files)
-    if "grad_u" not in ck.files:
-        logger.warning("checkpoint carries no grad_u -- gradient comparison skipped")
+    # the likelihood-only re-solve.
+    want_grad = os.environ.get("VALIDATE_WARM_GRAD", "1").strip() != "0"
     t0 = time.perf_counter()
     L_parts, Y_parts, acc_parts, cn_parts, G_parts = [], [], [], [], []
     if want_grad:

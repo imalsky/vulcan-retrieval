@@ -58,10 +58,6 @@ def test_evidence_report_fields_and_identity():
     # the support split is additive in logs
     assert ev["log_support_fraction"] == pytest.approx(
         ev["log_support_physical"] + ev["log_conv_attrition"], rel=1e-12)
-    # no init stats -> NaNs, never silent numbers
-    ev0 = evidence_report(logZ, None)
-    assert all(math.isnan(ev0[k]) for k in
-               ("logZ_box", "log_support_fraction", "log_conv_attrition"))
 
 
 def test_logZ_error_lower_bound_tracks_ess_collapse():

@@ -121,8 +121,7 @@ def test_gate_is_load_bearing(smoke):
     def _raw_depth(cc, th, yw, rf):
         y = pipe.fwd.chem_solve_warm(cc, yw, rf[0], rf[1])   # ungated, non-converged
         aux = pipe.fwd.aux_from_y(y, cc)
-        cloud = (th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
-                 if pipe.n_cloud else None)
+        cloud = th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
         return pipe.fwd.rt_depth(aux, th[pipe.lnR0_idx], cloud)
 
     depth = np.asarray(jax.vmap(_raw_depth)(C_, Theta, Y0, refs0))

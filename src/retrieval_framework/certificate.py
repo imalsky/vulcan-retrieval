@@ -948,11 +948,8 @@ def artifact_warnings(cert: dict) -> list[str]:
     or measured at a different state than this run. They do not fail the
     certificate (maintainer's decision, notes 2.4): the maintainer decides by
     hand when the validation is done."""
-    required = set(REQUIRED_VALIDATION_ARTIFACTS)
     out = []
     for name, art in cert["validation_artifacts"].items():
-        if name not in required:
-            continue
         if art is None:
             out.append(
                 f"validation artifact '{name}' is missing: the production "

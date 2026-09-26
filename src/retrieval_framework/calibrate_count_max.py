@@ -45,7 +45,8 @@ from pathlib import Path
 
 import numpy as np
 
-from retrieval_framework.run_smc import _cuda_profiler, make_config   # the exact preset/override logic
+from retrieval_framework.run_smc import (   # the exact preset/override logic
+    _cuda_profiler, make_config, set_observations)
 
 
 def main() -> None:
@@ -82,16 +83,6 @@ def main() -> None:
     args = ap.parse_args()
     if args.grad and int(args.fixed_steps) <= 0:
         ap.error("--grad requires --fixed-steps")
-    if args.lanes is not None and int(args.lanes) > 0 and int(args.fixed_steps) > 0:
-        # A capped lane is is_done, so the queue writes it out and refills it
-        # with the next draw: the fixed-step bench would time queue throughput
-        # over the whole draw list, not the per-step cost it reports. The same
-        # refusal is repeated below on the RESOLVED cold_lanes, which catches a
-        # config that sets the knob without --lanes.
-        ap.error("--lanes > 0 cannot be combined with --fixed-steps: a capped "
-                 "lane is is_done and gets refilled, so the bench would measure "
-                 "queue throughput, not the cost of one accepted step. Bench "
-                 "the step cost with --lanes 0 (or without --lanes)")
 
     logging.basicConfig(level=logging.INFO,
                          format="%(asctime)s | %(levelname)s | %(message)s")
@@ -117,7 +108,7 @@ def main() -> None:
         # The fixed-step bench times one accepted step of a lockstep batch; the
         # config's lane queue (on by default) would refill every capped lane and
         # time queue throughput instead, so the bench runs lockstep unless
-        # --lanes asks for something else (which is refused above).
+        # --lanes asks for something else (refused just below).
         cfg = replace(cfg, cold_lanes=0)
     if K > 0 and int(cfg.cold_lanes) > 0:
         raise SystemExit(
@@ -146,10 +137,7 @@ def main() -> None:
         # Observations are required before any jitted likelihood call (L is a
         # byproduct here, not the point, but batch_eval_cold_l_diag computes it
         # regardless).
-        if cfg_.generate_synthetic_data:
-            P.generate_observations(pipe, seed=int(cfg_.seed))
-        else:
-            P.load_real_into_pipe(pipe)
+        set_observations(cfg_, pipe, P)
         key = jax.random.PRNGKey(int(cfg_.seed) + int(args.seed_offset))
         key, sub = jax.random.split(key)
         U = pipe.sample_prior_u(sub, int(args.n_draws))

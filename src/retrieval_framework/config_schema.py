@@ -418,9 +418,6 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     if cfg.infer_noise_inflation:
         add("noise_inflation", r"$b$", *cfg.prior_noise_inflation, cfg.truth_noise_inflation,
             "noise", prior_type="log10_uniform")
-
-    if not specs:
-        raise ValueError("no parameters enabled for inference")
     return specs
 
 
@@ -656,15 +653,9 @@ def describe_config(cfg: Config, preset: str = "") -> str:
     # pipeline, which logs its resolved groups after build.
     groups = list(cfg.combo)
     if cfg.obs_dir and cfg.obs_products:
-        try:
-            from retrieval_framework import observations as OBS
-            groups = list(OBS.load_real_observations(cfg)["groups"])
-        except Exception:
-            pass   # banner stays provisional; the pipeline logs resolved groups
-    try:
-        specs = specs_from_config(cfg, groups=groups)
-    except Exception:
-        specs = []
+        from retrieval_framework import observations as OBS
+        groups = list(OBS.load_real_observations(cfg)["groups"])
+    specs = specs_from_config(cfg, groups=groups)
     W = 84
     bar = "=" * W
 

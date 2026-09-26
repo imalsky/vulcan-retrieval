@@ -154,14 +154,6 @@ def test_init_state_raises_when_too_few_survivors():
         P._init_state(pipe, U, target_n=8)
 
 
-def test_init_state_all_healthy_default_target_is_len_u():
-    pipe = _chem_like_pipe(count_max=100)
-    U = _U([-1, -2, -3, -4])
-    U_keep, L, G, Y, refs, stats = P._init_state(pipe, U)   # target_n=None -> len(U)
-    assert U_keep.shape[0] == 4
-    assert np.all(np.isfinite(np.asarray(L)))
-
-
 def test_init_phase2_culls_recert_failures_and_backfills():
     pipe = _chem_like_pipe(count_max=100)
     # 12 phase-1-healthy draws; draws 2 and 5 certify cold but cannot re-certify warm

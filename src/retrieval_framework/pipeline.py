@@ -243,8 +243,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     def tp_valid(theta):
         """True iff the drawn T-P lies entirely inside [T_min, T_max] on the ART grid."""
-        if n_tp == 0:
-            return jnp.asarray(True)
         T_art = tp_eval(jnp.asarray(theta)[3:3 + n_tp], p_art_j)
         return jnp.all(jnp.isfinite(T_art) & (T_art >= tp_T_min) & (T_art <= tp_T_max))
 
@@ -288,13 +286,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             f"+ {fwd.n_tp} T-P dims; got names={names[:n_chem_tp]} "
             f"kinds={kinds[:n_chem_tp]} (n_dim={n_dim}). The chem block is "
             "positional and load-bearing -- do not drop infer_lnZ/c_o/lnKzz.")
-    lnR0_idx = names.index("lnR0") if "lnR0" in names else None
+    # lnR0 and both cloud parameters are always present (specs_from_config)
+    lnR0_idx = names.index("lnR0")
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
     off_idx = [i for i, k in enumerate(kinds) if k == "offset"]
     noise_idx = names.index("noise_inflation") if "noise_inflation" in names else None
     off_lo = off_idx[0] if off_idx else None
     n_off = len(off_idx)
-    cloud_lo = cloud_idx[0] if cloud_idx else None
+    cloud_lo = cloud_idx[0]
     n_cloud = len(cloud_idx)
 
     prior_types = [s.prior_type for s in specs]
@@ -318,10 +317,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     def sample_prior_u_valid(rng_key, n_particles):
         n_particles = int(n_particles)
-        if n_tp == 0:
-            tp_prior_stats["n_drawn"] += n_particles
-            tp_prior_stats["n_kept"] += n_particles
-            return sample_prior_u(rng_key, n_particles)
         key = rng_key
         kept, have, drawn = [], 0, 0
         over = max(n_particles, 16)
@@ -356,15 +351,15 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     pipe = Pipeline()
 
     def _cloud_from(theta):
-        return theta[cloud_lo:cloud_lo + n_cloud] if n_cloud else None
+        return theta[cloud_lo:cloud_lo + n_cloud]
 
     def _binned_ok(theta):
         """(binned model depth, ok): ok is the cold certificate bit from
         fwd.native_depth_aux (canonical convergence AND under count_max)."""
         theta = jnp.asarray(theta, dtype=dtype)
         chem_theta = theta[:n_chem_tp]
-        lnR0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
-        native, _aux, ok = fwd.native_depth_aux(chem_theta, lnR0, _cloud_from(theta))
+        native, _aux, ok = fwd.native_depth_aux(chem_theta, theta[lnR0_idx],
+                                                _cloud_from(theta))
         binned = B_jax @ native                                # (n_bin,)
         if n_off > 0:
             offs = jax.lax.dynamic_slice_in_dim(theta, off_lo, n_off) * OBS.OFFSET_UNIT
@@ -420,8 +415,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         u = jnp.asarray(u)
         eye = jnp.eye(n_dim, dtype=u.dtype)
         y0, dy0 = jax.jvp(log_likelihood_u, (u,), (eye[0],))
-        if n_dim == 1:
-            return y0, jnp.atleast_1d(dy0)
         dy_rest = jax.vmap(lambda v: jax.jvp(log_likelihood_u, (u,), (v,))[1])(eye[1:])
         return y0, jnp.concatenate([jnp.atleast_1d(dy0), dy_rest], axis=0)
 
@@ -438,7 +431,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # diagonal d(theta)/d(u): theta_from_u is elementwise, so J @ 1 == diag(J)
         _, dtheta_du = jax.jvp(theta_from_u, (u,), (jnp.ones_like(u),))
         c = theta[:n_chem_tp]
-        r0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
+        r0 = theta[lnR0_idx]
         cloudp = _cloud_from(theta)
 
         eye_c = jnp.eye(n_chem_tp, dtype=u.dtype)
@@ -468,22 +461,15 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         g_theta = g_theta.at[:n_chem_tp].set(J_chem @ Btw)
 
         # RT-only dims (lnR0 + cloud params): one jacfwd through the RT at frozen aux
-        rt_idx = ([lnR0_idx] if lnR0_idx is not None else []) + cloud_idx
-        if rt_idx:
-            has_r = lnR0_idx is not None
-            rv0 = jnp.stack([theta[i] for i in rt_idx])
+        rt_idx = [lnR0_idx] + cloud_idx
+        rv0 = jnp.stack([theta[i] for i in rt_idx])
 
-            def _rt(rv):
-                r = rv[0] if has_r else jnp.asarray(0.0, u.dtype)
-                if n_cloud:
-                    cp = rv[1:] if has_r else rv
-                else:
-                    cp = None
-                return fwd.rt_depth(aux, r, cp)
+        def _rt(rv):
+            return fwd.rt_depth(aux, rv[0], rv[1:])
 
-            J_rt = jax.jacfwd(_rt)(rv0)                          # (n_native, n_rt)
-            for j, i in enumerate(rt_idx):
-                g_theta = g_theta.at[i].set(jnp.dot(J_rt[:, j], Btw))
+        J_rt = jax.jacfwd(_rt)(rv0)                              # (n_native, n_rt)
+        for j, i in enumerate(rt_idx):
+            g_theta = g_theta.at[i].set(jnp.dot(J_rt[:, j], Btw))
         if n_off > 0:
             g_theta = g_theta.at[off_lo:off_lo + n_off].set(OBS.OFFSET_UNIT * (O_jax.T @ wres))
         if noise_idx is not None:
@@ -509,11 +495,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     rt_vjp_chunk = int(cfg.smc_rt_vjp_chunk or 0)
     y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)          # (nz, ni)
     eye_c = jnp.eye(n_chem_tp, dtype=dtype)
-    have_cloud = bool(n_cloud)
-
-    def _rt_wrap(aux, r0, cp):
-        # cp is a dummy (0,) array when clouds are off, so the vjp signature is fixed
-        return fwd.rt_depth(aux, r0, cp if have_cloud else None)
 
     def _mu_from_depth(depth, theta):
         mu = B_jax @ depth
@@ -524,9 +505,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _rt_val(args):
         """Per-particle RT stage, primal only: aux profiles -> loglik value."""
         aux, theta = args
-        r0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
-        cp = theta[cloud_lo:cloud_lo + n_cloud] if have_cloud else jnp.zeros((0,), dtype)
-        depth = _rt_wrap(aux, r0, cp)
+        depth = fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta))
         mu = _mu_from_depth(depth, theta)
         val = _gauss_loglik(mu, theta)
         finite = jnp.all(jnp.isfinite(depth))
@@ -537,10 +516,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         observed_depth_model, with no chemistry solve. UNGATED like it; the
         posterior predictive runs it on the final particles' carried columns."""
         y, theta = args
-        r0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
-        cp = theta[cloud_lo:cloud_lo + n_cloud] if have_cloud else jnp.zeros((0,), dtype)
         aux = fwd.aux_from_y(y, theta[:n_chem_tp])
-        return _mu_from_depth(_rt_wrap(aux, r0, cp), theta)
+        return _mu_from_depth(
+            fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta)), theta)
 
     observed_depth_from_y_jit = jax.jit(
         lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
@@ -551,9 +529,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         jvp lanes; contracting it against the RT cotangent gives the chem+T-P block,
         and the same vjp call yields the lnR0/cloud entries for free."""
         aux, daux, theta = args
-        r0 = theta[lnR0_idx] if lnR0_idx is not None else jnp.asarray(0.0, dtype)
-        cp = theta[cloud_lo:cloud_lo + n_cloud] if have_cloud else jnp.zeros((0,), dtype)
-        depth, vjp_fn = jax.vjp(_rt_wrap, aux, r0, cp)
+        depth, vjp_fn = jax.vjp(fwd.rt_depth, aux, theta[lnR0_idx],
+                                _cloud_from(theta))
         mu = _mu_from_depth(depth, theta)
         sig = _sigma_for(theta)
         resid = pipe.obs_depth_jax - mu
@@ -563,10 +540,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         aux_bar, r_bar, cloud_bar = vjp_fn(Btw)
         g = jnp.zeros((n_dim,), dtype)
         g = g.at[:n_chem_tp].set(jax.vmap(lambda d: _tree_dot(d, aux_bar))(daux))
-        if lnR0_idx is not None:
-            g = g.at[lnR0_idx].set(r_bar)
-        if have_cloud:
-            g = g.at[cloud_lo:cloud_lo + n_cloud].set(cloud_bar)
+        g = g.at[lnR0_idx].set(r_bar)
+        g = g.at[cloud_lo:cloud_lo + n_cloud].set(cloud_bar)
         if n_off > 0:
             g = g.at[off_lo:off_lo + n_off].set(OBS.OFFSET_UNIT * (O_jax.T @ wres))
         if noise_idx is not None:
@@ -758,8 +733,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # per-particle T-P window mask (no clip): an out-of-window proposal is
             # rejected (-inf L, state pinned to baseline) and is NOT flagged as an AD
             # pathology (its gradient is irrelevant once MH rejects it).
-            valid = (jax.vmap(tp_valid)(Theta) if n_tp > 0
-                     else jnp.ones((Theta.shape[0],), bool))
+            valid = jax.vmap(tp_valid)(Theta)
             usable = valid   # narrowed to (valid & certified) on the warm gradient path
             if want_grad:
                 # Chemistry jvp directions: ONE batched solve for the whole
@@ -924,7 +898,7 @@ def logz_err_lower_bound(ess_hist, n_particles: int) -> float:
 
 
 # Observations
-def evidence_report(logZ: float, init_stats: dict | None) -> dict:
+def evidence_report(logZ: float, init_stats: dict) -> dict:
     """Evidence-semantics fields from the SMC ``logZ`` and the init cull
     counters. Module-level and jax-free so the semantics are unit-testable
     (tests/test_evidence_semantics.py), like validate_observations.
@@ -961,12 +935,6 @@ def evidence_report(logZ: float, init_stats: dict | None) -> dict:
         f = max(k / n, 1.0 / (2.0 * n))          # floor so ln(f) stays finite
         se = math.sqrt(max(f * (1.0 - f), 0.0) / n) / f   # d ln f
         return f, se
-    if not init_stats:
-        nan = float("nan")
-        return dict(log_support_fraction=nan, log_support_fraction_err=nan,
-                    log_support_physical=nan, log_support_physical_err=nan,
-                    log_conv_attrition=nan, log_conv_attrition_err=nan,
-                    logZ_box=nan, f_tp=nan, f_conv=nan)
     f_tp, se_tp = _binom(init_stats.get("tp_n_kept", 0),
                          init_stats.get("tp_n_drawn", 0))
     f_c1, se_c1 = _binom(init_stats.get("n_alive_phase1", 0),
@@ -1133,7 +1101,7 @@ def _get_batch_evals(pipe: Pipeline):
         return (pipe.batch_eval_cold_vg, pipe.batch_eval_cold_l,
                 pipe.batch_eval_move_vg, pipe.batch_eval_move_l)
     if not hasattr(pipe, "_stub_evals"):
-        vg1 = jax.value_and_grad(pipe.loglik_fwd)
+        vg1 = jax.value_and_grad(pipe.log_likelihood_u)
 
         def eval_vg(U, Y, refs):
             L, G = jax.vmap(vg1)(U)
@@ -1180,9 +1148,9 @@ def _init_draw_count(pipe: Pipeline, n_target: int) -> int:
     return max(n_target, int(math.ceil(n_target * over)))
 
 
-def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
+def _init_state(pipe: Pipeline, U, target_n: int):
     """Initialize the SMC particle state, returning (U_kept, L, G, Y, refs,
-    init_stats) for exactly ``target_n`` healthy particles (default: all of U).
+    init_stats) for exactly ``target_n`` healthy particles.
 
     ``U`` is an OVERSAMPLED prior cloud (ceil(target_n * init_oversample) draws
     for real pipelines; _init_draw_count).
@@ -1204,8 +1172,6 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
     problem); a finite likelihood with a non-finite tangent is kept with
     zeroed gradient entries, up to the smc_tangent_bad_max_frac backstop."""
     M = int(U.shape[0])
-    if target_n is None:
-        target_n = M
     target_n = int(target_n)
     if M < target_n:
         raise RuntimeError(f"_init_state got {M} draw(s) but target_n={target_n}: the "
@@ -1389,8 +1355,6 @@ def _init_state(pipe: Pipeline, U, target_n: Optional[int] = None):
             "cannot re-certify.")
     sel2 = jnp.asarray(alive2[:target_n])
     U_keep, L, G, Y, refs = U_keep[sel2], L[sel2], G[sel2], Y[sel2], refs[sel2]
-    if not np.all(np.isfinite(np.asarray(jax.device_get(G)))):
-        raise RuntimeError("non-finite gradient entries at initialization")
     logger.info(f"init 2/2 done in {time.perf_counter() - t0:.1f}s "
                 f"(kept {target_n}/{n_phase2})")
     # Structured record of the operational-prior support measurement: these counts
@@ -1611,9 +1575,9 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
     return mutate
 
 
-def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]] = None,
-                           dump_path: Optional[Path] = None,
-                           n_particles: int = 0, max_frac: float = 0.0) -> None:
+def _check_mutation_health(n_bad: int, where: str, forensics: Dict[str, Any],
+                           dump_path: Optional[Path], n_particles: int,
+                           max_frac: float) -> None:
     """Handle flagged tangent pathologies from a mutation sweep: dump + warn on
     every occurrence, RAISE only above the systematic-breakage backstop.
 
@@ -1626,23 +1590,18 @@ def _check_mutation_health(n_bad, where: str, forensics: Optional[Dict[str, Any]
     occurrence. A single sweep exceeding ceil(max_frac * n_particles) events
     is far beyond the measured physical class -- that is systematic AD
     breakage, and the host raises loudly."""
-    n_bad = int(jax.device_get(n_bad))
-    if n_bad == 0:
-        return
-    detail = ""
-    if forensics is not None:
-        f = {k: np.asarray(jax.device_get(v)) for k, v in forensics.items()}
-        idx = np.flatnonzero(f["bad_grad"])
-        n_chem = int(f["chem_tan_bad"][idx].sum()) if idx.size else 0
-        detail = (
-            f" Offending particle indices {idx.tolist()}; attribution: {n_chem} "
-            f"chemistry-tangent side, {int(idx.size) - n_chem} RT-vjp side; "
-            f"accept counts {f['acc'][idx].tolist()}; "
-            f"longdy {[f'{v:.3g}' for v in f['longdy'][idx]]}.")
-        if dump_path is not None:
-            save_npz(Path(dump_path), **f)
-            detail += f" Per-particle forensics dumped to {dump_path}."
-    threshold = int(math.ceil(max_frac * max(0, int(n_particles))))
+    f = {k: np.asarray(jax.device_get(v)) for k, v in forensics.items()}
+    idx = np.flatnonzero(f["bad_grad"])
+    n_chem = int(f["chem_tan_bad"][idx].sum()) if idx.size else 0
+    detail = (
+        f" Offending particle indices {idx.tolist()}; attribution: {n_chem} "
+        f"chemistry-tangent side, {int(idx.size) - n_chem} RT-vjp side; "
+        f"accept counts {f['acc'][idx].tolist()}; "
+        f"longdy {[f'{v:.3g}' for v in f['longdy'][idx]]}.")
+    if dump_path is not None:
+        save_npz(Path(dump_path), **f)
+        detail += f" Per-particle forensics dumped to {dump_path}."
+    threshold = int(math.ceil(max_frac * int(n_particles)))
     if n_bad > threshold:
         raise RuntimeError(
             f"{n_bad} finite-likelihood/non-finite-gradient event(s) during {where} "
