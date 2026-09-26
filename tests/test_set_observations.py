@@ -57,7 +57,8 @@ RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 @pytest.mark.slow
 @pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",
                     reason="opt-in: builds the exact production forward "
-                           "(set RUN_PRODUCTION_PREFLIGHT=1)")
+                           "(RUN_PRODUCTION_PREFLIGHT=1 python -m pytest "
+                           "tests/test_set_observations.py -m slow)")
 def test_production_case_assembles_and_evaluates_one_finite_likelihood(
         monkeypatch, tmp_path):
     """Assemble the shipped case (real products, binning and offset operators)

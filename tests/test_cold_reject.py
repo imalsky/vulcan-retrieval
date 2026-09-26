@@ -3,8 +3,8 @@ solve: the scalar log_likelihood_u, both gradient routes and the batched cold
 evaluator apply one certificate (retrieval_forward.native_depth_aux's ok bit ==
 pipeline._proposal_converged plus the count_max cap). Real smoke pipeline at
 count_max=50 < count_min (conftest.capped_smoke_pipe), so no cold solve can
-certify while its column, and hence its spectrum, stays finite. Slow: real
-chemistry + RT build, ~1-3 min."""
+certify while its column, and hence its spectrum, stays finite. Slow (full
+tier): five distinct chemistry compiles, ~15 min on daw."""
 import jax
 import numpy as np
 import pytest

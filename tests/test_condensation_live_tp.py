@@ -37,10 +37,9 @@ import platform
 import numpy as np
 import pytest
 
-# SLOW: this module builds a REAL chemistry + RT pipeline (ExoJAX RT model,
-# k-tables, chemistry converged to steady state), so it costs
-# minutes, not seconds. `pytest tests` still runs it; `pytest -m "not slow"`
-# is the opt-in fast inner loop.
+# SLOW (full tier only): this module builds a REAL chemistry + RT pipeline
+# (ExoJAX RT model, k-tables, chemistry converged to steady state), so it
+# costs minutes, not seconds.
 pytestmark = [pytest.mark.slow,
               pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 

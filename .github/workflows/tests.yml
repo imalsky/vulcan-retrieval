@@ -2,8 +2,9 @@ name: tests
 
 # Fast, dependency-light CI: exercises the sampler core, u-space prior machinery,
 # binning matrix, and init reject-and-cull logic on stub pipelines (CPU jax only).
-# The chemistry/RT integration tests (test_warm_reject, ...) skip cleanly without
-# the VULCAN-JAX + ExoJax stack and its opacity caches -- those run locally / on HPC.
+# This is the normal tier: pyproject's addopts deselect the `slow` chemistry/RT
+# integration tests (test_warm_reject, ...), which run in the local full tier;
+# the other tests that need the VULCAN-JAX + ExoJax stack skip without it.
 on:
   push:
     branches: [main, speed]

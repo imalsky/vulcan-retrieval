@@ -77,13 +77,14 @@ version = { attr = "retrieval_framework._version.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --tb=short"
+# The normal tier (plain `pytest tests`, and CI) deselects `slow`, with a
+# visible deselected count. The full tier adds `-m "slow or not slow"`; a
+# single slow file or node id needs `-m slow`.
+addopts = "-ra --tb=short -m 'not slow'"
 markers = [
     # Integration tests that build a real chemistry + RT pipeline (five files:
     # test_cold_reject, test_condensation_live_tp, test_set_observations,
-    # test_stage_split, test_warm_reject). `pytest tests` still runs them;
-    # `pytest -m "not slow"` is the explicit fast loop, with a visible
-    # deselected count.
+    # test_stage_split, test_warm_reject).
     "slow: builds a real chemistry/RT pipeline; minutes, not seconds",
 ]
 
