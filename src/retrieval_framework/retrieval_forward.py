@@ -104,7 +104,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
             "the chemistry warm-up solve failed its check (see the [chem] "
-            "WARNING above for longdy/longdydt/aflux_change). Its column is not "
+            "WARNING above for end_case/termination_reason/longdy). Its column is not "
             "used and every draw certifies itself, but this configuration may "
             "not converge: check the T-P window / Kzz / dt_max settings.")
 
