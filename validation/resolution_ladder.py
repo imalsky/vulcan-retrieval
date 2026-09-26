@@ -158,7 +158,7 @@ def main() -> int:
         })
         ok &= jrel < GATE_JAC_REL
     # Without --jacobian the depth gate alone cannot certify gradient convergence,
-    # so a clean run is REPORT, not PASS. certificate.validate refuses REPORT.
+    # so a clean run is REPORT, not PASS; the certificate warns on REPORT.
     status = ("PASS" if args.jacobian else "REPORT") if ok else "FAIL"
     print(f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
           + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")

@@ -28,12 +28,13 @@
 #
 # Submit (from this case dir, or export PROJECT_ROOT):
 #   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval/runs/w39b_smc_retrieval
-#   qsub run_nas_w39b.pbs                        # real-data production run
+#   qsub run_nas_w39b.pbs                        # real-data production run (nautilus, warm starts)
+#   qsub -v RESUME=1 run_nas_w39b.pbs            # continue it in the next job
+#   qsub -v NAUTILUS_WARM=0 run_nas_w39b.pbs     # cold nautilus: the order-independent evidence
+#   qsub -v SAMPLER=smc run_nas_w39b.pbs         # MALA-SMC (run_smc.py; plots and certificate)
 #   qsub -v SYNTH=1 run_nas_w39b.pbs             # gpu-fidelity synthetic recovery test
 #   qsub -v CALIBRATE_ONLY=1 run_nas_w39b.pbs    # timing projection only (~1 h)
 #   qsub -v CALIBRATE_COUNT_MAX=1 run_nas_w39b.pbs   # accept_count distribution only
-#   qsub -v SAMPLER=nautilus run_nas_w39b.pbs       # nested sampling (run_nautilus.py)
-#   qsub -v SAMPLER=nautilus,RESUME=1 run_nas_w39b.pbs   # continue it in the next job
 #
 # Env knobs (-v):
 #   CONDA_ENV               interpreter env            (default pyt2_8_gh)
@@ -69,7 +70,8 @@
 #                           device's SM count, 132 on the GH200; 0 = one lockstep batch, the reference
 #                           arm) -- the lane-count arm of the bench, same draws and
 #                           seed. A fixed-step bench runs lockstep on its own.
-#   RESUME=1                continue a killed run from its smc_checkpoint.npz
+#   RESUME=1                continue a killed run from its checkpoint
+#                           (SMC smc_checkpoint.npz, nautilus its HDF5 file)
 #   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default;
 #                           the commas stay inside the script
 #   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
@@ -194,7 +196,7 @@ set_xla_flags() {
   esac
 }
 set_xla_flags || exit 1
-case "${SAMPLER:-smc}" in
+case "${SAMPLER:-nautilus}" in
   smc|nautilus) ;;
   *) echo "ERROR: SAMPLER=${SAMPLER}: expected smc or nautilus"; exit 1 ;;
 esac
@@ -472,7 +474,7 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
     ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?
   wait_for_tree_python
-elif [ "${SAMPLER:-smc}" = "nautilus" ]; then
+elif [ "${SAMPLER:-nautilus}" = "nautilus" ]; then
   # Nested sampling on the same likelihood (retrieval_framework.run_nautilus):
   # output in <out_dir>_nautilus, stops at the preset's walltime governor and
   # exits 0 unfinished; continue with RESUME=1. No plots or certificate (both
