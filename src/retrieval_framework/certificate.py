@@ -148,7 +148,8 @@ def _git_raw(repo: Path, *args: str):
     """
     try:
         r = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=15)
+                           capture_output=True, text=True, errors="replace",
+                           timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return _GIT_FAILED
     return r.stdout.strip() if r.returncode == 0 else _GIT_FAILED
