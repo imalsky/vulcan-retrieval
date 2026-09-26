@@ -70,7 +70,7 @@ def main() -> None:
     obs = np.load(out / "observations.npz", allow_pickle=True)
     # a governor-stopped run saves a TEMPERED cloud; stamp every headline figure so it
     # can never be mistaken for the posterior
-    final_beta = float(s["final_beta"]) if "final_beta" in s.files else 1.0
+    final_beta = float(s["final_beta"])
     tempered_tag = ("" if final_beta >= 1.0 - 1e-6
                     else f"  [TEMPERED beta={final_beta:.3f} -- NOT the posterior]")
 
@@ -78,8 +78,7 @@ def main() -> None:
     # sampler history, so its cloud is a sample from an APPROXIMATE target.
     # Carried on every headline figure for the same reason as the tempered tag:
     # a figure outlives the log that explained it.
-    approx_target = bool(int(s["approximate_history_dependent_target"])) \
-        if "approximate_history_dependent_target" in s.files else False
+    approx_target = bool(int(s["approximate_history_dependent_target"]))
     if approx_target:
         tempered_tag += ("  [APPROXIMATE TARGET: warm continuation, "
                          "history-dependent likelihood]")
@@ -177,7 +176,7 @@ def main() -> None:
     g_cgs = float(cfgj["tp_gravity_cgs"]); f_g = GUILLOT_F; Tint = float(cfgj["tp_Tint_K"])
     iT = names.index("Tirr"); ik = names.index("log10kappa")
     ig = names.index("log10gamma") if "log10gamma" in names else None
-    gam_fix = float(cfgj.get("tp_gamma_fixed", 0.4))
+    gam_fix = float(cfgj["tp_gamma_fixed"])
     p_bar = np.logspace(-8, np.log10(7.0), 120)
     rng = np.random.default_rng(3)
     sel = theta[rng.choice(theta.shape[0], size=min(300, theta.shape[0]), replace=False)]
@@ -217,8 +216,7 @@ def main() -> None:
         a.set_xlabel("stage"); a.set_ylabel("ESS"); a.set_title("effective sample size"); a.legend(fontsize=8)
         a = axs[1, 0]
         a.plot(stages, np.asarray(x["smc_acceptance_rate"], float), "o-", ms=3, label="acceptance")
-        # archived configs predate smc_mcmc_kernel, so default to mala
-        _kern = str(cfgj.get("smc_mcmc_kernel", "mala")).strip().lower()
+        _kern = str(cfgj["smc_mcmc_kernel"]).strip().lower()
         a.axhline(TARGET_ACCEPT[_kern], color="r", lw=0.7, ls="--", label="target")
         a2 = a.twinx(); a2.semilogy(stages, np.asarray(x["smc_step_size_history"], float),
                                     "s-", ms=2.5, color="#2ca02c", alpha=0.7, label="step size")
