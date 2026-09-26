@@ -253,9 +253,8 @@ def main() -> None:
 
     # Exit element-budget drift (the solver's cumulative element-budget gate)
     # per draw, with the exit time t: the molecular-diffusion boundary rows
-    # leak at a fixed rate (inherited from upstream op.py:1549-1558, which uses
-    # one g for both densities of a boundary interface), so a constant drift/t
-    # at long t is that term; a short-t,
+    # leak at a fixed rate (they use g[0] / g[-1] for both densities of their
+    # interface), so a constant drift/t at long t is that term; a short-t,
     # element-specific drift is geometry or a real leak.
     drift = np.asarray(jax.device_get(cd.budget_drift_max), np.float64)
     atom = np.asarray(jax.device_get(cd.budget_drift_atom), np.int64)
