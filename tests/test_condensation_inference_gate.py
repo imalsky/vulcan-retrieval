@@ -1,12 +1,10 @@
-"""Resolved-config condensation inference gate (F5).
+"""Resolved-config condensation inference gate.
 
 Condensation is a forward-model capability only. The early ``cfg_overrides`` gate
 in ``config_schema.validate_config`` catches the common case, but a base VULCAN
 config can default ``use_condense=True`` (e.g. ``Earth.yaml``) without the flag
 appearing in ``cfg_overrides``. ``retrieval_forward._refuse_condense_inference``
 gates on the RESOLVED ``chem.conden_spec`` instead, closing that bypass.
-
-Record: VULCAN-JAX notes §2.5-2.6.
 """
 
 from __future__ import annotations

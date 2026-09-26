@@ -250,7 +250,7 @@ _ARTIFACT_WARNINGS = [
                          ids=[r[0] for r in _ARTIFACT_WARNINGS])
 def test_validation_artifacts_warn_not_fail(cert, mutate, replay, expect):
     """A missing, non-PASS or differently-measured artifact is reported with
-    the numbers and never fails the certificate (notes 2.4)."""
+    the numbers and never fails the certificate."""
     c = cert()
     mutate(c)
     assert not validate(c, replay())
@@ -554,7 +554,7 @@ def test_a_fresh_ladder_artifact_is_accepted():
 @pytest.mark.parametrize("stored, want, refused", [
     ("a" * 64, "a" * 64, False),   # same target: resume proceeds
     ("a" * 64, "b" * 64, True),    # different target
-    (None, "b" * 64, True),        # legacy checkpoint, no digest at all
+    (None, "b" * 64, True),        # checkpoint without a digest
 ])
 def test_resume_is_refused_before_the_run_directory_is_written(
         stored, want, refused, tmp_path):

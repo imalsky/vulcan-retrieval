@@ -61,7 +61,7 @@ GRAD_REL_FAIL = 0.1
 
 # Rows whose warm drift was zeroed by the badgrad handling read rel = 1 by
 # construction. The GRAD_REL_FAIL gate runs on rows where both gradients are
-# real; the zeroed fraction has its own ceiling (notes §2.5).
+# real; the zeroed fraction has its own ceiling.
 GRAD_ZEROED_FRAC_FAIL = Config.smc_tangent_bad_max_frac
 # Particles per cold re-solve chunk unless VALIDATE_WARM_CHUNK says otherwise.
 VALIDATE_WARM_CHUNK_DEFAULT = 48

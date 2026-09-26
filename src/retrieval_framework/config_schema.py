@@ -60,7 +60,7 @@ class Config:
     nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
     # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
-    # steps for no gradient gain, notes §1.1). slope_cri / yconv_min / flux_cri are not
+    # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
     # overridden: they inherit vulcan_cfg_W39b.
     yconv_cri: float = 0.01
     molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
@@ -80,8 +80,8 @@ class Config:
     count_min: Optional[int] = None
     count_max: Optional[int] = None
     # Warm mutation cap (accepted steps): a proposal unconverged here is an MH
-    # rejection. conv_step=500 sets the effective floor; 1500 leaves margin (notes
-    # §1.1). Cold solves keep count_max; validate_config requires
+    # rejection. conv_step=500 sets the effective floor; 1500 leaves margin.
+    # Cold solves keep count_max; validate_config requires
     # warm_count_max <= count_max.
     warm_count_max: int = 1500
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
@@ -210,8 +210,8 @@ class Config:
     # ---- inference: adaptive-tempered SMC (plain JAX) + forward-mode-jvp MALA --
     run_inference: bool = True
     # Expert opt-in: gradient-MALA inference with condensation ON. Off by default:
-    # the tangent through the condensing+pinned state disagrees with FD at O(1)
-    # (notes §2.7). Condensation forward solves are always allowed.
+    # the tangent through the condensing+pinned state disagrees with FD at O(1).
+    # Condensation forward solves are always allowed.
     allow_condense_inference: bool = False
     smc_num_particles: int = 48
     smc_target_ess_frac: float = 0.6
@@ -233,23 +233,23 @@ class Config:
     # logged as badgrad= with forensics. A sweep above ceil(this * N) raises.
     smc_tangent_bad_max_frac: float = 0.25
     # "cold" (default): the two-stage map for every evaluation; the likelihood does
-    #         not depend on sampler history, up to the lane refill tick (notes §2.13).
+    #         not depend on sampler history, up to the lane refill tick.
     # "warm": continuation from the carried column, cheaper but history-dependent;
     #         stamped approximate and needs both post-run validators.
     smc_chem_mode: str = "cold"
     # Particles per lax.map chunk through the ExoJAX RT. 0 = one all-particle
-    # batch. RT VJP is the memory wall (notes §1.3); PROBE_MEMORY=1 reads the
+    # batch. RT VJP is the memory wall; PROBE_MEMORY=1 reads the
     # peak when a width or the band grows a lot.
     smc_rt_chunk: int = 16              # primal-likelihood RT chunk
     # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
-    # random-overlap folds, so its memory is linear in this width (notes §1.3).
+    # random-overlap folds, so its memory is linear in this width.
     smc_rt_vjp_chunk: int = 6
     # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
     # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
     # and refills a lane that certifies with the next draw inside the same
     # while loop (vulcan_forward.converged_y_queue), so wall time follows total
     # work / k. The gpu preset sets it and smc_num_particles to
-    # `device_lane_count()`, one kernel wave of the card (notes §2.13). Below
+    # `device_lane_count()`, one kernel wave of the card. Below
     # smc_num_particles a sweep's proposals queue slowest first. The schema
     # default is the off-GPU width.
     cold_lanes: int = OFF_GPU_LANES
@@ -327,7 +327,7 @@ SCALE_CLIP = 20.0
 UNDERFLOW_DENOM = 1e-300
 # Largest cold-init draw factor validate_config accepts.
 INIT_OVERSAMPLE_MAX = 10.0
-# The CUDA compute capability the `ffi` block-Thomas kernel runs on (notes §1.4).
+# The CUDA compute capability the `ffi` block-Thomas kernel runs on.
 FFI_COMPUTE_CAPABILITY = "9.0"
 # Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
 # only the banner's C/O range uses it.
@@ -399,7 +399,7 @@ def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     count (132 on a GH200 / H100 SXM, 108 on an A100), read from the PJRT
     device description's `core_count`. Both VULCAN-JAX block kernels take
     ~125 KB of shared memory and run one block per SM, so a width above the
-    SM count runs a second, mostly empty wave (notes §1.4). Off the GPU
+    SM count runs a second, mostly empty wave. Off the GPU
     the width is a statistics knob only: `fallback`."""
     import jax
 
@@ -449,7 +449,7 @@ def hardware_profile() -> dict:
 def choose_solver() -> str:
     """Set VULCAN_JAX_SOLVER for this process from the device, unless the user
     set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
-    the only card it is measured on (notes §1.4), and only when its CUDA library is
+    the only card it is validated on, and only when its CUDA library is
     built; `fast` everywhere else (the kernel's 125 KB block does not fit
     sm_86/89 shared memory). Import-frozen by VULCAN-JAX, so this runs before
     the first vulcan_jax import (make_config calls it). Returns the choice and
@@ -486,7 +486,7 @@ def hardware_warnings(prof: dict) -> list:
     if prof["backend"] == "cpu":
         out.append(
             "running on CPU: the batched pipeline uses about 2 cores regardless of "
-            "lane count (vulcan-retrieval notes §1.4). Use the GPU for production "
+            "lane count. Use the GPU for production "
             "runs.")
     elif not prof.get("fp64_full_rate", True):
         out.append(
@@ -497,8 +497,7 @@ def hardware_warnings(prof: dict) -> list:
             and "xla_gpu_enable_command_buffer" not in prof["xla_flags"]):
         out.append(
             "XLA_FLAGS carries no --xla_gpu_enable_command_buffer; "
-            "run_nas_w39b.pbs sets FUSION,CUBLAS,CUSTOM_CALL,WHILE "
-            "(vulcan-retrieval notes §1.4).")
+            "run_nas_w39b.pbs sets FUSION,CUBLAS,CUSTOM_CALL,WHILE.")
     return out
 
 
@@ -532,7 +531,7 @@ def validate_config(cfg: Config) -> None:
             f"{cfg.smc_mcmc_kernel!r}")
     # Inference with condensation ON is refused by default: the fix_species pin
     # captures the column at a discrete accepted step, so the pinned-species
-    # tangent disagrees with FD at O(1) (notes §2.7). allow_condense_inference=True
+    # tangent disagrees with FD at O(1). allow_condense_inference=True
     # is the opt-in.
     if (bool(cfg.cfg_overrides.get("use_condense", False))
             and cfg.run_inference and not cfg.allow_condense_inference):

@@ -18,7 +18,7 @@
 # tools/bootstrap_nas_env.pbs; the preflight only validates
 # (retrieval_framework.validate_env) and fails with a pointer to the bootstrap.
 #
-# Expected layout on /nobackup (git pull for code, scp for data; notes §5):
+# Expected layout on /nobackup (git pull for code, scp for data):
 #   ${PROJECT_ROOT}/VULCAN-JAX/                                  (chemistry repo)
 #   ${PROJECT_ROOT}/vulcan-forward/                               (forward engine)
 #   ${PROJECT_ROOT}/vulcan-retrieval/                             (THIS repo; data/ at its root)
@@ -70,8 +70,8 @@
 #                           arm) -- the lane-count arm of the bench, same draws and
 #                           seed. A fixed-step bench runs lockstep on its own.
 #   RESUME=1                continue a killed run from its smc_checkpoint.npz
-#   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default (notes
-#                           §1.4); the commas stay inside the script
+#   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default;
+#                           the commas stay inside the script
 #   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
 #                           one-command minimum graph size: the arm that shows whether
 #                           the whole step loop is captured as one graph
@@ -179,9 +179,9 @@ export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
-# Command buffers are ON by default (notes §1.4); XLA_CMDBUF=0 turns them off for
+# Command buffers are ON by default; XLA_CMDBUF=0 turns them off for
 # an A/B or a per-kernel profile. Off needs the EMPTY value: with no flag at all
-# XLA keeps its own default set (register #93).
+# XLA keeps its own default set.
 # The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
 # while loop becomes one graph only if every op in its body is capturable.
 # A function, so a chain arm that sets its own XLA_CMDBUF gets its own flags.
@@ -199,7 +199,7 @@ case "${SAMPLER:-smc}" in
   *) echo "ERROR: SAMPLER=${SAMPLER}: expected smc or nautilus"; exit 1 ;;
 esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-# Production solver: `ffi`, the CUDA block-Thomas kernel (notes §2.13). Pinned here, not left to config_schema.choose_solver(),
+# Production solver: `ffi`, the CUDA block-Thomas kernel. Pinned here, not left to config_schema.choose_solver(),
 # so the job script states the choice and a missing kernel build fails loudly
 # instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
 # still overrides it.
@@ -275,7 +275,7 @@ if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
   if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
     # 1 kHz keeps the metrics stream small over hours; 10 ms resolution shows
     # busy-vs-idle. nsys >= 2024.5 spells it --gpu-metrics-devices, hardcoded for
-    # the NAS nsys 2025.6.3 (the deprecated singular aborts nsys; notes §5).
+    # the NAS nsys 2025.6.3 (the deprecated singular aborts nsys).
     # NSYS_GPU_METRICS_DEV overrides the device list (GPU ID, all, none).
     NSYS_WRAP+=(--gpu-metrics-devices="${NSYS_GPU_METRICS_DEV:-all}"
                 --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
@@ -312,7 +312,7 @@ if [ "${NCU:-0}" = "1" ]; then
   [ "${NSYS_CAPTURE_API:-0}" = "1" ] || { echo "ERROR: NCU=1 needs NSYS_CAPTURE_API=1 (the profiler range)"; exit 1; }
   [ "${NSYS:-0}${NSYS_FULL:-0}" = "00" ] || { echo "ERROR: NCU=1 and NSYS=1 exclude each other"; exit 1; }
   # By path, never `module load cuda` here: the module's ptxas breaks JAX's
-  # own CUDA compile (notes §5).
+  # own CUDA compile.
   NCU_BIN="${NCU_BIN:-$(command -v ncu 2>/dev/null || ls /usr/local/cuda/bin/ncu /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)}"
   [ -x "${NCU_BIN:-}" ] || { echo "ERROR: NCU=1 but no ncu found (set NCU_BIN=<path>)"; exit 1; }
   export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
@@ -417,7 +417,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
       fi
       wrc=$?
       # A windowed nsys can return while the app still holds the GPU; wait
-      # before the next arm touches it (notes §5).
+      # before the next arm touches it.
       wait_for_tree_python
       if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
         echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1

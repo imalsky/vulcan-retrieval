@@ -82,7 +82,7 @@ def test_move_vg_rejects_nonconverged_without_raising(smoke):
 def test_init_eval_is_uncapped(smoke):
     """The INIT gradient path must NOT run under the mutation cap: a phase-1 survivor
     that needs more than warm_count_max steps to re-certify is a healthy particle, not
-    a doomed proposal (notes §1.2). chem_solve_warm_diag_full must run the
+    a doomed proposal. chem_solve_warm_diag_full must run the
     UNCAPPED runner: from the baseline column (which cannot certify in either budget
     here) the capped solve stops at WARM_CMAX while the full solve marches on to the
     cold cap."""

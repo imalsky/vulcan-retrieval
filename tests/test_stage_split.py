@@ -79,8 +79,8 @@ def test_stage_split_matches_single_chain(smoke):
                     f"max {ulp:.3g} ulp")
     assert np.array_equal(np.asarray(L_new), np.asarray(L_ref))
 
-    # Norm-relative (notes §1.8). The routes batch the stage-1 tangent at
-    # different widths, so XLA fusion differs; measured 1.1e-10 (notes §2.13),
+    # Norm-relative. The routes batch the stage-1 tangent at
+    # different widths, so XLA fusion differs; measured 1.1e-10,
     # the gate ~90x above.
     G_new, G_ref = np.asarray(G_new), np.asarray(G_ref)
     dg = float(np.max(np.abs(G_new - G_ref)) / max(float(np.max(np.abs(G_ref))), UNDERFLOW_DENOM))

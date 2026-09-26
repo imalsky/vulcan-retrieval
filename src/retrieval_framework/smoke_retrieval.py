@@ -41,13 +41,13 @@ from retrieval_framework import pipeline as P
 import jax
 import jax.numpy as jnp
 
-# Gates; the measurements behind each: notes §1.8.
+# Gates.
 BLOCK_NAIVE_MAX = 1e-7     # block vs naive gradient, max|dg| / max|g|
 # FD check: relative agreement, or absolute agreement against the dominant
 # gradient component in weak directions. 5% is what the correlated-k path
 # needs (ckd.overlap's resort-rebin has dense kinks, so AD is the a.e.
 # derivative and a central difference averages across them): not a bug and
-# not a gate to tighten (notes §1.9).
+# not a gate to tighten.
 FD_REL_TOL = 5e-2
 FD_ABS_FRAC = 1e-4
 STAGED_DVAL_MAX = 1e-6     # staged vs block at cold_lanes == 0, relative (floor 1)
@@ -100,7 +100,7 @@ def main() -> int:
           f"| t_block={t_block:.1f}s t_naive={t_naive:.1f}s", flush=True)
     ok_val = abs(float(vb) - float(vn)) <= BLOCK_NAIVE_VAL_MAX * max(1.0, abs(float(vn)))
     # Same chain rule regrouped, so compare by max|d| / max|g|: a componentwise
-    # ratio is ill-posed in a weak direction such as c_o (notes §1.8). Report both.
+    # ratio is ill-posed in a weak direction such as c_o. Report both.
     scale_g = float(np.max(np.abs(gn)))
     rel_bn = float(np.max(np.abs(gb - gn)) / max(scale_g, C.UNDERFLOW_DENOM))
     rel_cw = float(np.max(np.abs(gb - gn)
@@ -130,8 +130,7 @@ def main() -> int:
 
     # ---- staged batched evaluator (SMC hot path) vs per-particle block gradient ----
     # cold_lanes == 0: the tight STAGED_* pair; cold_lanes > 0: the staged side
-    # queues, a different map, gated at DLOGL_MAX_PASS. The regime is printed
-    # (notes §1.8, §2.13).
+    # queues, a different map, gated at DLOGL_MAX_PASS. The regime is printed.
     from retrieval_framework.validate_warm import DLOGL_MAX_PASS
     t0 = time.time()
     lanes = int(cfg.cold_lanes)

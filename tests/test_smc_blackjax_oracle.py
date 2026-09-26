@@ -5,8 +5,7 @@ seed scatter.
 
 The custom SMC core carries per-particle chemistry state, which BlackJAX cannot;
 this pins its generic machinery (tempering, resampling, evidence, MALA) against
-BlackJAX and the analytic evidence over 6 seeds (the 24-seed reading: notes
-§2.3).
+BlackJAX and the analytic evidence over 6 seeds.
 
 Opt-in (RUN_BLACKJAX_ORACLE=1): needs the `blackjax` package (not part of the
 runtime deps -- dev-only) and ~2-4 min of CPU. Analytic target: flat box prior

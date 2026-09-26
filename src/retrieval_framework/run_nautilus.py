@@ -19,7 +19,7 @@ becomes an anchor keyed by its unit-cube chemistry + T-P coordinates, and each
 later solve continues from its nearest anchor (the warm map at the cold
 count_max); batches before the first certified column run cold. The certified
 state and which draws are rejected then depend on the evaluation order at the
-convergence tolerance (notes §2.14), so the posterior and evidence are
+convergence tolerance, so the posterior and evidence are
 approximate and the evidence is not an SMC run's logZ_box. An evidence claim
 uses NAUTILUS_WARM=0, the cold primal map on the lane queue (a draw's column
 depends on its batch at the convergence scale), which compares with SMC's

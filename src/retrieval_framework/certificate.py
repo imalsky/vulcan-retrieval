@@ -14,8 +14,8 @@ Gates:
   * `reached_beta1` and a final beta of exactly 1 within tolerance -- a
     beta < 1 cloud is TEMPERED, not a posterior;
   * an EXACT target: cold chemistry (exact up to the lane queue's refill
-    tick, which moves a refilled draw's column at the convergence scale;
-    notes §2.13), or an explicit warm run whose artifacts carry
+    tick, which moves a refilled draw's column at the convergence scale),
+    or an explicit warm run whose artifacts carry
     `approximate_history_dependent_target` and whose two validators
     (validate_warm, mala_reversibility) both passed;
   * evidence reported with its operational-prior / box-prior semantics and the
@@ -89,7 +89,7 @@ PRIOR_RAIL_FRAC = 0.02
 # Chemistry-convergence attrition: the fraction of the declared prior removed by
 # conditioning on "the solver converged". Surviving the run is not evidence that
 # the removed region carries negligible posterior mass. These two levels WARN
-# (attrition_warnings), they do not fail the run (notes §2.12): past
+# (attrition_warnings), they do not fail the run: past
 # CONV_ATTRITION_WARN always, past CONV_ATTRITION_JUSTIFY when no
 # independent demonstration is named in cfg.attrition_justification.
 CONV_ATTRITION_WARN = 0.10
@@ -111,7 +111,7 @@ _PER_STAGE_KEYS = ("ess", "acceptance_rate", "unique_particles",
                    "warm_capped", "warm_stalled", "badgrad")
 
 # The two production-fidelity artifacts. Missing, not-PASS or drifted artifacts
-# warn (artifact_warnings; notes §2.4). Each certifies one resolved state, so
+# warn (artifact_warnings). Each certifies one resolved state, so
 # every key it recorded is compared against the run.
 REQUIRED_VALIDATION_ARTIFACTS = (
     "resolution_ladder",
@@ -427,7 +427,8 @@ class ResumeTargetMismatchError(RuntimeError, ValueError):
 
 
 def refuse_mismatched_resume(ckpt_path: Path, want: str) -> None:
-    """Refuse a mismatched or legacy checkpoint; ignore an absent checkpoint."""
+    """Refuse a mismatched checkpoint or one without a target digest; ignore an
+    absent checkpoint."""
     ckpt_path = Path(ckpt_path)
     if not ckpt_path.exists():
         return
@@ -933,8 +934,7 @@ def attrition_warnings(cert: dict) -> list[str]:
 
 def artifact_warnings(cert: dict) -> list[str]:
     """Warnings on the two production-fidelity artifacts: missing, not PASS,
-    or measured at a different state than this run. They warn, never fail
-    (notes §2.4)."""
+    or measured at a different state than this run. They warn, never fail."""
     out = []
     for name, art in cert["validation_artifacts"].items():
         if art is None:
@@ -1266,8 +1266,8 @@ def cold_replay(cfg, out_dir: Path, n: int) -> dict:
     re-test the sampler but to prove that THIS environment, with THIS data and
     THIS config, reproduces the recorded numbers -- to the convergence scale,
     hence the DLOGL_MAX_PASS gate: with cold_lanes > 0 a recorded draw may
-    have entered its lane on a refill, so its column moved with that tick
-    (notes §2.13). An environment or provenance mistake (a swapped k-table,
+    have entered its lane on a refill, so its column moved with that tick.
+    An environment or provenance mistake (a swapped k-table,
     a stale editable install pointing at another checkout, a different
     network file) passes every internal consistency check and fails here.
     """

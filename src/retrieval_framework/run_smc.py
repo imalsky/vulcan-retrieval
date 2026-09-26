@@ -293,7 +293,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     import jax.numpy as jnp
     N = int(cfg.smc_num_particles)
     # Derive U as run_smc_loop does, from the run's own seed, so the timing covers
-    # the prior corners the production init will hit (notes §1.2).
+    # the prior corners the production init will hit.
     key = jax.random.PRNGKey(int(cfg.seed))
     # oversampled cold-init draw (rejected corners culled back to N healthy in _init_state)
     U = pipe.sample_prior_u(jax.random.fold_in(key, P._INIT_KEY),
@@ -309,7 +309,7 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     mutate = P._make_mutation(pipe, int(cfg.smc_num_mcmc_steps))
     # Benchmark at stage-0 conditions (ESS-bisected beta, resampled cloud, clamped
     # step): an arbitrary large beta sends MALA proposals far off the converged map
-    # and their tangents go non-finite (register #10). rwm uses the same beta, to
+    # and their tangents go non-finite. rwm uses the same beta, to
     # reproduce stage 0.
     L_np = np.asarray(jax.device_get(L), np.float64)
     dbeta = P._next_dbeta(L_np, 0.0, float(cfg.smc_target_ess_frac) * N)

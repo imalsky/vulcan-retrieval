@@ -63,7 +63,7 @@ python -c "import pytest" 2>/dev/null || python -m pip install --user -q pytest
 python -m pip install --user --no-deps -q "exogibbs==0.6.0"
 python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
 # --- nvcc build in a subshell: the cuda module hides the pip CUDA plugin from
-# JAX (notes §5), so it stays out of the job env; the kernel links cudart
+# JAX, so it stays out of the job env; the kernel links cudart
 # statically.
 (
   export JAX_PLATFORMS=cpu   # the build imports jax for its include dir only

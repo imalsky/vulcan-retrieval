@@ -13,12 +13,12 @@ The VULCAN-JAX runner's `lax.while_loop` supports jvp but not vjp, so the chemis
 gradient is forward mode. The SMC hot path uses staged batched evaluators split at
 the chemistry/RT boundary: chemistry jvp lanes for the n_chem_tp dims with every
 particle in one batched solve; one reverse-mode RT vjp per particle, `lax.map`-
-chunked (the RT vjp holds GiB per lane, notes §1.3); offsets and noise inflation
+chunked (the RT vjp holds GiB per lane); offsets and noise inflation
 analytic. The per-particle gradient functions are kept for validation.
 
 `smc_chem_mode="cold"` (the default) re-solves every proposal with the two-stage
-map, so the target does not depend on sampler history (up to the lane refill tick,
-notes §2.13); `"warm"` continues each proposal from the particle's carried column
+map, so the target does not depend on sampler history (up to the lane refill
+tick); `"warm"` continues each proposal from the particle's carried column
 (fewer steps, history-dependent target).
 """
 from __future__ import annotations
@@ -106,8 +106,7 @@ class EvalStats(NamedTuple):
     """
 
     n_capped: jnp.ndarray
-    # Named for the removed stall fallback; it counts uncertified under-cap
-    # exits. The name stays: checkpoints and outputs carry it.
+    # Uncertified under-cap exits; checkpoints and outputs carry the name.
     n_stalled: jnp.ndarray
     acc: jnp.ndarray
     longdy: jnp.ndarray
@@ -136,7 +135,7 @@ def _proposal_converged(cd_vec):
     The gate that decides whether a proposal's state, and so its jvp tangents, is
     trusted: the runner's canonical two-branch certification recomputed at the
     exit state (``conv_normal``). A stall or budget exit reads False even with
-    longdy under yconv_min (notes §2.4).
+    longdy under yconv_min.
     """
     return cd_vec[:, _CD_CONV_NORMAL] > 0.5
 
@@ -588,8 +587,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # Cap of the convergence gate. mutation_cap=True (MALA proposals): warm
         # solves are capped at warm_count_max and an unconverged proposal is
         # rejected there. mutation_cap=False (init phase 2): survivors re-certify
-        # under the cold count_max (notes §9 #7). A cold solve is never
-        # warm-capped.
+        # under the cold count_max (a warm_count_max cap here culls healthy
+        # survivors). A cold solve is never warm-capped.
         wcmax = (int(fwd.chem.warm_count_max) if (warm and mutation_cap)
                  else int(fwd.chem.count_max))
 
@@ -599,8 +598,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # rides the jvp'd primal carry and is packed into one stop-gradient
             # float vector (keeps the jvp output all-float). eval_batch rejects an
             # exhausted or uncertified proposal; the cold path reads the same diag
-            # off its batched stage 2, so both chem modes share one gate (notes
-            # §9 #73).
+            # off its batched stage 2, so both chem modes share one gate.
             if warm:
                 _solve_cd_batch = (fwd.chem_solve_warm_diag_batch if mutation_cap
                                    else fwd.chem_solve_warm_diag_full_batch)
@@ -694,7 +692,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 one batched call (the cold two-stage map, or the warm continuation
                 under the mutation cap unless ``mutation_cap=False``). Lanes
                 freeze at their own exits; agreement with the per-lane map is at
-                the convergence scale (vulcan-jax notes §2.9)."""
+                the convergence scale."""
                 if warm:
                     # mutation_cap=False: the cold count_max, as on the gradient
                     # path (run_nautilus's anchored warm starts)
@@ -719,7 +717,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             if want_grad:
                 # Chemistry jvp directions: ONE batched solve for the whole
                 # cloud in either chem mode. The chemistry tangent lanes are
-                # cheap (~20 MB per lane pair, notes.md §1.3); the RT VJP below
+                # cheap (~20 MB per lane pair); the RT VJP below
                 # is the memory wall.
                 AUX, DAUX, Ynew, CD = _chem_batch(C_, Y, refs)
                 vals, g_th, bads = _map_chunks(jax.vmap(_rt_val_grad),
@@ -731,7 +729,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 #   stalled -- under the cap but not canonically certified (e.g.
                 #              a budget exit): the primal may look settled while
                 #              the jvp tangent, with no stopping rule of its own,
-                #              has not (notes §9 #14).
+                #              has not.
                 ACC = CD[:, 0].astype(jnp.int32)
                 conv_ok = _proposal_converged(CD)
                 under_cap = ACC < wcmax
@@ -898,7 +896,7 @@ def evidence_report(logZ: float, init_stats: dict) -> dict:
                                     shown likelihood-negligible.
 
     With cold_lanes > 0 a refilled draw's C and L move with its lane tick at
-    the convergence scale (notes §2.13); "exact" holds up to that.
+    the convergence scale; "exact" holds up to that.
 
     No ``logZ_box_physical`` (logZ + ln f_tp) is returned: it is neither the box
     integral over A nor the A-conditioned evidence.
@@ -1025,7 +1023,8 @@ def _proposal_scale(particles: np.ndarray, cap: float,
     cloud covariance, used as the MALA preconditioner (C = L L^T).
 
     Absolute, not normalized: the proposal narrows with the tempered posterior,
-    so the step size only fine-tunes toward the target acceptance (register #4).
+    so the step size only fine-tunes toward the target acceptance (a shape-only,
+    unit-geometric-mean preconditioner collapses the late-stage acceptance).
 
     FULL covariance, not just the diagonal: this posterior's degeneracies are
     between parameters (metallicity against C/O against cloud opacity against
@@ -1261,7 +1260,7 @@ def _init_state(pipe: Pipeline, U, target_n: int):
         # The tangent-blown class also occurs on the init phase-2 warm
         # re-certifications, and it is theta-dependent, so culling or raising
         # on it would bias the initial importance sample against that corner
-        # (notes.md §2.5, the badgrad class). Consistent with the
+        # (the badgrad class). Consistent with the
         # mutation kernel's zero-drift handling: keep the particle with its
         # certified likelihood and eval-zeroed gradient entries (its first
         # MALA move starts with prior-only drift),
@@ -1411,7 +1410,7 @@ def _make_mutation(pipe: Pipeline, n_mcmc: int):
         # are zero-drift MALA moves, not rejections: the zeroed gradient entries
         # enter both proposal densities (GT_new) and, on acceptance, the carried
         # G. Rejecting biases against the theta corner where the class
-        # concentrates (notes §2.5). Valid only while the zero pattern is a
+        # concentrates. Valid only while the zero pattern is a
         # function of theta (cold mode, particles <= lanes). Visible through
         # badgrad= per sweep, the forensics dumps and the backstop.
         GT_new = dlogprior(U_new) + beta * G_new
@@ -1535,7 +1534,7 @@ def _check_mutation_health(n_bad: int, where: str, forensics: Dict[str, Any],
     dump + warn, and raise only above the systematic-breakage backstop.
 
     A finite-likelihood/non-finite-tangent proposal at a certified state is a
-    zero-drift MALA move (see the sweep comment; notes §2.5). ``forensics``
+    zero-drift MALA move (see the sweep comment). ``forensics``
     (per-particle device arrays) is dumped to ``dump_path`` and summarized in
     the log. A sweep above ceil(max_frac * n_particles) events is systematic
     AD breakage and raises."""
@@ -1560,8 +1559,7 @@ def _check_mutation_health(n_bad: int, where: str, forensics: Dict[str, Any],
     logger.warning(
         f"{n_bad} tangent-blown proposal(s) during {where}: handled as "
         f"zero-drift MALA moves (backstop {threshold} = ceil({max_frac:g} x "
-        f"{n_particles})); a theta-independent rate is an anomaly (notes "
-        "§2.5)." + detail)
+        f"{n_particles})); a theta-independent rate is an anomaly." + detail)
 
 
 # Reserved fold_in(key, .) namespaces. Stage keys use the absolute stage index
@@ -1602,7 +1600,7 @@ def _write_checkpoint(checkpoint_path, pipe: Pipeline, *, U, Y, refs, L, G, cost
              last_step=np.asarray(int(last_step), np.int64),
              logZ=np.asarray(logZ),
              # Target-exactness stamp: warm (likelihood depends on sampler
-             # history), cold (exact up to the lane refill tick, notes §2.13),
+             # history), cold (exact up to the lane refill tick),
              # or "none" for a stub pipeline. Every artifact carries it.
              chem_mode=np.asarray(str(getattr(pipe, "chem_mode", None) or "none")),
              # Full target identity (certificate.target_digest): resolved config,

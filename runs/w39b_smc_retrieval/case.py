@@ -59,7 +59,7 @@ _W39B = dict(
     prior_c_o=(-1.70, 0.24),
     #   Kzz : x0.1..x100 about the VULCAN W39b baseline profile. The lower edge
     #         is Tsai's tested x0.1: below it most columns do not certify within
-    #         count_max (notes §1.5).
+    #         count_max.
     prior_lnKzz=(math.log(0.1), math.log(100.0)),
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
     #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
@@ -119,7 +119,7 @@ def gpu_config(**overrides: Any) -> Config:
         # gate at the nominal state. Omitting a produced absorber biases the
         # abundances that must absorb its opacity. A species is omitted only with a
         # recorded leave-one-out bound below the gate
-        # (validation/opacity_leave_one_out.py; the unscreened set: notes §3).
+        # (validation/opacity_leave_one_out.py).
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S",
                    "NH3", "OCS", "SH", "SO"),
         # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
@@ -145,12 +145,12 @@ def gpu_config(**overrides: Any) -> Config:
         init_oversample=2.5,
         init_phase2_spare=48,
         # Declared convergence attrition: pipeline._init_state raises above it.
-        # 0.35 covers the measured rates with margin (notes §1.2); the certificate
+        # 0.35 covers the measured rates with margin; the certificate
         # warns above CONV_ATTRITION_WARN until the removed region is shown to carry
         # negligible posterior mass.
         init_max_nonconverged_frac=0.35,
         # Cold chemistry: a draw's column never depends on sampler history, up to
-        # the lane queue's refill tick (convergence scale; notes §2.13). "warm" is
+        # the lane queue's refill tick (convergence scale). "warm" is
         # history-dependent and its logZ approximate.
         smc_chem_mode="cold",
         # Four sequential cold sweeps preserve particle count but may require
@@ -165,8 +165,8 @@ def gpu_config(**overrides: Any) -> Config:
         # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
         # extra dimension and nothing else.
         infer_noise_inflation=True,
-        # RT-vjp chunk: memory is linear in this width (notes §1.3); a wider chunk
-        # buys no time (notes §1.4). Numerically identical at any width.
+        # RT-vjp chunk: memory is linear in this width; a wider chunk
+        # buys no time. Numerically identical at any width.
         smc_rt_vjp_chunk=4,
         num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
         walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall

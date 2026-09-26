@@ -21,7 +21,7 @@ column on the production SNCHO network (its one condensation reaction is
 S8 -> S8_l_s), photochemistry off. Every solve starts from the cfg's
 const_mix column (``chem.y0``) as a continuation, not from the engine's cold
 equilibrium seed: at 400 K that seed holds S8 at ~1e-66 VMR, nothing
-condenses and the solve certifies at count_min (notes §2.7).
+condenses and the solve certifies at count_min.
 Convergence uses the upstream conden-window + whole-column fix_species pin
 (same methodology jwst_tool.forward.CONDEN_CFG ships): without the pin the
 steady state is transport-limited -- the upper S8 reservoir drains through
@@ -100,8 +100,8 @@ _CFG_OVERRIDES = {
     # (end-of-window rainout, drizzle truncated at STOP_CONDEN).
     "trun_min": STOP_CONDEN,
     # Physical integration cap: this anchor-free column (400 K, no
-    # photochemistry, no hot deep boundary) has no reachable longdy steady state
-    # (notes §2.7), so, as upstream VULCAN does, integrate to a physically
+    # photochemistry, no hot deep boundary) has no reachable longdy steady state,
+    # so, as upstream VULCAN does, integrate to a physically
     # sufficient time. 1e14 s (~3 Myr) is far past every transport/condensation
     # timescale here.
     "runtime": 1.0e14,
@@ -241,7 +241,7 @@ def test_isothermal_condensation_converges_and_rains_out(stack, chem_iso):
     assert final_ratio < 2.0, f"gas must relax to ~saturation (got {final_ratio:.2f})"
 
 
-# The Guillot column's cold top caps dt at ~4e5 s (notes §2.7), so 1e14 s is
+# The Guillot column's cold top caps dt at ~4e5 s, so 1e14 s is
 # unreachable; 1e9 s is still four decades past the conden window + pin (1e5 s).
 GUILLOT_RUNTIME = 1.0e9
 GUILLOT_COUNT_MAX = 15000
@@ -389,15 +389,15 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
                f"{fd_smooth[i]:.6e} (rel {rel:.3f}) -- exceeds 15%")
         # The FD is step-stable to 0.03% and the jvp matches it on aarch64 (the
         # certified platform); on x86 the tangent through the pinned state is
-        # platform-dependent (1.3-2.4x, notes.md §9).
+        # platform-dependent (1.3-2.4x).
         if rel >= 0.15 and platform.machine() not in ("arm64", "aarch64"):
-            pytest.xfail(msg + " [x86 tangent, notes §9]")
+            pytest.xfail(msg + " [x86 tangent]")
         assert rel < 0.15, msg
 
     # The gas/condensate split is jump-dominated (centred FD ~ 1/dT: a fixed
     # discontinuity from the pin's discrete capture step), so it is not asserted
     # per species. The conserved reservoir has a derivative: FD stable to ~5%
-    # over a 32x dT range, jvp within 18-22% (sweep: notes §2.7).
+    # over a 32x dT range, jvp within 18-22%.
     jv_tot, fd_tot = float(jv_pin.sum()), float(fd_pin.sum())
     rel_tot = abs(jv_tot - fd_tot) / max(abs(fd_tot), 1e-300)
     assert rel_tot < 0.35, (

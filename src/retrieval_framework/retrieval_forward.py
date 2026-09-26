@@ -49,7 +49,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
     ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
     condensation is active), so gating on it closes that bypass. The pinned
     condensation state is not reliably differentiable, and gradient MALA is the
-    default kernel (VULCAN-JAX notes §2.5-2.6).
+    default kernel.
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
@@ -85,12 +85,12 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     # Condensation is a FORWARD-model capability only; refuse inference on the
     # RESOLVED config (closes the base-config bypass of the early cfg_overrides
-    # gate). VULCAN-JAX notes §2.5-2.6.
+    # gate).
     _refuse_condense_inference(chem, cfg)
 
     # Warn, do not refuse: nothing consumes the warm-up column (cold solves start
     # from the equilibrium seed) and every draw certifies itself; a failure only
-    # flags a configuration that may not converge (vulcan-forward notes §2).
+    # flags a configuration that may not converge.
     if bool(cfg.run_inference) and not bool(
             getattr(chem, "baseline_conv_normal", True)):
         logger.warning(
@@ -139,7 +139,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         retrieved (lnKzz, T-P) with baseline composition. A function of
         chem_theta[2:] only (theta[0:2] are overwritten with 0), so two proposals
         sharing theta[2:] share this subproblem bit for bit. No ConvDiag: stage 1
-        is not gated (notes §2.12)."""
+        is not gated."""
         return chem.converged_y(chem_theta.at[0].set(0.0).at[1].set(0.0))
 
     def chem_stage2_diag(chem_theta, y_relaxed):
@@ -152,12 +152,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         """Converged absolute column y (nz, ni) and its ``ConvDiag``, in two
         stages: (1) converge at the retrieved T-P/Kzz with baseline composition;
         (2) apply the lnZ / C-O scaling to that column and re-converge warm. A
-        one-stage solve loses the lnZ/C-O response under a retrieved T-P (notes
-        §2.1, §2.12).
+        one-stage solve loses the lnZ/C-O response under a retrieved T-P.
 
         Every ConvDiag field, ``accept_count`` included, describes the final
         stage, the state ``y`` is; stage 1's step count says nothing about the
-        draw's own column (notes §1.1). accept_count alone is not a convergence
+        draw's own column. accept_count alone is not a convergence
         test; gate on ``conv_normal`` too.
 
         Used by native_depth_aux (scalar likelihood and block gradient); the
@@ -193,8 +192,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         the whole batch instead of on every lane every iteration. Each lane
         freezes at its own exit, so a particle's column does not depend on the
         others, but it is NOT bit-identical to its solo solve: the cadence rides
-        the loop's iteration tick (agreement at the convergence scale;
-        vulcan-jax notes §2.9). The cold gradient path takes the same route,
+        the loop's iteration tick (agreement at the convergence scale).
+        The cold gradient path takes the same route,
         one ``jax.jvp`` per direction through the stage twins below, and so do
         the batched warm continuations (``chem_solve_warm_diag_batch``). Every
         batch goes through ``_chem_batch_route``."""
@@ -237,7 +236,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         its inputs are phase-1 SURVIVORS re-certifying from their own converged
         columns -- proven-convergent states, not disposable proposals -- and a
         marginal survivor (a slow phase-1 converger) can need more than
-        warm_count_max accepted steps to re-certify (notes §1.2)."""
+        warm_count_max accepted steps to re-certify."""
         return chem.converged_y(chem_theta, warm_y=y_warm,
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=False)

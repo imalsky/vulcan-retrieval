@@ -5,7 +5,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# Local-only docs: agent instructions, notes and the maintainer's work list.
+# Local-only files.
 CLAUDE.md
 /notes.md
 /todo.md
@@ -20,7 +20,7 @@ data/exomolop/
 
 # Run outputs (posteriors, checkpoints, logs, PBS job logs) -- regenerated per run
 # ** so a nested run dir (a repo-root-relative SMC_RETRIEVAL_OUT_DIR
-# resolved against the run dir) cannot escape the way runs/*/data/ did
+# resolved against the run dir) is matched too
 runs/**/data/
 runs/**/logs/
 runs/**/plots/
@@ -42,6 +42,6 @@ dist/
 # Local scratch output
 output/
 
-# Local production-ladder overrides stay out of the repo (the running job's config is
-# recorded in notes §5); calibration overrides are tracked so a pull brings the chain's inputs.
+# Local production-ladder overrides stay out of the repo; calibration overrides are
+# tracked so a pull brings the chain's inputs.
 runs/w39b_smc_retrieval/overrides/prod_*.json

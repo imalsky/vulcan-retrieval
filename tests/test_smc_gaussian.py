@@ -70,8 +70,7 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
     the uncorrelated test above can see. The gates are identical across kernels;
     only the sweep count differs, because a random walk needs more sweeps for the
     same mixing. The gates sit ~3-5 sigma of the measured single-seed scatter
-    (MALA over 24 seeds; rwm at 24 sweeps, the smallest count with margin;
-    readings in notes §2.3)."""
+    (MALA over 24 seeds; rwm at 24 sweeps, the smallest count with margin)."""
     sd = np.array([0.40, 0.60, 0.25])
     corr = np.array([[1.0, 0.95, 0.30], [0.95, 1.0, 0.20], [0.30, 0.20, 1.0]])
     sig = corr * np.outer(sd, sd)
@@ -348,8 +347,7 @@ def test_tangent_blown_proposal_zero_drift_not_fatal(tmp_path, monkeypatch):
     in both proposal densities; the certified likelihood decides acceptance),
     its forensics are dumped, and the RUN COMPLETES. The class is
     theta-DEPENDENT (dense in the high-Z/low-C-O corner the posterior favors),
-    so MH-rejecting it with a floored L suppresses the posterior bulk
-    (notes §2.5)."""
+    so MH-rejecting it with a floored L suppresses the posterior bulk."""
     cfg = C.Config(smc_num_particles=32, smc_num_mcmc_steps=3, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=32,
                    num_chains=1)   # default backstop 0.25 -> 8/sweep
