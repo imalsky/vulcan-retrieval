@@ -23,6 +23,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from conftest import CAPPED_COLD_CMAX as COLD_CMAX, CAPPED_WARM_CMAX as WARM_CMAX  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 
 # SLOW (full tier only): this module builds a REAL chemistry + RT pipeline
@@ -30,8 +31,6 @@ from retrieval_framework import pipeline as P  # noqa: E402
 # costs minutes, not seconds.
 pytestmark = pytest.mark.slow
 
-WARM_CMAX = 5     # conftest.CAPPED_WARM_CMAX: a warm continuation from baseline cannot converge
-COLD_CMAX = 50    # conftest.CAPPED_COLD_CMAX: well above WARM_CMAX, proves the warm cap cut the loop
 N = 4
 
 

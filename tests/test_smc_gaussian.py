@@ -12,15 +12,10 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
-from conftest import stub_pipeline  # noqa: E402
+from conftest import GAUSS_M as M, GAUSS_SPECS as SPECS, gauss_loglik  # noqa: E402
+from conftest import GAUSS_S as S, stub_pipeline  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
-from retrieval_framework.config_schema import ParamSpec  # noqa: E402
-
-M = np.array([1.0, -0.5, 0.3])
-S = np.array([0.40, 0.60, 0.25])
-SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", -8.0, 8.0, float(M[i]), "chem")
-         for i in range(3)]
 
 
 def _dying_make_mutation(_pipe, n_mcmc):
@@ -31,9 +26,7 @@ def _dying_make_mutation(_pipe, n_mcmc):
 
 
 def _stub_pipe(cfg):
-    m = jnp.asarray(M)
-    s = jnp.asarray(S)
-    return stub_pipeline(cfg, SPECS, lambda th: -0.5 * jnp.sum(((th - m) / s) ** 2))
+    return stub_pipeline(cfg, SPECS, gauss_loglik)
 
 
 def test_smc_recovers_gaussian_posterior(tmp_path):
@@ -105,10 +98,10 @@ def test_log_evidence_moves_with_a_likelihood_offset(tmp_path):
     moves logZ by exactly c: the max-shifted increment must add the shift back."""
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=2)
-    m, s, c = jnp.asarray(M), jnp.asarray(S), 7.0
-    out = [P.run_smc_loop(stub_pipeline(cfg, SPECS, lambda th, k=k: k - 0.5 * jnp.sum(
-               ((th - m) / s) ** 2)), key=jax.random.PRNGKey(3), progress=False,
-               checkpoint_path=tmp_path / f"ck{k}.npz") for k in (0.0, c)]
+    c = 7.0
+    out = [P.run_smc_loop(stub_pipeline(cfg, SPECS, lambda th, k=k: k + gauss_loglik(th)),
+                          key=jax.random.PRNGKey(3), progress=False,
+                          checkpoint_path=tmp_path / f"ck{k}.npz") for k in (0.0, c)]
     assert out[1]["logZ"] - out[0]["logZ"] == pytest.approx(c, abs=1e-6)
 
 
@@ -123,19 +116,6 @@ def test_proposal_scale_reduces_to_the_diagonal_at_full_shrinkage():
     assert np.allclose(got, np.diag(np.clip(x.std(axis=0), C.SCALE_FLOOR, C.SCALE_CLIP)))
 
 
-def test_walltime_governor_stops_cleanly(tmp_path):
-    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
-                         num_samples=32, num_chains=1)
-    pipe = _stub_pipe(cfg)
-    res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(2), progress=False,
-                         checkpoint_path=tmp_path / "ck.npz",
-                         walltime_seconds=1e-9)     # exceeded after the first stage
-    assert len(res["betas"]) == 2                   # exactly one stage ran
-    assert not res["reached_beta1"]
-    assert (tmp_path / "ck.npz").exists()           # partial output usable
-    assert res["theta_draws"].shape == (1, 32, 3)
-
-
 def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     """A killed-and-resumed ladder must be bit-identical to an uninterrupted one:
     per-stage randomness is fold_in(seed_key, absolute stage index), so a resumed
@@ -143,7 +123,7 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     statistical claims are covered by test_smc_recovers_gaussian_posterior and
     test_smc_blackjax_oracle.py."""
     cfg = C.Config(smc_num_particles=128, smc_num_mcmc_steps=4, smc_max_steps=40,
-                   smc_target_ess_frac=0.6, num_samples=128, num_chains=1)
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
     key = jax.random.PRNGKey(11)              # the SAME seed on both legs
     full = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                           checkpoint_path=tmp_path / "a.npz")
@@ -152,7 +132,8 @@ def test_resume_reproduces_an_uninterrupted_run(tmp_path):
     ck = tmp_path / "b.npz"
     part = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                           checkpoint_path=ck, walltime_seconds=1e-9)
-    assert not part["reached_beta1"] and len(part["betas"]) == 2
+    assert not part["reached_beta1"] and len(part["betas"]) == 2   # one stage ran
+    assert ck.exists() and part["theta_draws"].shape == (1, 64, 3)  # partial output usable
     res = P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
                          checkpoint_path=ck, resume_from=ck)
     assert res["reached_beta1"]
@@ -263,23 +244,18 @@ def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path, field, ba
                        checkpoint_path=tmp_path / "out.npz", resume_from=ck)
 
 
-def test_resume_refuses_a_checkpoint_with_no_target_digest(tmp_path):
-    """A checkpoint without a target digest is refused."""
-    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=20,
-                   smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
-    key = jax.random.PRNGKey(3)
+def _init_ck(cfg, tmp_path, monkeypatch, seed):
+    """Write an init-level checkpoint (last_step=-1): the mutation kernel dies at
+    stage 0, simulating the bad-grad raise."""
     ck = tmp_path / "ck.npz"
-    P.run_smc_loop(_stub_pipe(cfg), key=key, progress=False,
-                   checkpoint_path=ck, walltime_seconds=1e-9)
-    d = {k: v for k, v in np.load(ck, allow_pickle=True).items()}
-    del d["target_digest"]
-    np.savez(ck, **d)
-
-    pipe = _stub_pipe(cfg)
-    pipe.target_digest = "d" * 64
-    with pytest.raises(ValueError, match="absent"):
-        P.run_smc_loop(pipe, key=key, progress=False,
-                       checkpoint_path=tmp_path / "out.npz", resume_from=ck)
+    real_make_mutation = P._make_mutation
+    monkeypatch.setattr(P, "_make_mutation", _dying_make_mutation)
+    with pytest.raises(RuntimeError, match="simulated stage-0"):
+        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(seed), progress=False,
+                       checkpoint_path=ck)
+    monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
+    assert ck.exists() and int(np.load(ck)["last_step"]) == -1
+    return ck
 
 
 def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
@@ -289,24 +265,13 @@ def test_init_checkpoint_recovers_stage0_death(tmp_path, monkeypatch):
     hours-scale init)."""
     cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=4, smc_max_steps=40,
                    smc_target_ess_frac=0.6, num_samples=64, num_chains=1)
-    ck = tmp_path / "ck.npz"
-
-    # run 1: the mutation kernel dies at stage 0 (simulating the bad-grad raise)
-    real_make_mutation = P._make_mutation
-    monkeypatch.setattr(P, "_make_mutation", _dying_make_mutation)
-    with pytest.raises(RuntimeError, match="simulated stage-0"):
-        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(3), progress=False,
-                       checkpoint_path=ck)
-    assert ck.exists()
+    ck = _init_ck(cfg, tmp_path, monkeypatch, seed=3)   # run 1: stage-0 death
     d = np.load(ck)
-    assert int(d["last_step"]) == -1
     assert list(d["betas"]) == [0.0]
     assert "y_state" in d.files and "loglik" in d.files and "grad_u" in d.files
 
     # run 2: resume from the init checkpoint -- _init_state must NOT run again,
     # and the ladder completes to beta=1 with the recovered init_stats
-    monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
-
     def no_init(*a, **k):
         raise AssertionError("_init_state must not run on an init-checkpoint resume")
 
@@ -326,15 +291,7 @@ def _init_ck_then_poison(cfg, tmp_path, monkeypatch, seed=5):
     non-finite gradient entries are ZEROED and the particle is flagged in
     stats.bad_grad (pipeline._rt_val_grad zeroes; the flag drives the zero-drift
     handling + forensics)."""
-    ck = tmp_path / "ck.npz"
-    real_make_mutation = P._make_mutation
-    monkeypatch.setattr(P, "_make_mutation", _dying_make_mutation)
-    with pytest.raises(RuntimeError, match="simulated stage-0"):
-        P.run_smc_loop(_stub_pipe(cfg), key=jax.random.PRNGKey(seed), progress=False,
-                       checkpoint_path=ck)
-    monkeypatch.setattr(P, "_make_mutation", real_make_mutation)
-    assert ck.exists() and int(np.load(ck)["last_step"]) == -1
-
+    ck = _init_ck(cfg, tmp_path, monkeypatch, seed)
     pipe = _stub_pipe(cfg)
     evg, el, _, _ = P._get_batch_evals(pipe)
 

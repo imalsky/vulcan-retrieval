@@ -8,7 +8,6 @@ two batched evaluators _init_state calls, with count_max exhaustion made a deter
 function of the draw so the test controls exactly which particles are rejected.
 """
 import types
-from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -17,18 +16,10 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
-from conftest import stub_pipeline  # noqa: E402
+from conftest import StubConvDiag, stub_pipeline  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
-
-
-class _StubConvDiag(NamedTuple):
-    """Pytree stand-in for forward.vulcan_chem.ConvDiag: _init_state phase 1 reads
-    only .accept_count and .conv_normal (importing the real one would pull the
-    heavy VULCAN env into these unit tests)."""
-    accept_count: jnp.ndarray
-    conv_normal: jnp.ndarray
 
 
 def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
@@ -50,7 +41,7 @@ def _chem_like_pipe(count_max=100, oversample=1.6, y_shape=(4, 3)):
         L = -0.5 * jnp.sum(U ** 2, axis=1)                       # always finite
         Y = jnp.broadcast_to(y_baseline[None], (n,) + y_shape)
         refs = jnp.zeros((n, 2), jnp.float64)
-        return L, Y, refs, _StubConvDiag(worst_accept, ~stalled)
+        return L, Y, refs, StubConvDiag(worst_accept, ~stalled)
 
     def move_vg(U, Y, refs):
         L = -0.5 * jnp.sum(U ** 2, axis=1)

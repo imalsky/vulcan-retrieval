@@ -8,11 +8,11 @@ production preflight at the bottom, which builds the real forward.
 """
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
+from conftest import RUN_DIR
 from retrieval_framework import pipeline as P
 
 
@@ -50,9 +50,6 @@ def test_invalid_observations_raise():
 
 
 # --- production preflight -----------------------------------------------------
-
-RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
-
 
 @pytest.mark.slow
 @pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",

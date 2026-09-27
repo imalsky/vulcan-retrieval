@@ -7,15 +7,18 @@ VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 
 Also the shared pipeline builders: a chemistry-free stub for the SMC-core tests
 and the real smoke pipeline (the session fixture the two rejection-gate files
-share is built once per session, per xdist worker).
+share is built once per session, per xdist worker), and the shared stubs.
 """
 import dataclasses
 import os
 from pathlib import Path
+from typing import Any, NamedTuple
 
+import numpy as np
 import pytest
 
 import retrieval_framework
+from retrieval_framework.config_schema import ParamSpec
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "retrieval_framework"
 _IMPORTED = Path(retrieval_framework.__file__).resolve().parent
@@ -30,6 +33,25 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays finite
 CAPPED_WARM_CMAX = 5    # well below the cold cap, so the warm cap is what binds
+
+# Gaussian-box target: flat U(-8,8)^3 prior x independent Gaussian likelihood.
+GAUSS_M = np.array([1.0, -0.5, 0.3])
+GAUSS_S = np.array([0.40, 0.60, 0.25])
+GAUSS_SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", -8.0, 8.0, float(GAUSS_M[i]), "chem")
+               for i in range(3)]
+
+
+def gauss_loglik(th):
+    import jax.numpy as jnp    # not at module level: each test sets x64 first
+    return -0.5 * jnp.sum(((th - jnp.asarray(GAUSS_M)) / jnp.asarray(GAUSS_S)) ** 2)
+
+
+class StubConvDiag(NamedTuple):
+    """Pytree stand-in for forward.vulcan_chem.ConvDiag: the init reads only
+    .accept_count and .conv_normal (importing the real one would pull the heavy
+    VULCAN env into unit tests)."""
+    accept_count: Any
+    conv_normal: Any
 
 
 def stub_pipeline(cfg, specs, loglik_theta):

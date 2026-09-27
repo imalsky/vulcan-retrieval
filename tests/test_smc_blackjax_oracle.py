@@ -31,30 +31,22 @@ import jax  # noqa: E402
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
-from conftest import stub_pipeline  # noqa: E402
+from conftest import GAUSS_S as S, GAUSS_SPECS as SPECS  # noqa: E402
+from conftest import gauss_loglik, stub_pipeline  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
-from retrieval_framework.config_schema import ParamSpec  # noqa: E402
 
-M = np.array([1.0, -0.5, 0.3])
-S = np.array([0.40, 0.60, 0.25])
-LO, HI = -8.0, 8.0
-SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", LO, HI, float(M[i]), "chem")
-         for i in range(3)]
+LO, HI = SPECS[0].lo, SPECS[0].hi
 LNZ_EXACT = sum(math.log(s * math.sqrt(2 * math.pi)) for s in S) \
     - 3 * math.log(HI - LO)
 N_PART, N_MCMC, ESS_FRAC, N_SEEDS = 512, 8, 0.6, 6
-
-
-def _loglik_theta(th):
-    return -0.5 * jnp.sum(((th - jnp.asarray(M)) / jnp.asarray(S)) ** 2)
 
 
 def _repo_lnz(seed):
     cfg = C.Config(smc_num_particles=N_PART, smc_num_mcmc_steps=N_MCMC,
                    smc_max_steps=60, smc_target_ess_frac=ESS_FRAC,
                    num_samples=N_PART, num_chains=1)
-    pipe = stub_pipeline(cfg, SPECS, _loglik_theta)
+    pipe = stub_pipeline(cfg, SPECS, gauss_loglik)
     res = P.run_smc_loop(pipe, key=jax.random.PRNGKey(seed), progress=False)
     assert res["reached_beta1"]
     return float(res["logZ"])
@@ -71,7 +63,7 @@ def _blackjax_lnz(seed, step_size=0.10):
     theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(SPECS, jnp.float64)
     alg = blackjax.adaptive_tempered_smc(
         logprior_fn=log_prior_u,
-        loglikelihood_fn=lambda u: _loglik_theta(theta_from_u(u)),
+        loglikelihood_fn=lambda u: gauss_loglik(theta_from_u(u)),
         mcmc_step_fn=blackjax.mala.build_kernel(),
         mcmc_init_fn=blackjax.mala.init,
         mcmc_parameters=dict(step_size=jnp.full((1,), step_size)),

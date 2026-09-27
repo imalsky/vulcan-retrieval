@@ -16,16 +16,12 @@ from scipy.special import ndtr
 
 jax.config.update("jax_enable_x64", True)
 
+from conftest import StubConvDiag
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
 from retrieval_framework.run_nautilus import Anchors, make_loglike
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
-
-
-class _Diag(NamedTuple):
-    accept_count: jnp.ndarray
-    conv_normal: jnp.ndarray
 
 
 class _Stats(NamedTuple):
@@ -46,7 +42,7 @@ def _stub_pipe():
 
     def cold(U, Y, refs):          # the column is a code of the point's own chemistry
         th, L, acc, conv = common(U)
-        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], _Diag(acc, conv)
+        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], StubConvDiag(acc, conv)
 
     def warm(U, Y, refs):          # hands back the column it started from; like the
         _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
