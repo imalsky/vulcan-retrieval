@@ -129,3 +129,18 @@ def test_replicates_carry_the_likelihood_conditional_variance():
         assert np.allclose(y_rep.std(axis=0), sigma * b, rtol=0.05)
         # and it is centred on the latent model, not shifted by it
         assert np.allclose(y_rep.mean(axis=0), mu[0], atol=4 * sigma * b / np.sqrt(n_draw))
+
+
+def test_rprs_products_propagate_to_depth(tmp_path):
+    """A product row in (Rp/Rs) with errors -e/+e becomes depth (Rp/Rs)^2 with
+    sigma 2 (Rp/Rs) e, first-order propagation; a padding row is dropped."""
+    from retrieval_framework.observations import read_rprs_csv
+    f = tmp_path / "p.csv"
+    f.write_text("i,wl,wl_lo,wl_hi,rprs,el,eh\n"
+                 "0,1.0,0.99,1.01,0.1,-0.001,0.003\n"
+                 "1,nan,1.01,1.03,0.1,0.001,0.001\n")
+    wl, lo, hi, depth, sigma = read_rprs_csv(f)
+    assert wl.tolist() == [1.0]
+    np.testing.assert_allclose(depth, [0.01], rtol=1e-15)
+    np.testing.assert_allclose(sigma, [2.0 * 0.1 * 0.002], rtol=1e-15)
+

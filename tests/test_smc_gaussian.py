@@ -100,6 +100,18 @@ def test_full_covariance_preconditioner_on_a_correlated_posterior(kernel, n_swee
     assert res["unique_particles"][-1] == cfg.smc_num_particles
 
 
+def test_log_evidence_moves_with_a_likelihood_offset(tmp_path):
+    """log L + c leaves the weights, the tempering and the moves unchanged and
+    moves logZ by exactly c: the max-shifted increment must add the shift back."""
+    cfg = C.Config(smc_num_particles=64, smc_num_mcmc_steps=2, smc_max_steps=40,
+                   smc_target_ess_frac=0.6, num_samples=64, num_chains=2)
+    m, s, c = jnp.asarray(M), jnp.asarray(S), 7.0
+    out = [P.run_smc_loop(stub_pipeline(cfg, SPECS, lambda th, k=k: k - 0.5 * jnp.sum(
+               ((th - m) / s) ** 2)), key=jax.random.PRNGKey(3), progress=False,
+               checkpoint_path=tmp_path / f"ck{k}.npz") for k in (0.0, c)]
+    assert out[1]["logZ"] - out[0]["logZ"] == pytest.approx(c, abs=1e-6)
+
+
 def test_proposal_scale_reduces_to_the_diagonal_at_full_shrinkage():
     """shrink=1 must reproduce the per-dimension (diagonal) preconditioner."""
     rng = np.random.default_rng(0)

@@ -49,13 +49,13 @@ def test_zero_filled_box_evidence_is_the_exact_masked_integral():
 def test_evidence_report_fields_and_identity():
     stats = dict(tp_n_kept=500, tp_n_drawn=1000,     # f_tp = 0.5
                  n_alive_phase1=400, n_drawn=800,    # f_c1 = 0.5
-                 n_phase2=100, n_recert_fail=0)      # f_c2 = 1.0
+                 n_phase2=100, n_recert_fail=50)     # f_c2 = 0.5
     logZ = math.log(Z_OPER)
     ev = evidence_report(logZ, stats)
     assert ev["f_tp"] == pytest.approx(0.5)
-    assert ev["f_conv"] == pytest.approx(0.5)
-    # zero-filled identity on the toy numbers: 10 * 0.5 * 0.5 = 2.5
-    assert math.exp(ev["logZ_box"]) == pytest.approx(Z_BOX_ZEROFILL, rel=IDENTITY_REL)
+    assert ev["f_conv"] == pytest.approx(0.25)        # f_c1 * f_c2
+    # zero-filled identity: Z_oper * f_tp * f_c1 * f_c2
+    assert math.exp(ev["logZ_box"]) == pytest.approx(Z_OPER * 0.125, rel=IDENTITY_REL)
     # the support split is additive in logs
     assert ev["log_support_fraction"] == pytest.approx(
         ev["log_support_physical"] + ev["log_conv_attrition"], rel=IDENTITY_REL)

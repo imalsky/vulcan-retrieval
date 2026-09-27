@@ -6,14 +6,18 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 
+from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 from retrieval_framework.config_schema import ParamSpec  # noqa: E402
 
 EDGE_ATOL = 1e-8   # theta at |u| = 40 sits within this of the box edge
 
+# The second spec is the config's own noise-inflation prior (log10-uniform
+# on [0.5, 3.0]), so the tests below pin what a run actually samples.
 SPECS = [
     ParamSpec("a", "a", "uniform", -2.0, 3.0, 0.0, "chem"),
-    ParamSpec("b", "b", "log10_uniform", 0.5, 3.0, 1.0, "noise"),
+    next(s for s in C.specs_from_config(C.Config(infer_noise_inflation=True))
+         if s.name == "noise_inflation"),
 ]
 
 
