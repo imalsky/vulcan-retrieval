@@ -52,3 +52,10 @@ def test_log_prior_gradient_finite():
     assert np.all(np.isfinite(np.asarray(g)))
     # log-prior maximized at u=0 (theta mid-box)
     assert float(lp(jnp.zeros(2))) > float(lp(jnp.asarray([3.0, -3.0])))
+
+
+def test_tp_window_is_inset_inside_the_opacity_range():
+    """The T-P reject window sits strictly inside the k-tables' range."""
+    from retrieval_framework import tp_profile as tp
+    assert tp.T_OPA_MIN_K < tp._T_MIN < tp._T_MAX < tp.T_OPA_MAX_K
+
