@@ -279,23 +279,15 @@ def chem_guillot(stack):
         pytest.skip(f"chem model build failed: {e}")
 
 
-# Guillot parameters giving a ~360-450 K column over 5 -> 0.01 bar: cold
-# enough aloft to supersaturate S8 at 1e-4 VMR, warm enough deep to stay
-# inside the thermo tables.
-_GUILLOT = dict(Tirr=560.0, Tint=80.0, log_kappa=-2.3, log_gamma=-1.0)
-
-
-def _theta_guillot():
-    return np.array([0.0, 0.0, 0.0, _GUILLOT["Tirr"], _GUILLOT["Tint"],
-                     _GUILLOT["log_kappa"], _GUILLOT["log_gamma"]],
-                    dtype=np.float64)
-
-
 def test_guillot_condensation_end_to_end(stack, chem_guillot):
     """A non-isothermal (Guillot) T-P condensation solve: converges, rains
     out, and the carry saturation row follows the Guillot temperatures."""
     _, jax, jnp = stack
-    th = _theta_guillot()
+    # Guillot parameters giving a ~360-450 K column over 5 -> 0.01 bar: cold
+    # enough aloft to supersaturate S8 at 1e-4 VMR, warm enough deep to stay
+    # inside the thermo tables.
+    # lnZ, c_o, lnKzz, Tirr, Tint, log_kappa, log_gamma
+    th = np.array([0.0, 0.0, 0.0, 560.0, 80.0, -2.3, -1.0])
     pv = chem_guillot.prep_pv(th)
     T_live = np.asarray(pv.r_Tco)
     assert T_live.std() > 5.0, "Guillot profile must be genuinely non-isothermal"

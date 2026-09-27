@@ -1,7 +1,7 @@
 """Every likelihood entry point rejects a FINITE spectrum from an uncertified cold
 solve: the scalar log_likelihood_u, both gradient routes and the batched cold
 evaluator apply one certificate (retrieval_forward.native_depth_aux's ok bit ==
-pipeline._proposal_converged plus the count_max cap). Real smoke pipeline at
+the conv_normal gate plus the count_max cap). Real smoke pipeline at
 count_max=50 < count_min (conftest.capped_smoke_pipe), so no cold solve can
 certify while its column, and hence its spectrum, stays finite. Slow (full
 tier): five distinct chemistry compiles, ~15 min on daw."""

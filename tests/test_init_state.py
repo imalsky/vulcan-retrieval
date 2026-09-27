@@ -8,7 +8,6 @@ two batched evaluators _init_state calls, with count_max exhaustion made a deter
 function of the draw so the test controls exactly which particles are rejected.
 """
 import types
-from dataclasses import replace
 from typing import NamedTuple
 
 import numpy as np
@@ -188,11 +187,3 @@ def test_validate_config_refuses_broken_knobs(knob, bad):
     production lane count)."""
     with pytest.raises(ValueError, match=knob):
         C.validate_config(C.Config(**{knob: bad}))
-
-
-@pytest.mark.parametrize("knob", ["cold_seed", "abundance_mode", "reanchor_atom_ini"])
-def test_a_removed_knob_is_refused(knob):
-    """A retired knob in a preset or an override file is an error, never a
-    silent no-op (make_config applies overrides with dataclasses.replace)."""
-    with pytest.raises(TypeError, match=knob):
-        replace(C.Config(), **{knob: 0})

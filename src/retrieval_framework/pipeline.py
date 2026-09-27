@@ -55,8 +55,6 @@ Pipeline = SimpleNamespace   # the attribute bag build_pipeline fills
 REJECT_LOGL = -1.0e30
 REJECT_BELOW = -1.0e29
 
-# Column of conv_normal in the packed per-particle ConvDiag vector (_pack_cd).
-_CD_CONV_NORMAL = 4
 # sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
 _PRIOR_Z_EPS = 1e-6
 # T-P window rejection sampling: the floor on candidates per round, and the candidate cap
@@ -127,18 +125,6 @@ def _zero_eval_stats(n: int, dtype) -> EvalStats:
         bad_grad=jnp.zeros((n,), bool),
         chem_tan_bad=jnp.zeros((n,), bool),
     )
-
-
-def _proposal_converged(cd_vec):
-    """Convergence predicate for a gradient-path solve (warm or cold), from the packed
-    per-particle ConvDiag vector ``[accept_count, longdy, longdydt,
-    count_since_new_min, conv_normal]`` (see vulcan_forward.vulcan_chem.ConvDiag).
-    The gate that decides whether a proposal's state, and so its jvp tangents, is
-    trusted: the runner's canonical two-branch certification recomputed at the
-    exit state (``conv_normal``). A stall or budget exit reads False even with
-    longdy under yconv_min.
-    """
-    return cd_vec[:, _CD_CONV_NORMAL] > 0.5
 
 
 def make_uspace(specs, dtype):
@@ -354,18 +340,20 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _cloud_from(theta):
         return theta[cloud_lo:cloud_lo + n_cloud]
 
+    def _mu_from_depth(depth, theta):
+        """Binned model depth: B @ native depth + O @ offsets."""
+        mu = B_jax @ depth
+        if n_off > 0:
+            mu = mu + O_jax @ (theta[off_lo:off_lo + n_off] * OBS.PPM)
+        return mu
+
     def _binned_ok(theta):
         """(binned model depth, ok): ok is the cold certificate bit from
         fwd.native_depth_aux (canonical convergence AND under count_max)."""
         theta = jnp.asarray(theta, dtype=dtype)
-        chem_theta = theta[:n_chem_tp]
-        native, _aux, ok = fwd.native_depth_aux(chem_theta, theta[lnR0_idx],
+        native, _aux, ok = fwd.native_depth_aux(theta[:n_chem_tp], theta[lnR0_idx],
                                                 _cloud_from(theta))
-        binned = B_jax @ native                                # (n_bin,)
-        if n_off > 0:
-            offs = jax.lax.dynamic_slice_in_dim(theta, off_lo, n_off) * OBS.PPM
-            binned = binned + O_jax @ offs
-        return binned, ok > 0.5
+        return _mu_from_depth(native, theta), ok > 0.5
 
     def observed_depth_model(theta):
         """Binned model depth, UNGATED: a plotting/diagnostic interface (truth
@@ -446,12 +434,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         aux = jax.tree_util.tree_map(lambda x: x[0], aux_all)    # primal ART-grid profiles
         # J_chem: (n_chem_tp, n_native) tangent stack
 
-        # mu = B @ native + O @ offsets  (identical to observed_depth_model)
-        mu = B_jax @ d0
-        if n_off > 0:
-            offs = theta[off_lo:off_lo + n_off] * OBS.PPM
-            mu = mu + O_jax @ offs
-
+        mu = _mu_from_depth(d0, theta)
         sig = _sigma_for(theta)
         resid = pipe.obs_depth_jax - mu
         wres = resid / (sig * sig)                                   # dL/dmu
@@ -490,18 +473,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     #   dL/dtheta_chem[k] = < d aux / d theta[k]  (fwd jvp through the chemistry),
     #                         d L / d aux          (rev vjp through the RT) >.
     chem_mode = str(cfg.smc_chem_mode).strip().lower()
-    if chem_mode not in ("warm", "cold"):
-        raise ValueError(f"smc_chem_mode must be 'warm' or 'cold', got {chem_mode!r}")
-    rt_chunk = int(cfg.smc_rt_chunk or 0)
-    rt_vjp_chunk = int(cfg.smc_rt_vjp_chunk or 0)
+    rt_chunk = int(cfg.smc_rt_chunk)
+    rt_vjp_chunk = int(cfg.smc_rt_vjp_chunk)
     y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)          # (nz, ni)
     eye_c = jnp.eye(n_chem_tp, dtype=dtype)
-
-    def _mu_from_depth(depth, theta):
-        mu = B_jax @ depth
-        if n_off > 0:
-            mu = mu + O_jax @ (theta[off_lo:off_lo + n_off] * OBS.PPM)
-        return mu
 
     def _rt_val(args):
         """Per-particle RT stage, primal only: aux profiles -> loglik value."""
@@ -593,6 +568,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # survivors). A cold solve is never warm-capped.
         wcmax = (int(fwd.chem.warm_count_max) if (warm and mutation_cap)
                  else int(fwd.chem.count_max))
+        warm_solve = (fwd.chem_solve_warm_diag_batch if mutation_cap
+                      else fwd.chem_solve_warm_diag_full_batch)
 
         if want_grad:
             # A proposal can end finite but unsettled (a non-convergent corner or
@@ -601,10 +578,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # float vector (keeps the jvp output all-float). eval_batch rejects an
             # exhausted or uncertified proposal; the cold path reads the same diag
             # off its batched stage 2, so both chem modes share one gate.
-            if warm:
-                _solve_cd_batch = (fwd.chem_solve_warm_diag_batch if mutation_cap
-                                   else fwd.chem_solve_warm_diag_full_batch)
-
             def _pack_cd(cd):
                 # [accept_count, longdy, longdydt, count_since_new_min, conv_normal]
                 return jax.lax.stop_gradient(jnp.stack([
@@ -636,7 +609,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 # batch as constants -- only theta carries a tangent. The
                 # mutation cap is per lane on the runner carry (warm_cap).
                 def _warm_chain(C_, Y, refs):
-                    Y_new, cd = _solve_cd_batch(C_, Y, refs[:, 0], refs[:, 1])
+                    Y_new, cd = warm_solve(C_, Y, refs[:, 0], refs[:, 1])
                     return _aux_batch(Y_new, C_), Y_new, _pack_cd_batch(cd)
 
                 def _chem_batch(C_, Y, refs):
@@ -696,11 +669,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 freeze at their own exits; agreement with the per-lane map is at
                 the convergence scale."""
                 if warm:
-                    # mutation_cap=False: the cold count_max, as on the gradient
-                    # path (run_nautilus's anchored warm starts)
-                    solve = (fwd.chem_solve_warm_diag_batch if mutation_cap
-                             else fwd.chem_solve_warm_diag_full_batch)
-                    Y_new, CD = solve(C_, Y, refs[:, 0], refs[:, 1])
+                    Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1])
                 else:
                     Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
@@ -733,7 +702,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 #              the jvp tangent, with no stopping rule of its own,
                 #              has not.
                 ACC = CD[:, 0].astype(jnp.int32)
-                conv_ok = _proposal_converged(CD)
+                conv_ok = CD[:, 4] > 0.5   # conv_normal column of _pack_cd
                 under_cap = ACC < wcmax
                 usable = valid & under_cap & conv_ok
                 n_bad = jnp.sum((bads & usable).astype(jnp.int32))
@@ -1640,7 +1609,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     under the OPERATIONAL prior (box, T-P window and converged chemistry,
     renormalized); ``logZ_box`` is the ZERO-FILLED box evidence, SOLVER-DEPENDENT
     through the convergence indicator (count_max, warm_count_max, tolerances,
-    the canonical conv_normal gate in _proposal_converged, init history). Never
+    the canonical conv_normal gate, init history). Never
     difference bare ``logZ`` across models with different support fractions."""
     cfg = pipe.cfg
     dtype = pipe.dtype
@@ -1689,18 +1658,6 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
         if ck["u_particles"].shape != (N, n_dim):
             raise ValueError(f"checkpoint particles {ck['u_particles'].shape} != ({N},{n_dim}); "
                              "resume requires the same smc_num_particles and parameter set")
-        # The checkpoint carries a TARGET-EXACTNESS STAMP (written by _write_checkpoint).
-        # Adopting betas/logZ/loglik across a target change would splice two
-        # different densities into one evidence integral, and nothing
-        # downstream could detect it -- the certificate reads the last job only.
-        ck_mode = str(ck["chem_mode"])
-        now_mode = str(getattr(pipe, "chem_mode", None) or "none")
-        if ck_mode != now_mode:
-            raise ValueError(
-                f"checkpoint was produced with chem_mode={ck_mode!r} but this run "
-                f"is chem_mode={now_mode!r}; the tempering ladder and logZ are not "
-                "transferable across a target change. Start a fresh run or restore "
-                "the original chem_mode.")
         U = jnp.asarray(ck["u_particles"], dtype)
         betas = [float(b) for b in ck["betas"]]
         beta = betas[-1]

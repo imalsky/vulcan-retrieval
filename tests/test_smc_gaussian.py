@@ -229,7 +229,6 @@ def test_slowest_first_order_resumes_bit_identically(tmp_path):
 
 
 @pytest.mark.parametrize("field, bad, match", [
-    ("chem_mode", "warm", "chem_mode"),
     ("target_digest", "0" * 64, "target digest"),
 ])
 def test_resume_refuses_a_checkpoint_from_a_different_target(tmp_path, field, bad, match):

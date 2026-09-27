@@ -381,20 +381,26 @@ def _digest_pipe():
         groups=["A"], n_bin=2)
 
 
-@pytest.mark.parametrize("field, value", [
-    ("yconv_cri", 0.001),            # convergence tolerance
-    ("molecules", ("H2O",)),         # opacity list
-    ("nz", 80),                      # chemistry grid
-    ("art_ptop_bar", 1e-8),          # pressure domain
-    ("prior_lnZ", (-1.0, 1.0)),      # prior definition
-    ("smc_chem_mode", "warm"),       # target semantics
-    ("smc_mcmc_kernel", "rwm"),      # mutation kernel (resume must refuse a swap)
-    ("seed", 999),                   # RNG identity (bit-identical resume)
-    ("count_max", 4000),             # solver-defined support
+@pytest.mark.parametrize("field, value, moves", [
+    ("yconv_cri", 0.001, True),            # convergence tolerance
+    ("molecules", ("H2O",), True),         # opacity list
+    ("nz", 80, True),                      # chemistry grid
+    ("art_ptop_bar", 1e-8, True),          # pressure domain
+    ("prior_lnZ", (-1.0, 1.0), True),      # prior definition
+    ("smc_chem_mode", "warm", True),       # target semantics
+    ("smc_mcmc_kernel", "rwm", True),      # mutation kernel (resume must refuse a swap)
+    ("seed", 999, True),                   # RNG identity (bit-identical resume)
+    ("count_max", 4000, True),             # solver-defined support
+    ("smc_max_steps", 999, False),         # per-JOB cap, documented
+    ("walltime_seconds", 3600.0, False),   # per-JOB governor
+    ("smc_rt_vjp_chunk", 24, False),       # batch split, numerically identical
+    ("out_dir", Path("/tmp/elsewhere"), False),
 ])
-def test_target_digest_moves_with_every_bound_class(field, value, monkeypatch):
+def test_target_digest_moves_with_every_bound_class(field, value, moves, monkeypatch):
     """Each manifest class must change the digest, or a resume could carry
-    numbers from a different density."""
+    numbers from a different density. A chained RESUME job legitimately changes
+    the per-job settings; binding them would refuse the documented NAS chaining
+    workflow."""
     monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
     monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
     from retrieval_framework import config_schema as _C
@@ -403,37 +409,15 @@ def test_target_digest_moves_with_every_bound_class(field, value, monkeypatch):
     assert getattr(base, field) != value, f"{field} probe equals the default"
     changed = replace(base, **{field: value})
     assert (certificate.target_digest(base, pipe)
-            != certificate.target_digest(changed, pipe))
+            != certificate.target_digest(changed, pipe)) is moves
 
 
-@pytest.mark.parametrize("field, value", [
-    ("smc_max_steps", 999),          # per-JOB cap, documented
-    ("walltime_seconds", 3600.0),    # per-JOB governor
-    ("smc_rt_vjp_chunk", 24),        # batch split, numerically identical
-    ("out_dir", Path("/tmp/elsewhere")),
-])
-def test_target_digest_ignores_per_job_settings(field, value, monkeypatch):
-    """A chained RESUME job legitimately changes these; binding them would refuse
-    the documented NAS chaining workflow."""
-    monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
-    monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
-    from retrieval_framework import config_schema as _C
-    pipe = _digest_pipe()
-    base = _C.Config(molecules=("H2O", "CO2"))
-    assert (certificate.target_digest(base, pipe)
-            == certificate.target_digest(replace(base, **{field: value}), pipe))
-
-
-def test_target_digest_moves_with_code_and_with_data(monkeypatch):
+def test_target_digest_moves_with_the_observations(monkeypatch):
     from retrieval_framework import config_schema as _C
     monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
     pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
     monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "a" * 40, "dirty": False}})
     a = certificate.target_digest(cfg, pipe)
-    monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "b" * 40, "dirty": False}})
-    assert certificate.target_digest(cfg, pipe) != a, "code identity not bound"
-
-    monkeypatch.setattr(certificate, "_repo_states", lambda *a, **k: {"r": {"commit": "a" * 40, "dirty": False}})
     pipe.obs_sigma = pipe.obs_sigma * 2.0
     assert certificate.target_digest(cfg, pipe) != a, "observations not bound"
 
@@ -483,6 +467,7 @@ def _repo(**over):
     ({"dirty_files": ["a.py", "b.py"]}, False),   # the LIST churns; not an identity
     ({"dirty": False, "dirty_files": [], "src_diff": None}, True),
     ({"src_diff": "e" * 64}, True),               # a DIFFERENT uncommitted src edit
+    ({"commit": "b" * 40}, True),                 # a different commit
 ])
 def test_target_digest_binds_code_state_not_file_churn(state, moves, monkeypatch):
     """A scratch edit must not refuse a resume, but a different source diff must.

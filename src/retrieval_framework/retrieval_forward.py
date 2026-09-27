@@ -291,8 +291,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
         ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
         canonical convergence bit AND accept_count under count_max -- the same
-        predicate the staged batch evaluators apply (pipeline._proposal_converged
-        plus the cap). The scalar likelihood and the block gradient reject on it,
+        predicate the staged batch evaluators apply (the conv_normal gate plus
+        the cap). The scalar likelihood and the block gradient reject on it,
         so no likelihood entry point accepts a finite spectrum from an uncertified
         solve. Reading the diag is free: every field rides the primal carry.
 
