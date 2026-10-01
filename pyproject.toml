@@ -35,10 +35,11 @@ dependencies = [
     "jax>=0.6.2",
     "numpy>=1.26",
     "scipy>=1.12",
-    # The forward-model engine (chemistry + ExoJAX RT) owns the exojax==2.2.3
-    # pin. >=0.27.0: the equilibrium seed as the only cold start, refusing
-    # cold_seed / abundance_mode / reanchor_atom_ini.
-    "vulcan-forward>=0.27.0",
+    # The forward-model engine (chemistry + ExoJAX RT) owns the exojax pin.
+    # >=0.27.1: exojax 2.6.0, which validate_env requires; 0.27.0 made the
+    # equilibrium seed the only cold start, refusing cold_seed /
+    # abundance_mode / reanchor_atom_ini.
+    "vulcan-forward>=0.27.1",
     # >=0.17.0: conv_normal and validate_overrides (vulcan-forward 0.27.0's floor).
     "vulcan-jax>=0.17.0",
 ]

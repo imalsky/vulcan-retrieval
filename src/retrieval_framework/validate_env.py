@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 SUPPORTED_PYTHON = (3, 10)
-EXOJAX_PIN = "2.2.3"  # keep in lockstep with vulcan-forward's pyproject.toml
+EXOJAX_PIN = "2.6.0"  # keep in lockstep with vulcan-forward's pyproject.toml
 EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan_jax.ini_abun.eq_seed
 
 _ERRORS: list[str] = []

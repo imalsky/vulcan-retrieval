@@ -107,7 +107,7 @@ print(f"numpy=={numpy.__version__}")
 PY
 echo "constraints: $(tr '\n' ' ' < "${CONSTRAINTS}")"
 
-python -m pip install --user --constraint "${CONSTRAINTS}" "exojax==2.2.3" corner tqdm
+python -m pip install --user --constraint "${CONSTRAINTS}" "exojax==2.6.0" corner tqdm
 python -m pip install --user --no-deps -e "${PROJECT_ROOT}/VULCAN-JAX"
 # vulcan-forward sits between the two in the dependency DAG: every retrieval
 # path imports vulcan_forward.vulcan_chem, and the validate_env step at the end
