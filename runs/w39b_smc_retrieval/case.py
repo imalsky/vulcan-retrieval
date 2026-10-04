@@ -57,21 +57,27 @@ _W39B = dict(
     #         dln(C/O) about the 0.549 baseline -> C/O in [0.10, 0.70]. Upper edge 0.24
     #         stays below the fixed-O b_z positivity bound (~0.566) too.
     prior_c_o=(-1.70, 0.24),
-    #   Kzz : x0.1..x100 about the VULCAN W39b baseline profile. The lower edge
+    #   Kzz : x0.1..x1000 about the VULCAN W39b baseline profile. The lower edge
     #         is Tsai's tested x0.1: below it most columns do not certify within
-    #         count_max.
-    prior_lnKzz=(math.log(0.1), math.log(100.0)),
+    #         count_max. The real-data posterior piled against an x100 ceiling;
+    #         along its ridge log L falls ~10-17 nats by x200, so x1000 holds it.
+    prior_lnKzz=(math.log(0.1), math.log(1000.0)),
     #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
-    #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [1100, 2200] K
-    #         gives a limb T ~770-1540 K -- physical for W39b, no unmodelably cold/hot
-    #         corners. gamma up to ~2 lets the data prefer a WEAK thermal inversion;
+    #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [800, 2200] K
+    #         gives a limb T ~560-1540 K. The real-data posterior sat at a 1100 K
+    #         floor; along its ridge the likelihood falls ~4 nats by 1025 K and ~16 by
+    #         950 K, so the schema's 800 K floor holds it with margin.
+    #         gamma up to ~2 lets the data prefer a WEAK thermal inversion;
     #         a mild inversion actually cools the deep atmosphere, so
     #         it slightly LOWERS the reject rate. Any residual out-of-window profile is
     #         REJECTED, not clipped (pipeline.tp_valid).
-    prior_Tirr=(1100.0, 2200.0),        # K
+    prior_Tirr=(800.0, 2200.0),         # K
     prior_log10gamma=(-2.0, math.log10(2.0)),      # gamma = kappa_v/kappa_th in [0.01, 2.0]
-    # prior_log10kappa (IR opacity), prior_lnR0, cloud, and offset priors keep the
-    # schema defaults (generic nuisances, not W39b-specific).
+    #   lnR0 : the reference-radius nuisance sits near -0.075, inside the schema's
+    #         +-0.08 but close to its edge; +-0.15 keeps the tail (RT-only direction).
+    prior_lnR0=(-0.15, 0.15),
+    # prior_log10kappa (IR opacity), cloud, and offset priors keep the schema
+    # defaults (generic nuisances, not W39b-specific).
 )
 
 
