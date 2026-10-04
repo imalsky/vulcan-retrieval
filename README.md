@@ -17,16 +17,18 @@ the posterior in a publication.
 
 ## Install
 
-Use Python 3.10 to 3.12.
+Use Python 3.10 to 3.12. The retrieval runs from checkouts of the three
+repositories side by side, installed in editable mode (the `VULCAN-JAX`
+directory name is required):
 
 ```bash
+mkdir vulcan && cd vulcan
+git clone https://github.com/imalsky/jax-vulcan.git VULCAN-JAX
+git clone https://github.com/imalsky/vulcan-forward.git
 git clone https://github.com/imalsky/vulcan-retrieval.git
+python -m pip install -e ./VULCAN-JAX -e ./vulcan-forward \
+  -e "./vulcan-retrieval[dev,plot]"
 cd vulcan-retrieval
-python -m pip install \
-  -i https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ \
-  "vulcan-jax>=0.17.0" "vulcan-forward>=0.27.1"
-python -m pip install -e ".[dev,plot]"
 ```
 
 Opacity data are not stored in Git. Set `VULCAN_FORWARD_DATA`, then fetch the
