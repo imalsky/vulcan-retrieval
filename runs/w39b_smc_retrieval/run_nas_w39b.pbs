@@ -63,11 +63,7 @@
 #                           20000), CALIBRATE_SEED_OFFSET (default 0)
 #                           CALIBRATE_FIXED_STEPS=<K> (+ CALIBRATE_GRAD=1, and only
 #                           the value 1 enables it): fixed-step
-#                           step-cost bench, primal or gradient; pair with NSYS=1
-#                           NSYS_CAPTURE_API=1 NSYS_GPU_METRICS=1 for kernels per step;
-#                           NCU=1 (+ XLA_CMDBUF=0 NSYS_CAPTURE_API=1, small K): Nsight
-#                           Compute counters on the bt_* kernels inside the timed call,
-#                           NCU_LAUNCH_COUNT launches (default 40 = 8 iterations)
+#                           step-cost bench, primal or gradient
 #                           CALIBRATE_LANES=<k>: run the cold batch on k lanes with
 #                           refill (cfg.cold_lanes; the gpu preset's default is the
 #                           device's SM count, 132 on the GH200; 0 = one lockstep batch, the reference
@@ -80,18 +76,6 @@
 #   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
 #                           one-command minimum graph size: the arm that shows whether
 #                           the whole step loop is captured as one graph
-#   NSYS=1                  WINDOWED Nsight Systems capture of a bounded slice (for the
-#                           long SMC run): NSYS_DELAY (default 900 s, skips build+jit),
-#                           NSYS_DURATION (default 120 s); job runs on past the window.
-#   NSYS_CAPTURE_API=1      with NSYS=1: capture the range the app marks with
-#                           cudaProfilerStart/Stop (run_smc --calibrate marks its timed
-#                           mutation sweep) instead of a fixed delay window.
-#   NSYS_FULL=1             FULL whole-process Nsight Systems trace (for a BOUNDED job:
-#                           the count_max calibration or PROBE_MEMORY). Keep that job
-#                           short or the .nsys-rep gets large.
-#   NSYS_GPU_METRICS=1      add the GPU-metrics timeline to either mode (SM/DRAM
-#                           utilization). NSYS_GPU_METRICS_DEV overrides the device
-#                           list (default all); NSYS_GPU_METRICS_HZ the rate (1000)
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
 #
 # Deep-adiabat sensitivity (the interior temperature is FIXED and transmission does
@@ -185,9 +169,8 @@ export JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-true}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
-# Command buffers are ON by default; XLA_CMDBUF=0 turns them off for
-# an A/B or a per-kernel profile. Off needs the EMPTY value: with no flag at all
-# XLA keeps its own default set.
+# Command buffers are ON by default; XLA_CMDBUF=0 turns them off for an A/B.
+# Off needs the EMPTY value: with no flag at all XLA keeps its own default set.
 # The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
 # while loop becomes one graph only if every op in its body is capturable.
 # A function, so a chain arm that sets its own XLA_CMDBUF gets its own flags.
@@ -242,97 +225,6 @@ cleanup() { kill "${GPU_MON_PID}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 echo "GPU monitor: ${GPU_MON_LOG}"
 
-# --- Nsight Systems profiling -------------------------------------------------
-# Two modes -> logs/nsys_<jobid>.nsys-rep :
-#   NSYS=1       WINDOWED: skip build+compile (NSYS_DELAY, default 900 s) then trace
-#                NSYS_DURATION (default 120 s) of the steady-state GPU loop, --kill=none
-#                so the job runs on. Use for the long (multi-hour) SMC run, where a
-#                whole-run kernel trace would be tens of GB and unloadable.
-#   NSYS_FULL=1  FULL whole-process trace, no window (runs start->finish). Use for a
-#                BOUNDED job -- the count_max calibration or PROBE_MEMORY -- where the
-#                whole thing is minutes-to-an-hour. Keep the traced job short (e.g.
-#                calibrate at a modest CALIBRATE_COUNT_MAX_PROBE) or the .nsys-rep gets
-#                large; the chemistry loop launches many tiny kernels.
-# Either mode: NSYS_GPU_METRICS=1 adds the sampled SM/DRAM GPU-metrics timeline
-#   (flag spelling hardcoded below for the NAS nsys). The always-on nvidia-smi
-#   monitor above already logs util/power/clocks every 60 s for the whole run.
-# Inspect:  nsys stats -r cuda_gpu_kern_sum,cuda_gpu_mem_time_sum logs/nsys_<jobid>.nsys-rep
-# or scp the .nsys-rep to a workstation and open it in the Nsight Systems GUI.
-# build_nsys_wrap reads NSYS* from the CURRENT environment, so a chain arm can rebuild
-# it after exporting its own knobs; NSYS_TAG suffixes the .nsys-rep name so two
-# profiled arms in one job do not overwrite each other.
-build_nsys_wrap() {
-NSYS_WRAP=()
-if [ "${NSYS:-0}" = "1" ] || [ "${NSYS_FULL:-0}" = "1" ]; then
-  command -v nsys >/dev/null 2>&1 || module load cuda 2>/dev/null || true
-  if ! command -v nsys >/dev/null 2>&1; then
-    echo "ERROR: NSYS/NSYS_FULL set but nsys is not in PATH (and 'module load cuda' did not provide it)."
-    exit 1
-  fi
-  NSYS_OUT="${LOG_DIR}/nsys_${_jobid%%.*}${NSYS_TAG:-}"
-  NSYS_WRAP=(nsys profile -o "${NSYS_OUT}" --force-overwrite=true
-             -t cuda,nvtx -s none --cpuctxsw=none)
-  # Under command buffers XLA replays CUDA graphs, which nsys traces as ONE
-  # unit per graph launch by default: the kernel table would then hold no
-  # per-kernel rows for the step loop. Node-level tracing keeps them.
-  if [ "${XLA_CMDBUF:-1}" != "0" ]; then
-    NSYS_WRAP+=(--cuda-graph-trace=node)
-  fi
-  if [ "${NSYS_GPU_METRICS:-0}" = "1" ]; then
-    # 1 kHz keeps the metrics stream small over hours; 10 ms resolution shows
-    # busy-vs-idle. nsys >= 2024.5 spells it --gpu-metrics-devices, hardcoded for
-    # the NAS nsys 2025.6.3 (the deprecated singular aborts nsys).
-    # NSYS_GPU_METRICS_DEV overrides the device list (GPU ID, all, none).
-    NSYS_WRAP+=(--gpu-metrics-devices="${NSYS_GPU_METRICS_DEV:-all}"
-                --gpu-metrics-frequency="${NSYS_GPU_METRICS_HZ:-1000}")
-    echo "nsys gpu-metrics: devices=${NSYS_GPU_METRICS_DEV:-all} frequency=${NSYS_GPU_METRICS_HZ:-1000} Hz"
-  fi
-  if [ "${NSYS_FULL:-0}" = "1" ]; then
-    echo "nsys: FULL whole-process capture (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
-  elif [ "${NSYS_CAPTURE_API:-0}" = "1" ]; then
-    # The app marks the range: run_smc --calibrate calls cudaProfilerStart/Stop
-    # around its timed mutation sweep, so the capture lands on the sweep wherever
-    # it falls.
-    NSYS_WRAP+=(--capture-range=cudaProfilerApi --capture-range-end=stop --kill=none)
-    echo "nsys: CAPTURE-RANGE cudaProfilerApi (the timed sweep; gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
-  else
-    NSYS_WRAP+=(--delay="${NSYS_DELAY:-900}" --duration="${NSYS_DURATION:-120}" --kill=none)
-    echo "nsys: WINDOWED delay=${NSYS_DELAY:-900}s duration=${NSYS_DURATION:-120}s (gpu_metrics=${NSYS_GPU_METRICS:-0}) -> ${NSYS_OUT}.nsys-rep"
-  fi
-  nsys --version | head -1 || true
-fi
-}
-build_nsys_wrap
-
-# --- Nsight Compute on the block-Thomas kernels (NCU=1) --------------------------
-# The counters nsys does not sample: achieved occupancy, FP64 pipe use, stall
-# reasons. Only for the fixed-step bench. Needs XLA_CMDBUF=0 (ncu cannot see
-# inside a CUDA graph) and NSYS_CAPTURE_API=1 (the app's cudaProfilerStart marks
-# the timed second call; ncu profiles nothing before it). Kernel replay
-# snapshots every device allocation per pass, so the preallocated pool is
-# replaced by the platform allocator for this run. Clocks are left unlocked so
-# the rates are the card's real ones.
-NCU_WRAP=()
-if [ "${NCU:-0}" = "1" ]; then
-  [ "${XLA_CMDBUF:-1}" = "0" ] || { echo "ERROR: NCU=1 needs XLA_CMDBUF=0"; exit 1; }
-  [ "${NSYS_CAPTURE_API:-0}" = "1" ] || { echo "ERROR: NCU=1 needs NSYS_CAPTURE_API=1 (the profiler range)"; exit 1; }
-  [ "${NSYS:-0}${NSYS_FULL:-0}" = "00" ] || { echo "ERROR: NCU=1 and NSYS=1 exclude each other"; exit 1; }
-  # By path, never `module load cuda` here: the module's ptxas breaks JAX's
-  # own CUDA compile.
-  NCU_BIN="${NCU_BIN:-$(command -v ncu 2>/dev/null || ls /usr/local/cuda/bin/ncu /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | tail -1)}"
-  [ -x "${NCU_BIN:-}" ] || { echo "ERROR: NCU=1 but no ncu found (set NCU_BIN=<path>)"; exit 1; }
-  export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
-  NCU_OUT="${LOG_DIR}/ncu_${_jobid%%.*}"
-  NCU_WRAP=("${NCU_BIN}" -o "${NCU_OUT}" --force-overwrite --profile-from-start off
-            --kernel-name "regex:bt_" --launch-count "${NCU_LAUNCH_COUNT:-40}"
-            --section SpeedOfLight --section ComputeWorkloadAnalysis
-            --section MemoryWorkloadAnalysis --section Occupancy
-            --section LaunchStats --section WarpStateStats
-            --clock-control none)
-  echo "ncu: ${NCU_LAUNCH_COUNT:-40} bt_* launches inside the profiler range -> ${NCU_OUT}.ncu-rep"
-  "${NCU_BIN}" --version | tail -1 || true
-fi
-
 # --- retrieval configuration ---------------------------------------------------
 export SMC_RETRIEVAL_PRESET="${SMC_RETRIEVAL_PRESET:-gpu}"
 if [ "${RESUME:-0}" = "1" ]; then export SMC_RESUME=1; fi
@@ -358,22 +250,12 @@ echo "preset=${SMC_RETRIEVAL_PRESET} overrides=${SMC_RETRIEVAL_OVERRIDES:-<none>
 
 cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
 
-# A windowed nsys (--kill=none) returns when its window closes and leaves the
-# app running; every path that may run under the wrapper waits for
-# this tree's python before the next step touches the GPU or the job exits.
-wait_for_tree_python() {
-  while pgrep -u "${USER}" -f "retrieval_framework\.(run_smc|run_nautilus|probe_memory|calibrate_count_max) ${SMC_DIR}" >/dev/null; do
-    sleep 30
-  done
-}
-
 rc=0
 if [ "${PROBE_MEMORY:-0}" = "1" ]; then
   # compile-only XLA buffer-size report for every evaluator stage; nothing
   # executes on the GPU, so this cannot OOM (see retrieval_framework/probe_memory.py)
   echo "========== MEMORY PROBE (compile-only) =========="
-  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}" || rc=$?
-  wait_for_tree_python
+  python -u -m retrieval_framework.probe_memory "${SMC_DIR}" || rc=$?
 elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # One job, several bounded arms. Each non-comment line of the chain file:
   #   name|probe, calibrate or bench|overrides file|out dir|KEY=VAL;KEY=VAL
@@ -402,29 +284,25 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
     echo "---------- arm ${name} (${mode}) started $(date) ----------"
     t0="$(date +%s)"; arm_rc=0
     (
-      export SMC_RETRIEVAL_OUT_DIR="${outd}" NSYS_TAG="_${name}"
+      export SMC_RETRIEVAL_OUT_DIR="${outd}"
       if [ -n "${ovf}" ]; then export SMC_RETRIEVAL_OVERRIDES_FILE="${ovf}"; fi
       if [ -n "${envs}" ]; then
         IFS=';' read -r -a kvs <<< "${envs}"
         for kv in "${kvs[@]}"; do [ -n "${kv}" ] && export "${kv?}"; done
       fi
       case ";${envs};" in *";XLA_CMDBUF="*) set_xla_flags || exit 1 ;; esac
-      build_nsys_wrap
-      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN_JAX_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS} NSYS=${NSYS:-0}"
+      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN_JAX_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS}"
       if [ "${mode}" = "probe" ]; then
-        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
+        python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
       elif [ "${mode}" = "bench" ]; then
         GRAD_ARG=""
         if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
-        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
+        python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
           ${CALIBRATE_N_DRAWS:+--n-draws ${CALIBRATE_N_DRAWS}} --fixed-steps "${CALIBRATE_FIXED_STEPS:-150}" ${GRAD_ARG}
       else
-        ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
+        python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate
       fi
       wrc=$?
-      # A windowed nsys can return while the app still holds the GPU; wait
-      # before the next arm touches it.
-      wait_for_tree_python
       if [ "${mode}" = "calibrate" ] && [ ! -f "${SMC_DIR}/${outd}/timing.json" ]; then
         echo "arm ${name}: no timing.json in ${outd} -> failed"; exit 1
       fi
@@ -459,8 +337,7 @@ for row in csv.DictReader(open(tsv), delimiter="\t"):
 PYEOF
 elif [ "${CALIBRATE_ONLY:-0}" = "1" ]; then
   echo "========== CALIBRATION ONLY =========="
-  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
-  wait_for_tree_python
+  python -u -m retrieval_framework.run_smc "${SMC_DIR}" --calibrate || rc=$?
 elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # measures the REAL accept_count distribution over CALIBRATE_N_DRAWS prior draws at
   # whatever nz/prior SMC_RETRIEVAL_OVERRIDES_FILE resolves to, at a generous
@@ -471,13 +348,12 @@ elif [ "${CALIBRATE_COUNT_MAX:-0}" = "1" ]; then
   # enabled the gradient bench for CALIBRATE_GRAD=0 too.
   GRAD_ARG=""
   if [ "${CALIBRATE_GRAD:-0}" = "1" ]; then GRAD_ARG="--grad"; fi
-  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} ${NCU_WRAP[@]+"${NCU_WRAP[@]}"} python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
+  python -u -m retrieval_framework.calibrate_count_max "${SMC_DIR}" \
     --n-draws "${CALIBRATE_N_DRAWS:-48}" \
     ${CALIBRATE_COUNT_MAX_PROBE:+--count-max-probe ${CALIBRATE_COUNT_MAX_PROBE}} \
     --seed-offset "${CALIBRATE_SEED_OFFSET:-0}" \
     ${CALIBRATE_LANES:+--lanes ${CALIBRATE_LANES}} \
     ${CALIBRATE_FIXED_STEPS:+--fixed-steps ${CALIBRATE_FIXED_STEPS}} ${GRAD_ARG} || rc=$?
-  wait_for_tree_python
 elif [ "${SAMPLER:-nautilus}" = "nautilus" ]; then
   # Nested sampling on the same likelihood (retrieval_framework.run_nautilus):
   # output in <out_dir>_nautilus, stops at the preset's walltime governor and
@@ -485,11 +361,9 @@ elif [ "${SAMPLER:-nautilus}" = "nautilus" ]; then
   # read the SMC files).
   echo "========== NAUTILUS RETRIEVAL =========="
   python -u -m retrieval_framework.run_nautilus "${SMC_DIR}" || rc=$?
-  wait_for_tree_python
 else
   echo "========== SMC RETRIEVAL =========="
-  ${NSYS_WRAP[@]+"${NSYS_WRAP[@]}"} python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
-  wait_for_tree_python
+  python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
   if [ "${rc}" -eq 0 ]; then
     echo "========== PLOTS =========="
     python -u -m retrieval_framework.plot_smc "${SMC_RETRIEVAL_OUT_DIR:-${SMC_DIR}/data/${SMC_RETRIEVAL_PRESET}}" \

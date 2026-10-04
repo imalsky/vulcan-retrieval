@@ -11,9 +11,9 @@
 # build the kernel with nvcc, run tests/test_solver_fast.py on the GPU twice (plain,
 # then under run_nas_w39b.pbs's XLA_CMDBUF=2 command-buffer flags), and
 # vulcan-forward's fold test on the GPU.
-# Resubmit after every change to the kernel. From the speed tree's
+# Resubmit after every change to the kernel. From the production tree's
 # vulcan-retrieval root (or its tools/ dir):
-#   qsub -v VULCAN_SCRATCH=/nobackup/$USER/.vulcan-speed tools/gpu_kernel_test.pbs
+#   qsub tools/gpu_kernel_test.pbs
 # Bench jobs that need the refreshed metadata chain on it with
 # `-W depend=afterany:<jobid>` (afterok deletes them if a GPU test fails).
 set -euo pipefail

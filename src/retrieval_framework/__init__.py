@@ -10,11 +10,15 @@ Planet-agnostic machinery only. A concrete retrieval lives in a CASE DIRECTORY
 
 Entry points (run from anywhere; <run_dir> defaults to the cwd):
 
+    python -m retrieval_framework.run_nautilus         <run_dir>
     python -m retrieval_framework.run_smc              <run_dir> [--calibrate]
     python -m retrieval_framework.calibrate_count_max  <run_dir> [--n-draws N ...]
     python -m retrieval_framework.probe_memory         <run_dir>
     python -m retrieval_framework.smoke_retrieval      <run_dir>
     python -m retrieval_framework.plot_smc             <out_dir>
+    python -m retrieval_framework.certificate          <run_dir>
+    python -m retrieval_framework.validate_warm        <run_dir>
+    python -m retrieval_framework.validate_env         <project_root> [--require-gpu]
 
 Module map (the import chain is heavy-import-safe top to bottom):
 

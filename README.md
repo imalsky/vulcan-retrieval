@@ -5,9 +5,11 @@ model. It uses VULCAN-JAX for chemical kinetics and ExoJAX for radiative
 transfer through the shared
 [`vulcan-forward`](https://github.com/imalsky/vulcan-forward) package.
 
-The sampler uses adaptive-tempered sequential Monte Carlo (SMC). Optional
-MALA moves use forward derivatives from the atmosphere model. The repository
-contains a WASP-39 b case, a small synthetic case, validation scripts, and a
+Two samplers run on the same likelihood: nested sampling with nautilus
+(`run_nautilus`, the default of the NAS job script) and adaptive-tempered
+sequential Monte Carlo (SMC, `run_smc`). Optional MALA moves in the SMC use
+forward derivatives from the atmosphere model. The repository contains a
+WASP-39 b case with a small synthetic preset, validation scripts, and a
 run-certificate check.
 
 This is research software. Validate a new target and model setup before using
@@ -15,7 +17,7 @@ the posterior in a publication.
 
 ## Install
 
-Use Python 3.10 to 3.12 and a C++ compiler for FastChem.
+Use Python 3.10 to 3.12.
 
 ```bash
 git clone https://github.com/imalsky/vulcan-retrieval.git
@@ -23,7 +25,7 @@ cd vulcan-retrieval
 python -m pip install \
   -i https://test.pypi.org/simple/ \
   --extra-index-url https://pypi.org/simple/ \
-  "vulcan-jax>=0.3.0" "vulcan-forward>=0.11.0"
+  "vulcan-jax>=0.17.0" "vulcan-forward>=0.27.1"
 python -m pip install -e ".[dev,plot]"
 ```
 
@@ -33,7 +35,7 @@ needed ExoMolOP tables. CIA data go in `opacity_cache/`.
 ```bash
 export VULCAN_FORWARD_DATA="$PWD/data"
 python -m vulcan_forward.fetch_exomolop \
-  --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S
+  --molecules H2O,CO2,CO,CH4,SO2,HCN,C2H2,H2S,NH3,OCS,SH,SO
 python -m retrieval_framework.validate_env ..
 ```
 
@@ -69,6 +71,10 @@ diagnostics, predictions, and plots to the case data directory. Check
 `python -m retrieval_framework.certificate runs/w39b_smc_retrieval` before
 reporting a production result.
 
+Nested sampling uses the same case and presets:
+`python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval` writes to
+`<out_dir>_nautilus`. It does not yet write plots or a certificate.
+
 ## Limits
 
 - The likelihood is diagonal Gaussian.
@@ -79,7 +85,7 @@ reporting a production result.
   T-P profile leaves the modelable window, or whose chemistry does not
   converge, are rejected and the target is renormalized over what remains.
   The figures carry the two surviving fractions.
-- Condensation is refused during gradient inference.
+- Condensation is refused during inference.
 - A certificate checks required artifacts and numerical gates. It does not
   prove that the physical model is complete.
 - Results depend on the reaction network, opacity coverage, pressure and
@@ -94,7 +100,7 @@ Published work should cite this repository and the model components used:
 - ExoJAX: [Kawahara et al. (2022)](https://arxiv.org/abs/2105.14782) and
   [Kawahara et al. (2025)](https://arxiv.org/abs/2410.06900)
 - ExoMolOP tables: [Chubb et al. (2021)](https://doi.org/10.1051/0004-6361/202038350)
-- FastChem initialization: [Stock et al. (2018)](https://doi.org/10.1093/mnras/sty1531)
+- ExoGibbs equilibrium initialization: [ExoGibbs](https://github.com/HajimeKawahara/exogibbs)
 
 Record the repository commit, package versions, data releases, reaction
 network, priors, and full resolved configuration.

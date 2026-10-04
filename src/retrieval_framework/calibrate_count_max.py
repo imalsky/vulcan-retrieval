@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework.run_smc import (   # the exact preset/override logic
-    _cuda_profiler, make_config, set_observations, setup_logging)
+    make_config, set_observations, setup_logging)
 
 # Caps the production-gate table always reports, beside the preset's and the probe's.
 COUNT_MAX_CANDIDATES = (5000, 10000)
@@ -138,23 +138,18 @@ def main() -> None:
         Y0, refs0 = P._blank_state(pipe, int(args.n_draws))
         return pipe, U, Y0, refs0
 
-    def _timed(cfg_, capture):
-        """Compile pass, then one timed pass (inside the nsys capture range if
-        `capture`). Returns (t_first, t_steady, out, U)."""
+    def _timed(cfg_):
+        """Compile pass, then one timed pass. Returns (t_first, t_steady, out, U)."""
         pipe, U, Y0, refs0 = _setup(cfg_)
         fn = jax.jit(pipe.batch_eval_cold_vg if args.grad else pipe.batch_eval_cold_l_diag)
         t0 = time.perf_counter()
         out = fn(U, Y0, refs0)
         jax.block_until_ready(out[0])
         t_first = time.perf_counter() - t0
-        if capture:
-            _cuda_profiler(True)     # no-op unless NSYS_CAPTURE_API=1
         t0 = time.perf_counter()
         out = fn(U, Y0, refs0)
         jax.block_until_ready(out[0])
         t_steady = time.perf_counter() - t0
-        if capture:
-            _cuda_profiler(False)
         return t_first, t_steady, out, U
 
     if K > 0:
@@ -163,8 +158,8 @@ def main() -> None:
         # is NOT the solver loop (the equilibrium seed and the RT above all), so the
         # loop's cost is the difference between the two timed passes.
         _t1_first, t1_steady, _o1, _u1 = _timed(
-            replace(cfg, count_min=1, count_max=1, warm_count_max=1), capture=False)
-        t_first, t_steady, out, U = _timed(cfg, capture=True)
+            replace(cfg, count_min=1, count_max=1, warm_count_max=1))
+        t_first, t_steady, out, U = _timed(cfg)
         # The runner's exit test is accept_count > count_max (VULCAN-JAX
         # outer_loop._real_terminate), so a capped lane stops after exactly K+1
         # accepted steps.
@@ -179,17 +174,13 @@ def main() -> None:
                  f"lanes={int(args.n_draws)} K={K} steps_per_lane={n_step} "
                  f"({n_stages} stage(s) x K+1)")
         log.info(f"  t_first  = {t_first:.3f} s (compile + run)")
-        log.info(f"  t_steady = {t_steady:.3f} s  (K={K}, inside the nsys capture range)")
+        log.info(f"  t_steady = {t_steady:.3f} s  (K={K})")
         log.info(f"  t_steady = {t1_steady:.3f} s  (K=1 baseline: seeds + RT + likelihood + "
                  f"{n_stages * 2} accepted steps, {n_stages} stage(s) x 2)")
         loop = t_steady - t1_steady
         log.info(f"  loop     = {loop:.3f} s for the extra {n_stages}(K-1)={n_extra} accepted steps "
                  f"of the slowest lane; {1000.0 * loop / max(1, n_extra):.3f} ms per accepted "
-                 "step. Per loop ITERATION (accepted + rejected) divide `loop` by the "
-                 "factorisation count in the capture: the LU path runs one getrf_panel "
-                 "per layer, so nsys instances / nz, while the FFI block-Thomas kernel "
-                 "traverses every layer AND every lane in ONE launch, so its "
-                 "bt_factor instances ARE the iterations.")
+                 "step.")
 
         Lb = np.asarray(jax.device_get(out[0]), np.float64)
         Yb = np.asarray(jax.device_get(out[2] if args.grad else out[1]), np.float64)

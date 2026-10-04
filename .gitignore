@@ -25,7 +25,6 @@ runs/**/data/
 runs/**/logs/
 runs/**/plots/
 runs/*/*.o[0-9]*
-*.nsys-rep
 
 # Generated npz caches: regenerable and easy to leave stale in git; never track them.
 data/*.npz

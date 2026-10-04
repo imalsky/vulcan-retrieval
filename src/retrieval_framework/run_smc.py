@@ -243,33 +243,6 @@ def output_truth(cfg: C.Config, pipe) -> np.ndarray:
 log = logging.getLogger("retrieval")
 
 
-def _cuda_profiler(on: bool) -> None:
-    """cudaProfilerStart / cudaProfilerStop around the timed mutation sweep when
-    NSYS_CAPTURE_API=1, so an ``nsys profile --capture-range=cudaProfilerApi``
-    wrapper records that sweep; a fixed ``--delay`` window cannot target it.
-    No-op unless the variable is set; a missing libcudart is logged."""
-    if os.environ.get("NSYS_CAPTURE_API") != "1":
-        return
-    import ctypes
-    import ctypes.util
-    import glob
-    import site
-    names = ["libcudart.so.12", "libcudart.so", ctypes.util.find_library("cudart")]
-    for d in list(site.getsitepackages()) + [site.getusersitepackages()]:
-        names += sorted(glob.glob(os.path.join(d, "nvidia", "cuda_runtime", "lib", "libcudart.so*")))
-    for name in names:
-        if not name:
-            continue
-        try:
-            lib = ctypes.CDLL(name)
-            fn = lib.cudaProfilerStart if on else lib.cudaProfilerStop
-            rc = int(fn())
-            log.info(f"cudaProfiler{'Start' if on else 'Stop'} via {name}: rc={rc}")
-            return
-        except OSError:
-            continue
-    log.warning("NSYS_CAPTURE_API=1 but no libcudart could be loaded; nsys capture range not marked")
-
 def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
     """Time the cold state initialization (the phase-1 cold two-stage solve over the
     oversampled draw plus the phase-2 gradient pass -- paid once
@@ -337,13 +310,11 @@ def calibrate(cfg: C.Config, pipe, P, jax) -> Dict[str, Any]:
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut_compile = time.perf_counter() - t0
     U2, Y2, refs2, L2, G2 = out[:5]
-    _cuda_profiler(True)
     t0 = time.perf_counter()
     out = mutate(k_steady, U2, Y2, refs2, L2, G2, beta, step, scale,
                  where="calibration mutation (steady-state pass)",
                  dump_dir=cfg.out_dir)
     jax.block_until_ready(out[0]); t_mut = time.perf_counter() - t0
-    _cuda_profiler(False)
 
     per_stage = t_mut
     proj = {
