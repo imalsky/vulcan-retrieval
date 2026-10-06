@@ -38,7 +38,7 @@ dependencies = [
     # The forward-model engine (chemistry + ExoJAX RT) owns the exojax pin.
     # Floor: exojax 2.6.0 (validate_env's pin) and the equilibrium seed as the
     # only cold start, which this package assumes.
-    "vulcan-forward>=0.27.1",
+    "vulcan-forward>=0.27.2",
     # Floor: conv_normal and validate_overrides (vulcan-forward's own floor).
     "vulcan-jax>=0.17.0",
 ]
