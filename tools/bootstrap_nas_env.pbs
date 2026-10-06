@@ -123,7 +123,13 @@ python -c "import pandas" 2>/dev/null || python -m pip install --user pandas
 
 # --- nested sampling (run_nautilus.py, SAMPLER=nautilus): pure Python on top of
 # scikit-learn; h5py is its checkpoint format. numpy stays at the env's version.
-python -m pip install --user --constraint "${CONSTRAINTS}" "nautilus-sampler==1.0.6" "h5py>=3"
+# The maintainer's fork (SiLU networks, spread_batch) keeps the 1.0.6 version
+# string, so --force-reinstall replaces a stock 1.0.6; --no-deps keeps that
+# reinstall off numpy, and the line before it installs the dependencies.
+python -m pip install --user --constraint "${CONSTRAINTS}" scipy "scikit-learn" \
+  "threadpoolctl>=3" "h5py>=3"
+python -m pip install --user --no-deps --force-reinstall \
+  "nautilus-sampler @ https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip"
 
 # --- stamp + definitive validation ----------------------------------------------
 python - <<PY

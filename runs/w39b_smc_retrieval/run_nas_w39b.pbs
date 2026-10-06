@@ -30,7 +30,9 @@
 # Submit (from this case dir, or export PROJECT_ROOT):
 #   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval/runs/w39b_smc_retrieval
 #   qsub run_nas_w39b.pbs                        # real-data production run (nautilus, warm starts,
-#                                                # 396 lanes, 396 points per batch)
+#                                                # 396 lanes, 1188 points per batch)
+#   qsub -l walltime=120:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/nautilus_long.json run_nas_w39b.pbs
+#                                                # the same as ONE 120 h job (governor 116 h)
 #   qsub -v RESUME=1 run_nas_w39b.pbs            # continue it in the next job
 #   qsub -v NAUTILUS_WARM=0 run_nas_w39b.pbs     # cold nautilus: the order-independent evidence
 #   qsub -v SAMPLER=smc run_nas_w39b.pbs         # MALA-SMC (run_smc.py; plots and certificate)

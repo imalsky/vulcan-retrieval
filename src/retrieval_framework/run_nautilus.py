@@ -45,10 +45,20 @@ The run stops at ``cfg.walltime_seconds`` (the preset's governor) and exits 0
 unfinished; resubmit with RESUME=1.
 
     python -m retrieval_framework.run_nautilus <run_dir>
-Env: NAUTILUS_N_LIVE (default N_LIVE), NAUTILUS_N_EFF (default N_EFF),
-NAUTILUS_N_BATCH (default the lane count, one column per lane per batch; with
+Env: NAUTILUS_N_LIVE (default N_LIVE; n_update follows at half of it),
+NAUTILUS_N_EFF (default N_EFF), NAUTILUS_N_BATCH (default BATCH_PER_LANE x the
+lane count, so a lane whose column certifies refills from the same batch; with
 cold_lanes = 0, one lockstep batch of config_schema.device_lane_count() columns),
 NAUTILUS_WARM (default 1).
+
+Sampler settings (the constants below): 2 ReLU + 2 SiLU networks, n_update =
+n_live / 2, exploration until f_live = F_LIVE, bounds enlarged by
+ENLARGE_PER_DIM, and sampling-phase batches spread over several shells
+(``spread_batch``). The SiLU networks and ``spread_batch`` exist only in the
+maintainer's nautilus fork; validate_env refuses stock nautilus.
+
+Every likelihood chunk appends one line to ``batches.jsonl``: its wall time,
+start mode and the accepted step count of each column.
 
 Lanes: ``cfg.cold_lanes`` (one SM per lane in the gpu preset), times
 FFI_BLOCKS_PER_SM under the ffi solver, whose one-buffer kernels keep that many
@@ -72,8 +82,12 @@ from retrieval_framework.run_smc import (
 
 log = logging.getLogger("retrieval")
 
-N_LIVE = 500        # live points
+N_LIVE = 1000       # live points
 N_EFF = 10_000      # effective posterior samples at which nautilus stops
+F_LIVE = 0.03       # exploration ends when the live set holds this evidence share
+ENLARGE_PER_DIM = 1.3
+NETWORKS = [{}, {"activation": "silu"}, {}, {"activation": "silu"}]
+BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 # ffi one-buffer blocks resident per SM at ni 89 on compute capability 9.0:
 # ~63 KB of shared memory each in the SM's 228 KB (VULCAN-JAX
 # block_thomas_cuda.cu, bt_choose picks that variant at this width).
@@ -129,13 +143,16 @@ class Anchors:
                 self.refs[idx])
 
 
-def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None):
+def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
+                 batch_log: Path | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a compiled evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with copies of its last row) and
     adds this call's counts to ``tally``. With ``anchors``, a chunk starts
     from the nearest certified column (warm, cold count_max) once one exists,
-    and every certified column it returns becomes an anchor."""
+    and every certified column it returns becomes an anchor. With
+    ``batch_log``, each chunk appends its wall time, mode and per-column
+    accepted step counts there."""
     import jax
     import jax.numpy as jnp
 
@@ -158,6 +175,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             if m < n_batch:
                 Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
             Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
+            t0 = time.perf_counter()
             warm = anchors is not None and len(anchors) > 0
             if warm:
                 idx, dist = anchors.nearest(Zc[:, :k])
@@ -171,6 +189,11 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(conv), bool)[:m]
+            if batch_log is not None:
+                with open(batch_log, "a") as fh:
+                    fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
+                                         "mode": "warm" if warm else "cold",
+                                         "acc": acc.tolist()}) + "\n")
             tp_out = ~np.asarray(jax.device_get(tp_ok(Uj)), bool)[:m]
             # solver state first: the warm evaluator already floors L on a
             # stalled or exhausted exit, which is not a non-finite forward
@@ -217,14 +240,17 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
+    n_update = n_live // 2
     n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
     n_batch = int(os.environ.get(
-        "NAUTILUS_N_BATCH", str(lanes if lanes > 0 else C.device_lane_count())))
+        "NAUTILUS_N_BATCH",
+        str(BATCH_PER_LANE * lanes if lanes > 0 else C.device_lane_count())))
     warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
-    log.info(f"nautilus: n_live={n_live} n_eff={n_eff} n_batch={n_batch} "
-             f"(cold_lanes={lanes}) seed={cfg.seed} "
-             f"starts={'anchored warm (growing)' if warm else 'cold'}")
+    log.info(f"nautilus: n_live={n_live} n_update={n_update} n_eff={n_eff} "
+             f"n_batch={n_batch} (cold_lanes={lanes}) f_live={F_LIVE} "
+             f"enlarge_per_dim={ENLARGE_PER_DIM} networks={NETWORKS} spread_batch "
+             f"seed={cfg.seed} starts={'anchored warm (growing)' if warm else 'cold'}")
     log.info(C.describe_config(cfg, preset))
 
     import jax
@@ -241,14 +267,16 @@ def main() -> None:
     obs_save = set_observations(cfg, pipe, P)
 
     # resume identity before anything in the run directory is written; the
-    # start policy, the batch width (the lane queue's composition) and n_live
-    # (nautilus does not restore it) are part of the target, so a resume
-    # cannot switch them
+    # start policy, the batch width (the lane queue's composition) and the
+    # sampler settings (nautilus restores none of them) are part of the
+    # target, so a resume cannot switch them
     ckpt = out / "nautilus_checkpoint.hdf5"
     digest_path = out / "target_digest.txt"
     tally_path = out / "nautilus_tally.json"
     want = (f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
-            f"|n_batch={n_batch}|n_live={n_live}")
+            f"|n_batch={n_batch}|n_live={n_live}|n_update={n_update}|f_live={F_LIVE}"
+            f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={json.dumps(NETWORKS)}"
+            f"|spread_batch")
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
         if not ckpt.exists():
@@ -271,7 +299,7 @@ def main() -> None:
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
-    like = make_loglike(pipe, n_batch, tally, anchors)
+    like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl")
 
     def loglike_saved(Z):
         L = like(Z)
@@ -281,13 +309,17 @@ def main() -> None:
         return L
 
     sampler = nautilus.Sampler(lambda z: z, loglike_saved, n_dim=pipe.n_dim, n_live=n_live,
+                               n_update=n_update, enlarge_per_dim=ENLARGE_PER_DIM,
+                               n_networks=len(NETWORKS), neural_network_kwargs=NETWORKS,
                                n_batch=n_batch, vectorized=True, pass_dict=False,
-                               seed=int(cfg.seed), filepath=str(ckpt), resume=resume)
+                               seed=int(cfg.seed), filepath=str(ckpt), resume=resume,
+                               spread_batch=True)
     budget = float(cfg.walltime_seconds)
     timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
     log.info(f"nautilus: starting at n_like={sampler.n_like}; timeout {timeout / 3600:.2f} h")
     t0 = time.perf_counter()
-    done = sampler.run(n_eff=n_eff, discard_exploration=True, timeout=timeout, verbose=True)
+    done = sampler.run(f_live=F_LIVE, n_eff=n_eff, discard_exploration=True, timeout=timeout,
+                       verbose=True)
     log.info(f"nautilus: {'finished' if done else 'stopped at the wall budget'} after "
              f"{(time.perf_counter() - t0) / 3600:.2f} h | n_like={sampler.n_like} "
              f"| log_z={sampler.log_z:.3f} | n_eff={sampler.n_eff:.0f} | tally={tally}")
@@ -309,6 +341,8 @@ def main() -> None:
     summary = {
         "logZ_box": float(sampler.log_z), "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff), "n_live": n_live, "n_batch": n_batch,
+        "n_update": n_update, "f_live": F_LIVE, "enlarge_per_dim": ENLARGE_PER_DIM,
+        "networks": NETWORKS, "spread_batch": True,
         "starts": "anchored warm (growing)" if warm else "cold",
         "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"

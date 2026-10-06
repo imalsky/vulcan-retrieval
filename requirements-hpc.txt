@@ -25,6 +25,9 @@ scipy>=1.12
 matplotlib
 corner
 tqdm
+h5py>=3
+# run_nautilus needs the maintainer's nautilus fork (SiLU networks, spread_batch)
+nautilus-sampler @ https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip
 vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@f3dfdf7eb07796aa93cd235c2566de5e65ea4623
 vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@ccdf92f55dcf61b0a403dae2f1aed141cca719fc
 -e .

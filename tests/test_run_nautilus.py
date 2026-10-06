@@ -4,6 +4,7 @@ log L = -inf, so nautilus's evidence is the zero-filled box integral (pinned
 against the exact value on a 3-D Gaussian with three cut regions); with
 anchors, each warm solve starts from the nearest certified column and only
 certified columns become anchors."""
+import json
 import math
 from types import SimpleNamespace
 from typing import NamedTuple
@@ -76,7 +77,7 @@ def test_zero_filled_evidence_and_rejection_classes():
 def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     rng = np.random.default_rng(0)
     anchors, tally = Anchors(tmp_path, 2), {}
-    like = make_loglike(_stub_pipe(), 16, tally, anchors)
+    like = make_loglike(_stub_pipe(), 16, tally, anchors, tmp_path / "batches.jsonl")
     z1 = rng.uniform(0.02, 0.98, (16, D))
     L1 = like(z1)                                # no anchors yet: cold
     assert len(anchors) == np.isfinite(L1).sum() > 0 and tally["n_cold"] == 16
@@ -93,3 +94,5 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     want = code_a[((anchors.z[new, None, :] - z_a[None]) ** 2).sum(-1).argmin(1)]
     assert np.array_equal(anchors.columns(new)[0][:, 0, 0], want)
     assert len(Anchors(tmp_path, 2)) == len(anchors)   # reloads on resume
+    rows = [json.loads(r) for r in (tmp_path / "batches.jsonl").read_text().splitlines()]
+    assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]

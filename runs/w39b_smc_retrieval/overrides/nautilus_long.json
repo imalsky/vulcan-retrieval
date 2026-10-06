@@ -1,0 +1,4 @@
+{
+  "_comment": "One long gpu_long job for run_nautilus: submit with -l walltime=120:00:00; the governor stops at 116 h, leaving 4 h for the build and the posterior write.",
+  "walltime_seconds": 417600
+}

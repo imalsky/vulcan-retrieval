@@ -26,7 +26,8 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      spectrum CSVs, and the ExoMolOP k-tables and H2-H2 + H2-He CIA at the
      paths vulcan_forward.paths resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs;
-  9. nautilus (nautilus-sampler) imports: run_nautilus needs it.
+  9. nautilus (nautilus-sampler) imports and is the maintainer's fork:
+     run_nautilus needs its SiLU networks and spread_batch.
 
 Usage:
     python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
@@ -258,17 +259,25 @@ def _check_exogibbs() -> None:
         _ok(f"exogibbs {got}")
 
 
+NAUTILUS_FORK = "https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip"
+
+
 def _check_nautilus() -> None:
     """run_nautilus (PBS SAMPLER=nautilus) imports nautilus inside the job,
-    after the config resolves; catch a missing install here."""
+    after the config resolves; catch a missing install, or stock nautilus
+    (no SiLU networks, no spread_batch), here."""
+    fix = (f'pip install --user --no-deps --force-reinstall "nautilus-sampler @ {NAUTILUS_FORK}" '
+           "(tools/bootstrap_nas_env.pbs does).")
     try:
         import nautilus
+        from nautilus.neural import SiLUMLPRegressor  # noqa: F401
     except Exception as e:  # noqa: BLE001
-        _err(f"nautilus failed to import: {e!r}. Install it: "
-             'pip install --user "nautilus-sampler==1.0.6" "h5py>=3" '
-             "(tools/bootstrap_nas_env.pbs does).")
+        _err(f"nautilus fork failed to import: {e!r}. Install it: {fix}")
         return
-    _ok(f"nautilus {getattr(nautilus, '__version__', '?')}")
+    if not hasattr(nautilus.Sampler, "add_samples_spread"):
+        _err(f"nautilus at {nautilus.__file__} has no spread_batch. Install the fork: {fix}")
+        return
+    _ok(f"nautilus {getattr(nautilus, '__version__', '?')} (fork: SiLU, spread_batch)")
 
 
 def main(argv: list[str] | None = None) -> int:
