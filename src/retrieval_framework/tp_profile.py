@@ -25,7 +25,10 @@ function. Scope of that consistency, stated precisely:
 Physical interpretation caveat: f = config_schema.GUILLOT_F = 1/4, the GLOBAL-average
 irradiation convention -- an analytic-shape choice, not a terminator measurement, so
 retrieved (Tirr, kappa, gamma) are flexible shape parameters of the limb profile
-rather than literal disk-average properties.
+rather than literal disk-average properties. Tint (fixed, or retrieved last with
+``tp_infer_Tint``) adds 3/4 Tint^4 tau and so sets the deep column; the profile has
+no convective adjustment, so it is a deep-temperature knob, not the planet's
+measured intrinsic flux.
 
 Import order: ``vulcan_chem`` (which sets env + jax x64) must be imported before this,
 because ExoJax is imported lazily inside ``build_tp_model``.
@@ -62,20 +65,23 @@ def build_tp_model(cfg: Any) -> SimpleNamespace:
     Tint = float(cfg.tp_Tint_K)
     infer_gamma = bool(cfg.tp_infer_gamma)
     gamma_fixed = float(cfg.tp_gamma_fixed)
-    n_params = 3 if infer_gamma else 2
+    infer_Tint = bool(cfg.tp_infer_Tint)
+    i_Tint = 2 + int(infer_gamma)          # the T-P order of config_schema.specs_from_config
+    n_params = i_Tint + int(infer_Tint)
 
     def _phys(tp):
         Tirr = tp[0]
         kappa = 10.0 ** tp[1]
         gamma = (10.0 ** tp[2]) if infer_gamma else jnp.asarray(gamma_fixed, dtype=tp.dtype)
-        return Tirr, kappa, gamma
+        Tint_t = tp[i_Tint] if infer_Tint else jnp.asarray(Tint, dtype=tp.dtype)
+        return Tirr, kappa, gamma, Tint_t
 
     def eval_fn(tp_params, p_bar):
         tp = jnp.asarray(tp_params)
         p = jnp.asarray(p_bar, dtype=tp.dtype)
-        Tirr, kappa, gamma = _phys(tp)
+        Tirr, kappa, gamma, Tint_t = _phys(tp)
         # RAW profile -- no clip. Out-of-window draws are rejected upstream, not bent
         # into range (see pipeline.tp_valid).
-        return atmprof_Guillot(p, g, kappa, gamma, jnp.asarray(Tint, dtype=tp.dtype), Tirr, f)
+        return atmprof_Guillot(p, g, kappa, gamma, Tint_t, Tirr, f)
 
     return SimpleNamespace(eval=eval_fn, n_params=int(n_params), T_min=_T_MIN, T_max=_T_MAX)

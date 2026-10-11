@@ -178,20 +178,22 @@ def main() -> None:
     g_cgs = float(cfgj["tp_gravity_cgs"]); f_g = GUILLOT_F; Tint = float(cfgj["tp_Tint_K"])
     iT = names.index("Tirr"); ik = names.index("log10kappa")
     ig = names.index("log10gamma") if "log10gamma" in names else None
+    iti = names.index("Tint") if "Tint" in names else None
     gam_fix = float(cfgj["tp_gamma_fixed"])
     p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(ART_PBTM_BAR), TP_PLOT_N_P)
     rng = np.random.default_rng(3)
     sel = theta[rng.choice(theta.shape[0], size=min(300, theta.shape[0]), replace=False)]
     curves = np.stack([
         guillot_T(p_bar, g_cgs, 10.0 ** t[ik], (10.0 ** t[ig] if ig is not None else gam_fix),
-                  Tint, t[iT], f_g) for t in sel])
+                  (t[iti] if iti is not None else Tint), t[iT], f_g) for t in sel])
     qs = np.nanpercentile(curves, [5, 50, 95], axis=0)
     fig, ax = plt.subplots(figsize=(4.6, 5.4))
     ax.fill_betweenx(p_bar, qs[0], qs[2], alpha=0.30, color="#1f77b4", lw=0, label="5-95%")
     ax.plot(qs[1], p_bar, color="#1f77b4", lw=1.6, label="median")
     if synthetic and np.isfinite(truth).any():
         ax.plot(guillot_T(p_bar, g_cgs, 10.0 ** truth[ik],
-                          (10.0 ** truth[ig] if ig is not None else gam_fix), Tint, truth[iT], f_g),
+                          (10.0 ** truth[ig] if ig is not None else gam_fix),
+                          (truth[iti] if iti is not None else Tint), truth[iT], f_g),
                 p_bar, "k--", lw=1.2, label="truth")
     ax.set_yscale("log"); ax.invert_yaxis()
     ax.set_xlabel("T [K]"); ax.set_ylabel("P [bar]")

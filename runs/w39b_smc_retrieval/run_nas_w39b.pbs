@@ -80,12 +80,6 @@
 #                           the whole step loop is captured as one graph
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
 #
-# Deep-adiabat sensitivity (the interior temperature is FIXED and transmission does
-# not constrain it, while it does set the CO/CH4 quench points, so lnKzz inherits it):
-#   qsub -v SEED=1,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 100.0}' run_nas_w39b.pbs
-#   qsub -v SEED=2,SMC_RETRIEVAL_OVERRIDES='{"tp_Tint_K": 300.0}' run_nas_w39b.pbs
-# Report how far lnKzz and lnZ move against their own statistical widths.
-#
 # With SAMPLER=smc, the plots run automatically on a successful run. Under
 # smc_chem_mode="warm" so do the warm-vs-cold validation (validate_warm; PASS gate
 # max|dlogL| < 0.1; the verdict lands in the log + validate_warm.npz) and

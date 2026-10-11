@@ -59,3 +59,22 @@ def test_tp_window_is_inset_inside_the_opacity_range():
     from retrieval_framework import tp_profile as tp
     assert tp.T_OPA_MIN_K < tp._T_MIN < tp._T_MAX < tp.T_OPA_MAX_K
 
+
+
+def test_free_tint_at_the_fixed_value_is_the_fixed_profile():
+    """A retrieved Tint is the last T-P entry and, at the fixed value, gives the
+    fixed-Tint profile exactly; the spec order matches the T-P sub-vector."""
+    from vulcan_forward import vulcan_chem  # noqa: F401  (before exojax)
+    from retrieval_framework import tp_profile as tp
+    fixed_cfg, free_cfg = C.Config(), C.Config(tp_infer_Tint=True)
+    fixed, free = tp.build_tp_model(fixed_cfg), tp.build_tp_model(free_cfg)
+    names = [s.name for s in C.specs_from_config(free_cfg) if s.kind == "tp"]
+    assert names == ["Tirr", "log10kappa", "log10gamma", "Tint"]
+    assert (fixed.n_params, free.n_params) == (3, 4)
+    p = jnp.logspace(-9.0, np.log10(7.0), 40)
+    th = jnp.array([1100.0, -0.5, -1.0])
+    assert np.array_equal(
+        np.asarray(fixed.eval(th, p)),
+        np.asarray(free.eval(jnp.append(th, fixed_cfg.tp_Tint_K), p)))
+    assert np.all(np.asarray(free.eval(jnp.append(th, 400.0), p))
+                  >= np.asarray(fixed.eval(th, p)))

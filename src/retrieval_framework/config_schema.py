@@ -118,14 +118,15 @@ class Config:
     # vulcan_jax.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
     # Planet/stellar radii for the RT depth normalization (cm).
-    # tp_gravity_cgs below doubles as the RT's g_btm.
+    # tp_gravity_cgs below doubles as the RT's gravity at rp_cm; the planet mass
+    # GM = g rp_cm^2 stays fixed when lnR0 scales the radius.
     rp_cm: Optional[float] = None
     rstar_cm: Optional[float] = None
     # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
     #
-    # Pinned to the RT grid bottom, where ExoJAX defines radius_btm. Because lnR0
-    # is inferred, changing the reference pressure only re-anchors that posterior;
-    # doing so requires an explicit re-baseline and a compatible prior_lnR0.
+    # Default: the RT grid bottom, where ExoJAX defines radius_btm. lnR0 is the
+    # log radius change at this level, so moving it changes what lnR0 means and
+    # needs a compatible prior_lnR0 (the W39b case anchors at 1 mbar).
     p_ref_bar: float = ART_PBTM_BAR
 
     # ---- observed spectrum source ---------------------------------------------
@@ -152,9 +153,12 @@ class Config:
     #      Tirr, f), the built-in irradiated analytic profile (uses jnp.exp,
     #      forward-mode-clean); f = GUILLOT_F below --------------------------------
     tp_gravity_cgs: float = 422.0      # WASP-39b surface gravity (config.GS_CGS)
-    tp_Tint_K: float = 150.0           # fixed interior temperature (transmission barely constrains it)
+    tp_Tint_K: float = 150.0           # interior temperature when tp_infer_Tint=False
     tp_infer_gamma: bool = True        # retrieve log10(gamma); False -> fixed no-inversion
     tp_gamma_fixed: float = 0.4        # used only when tp_infer_gamma=False
+    # Retrieve Tint (K). It sets the deep profile, and so the CO/CH4/NH3 quench,
+    # through 3/4 Tint^4 tau at large tau; the T-P sub-vector gains a 4th entry.
+    tp_infer_Tint: bool = False
 
     # ---- clouds (ExoJax powerlaw_clouds: kappa(nu)=kappac0*(nu/CLOUD_NUC0)^alphac,
     #      cm^2 per gram of atmosphere, uniformly mixed; alphac=0 -> gray deck) -----
@@ -185,13 +189,15 @@ class Config:
     prior_lnKzz: Tuple[float, float] = (-5.0, 5.0)        # eddy-diffusion multiplier
     truth_lnKzz: float = 0.0
     # Guillot irradiation temperature: WASP-39b Teq ~ 1166 K -> Tirr = sqrt(2)*Teq ~ 1650 K
-    # (with f=0.25 the skin temperature is ~0.70*Tirr ~ 1150 K, the JWST-inferred limb T).
+    # (with f=0.25 the skin temperature is ~0.6*Tirr: 0.59 at gamma << 1, 0.64 at 0.4).
     prior_Tirr: Tuple[float, float] = (800.0, 2600.0)     # K
     truth_Tirr: float = 1650.0
     prior_log10kappa: Tuple[float, float] = (-3.5, 0.5)   # IR opacity, cm^2/g (log10)
     truth_log10kappa: float = -2.0
     prior_log10gamma: Tuple[float, float] = (-2.0, 0.7)   # kappa_v/kappa_th (log10)
     truth_log10gamma: float = -0.4
+    prior_Tint: Tuple[float, float] = (100.0, 500.0)     # K, used when tp_infer_Tint
+    truth_Tint: float = 150.0
     prior_lnR0: Tuple[float, float] = (-0.08, 0.08)       # reference-radius log scaling
     truth_lnR0: float = 0.0
     prior_offset_ppm: Tuple[float, float] = (-800.0, 800.0)   # per-group depth offset, ppm
@@ -288,7 +294,7 @@ class Config:
             use_rayleigh=bool(self.use_rayleigh),
             co_mode=str(self.co_mode),
             cfg_overrides=dict(self.cfg_overrides),
-            gs_cgs=float(self.tp_gravity_cgs),   # RT g_btm = the T-P gravity
+            gs_cgs=float(self.tp_gravity_cgs),   # RT g at rp_cm = the T-P gravity
             p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
         )
         # `is not None`, not truthiness: an explicit 0 must reach the engine,
@@ -374,6 +380,8 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
     if cfg.tp_infer_gamma:
         add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
+    if cfg.tp_infer_Tint:
+        add("Tint", r"$T_{\rm int}$ [K]", *cfg.prior_Tint, cfg.truth_Tint, "tp")
 
     # --- radius nuisance ---
     add("lnR0", r"$\ln R_0$", *cfg.prior_lnR0, cfg.truth_lnR0, "lnR0")
@@ -641,7 +649,8 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
         "raise only if < N survive)",
         rule("T-P profile"),
-        f"    model=guillot   Tint={cfg.tp_Tint_K:g}K   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
+        f"    model=guillot   Tint={'free' if cfg.tp_infer_Tint else f'{cfg.tp_Tint_K:g}K'}"
+        f"   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
         f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}",
         "    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
         rule("data"),

@@ -2,8 +2,9 @@
 that. The reusable machinery lives in the ``vulcan-retrieval`` package
 (``retrieval_framework``).
 
-theta (gpu preset, 11-D): [lnZ, dln(C/O), lnKzz, Tirr, log10kappa, log10gamma,
-lnR0, log10kappa_cloud, cloud_alpha, offset_G395H, noise_inflation].
+theta (gpu preset, 13-D): [lnZ, dln(C/O), lnKzz, Tirr, log10kappa, log10gamma, Tint,
+lnR0, log10kappa_cloud, cloud_alpha, offset_G395H_NRS1, offset_G395H_NRS2,
+noise_inflation].
 
 Run (from the repo root, or via the PBS script in this directory):
 
@@ -23,26 +24,42 @@ from retrieval_framework.forward import config as fwd_config  # pure constants +
 _W39B = dict(
     run_label="WASP-39b",
     vulcan_cfg_name="W39b",
-    tp_gravity_cgs=fwd_config.GS_CGS,           # cm/s^2 (also the RT g_btm)
-    rp_cm=fwd_config.RP_CM,                     # planet radius at P_btm
+    tp_gravity_cgs=fwd_config.GS_CGS,           # cm/s^2 (also the RT g at rp_cm)
+    rp_cm=fwd_config.RP_CM,
     rstar_cm=fwd_config.RSTAR_CM,
+    # rp_cm/gs_cgs apply at 1 mbar, near the transmission photosphere (the
+    # engine's own default). lnR0 then scales that radius at fixed planet mass,
+    # so it reads as ln(R(1 mbar) / rp_cm) and stays nearly independent of T-P;
+    # at the 7 bar grid bottom it also carried the whole column's thickness.
+    p_ref_bar=1.0e-3,
     # Cap physically meaningless large-dt Ros2 oscillations on high-Kzz columns.
     # This is not a convergence criterion: yconv_cri/slope_cri remain the canonical
     # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected at init.
     dt_max=1.0e11,
-    # Carter & May (2024) fixed-limb-darkening products (repo data/):
-    # NRS1/NRS2 share the G395H group (one offset); NIRISS O1+O2 share NIRISS.
+    # Carter & May (2024) fixed-limb-darkening products (repo data/); NIRISS
+    # O1+O2 share NIRISS. G395H is the two detectors as one group (one offset);
+    # the gpu preset fits NRS1 and NRS2 as separate groups instead: Sarkar+2024
+    # (arXiv:2405.06737 §5.2) find a ~40-50 ppm NRS1-NRS2 offset in their
+    # reductions of this G395H visit, and it sits between the H2O (NRS1) and
+    # CO2/SO2/CO (NRS2) bands.
     obs_dir=fwd_config.DATA_DIR / "cm24_wasp39b",
     obs_products={
         "PRISM":  ("PRISM_native.csv",),
         "NIRISS": ("NIRISS_O1_R100.csv", "NIRISS_O2_R100.csv"),
         "G395H":  ("G395H_NRS1_R100.csv", "G395H_NRS2_R100.csv"),
+        "G395H_NRS1": ("G395H_NRS1_R100.csv",),
+        "G395H_NRS2": ("G395H_NRS2_R100.csv",),
         "NIRCam": ("NIRCam_R100.csv",),
     },
     # Drop two masked-gap truncation remnants (R=252 and 464, not R=100 bins).
     # R=200 removes both; the highest retained bin is R=103, safely below the
     # model/LSF refusal limit of R=333.
     obs_max_bin_R=200.0,
+    # The chemistry's own geometry: VULCAN puts Rp at the layer nearest 1 bar and
+    # derives g from Mp. The cfg's Rp is the 1.279 RJ transit radius; at fixed
+    # mass the RT puts 1 bar at 1.20-1.25 RJ (a hydrostatic estimate on the
+    # posterior), so 1.21 RJ keeps the chemistry's scale heights on the RT's.
+    cfg_overrides={"Rp": 1.21 * fwd_config.R_JUP_CM},
 
     # ---- realistic WASP-39b priors (literature-anchored) ---------------------
     # Sources: Tsai et al. 2023 (Nature, VULCAN photochemistry grid for W39b) and
@@ -57,27 +74,42 @@ _W39B = dict(
     #         dln(C/O) about the 0.549 baseline -> C/O in [0.10, 0.70]. Upper edge 0.24
     #         stays below the fixed-O b_z positivity bound (~0.566) too.
     prior_c_o=(-1.70, 0.24),
-    #   Kzz : x0.1..x1000 about the VULCAN W39b baseline profile. The lower edge
-    #         is Tsai's tested x0.1: below it most columns do not certify within
-    #         count_max. The real-data posterior piled against an x100 ceiling;
-    #         along its ridge log L falls ~10-17 nats by x200, so x1000 holds it.
+    #   Kzz : x0.1..x1000 about the VULCAN W39b baseline profile (3.4e9 cm^2/s
+    #         at 1 mbar). The lower edge is Tsai's tested x0.1, a solver limit:
+    #         below it most columns do not certify within count_max. Tsai's
+    #         profile is w_rms x 0.1 H from their GCM, so x10 is the full
+    #         H w_rms; x1000 is a loose exploratory ceiling, not a physical one
+    #         (a 56x-solar mode peaked at x200-x300).
     prior_lnKzz=(math.log(0.1), math.log(1000.0)),
-    #   T-P (Guillot) : Teq ~1100-1166 K; SO2 photochemistry sweet spot Teq 1000-1600 K
-    #         (Tsai 2023). With f=1/4 the terminator ~0.7*Tirr, so Tirr in [800, 2200] K
-    #         gives a limb T ~560-1540 K. The real-data posterior sat at a 1100 K
-    #         floor; along its ridge the likelihood falls ~4 nats by 1025 K and ~16 by
-    #         950 K, so the schema's 800 K floor holds it with margin.
-    #         gamma up to ~2 lets the data prefer a WEAK thermal inversion;
-    #         a mild inversion actually cools the deep atmosphere, so
-    #         it slightly LOWERS the reject rate. Any residual out-of-window profile is
-    #         REJECTED, not clipped (pipeline.tp_valid).
-    prior_Tirr=(800.0, 2200.0),         # K
-    prior_log10gamma=(-2.0, math.log10(2.0)),      # gamma = kappa_v/kappa_th in [0.01, 2.0]
-    #   lnR0 : the reference-radius nuisance sits near -0.075, inside the schema's
-    #         +-0.08 but close to its edge; +-0.15 keeps the tail (RT-only direction).
-    prior_lnR0=(-0.15, 0.15),
-    # prior_log10kappa (IR opacity), cloud, and offset priors keep the schema
-    # defaults (generic nuisances, not W39b-specific).
+    #   T-P (Guillot, f = 1/4, so the skin temperature is ~0.59 Tirr at
+    #         gamma << 1): Teq ~1100-1166 K, published limbs 889 / 1068 K
+    #         (Espinoza+2024). With lnR0 at fixed g the posterior (T ~847 K at
+    #         1 mbar) lay flat to an 800 K floor; fixed-mass gravity should
+    #         lift T by ~20%, and 700 K keeps that ridge's tail without chasing a
+    #         flat direction. Any out-of-window profile is REJECTED, not
+    #         clipped (pipeline.tp_valid).
+    prior_Tirr=(700.0, 2200.0),         # K
+    #   kappa_th: the schema's -3.5..0.5. With Tint fixed at 150 K the posterior
+    #         piled at 0.5, the only route to a hot deep column; the free Tint
+    #         below gives that directly, and a higher ceiling only adds
+    #         out-of-window volume (19.6% of the box at 0.5, 26.4% at 1.0).
+    #   gamma >= 0.01: the deep temperature saturates at ~(3/16 / (gamma
+    #         sqrt 3))^(1/4) Tirr, 1.8 Tirr at 0.01, already above Tsai's GCM
+    #         evening profile at 1 bar (1605 K); lower gamma only heats the
+    #         quench region further, which Tint now covers. gamma up to 2 lets
+    #         the data prefer a weak inversion.
+    prior_log10gamma=(-2.0, math.log10(2.0)),
+    #   Tint (gpu preset: free): Tsai+2023 adopt 358 K from the Thorngren+2019
+    #         Tint-flux relation; an interior fit gives ~300 K (arXiv:2410.04470).
+    #         Fixed at 358 K in this radiative Guillot profile (no convective
+    #         adjustment) it puts the preferred profiles' 7 bar level at ~4400 K,
+    #         so it is retrieved over 100-500 K instead.
+    prior_Tint=(100.0, 500.0),          # K
+    #   lnR0 = ln(R(1 mbar) / rp_cm) at fixed mass: the continuum depths put
+    #         the transit radius ~3% above the 1.279 RJ literature radius (with
+    #         this rstar), so expect ~+0.02-0.03.
+    prior_lnR0=(-0.05, 0.15),
+    # Cloud and offset priors keep the schema defaults (generic nuisances).
 )
 
 
@@ -131,8 +163,9 @@ def gpu_config(**overrides: Any) -> Config:
         # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
         # carried through the RT vjp, so the vjp chunk below sets its memory.
         nu_min=1900.0, nu_max=9900.0, art_nlayer=67,
-        combo=("NIRISS", "G395H"),
+        combo=("NIRISS", "G395H_NRS1", "G395H_NRS2"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
+        tp_infer_Tint=True,
         generate_synthetic_data=False,
         # N = the lane count = one kernel wave of the card (132 on the GH200,
         # 144 off the GPU): every particle's chemistry runs in one wave and the
