@@ -1,7 +1,10 @@
 """u-space transform: bounds, midpoints, induced-prior uniformity, finite gradients.
 Light: imports pipeline (jax) but never builds the VULCAN forward."""
+import importlib.util
+
 import numpy as np
 import jax
+import pytest
 
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
@@ -61,6 +64,10 @@ def test_tp_window_is_inset_inside_the_opacity_range():
 
 
 
+# find_spec, not importorskip: importing exojax before vulcan_chem breaks the
+# import-order guard for every later test in the worker.
+@pytest.mark.skipif(importlib.util.find_spec("exojax") is None,
+                    reason="needs exojax (the Guillot profile); CI is stack-free")
 def test_free_tint_at_the_fixed_value_is_the_fixed_profile():
     """A retrieved Tint is the last T-P entry and, at the fixed value, gives the
     fixed-Tint profile exactly; the spec order matches the T-P sub-vector."""
