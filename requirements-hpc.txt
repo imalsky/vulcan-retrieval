@@ -28,6 +28,6 @@ tqdm
 h5py>=3
 # run_nautilus needs the maintainer's nautilus fork (SiLU networks, spread_batch)
 nautilus-sampler @ https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip
-vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@7f0f00465b7caaf09195a924a8b7caa7813e9d46
+vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@760d96c75a29cb38e26295b98e39b8203deff1d9
 vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@70a837c92a72e9849a557d0892eae6efb1cb3beb
 -e .
