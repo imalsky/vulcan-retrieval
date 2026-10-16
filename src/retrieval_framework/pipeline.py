@@ -536,7 +536,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return val, g, bad_grad
 
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
-                         mutation_cap: bool = True):
+                         mutation_cap: bool = True, retry: bool = False):
         """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, n_bad_grad, stats)
         when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new, stats)
         -- or (L, Y_new, refs_new, per-particle ConvDiag) when diag; all
@@ -557,10 +557,23 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         The cold gradient runs the two stages as two explicit jvps, so stage 1
         carries only the lnKzz + T-P directions (the lnZ / c_o tangents are
         identically zero there); tests/test_stage_split.py pins it against the
-        single-chain jvp of the same map."""
+        single-chain jvp of the same map.
+
+        ``retry=True`` (cfg.chem_retry, run_nautilus's second pass): the same
+        evaluator on the chem_retry program (the retry rtol, gated at the retry
+        count_max). Primal only, and warm only uncapped (mutation_cap=False)."""
         warm = (mode == "warm")
         if diag and (warm or want_grad):
             raise ValueError("diag is cold+no-grad only")
+        if retry:
+            if want_grad:
+                raise ValueError("the chem_retry evaluators are primal only: the "
+                                 "SMC/MALA gradient paths do not implement the retry")
+            if fwd.chem_retry is None:
+                raise ValueError("retry evaluator requested but cfg.chem_retry is off")
+            if warm and mutation_cap:
+                raise ValueError("the retry pass runs uncapped by warm_count_max "
+                                 "(mutation_cap=False)")
         # Cap of the convergence gate. mutation_cap=True (MALA proposals): warm
         # solves are capped at warm_count_max and an unconverged proposal is
         # rejected there. mutation_cap=False (init phase 2): survivors re-certify
@@ -570,6 +583,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                  else int(fwd.chem.count_max))
         warm_solve = (fwd.chem_solve_warm_diag_batch if mutation_cap
                       else fwd.chem_solve_warm_diag_full_batch)
+        cold_solve = fwd.chem_solve_cold_diag_batch
+        if retry:
+            wcmax = int(fwd.chem_retry.count_max)
+            warm_solve = fwd.chem_solve_warm_diag_full_batch_retry
+            cold_solve = fwd.chem_solve_cold_diag_batch_retry
 
         if want_grad:
             # A proposal can end finite but unsettled (a non-convergent corner or
@@ -671,7 +689,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 if warm:
                     Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1])
                 else:
-                    Y_new, CD = fwd.chem_solve_cold_diag_batch(C_)
+                    Y_new, CD = cold_solve(C_)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
         def eval_batch(U, Y, refs):
@@ -804,6 +822,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # under the cold count_max; see _make_batch_eval's mutation_cap note)
         batch_eval_init_vg=_make_batch_eval(chem_mode, True, mutation_cap=False),
         batch_eval_move_l=_make_batch_eval(chem_mode, False),
+        # cfg.chem_retry (run_nautilus's second pass; None when off): the two
+        # passes' step tolerances and caps; the evaluators are
+        # _make_batch_eval(..., retry=True)
+        chem_retry=(None if fwd.chem_retry is None else SimpleNamespace(
+            rtol_first=fwd.chem_rtol, count_max_first=int(fwd.chem.count_max),
+            rtol=(float(cfg.chem_retry_rtol) if fwd.chem_retry_rtol is None
+                  else fwd.chem_retry_rtol),
+            count_max=int(fwd.chem_retry.count_max))),
         # observations injected by set_observations
         obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None,
     ))
@@ -1612,6 +1638,7 @@ def run_smc_loop(pipe: Pipeline, key, progress: bool = True,
     the canonical conv_normal gate, init history). Never
     difference bare ``logZ`` across models with different support fractions."""
     cfg = pipe.cfg
+    C.refuse_chem_retry(cfg, "run_smc_loop")
     dtype = pipe.dtype
     N = int(cfg.smc_num_particles)
     n_dim = pipe.n_dim

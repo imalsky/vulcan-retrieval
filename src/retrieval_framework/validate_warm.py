@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework.certificate import _sha256  # the one file-digest helper
-from retrieval_framework.config_schema import UNDERFLOW_DENOM, Config
+from retrieval_framework.config_schema import UNDERFLOW_DENOM, Config, refuse_chem_retry
 from retrieval_framework.observations import PPM
 
 # PASS gate on max|logL_cold - logL_warm| over the cloud. 0.1 log-units is far
@@ -151,6 +151,7 @@ def main() -> None:
 
     from retrieval_framework.run_smc import make_config, setup_logging
     cfg, preset = make_config(Path(args.run_dir))
+    refuse_chem_retry(cfg, "validate_warm")
     setup_logging()
     out = cfg.out_dir
     ck_path, obs_path = out / "smc_checkpoint.npz", out / "observations.npz"

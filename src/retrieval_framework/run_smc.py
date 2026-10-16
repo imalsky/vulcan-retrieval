@@ -389,6 +389,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg, preset = make_config(Path(args.run_dir))
+    C.refuse_chem_retry(cfg, "run_smc")
     ckpt_path = cfg.out_dir / "smc_checkpoint.npz"
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     # SMC_RESUME=1 means "continue a killed run": a missing checkpoint raises

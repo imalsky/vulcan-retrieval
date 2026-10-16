@@ -75,6 +75,7 @@ def main() -> int:
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")
     cfg, _preset = R.make_config(run_dir)
     from retrieval_framework import config_schema as C
+    C.refuse_chem_retry(cfg, "smoke_retrieval")
     print(C.describe_config(cfg, f"{_preset}+SMOKE"), flush=True)
     pipe = P.build_pipeline(cfg)
     print(f"[smoke] pipeline built | n_dim={pipe.n_dim} params={pipe.names} "

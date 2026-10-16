@@ -64,6 +64,35 @@ def _refuse_condense_inference(chem, cfg) -> None:
         )
 
 
+# _Statics fields a retry program may differ in from the main one: the step
+# acceptance tolerance and the cap (and the evolution buffer sized from the cap,
+# a length-1 placeholder unless save_evolution).
+RETRY_STATICS_FREE = frozenset({"rtol_accept", "count_max", "save_evo_n_max"})
+
+
+def statics_diff(sa, sb) -> list:
+    """Names of the fields in which two VULCAN-JAX ``_Statics`` differ."""
+    out = []
+    for f in sa._fields:
+        va, vb = getattr(sa, f), getattr(sb, f)
+        try:
+            xa, xb = np.asarray(va), np.asarray(vb)
+            same = xa.shape == xb.shape and bool(np.array_equal(xa, xb))
+        # broad: a non-array leaf (a callable, a tuple of names) compares by repr
+        except Exception:
+            same = repr(va) == repr(vb)
+        if not same:
+            out.append(f)
+    return out
+
+
+def _rtol_accept(chem) -> float | None:
+    """The step-acceptance tolerance baked into a chemistry program (VULCAN-JAX
+    ``_Statics.rtol_accept``), or None when the engine does not expose it."""
+    st = getattr(getattr(chem, "_integ", None), "_statics", None)
+    return None if st is None else float(st.rtol_accept)
+
+
 def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     """Build the theta-space forward model for a Config.
 
@@ -100,6 +129,28 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             "termination_reason / longdy). Its column is not "
             "used and every draw certifies itself, but this configuration may "
             "not converge: check the T-P window / Kzz / dt_max settings.")
+
+    # chem_retry: the SAME chemistry at another step tolerance and cap. rtol is
+    # a compile-time static of the step acceptance, so it is a second program
+    # (its own runner, compiled on its first solve). Refuse anything else
+    # differing: only numerical settings may change.
+    chem_retry = None
+    if bool(getattr(cfg, "chem_retry", False)):
+        from retrieval_framework.config_schema import retry_profile
+        chem_retry = vulcan_chem.build_chem_model(retry_profile(cfg),
+                                                  tp_eval=tpm.eval, n_tp_params=n_tp)
+        st_main = getattr(getattr(chem, "_integ", None), "_statics", None)
+        st_retry = getattr(getattr(chem_retry, "_integ", None), "_statics", None)
+        if st_main is not None and st_retry is not None:
+            extra = sorted(set(statics_diff(st_main, st_retry)) - RETRY_STATICS_FREE)
+            if extra:
+                raise RuntimeError(
+                    "chem_retry: the retry chemistry differs from the main program "
+                    f"beyond the step tolerance and the cap ({extra}); refusing")
+        logger.info(f"[chem retry] retry program: rtol {_rtol_accept(chem)} -> "
+                    f"{_rtol_accept(chem_retry)}, count_max {int(chem.count_max)} -> "
+                    f"{int(chem_retry.count_max)} (re-solves draws uncertified "
+                    "within the first cap, from the same start)")
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns
@@ -166,23 +217,28 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         non-converged cold proposal as a warm one is rejected."""
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
-    def _chem_batch_route(C, **kw):
-        """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
-        point for every batched solve, cold stage or warm continuation (the
-        knob keeps its ``cold_lanes`` name; ``kw`` carries ``warm_y`` /
-        ``lnZ_ref`` / ``c_o_ref`` / ``warm_cap``). ONE route per config:
-        ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
-        ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
-        draw count ``run_queue`` refills nothing and runs the plain batch's
-        ticks. A narrow call (the certificate's 4-particle replay, a
-        validate_warm chunk) therefore takes the same route as the production
-        run instead of silently switching to the lockstep batch.
-        ``cold_lanes = 0`` is the lockstep batch, call for call."""
-        lanes = int(cfg.cold_lanes)
-        if lanes > 0:
-            return chem.converged_y_queue(C, min(lanes, int(C.shape[0])),
-                                          chunk=int(cfg.cold_refill_chunk), **kw)
-        return chem.converged_y_batch(C, return_conv_diag=True, **kw)
+    def _route_for(ch):
+        def _chem_batch_route(C, **kw):
+            """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
+            point for every batched solve, cold stage or warm continuation (the
+            knob keeps its ``cold_lanes`` name; ``kw`` carries ``warm_y`` /
+            ``lnZ_ref`` / ``c_o_ref`` / ``warm_cap``). ONE route per config:
+            ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
+            ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
+            draw count ``run_queue`` refills nothing and runs the plain batch's
+            ticks. A narrow call (the certificate's 4-particle replay, a
+            validate_warm chunk) therefore takes the same route as the production
+            run instead of silently switching to the lockstep batch.
+            ``cold_lanes = 0`` is the lockstep batch, call for call. ``ch`` is the
+            main chemistry, or the chem_retry program on the retry route."""
+            lanes = int(cfg.cold_lanes)
+            if lanes > 0:
+                return ch.converged_y_queue(C, min(lanes, int(C.shape[0])),
+                                            chunk=int(cfg.cold_refill_chunk), **kw)
+            return ch.converged_y_batch(C, return_conv_diag=True, **kw)
+        return _chem_batch_route
+
+    _chem_batch_route = _route_for(chem)
 
     def chem_solve_cold_diag_batch(C):
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
@@ -268,6 +324,24 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                  warm_cap=False)
 
+    chem_solve_cold_diag_batch_retry = chem_solve_warm_diag_full_batch_retry = None
+    if chem_retry is not None:
+        _retry_route = _route_for(chem_retry)
+
+        def chem_solve_cold_diag_batch_retry(C):
+            """``chem_solve_cold_diag_batch`` on the chem_retry program: both cold
+            stages (the equilibrium-seeded stage 1 and the stage-2 warm
+            re-convergence) at the retry rtol and cap."""
+            Y1, _cd = _retry_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
+            return _retry_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
+
+        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref):
+            """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
+            same warm continuation (same columns, same references) at the
+            retry rtol, under the retry cap."""
+            return _retry_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
+                                warm_cap=False)
+
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)
         from an absolute column y (nz, ni). Differentiable and cheap (normalize +
@@ -326,6 +400,12 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_warm_diag_full=chem_solve_warm_diag_full,
         chem_solve_warm_diag_batch=chem_solve_warm_diag_batch,
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
+        # chem_retry (None when off): the retry program and its two solves
+        chem_retry=chem_retry,
+        chem_rtol=_rtol_accept(chem),
+        chem_retry_rtol=None if chem_retry is None else _rtol_accept(chem_retry),
+        chem_solve_cold_diag_batch_retry=chem_solve_cold_diag_batch_retry,
+        chem_solve_warm_diag_full_batch_retry=chem_solve_warm_diag_full_batch_retry,
         aux_from_y=aux_from_y,
         y_baseline=np.asarray(chem.y0, dtype=np.float64),
         wl_um=np.asarray(rt.wl_um, dtype=np.float64),
