@@ -14,8 +14,9 @@ The VULCAN-JAX runner's `lax.while_loop` supports jvp but not vjp, so the chemis
 gradient is forward mode. The SMC hot path uses staged batched evaluators split at
 the chemistry/RT boundary: chemistry jvp lanes for the n_chem_tp dims with every
 particle in one batched solve; one reverse-mode RT vjp per particle, `lax.map`-
-chunked (the RT vjp holds GiB per lane); offsets and noise inflation
-analytic. The per-particle gradient functions are kept for validation.
+chunked (the RT vjp holds GiB per lane); offsets and noise inflation (one
+b, or one per instrument group: make_noise_model) analytic. The per-particle
+gradient functions are kept for validation.
 
 `smc_chem_mode="cold"` (the default) re-solves every proposal with the two-stage
 map, so the target does not depend on sampler history (up to the lane refill
@@ -166,6 +167,64 @@ def make_uspace(specs, dtype):
     return theta_from_u, log_prior_u, sample_prior_u
 
 
+def make_noise_model(names, kinds, groups, group_per_bin, sigma0, dtype):
+    """The likelihood's per-bin sigma and its analytic noise gradient, for the
+    run's noise mode (the parameters of kind "noise"):
+
+      none                         sigma = sigma0
+      scalar  noise_inflation      sigma = sigma0 * b                 (every bin)
+      group   noise_inflation_<g>  sigma_i = sigma0_i * b_{g(i)}      (one per group,
+                                   in ``groups`` order, contiguous in theta)
+
+    ``sigma0`` is a zero-argument callable returning the observed sigma (read at
+    trace time: set_observations fills it after the build). Returns
+    ``(sigma_for(theta) -> (n_bin,), add_noise_grad(g, resid, theta) -> g)``:
+    the latter writes d logL / d b into ``g``'s noise entries, from the
+    residual ``resid = depth - mu``. With L = -1/2 sum r_i^2/(s0_i b_i)^2 -
+    sum log(s0_i b_i) + const, dL/db_i = r_i^2/(s0_i^2 b_i^3) - 1/b_i, summed
+    over each group's bins. Module-level so the formula is unit-tested against
+    jax.grad without the forward stack (tests/test_group_noise.py); BOTH
+    gradient paths (_value_and_grad_block and the batched _rt_val_grad) call
+    the same add_noise_grad. The scalar branch is the pre-existing expression,
+    op for op."""
+    names, kinds = list(names), list(kinds)
+    idx = [i for i, k in enumerate(kinds) if k == "noise"]
+    if not idx:
+        return (lambda theta: sigma0()), (lambda g, resid, theta: g)
+    if [names[i] for i in idx] == [OBS.NOISE_PREFIX]:
+        i_b = idx[0]
+
+        def sigma_for(theta):
+            return sigma0() * theta[i_b]
+
+        def add_noise_grad(g, resid, theta):
+            k = theta[i_b]
+            sig0 = sigma0()
+            return g.at[i_b].set(jnp.sum(resid * resid / (sig0 * sig0 * k ** 3))
+                                 - resid.size / k)
+
+        return sigma_for, add_noise_grad
+    want = [f"{OBS.NOISE_PREFIX}_{g}" for g in groups]
+    lo, n = idx[0], len(idx)
+    if [names[i] for i in idx] != want or idx != list(range(lo, lo + n)):
+        raise RuntimeError(
+            f"noise parameters {[names[i] for i in idx]} at {idx} are neither the scalar "
+            f"{OBS.NOISE_PREFIX!r} nor one contiguous block {want} in group order")
+    N = jnp.asarray(OBS.build_group_design({"groups": list(groups),
+                                            "group": group_per_bin}), dtype)
+
+    def sigma_for(theta):
+        return sigma0() * (N @ theta[lo:lo + n])
+
+    def add_noise_grad(g, resid, theta):
+        kb = N @ theta[lo:lo + n]                     # each bin's own group's b
+        sig0 = sigma0()
+        return g.at[lo:lo + n].set(N.T @ (resid * resid / (sig0 * sig0 * kb ** 3)
+                                          - 1.0 / kb))
+
+    return sigma_for, add_noise_grad
+
+
 def _tree_dot(a, b):
     """Sum of leaf-wise vdots of two pytrees with identical structure (the tangent /
     cotangent contraction of the split chain rule)."""
@@ -276,7 +335,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     lnR0_idx = names.index("lnR0")
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
     off_idx = [i for i, k in enumerate(kinds) if k == "offset"]
-    noise_idx = names.index("noise_inflation") if "noise_inflation" in names else None
     off_lo = off_idx[0] if off_idx else None
     n_off = len(off_idx)
     cloud_lo = cloud_idx[0]
@@ -364,11 +422,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     observed_depth_model_jit = jax.jit(observed_depth_model)
 
     # ---- likelihood in u-space (Gaussian, per-bin sigma, finite-guarded) ----
-    def _sigma_for(theta):
-        sig = pipe.obs_sigma_jax
-        if noise_idx is not None:
-            sig = sig * theta[noise_idx]
-        return sig
+    # sigma_eff and d logL / d(noise) for the run's noise mode (scalar b, one b
+    # per group, or none); both gradient paths below write the noise entries
+    # through _add_noise_grad.
+    _sigma_for, _add_noise_grad = make_noise_model(
+        names, kinds, groups, obs["group"], lambda: pipe.obs_sigma_jax, dtype)
 
     def _gauss_loglik(mu, theta):
         """The (finite-branch) Gaussian log-likelihood formula -- single source of
@@ -456,11 +514,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             g_theta = g_theta.at[i].set(jnp.dot(J_rt[:, j], Btw))
         if n_off > 0:
             g_theta = g_theta.at[off_lo:off_lo + n_off].set(OBS.PPM * (O_jax.T @ wres))
-        if noise_idx is not None:
-            k = theta[noise_idx]
-            sig0 = pipe.obs_sigma_jax
-            g_theta = g_theta.at[noise_idx].set(
-                jnp.sum(resid * resid / (sig0 * sig0 * k ** 3)) - mu.size / k)
+        g_theta = _add_noise_grad(g_theta, resid, theta)
 
         grad_u = g_theta * dtheta_du
         # reject an out-of-window T-P (no clip), a blown forward, or an uncertified solve
@@ -520,11 +574,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         g = g.at[cloud_lo:cloud_lo + n_cloud].set(cloud_bar)
         if n_off > 0:
             g = g.at[off_lo:off_lo + n_off].set(OBS.PPM * (O_jax.T @ wres))
-        if noise_idx is not None:
-            k = theta[noise_idx]
-            sig0 = pipe.obs_sigma_jax
-            g = g.at[noise_idx].set(
-                jnp.sum(resid * resid / (sig0 * sig0 * k ** 3)) - mu.size / k)
+        g = _add_noise_grad(g, resid, theta)
         finite = jnp.all(jnp.isfinite(depth))
         # A non-finite DEPTH is a rejected proposal (-1e30 sentinel -> -inf MH accept;
         # its gradient is then irrelevant and zeroed only to keep arithmetic clean).

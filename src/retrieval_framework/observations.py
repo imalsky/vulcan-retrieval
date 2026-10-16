@@ -12,6 +12,8 @@ inside the jitted likelihood:
                            a direct trapezoidal average).
     O  (n_bin, G-1)        instrument-offset design: bin i in group g>0 gets a flat
                            depth offset. depth_with_offset = binned + O @ (offset_ppm*PPM).
+    N  (n_bin, G)          group indicator, every group: with per-group noise
+                           inflation, sigma_eff = sigma * (N @ b) (build_group_design).
 
 Product CSV format (the Carter & May 2024 / Zenodo convention): one header line, then
 rows of  [index, wave, wave_low, wave_hig, rp/rs, rp/rs_err_low, rp/rs_err_hih].
@@ -34,6 +36,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 PPM = 1.0e-6   # one part per million of the transit depth (offsets, sigmas)
+# Name of the scalar noise-inflation parameter; the per-group ones are
+# f"{NOISE_PREFIX}_{group}" (config_schema.specs_from_config).
+NOISE_PREFIX = "noise_inflation"
 # A real-data run needs at least this many observed bins inside the model band.
 MIN_REAL_BINS = 4
 # Synthetic bin grid (smoke runs with no overlapping real bins): resolving power,
@@ -270,3 +275,42 @@ def build_offset_design(obs: Dict[str, np.ndarray]) -> np.ndarray:
         return np.zeros((group_per_bin.size, 0))
     cols = [(group_per_bin == g).astype(float) for g in groups[1:]]
     return np.column_stack(cols)
+
+
+def build_group_design(obs: Dict[str, np.ndarray]) -> np.ndarray:
+    """(n_bin, G) indicator matrix over EVERY group, in ``obs["groups"]`` order:
+    column k is 1 for the bins of groups[k]. Each bin has exactly one 1 (a bin
+    whose group is not listed raises), so N @ b gives every bin its group's
+    noise inflation."""
+    groups = list(obs["groups"])
+    group_per_bin = np.asarray(obs["group"]).astype(str)
+    N = np.column_stack([(group_per_bin == g).astype(float) for g in groups]) \
+        if groups else np.zeros((group_per_bin.size, 0))
+    if not np.all(N.sum(axis=1) == 1.0):
+        raise ValueError(f"bins of groups {sorted(set(group_per_bin) - set(groups))} "
+                         f"are not in groups={groups}")
+    return N
+
+
+def noise_scale_per_bin(theta, names, group_per_bin) -> np.ndarray:
+    """The likelihood's per-bin sigma multiplier for parameter vector(s)
+    ``theta`` (..., n_dim) with parameter ``names``: the scalar
+    ``noise_inflation`` scales every bin, ``noise_inflation_<g>`` the bins of
+    group g, and with neither it is 1. Returns (..., n_bin). numpy only: the
+    posterior predictive and the analysis scripts use it, so they follow
+    either noise mode by name."""
+    theta = np.asarray(theta, dtype=float)
+    names = list(names)
+    gpb = np.asarray(group_per_bin).astype(str)
+    out = np.ones(theta.shape[:-1] + (gpb.size,))
+    if NOISE_PREFIX in names:
+        return out * theta[..., names.index(NOISE_PREFIX), None]
+    per = {n[len(NOISE_PREFIX) + 1:]: i for i, n in enumerate(names)
+           if n.startswith(NOISE_PREFIX + "_")}
+    if per:
+        missing = sorted(set(gpb) - set(per))
+        if missing:
+            raise ValueError(f"per-group noise inflation has no parameter for groups {missing}")
+        for g, i in per.items():
+            out[..., gpb == g] = theta[..., i, None]
+    return out

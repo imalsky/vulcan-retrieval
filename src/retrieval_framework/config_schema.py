@@ -7,7 +7,8 @@ per-planet ``*_config()`` PRESETS living in each run's ``case.py`` (see
     theta = [ lnZ, dln(C/O), lnKzz,  <T-P params>,  lnR0,
               VULCAN chemistry (3)   Guillot T-P    radius
               log10kappa_cloud, cloud_alpha,  offset_g ...,   noise_inflation ]
-              clouds (2)                      offsets (G-1)   optional
+              clouds (2)                      offsets (G-1)   optional: one b, or
+                                                              one b per group (G)
 
 The chemistry parameters (lnZ, dln(C/O), lnKzz) and the T-P parameters all require
 re-converging VULCAN and are the *expensive* directions of every forward-mode
@@ -208,6 +209,12 @@ class Config:
     infer_noise_inflation: bool = False
     prior_noise_inflation: Tuple[float, float] = (0.5, 3.0)   # log10_uniform
     truth_noise_inflation: float = 1.0
+    # One inflation per observation group instead of one for every bin: b_g
+    # multiplies the sigmas of group g's bins, every group included (the
+    # offsets' reference group too), each with the prior above. Named
+    # noise_inflation_<group>, in the pipeline's group order, after the
+    # offsets. Needs infer_noise_inflation=True; off keeps the scalar b.
+    noise_inflation_per_group: bool = False
 
     # ---- data source ----------------------------------------------------------
     # False : fit the real observed spectrum (obs_dir/obs_products above).
@@ -398,8 +405,17 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
             add(f"offset_{g}", rf"$\delta_{{{g}}}$ [ppm]", *cfg.prior_offset_ppm,
                 cfg.truth_offset_ppm, "offset")
 
-    # --- optional noise inflation ---
-    if cfg.infer_noise_inflation:
+    # --- optional noise inflation: one b, or one per instrument group ---
+    if cfg.infer_noise_inflation and cfg.noise_inflation_per_group:
+        if not groups:
+            raise ValueError("noise_inflation_per_group needs the observation groups: "
+                             "call specs_from_config(cfg, groups=...)")
+        for g in groups:
+            tex = g.replace("_", r"\_")            # mathtext: a literal underscore
+            add(f"noise_inflation_{g}", rf"$b_{{\rm {tex}}}$",
+                *cfg.prior_noise_inflation, cfg.truth_noise_inflation, "noise",
+                prior_type="log10_uniform")
+    elif cfg.infer_noise_inflation:
         add("noise_inflation", r"$b$", *cfg.prior_noise_inflation, cfg.truth_noise_inflation,
             "noise", prior_type="log10_uniform")
     return specs
@@ -565,6 +581,10 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"warm_count_max={cfg.warm_count_max} exceeds count_max={cfg.count_max}: "
             "the warm cap must be at most the cold cap")
+    if cfg.noise_inflation_per_group and not cfg.infer_noise_inflation:
+        raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
+                         "(it splits the inferred inflation by group; alone it would "
+                         "silently infer none)")
     # [lnZ, c_o, lnKzz] is unpacked by fixed position (theta[0:3] chem,
     # theta[3:3+n_tp] T-P); dropping one shifts every later index, so all three
     # must be inferred.
