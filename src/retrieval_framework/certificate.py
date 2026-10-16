@@ -55,9 +55,9 @@ from retrieval_framework.config_schema import Config
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
 # Canonical repository labels plus accepted checkout names: the repository is
-# jax-vulcan, the NAS clone directory is VULCAN-JAX.
+# VULCAN3 (formerly jax-vulcan), the NAS clone directory is VULCAN-JAX.
 REPOSITORIES = {
-    "jax-vulcan": ("jax-vulcan", "VULCAN-JAX"),
+    "VULCAN3": ("VULCAN3", "VULCAN-JAX", "jax-vulcan"),
     "vulcan-forward": ("vulcan-forward",),
     "vulcan-retrieval": ("vulcan-retrieval",),
     # jwst-transit-authority is not a dependency of a retrieval run, so it is
@@ -214,7 +214,7 @@ def _versions() -> dict:
             out[mod] = __import__(mod).__version__
         except (ImportError, AttributeError):
             out[mod] = None
-    for dist in ("vulcan-jax", "vulcan-forward", "vulcan-retrieval"):
+    for dist in ("vulcan3", "vulcan-forward", "vulcan-retrieval"):
         try:
             out[dist] = version(dist)
         except PackageNotFoundError:
@@ -270,7 +270,7 @@ def _cia_identity() -> dict:
     leaves the tree summary unchanged while changing the continuum the retrieval
     fits. They and the ExoMolOP k-tables are the only target-affecting inputs NOT tracked in git --
     everything else (network, baseline T-P, Kzz, elemental abundances) is
-    vendored in vulcan-jax and therefore bound by its commit.
+    vendored in vulcan3 and therefore bound by its commit.
     """
     try:
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401
@@ -339,13 +339,13 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     net = cfg_dict.get("vulcan_cfg_name")
     ident["vulcan_cfg_name"] = net
     try:
-        # find_spec, NOT import: importing vulcan_jax parses and import-locks
+        # find_spec, NOT import: importing vulcan3 parses and import-locks
         # its reaction network, and this identity collector only needs the
         # package path.
         import importlib.util
-        spec = importlib.util.find_spec("vulcan_jax")
+        spec = importlib.util.find_spec("vulcan3")
         if spec is None or not spec.origin:
-            raise ModuleNotFoundError("vulcan_jax is not installed")
+            raise ModuleNotFoundError("vulcan3 is not installed")
         pkg = Path(spec.origin).resolve().parent
         cfg_yaml = pkg / "configs" / f"{net}.yaml"
         if cfg_yaml.is_file():
@@ -428,7 +428,7 @@ def target_manifest(cfg, pipe) -> dict:
         "versions": _versions(),
         # the solver moves every column at the convergence scale (fast vs ffi
         # agree to residual, not bitwise), so a resume must not switch it
-        "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
+        "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
     }
 
 

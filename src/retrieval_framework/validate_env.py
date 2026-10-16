@@ -7,18 +7,18 @@ job runs this module first instead of pip. It aggregates check failures into one
 report (exit 1) that names the remedy; an exception while loading the case's
 molecule list ends the run with a traceback instead.
 
-Checks, in import-order-safe sequence (vulcan_jax / retrieval_framework BEFORE
+Checks, in import-order-safe sequence (vulcan3 / retrieval_framework BEFORE
 exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first):
 
   1. python interpreter version within the supported range (>=3.10);
   2. jax imports; backend + devices reported; GPU asserted with --require-gpu;
-  3. vulcan_jax imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
+  3. vulcan3 imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
      the installed dist version matches the checkout's _version.py (a mismatch
      means the editable install predates a metadata change -- re-bootstrap);
   4. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
      engine every retrieval path imports;
   4b. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
-  5. cross-repo pin: the installed vulcan-jax and vulcan-forward satisfy
+  5. cross-repo pin: the installed vulcan3 and vulcan-forward satisfy
      vulcan-retrieval's declared requirements (skipped with a warning if
      `packaging` is absent);
   6. exojax imports and matches vulcan-forward's pin;
@@ -45,7 +45,7 @@ from pathlib import Path
 
 SUPPORTED_PYTHON = (3, 10)
 EXOJAX_PIN = "2.6.0"  # keep in lockstep with vulcan-forward's pyproject.toml
-EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan_jax.ini_abun.eq_seed
+EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan3.ini_abun.eq_seed
 
 _ERRORS: list[str] = []
 _WARNINGS: list[str] = []
@@ -143,7 +143,7 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
 
 
 def _check_cross_repo_pin() -> None:
-    """Every sibling-engine requirement vulcan-retrieval declares (vulcan-jax
+    """Every sibling-engine requirement vulcan-retrieval declares (vulcan3
     AND vulcan-forward) must be satisfied by the INSTALLED sibling."""
     from importlib import metadata
 
@@ -156,7 +156,7 @@ def _check_cross_repo_pin() -> None:
     except ImportError:
         _warn("`packaging` unavailable; cannot verify the sibling-engine requirements.")
         return
-    for dist in ("vulcan-jax", "vulcan-forward"):
+    for dist in ("vulcan3", "vulcan-forward"):
         spec = next((r for r in reqs if r.split()[0].startswith(dist)), None)
         if spec is None:
             continue
@@ -292,14 +292,14 @@ def main(argv: list[str] | None = None) -> int:
         _err(
             f"PROJECT_ROOT={root} must contain the vulcan-retrieval and "
             "VULCAN-JAX checkouts (the clone directory must be named VULCAN-JAX; "
-            "the GitHub repo is jax-vulcan)."
+            "the GitHub repo is VULCAN3)."
         )
     else:
         _check_python()
         _check_jax(args.require_gpu)
-        # vulcan_jax / retrieval_framework BEFORE exojax: vulcan_forward.vulcan_chem's
+        # vulcan3 / retrieval_framework BEFORE exojax: vulcan_forward.vulcan_chem's
         # import-order guard raises if exojax comes first.
-        _check_editable("vulcan_jax", "vulcan-jax", root / "VULCAN-JAX", "vulcan_jax")
+        _check_editable("vulcan3", "vulcan3", root / "VULCAN-JAX", "vulcan3")
         # the shared forward engine (chemistry + RT) is its own distribution
         _check_editable("vulcan_forward", "vulcan-forward",
                         root / "vulcan-forward", "vulcan_forward")

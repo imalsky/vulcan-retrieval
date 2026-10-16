@@ -71,12 +71,12 @@ python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
   module load cuda 2>/dev/null || true
   command -v nvcc >/dev/null || { echo "ERROR: no nvcc. Pick a toolkit: module avail cuda"; exit 1; }
   which nvcc; nvcc --version | tail -1
-  # Both twins: the ffi test fixture and VULCAN_JAX_SOLVER=ffi load the CPU
+  # Both twins: the ffi test fixture and VULCAN3_SOLVER=ffi load the CPU
   # library first (solver_fast._register) and would compile it on the fly with
   # whatever c++ the test shell has; build it here, where the compilers are.
-  python -m vulcan_jax.solver_fast
-  python -m vulcan_jax.solver_fast --cuda
-  ls -la "${PROJECT_ROOT}"/VULCAN-JAX/src/vulcan_jax/csrc/libblock_thomas_*
+  python -m vulcan3.solver_fast
+  python -m vulcan3.solver_fast --cuda
+  ls -la "${PROJECT_ROOT}"/VULCAN-JAX/src/vulcan3/csrc/libblock_thomas_*
 )
 # --- the GPU test, in the production job's JAX environment (run_nas_w39b.pbs) ----
 unset JAX_PLATFORMS
@@ -93,11 +93,11 @@ cd "${PROJECT_ROOT}/VULCAN-JAX"
 # carry; this job runs one file, so accept the reduced coverage explicitly.
 # -rA: a passing test's captured output too, so the matrix-free check's per-case
 # primal and tangent readings reach the log (the bars are set from them).
-VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
+VULCAN3_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
 # Again under XLA_CMDBUF=2's flags: the kernels are marked command-buffer
 # compatible, so capture must meet them here first, not inside a bench.
 XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" \
-  VULCAN_JAX_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
+  VULCAN3_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
 # --- vulcan-forward's correlated-k fold on the GPU: the lax.scan fold must stay
 # the unrolled loop's op sequence (bitwise on CPU; this is where the GPU says).
 # Last, so a GPU-only difference cannot stop the steps above.

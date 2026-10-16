@@ -6,14 +6,14 @@
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
 # TestPyPI; THIS file carries the exact validated chemistry commit -- keep the
 # pins at or above those floors
-# (vulcan-jax>=0.17.0, vulcan-forward>=0.28.0).
+# (vulcan3>=0.18.0, vulcan-forward>=0.28.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
 # ExoJax is a plain pip dependency; the opacity data (k-tables, CIA) are
 # seeded into the repo data/ tree, not fetched at run time.
 # The PBS preflight installs the synced trees editable instead (git pull is
 # the code-deploy mechanism); use this file for a standalone reproduction env.
-# NOT INSTALLABLE AS WRITTEN on linux-aarch64 (the GH200): the pinned vulcan-jax
+# NOT INSTALLABLE AS WRITTEN on linux-aarch64 (the GH200): the pinned vulcan3
 # declares exogibbs, whose declared dependency pyfastchem has no aarch64 wheel and
 # would be built from source. tools/bootstrap_nas_env.pbs installs exogibbs with
 # --no-deps and is the supported route on the node.
@@ -28,6 +28,6 @@ tqdm
 h5py>=3
 # run_nautilus needs the maintainer's nautilus fork (SiLU networks, spread_batch)
 nautilus-sampler @ https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip
-vulcan-jax @ git+https://github.com/imalsky/jax-vulcan.git@f3dfdf7eb07796aa93cd235c2566de5e65ea4623
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@d26e9d36154cdf5325fe220a2d8deb507b6a9d4a
+vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@7f0f00465b7caaf09195a924a8b7caa7813e9d46
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@70a837c92a72e9849a557d0892eae6efb1cb3beb
 -e .

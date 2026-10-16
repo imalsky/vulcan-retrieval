@@ -23,7 +23,7 @@ directory name is required):
 
 ```bash
 mkdir vulcan && cd vulcan
-git clone https://github.com/imalsky/jax-vulcan.git VULCAN-JAX
+git clone https://github.com/imalsky/VULCAN3.git VULCAN-JAX
 git clone https://github.com/imalsky/vulcan-forward.git
 git clone https://github.com/imalsky/vulcan-retrieval.git
 python -m pip install -e ./VULCAN-JAX -e ./vulcan-forward \

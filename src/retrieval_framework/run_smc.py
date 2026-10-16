@@ -131,8 +131,8 @@ def make_config(run_dir: Path) -> Tuple[C.Config, str]:
             overrides[k] = tuple(v)
     if overrides:
         cfg = replace(cfg, **overrides)
-    # VULCAN_JAX_SOLVER is import-frozen: choose it before anything imports
-    # vulcan_jax (every entry point resolves its config here first).
+    # VULCAN3_SOLVER is import-frozen: choose it before anything imports
+    # vulcan3 (every entry point resolves its config here first).
     # stderr: the PBS reads make_config's stdout (its chem-mode probe)
     print(f"[retrieval] solver: {C.choose_solver()}", file=sys.stderr, flush=True)
     return cfg, preset

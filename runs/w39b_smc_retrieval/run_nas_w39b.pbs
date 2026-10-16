@@ -99,7 +99,7 @@
 # noise inflation, log10gamma >= -3, 792 lanes), from this case dir, in a fresh out dir:
 #   qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v2.json,\
 #     SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v2,NAUTILUS_N_EFF=5000,\
-#     VULCAN_JAX_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs
+#     VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs
 #   (one line, no spaces after the commas; output in data/w39b_baseline_v2_nautilus)
 #
 # With SAMPLER=smc, the plots run automatically on a successful run. Under
@@ -208,21 +208,21 @@ esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 # Production solver: `ffi`, the CUDA block-Thomas kernel. Pinned here, not left to config_schema.choose_solver(),
 # so the job script states the choice and a missing kernel build fails loudly
-# instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
+# instead of falling back to `fast`. A chain arm or `qsub -v VULCAN3_SOLVER=fast`
 # still overrides it.
-export VULCAN_JAX_SOLVER="${VULCAN_JAX_SOLVER:-ffi}"
+export VULCAN3_SOLVER="${VULCAN3_SOLVER:-ffi}"
 # The ffi kernel libraries (CUDA and CPU twins) are per checkout and gitignored (*.so);
 # one not built from the checkout's present sources is refused at the first solve
-# (vulcan_jax.solver_fast._register). Build them here when stale (a no-op when current),
+# (vulcan3.solver_fast._register). Build them here when stale (a no-op when current),
 # so a pulled kernel change is built in the first minute, not failed hours into the job.
-if [ "${VULCAN_JAX_SOLVER}" = "ffi" ]; then
-  { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan_jax.solver_fast \
+if [ "${VULCAN3_SOLVER}" = "ffi" ]; then
+  { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan3.solver_fast \
     && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
-         python -m vulcan_jax.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
+         python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
 fi
-# Opt-in grouped chemistry RHS (VULCAN_JAX_CHEM_RHS=grouped, VULCAN-JAX 3154d6d: bitwise
+# Opt-in grouped chemistry RHS (VULCAN3_CHEM_RHS=grouped, VULCAN-JAX 3154d6d: bitwise
 # on the GH200 ffi path, so not part of the target; config.json hardware records it).
-echo "solver: VULCAN_JAX_SOLVER=${VULCAN_JAX_SOLVER} VULCAN_JAX_CHEM_RHS=${VULCAN_JAX_CHEM_RHS:-<unset>}"
+echo "solver: VULCAN3_SOLVER=${VULCAN3_SOLVER} VULCAN3_CHEM_RHS=${VULCAN3_CHEM_RHS:-<unset>}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
 if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
@@ -293,7 +293,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # the fixed-step step-cost bench (calibrate_count_max --fixed-steps), sized by
   # its CALIBRATE_N_DRAWS (default: the preset's particle count, the GPU's SM
   # count), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
-  # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN_JAX_SOLVER passes through.
+  # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN3_SOLVER passes through.
   # Every override file is checked BEFORE the first arm runs.
   # Arms run in order, each in a subshell that exports its own env; the chain file is read
   # on fd 3 so an arm's process cannot swallow the remaining lines.
@@ -321,7 +321,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
         for kv in "${kvs[@]}"; do [ -n "${kv}" ] && export "${kv?}"; done
       fi
       case ";${envs};" in *";XLA_CMDBUF="*) set_xla_flags || exit 1 ;; esac
-      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN_JAX_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS}"
+      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN3_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS}"
       if [ "${mode}" = "probe" ]; then
         python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
       elif [ "${mode}" = "bench" ]; then
