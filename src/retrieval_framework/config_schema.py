@@ -476,6 +476,7 @@ def hardware_profile() -> dict:
             "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE")
                                   * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
             "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
+            "vulcan_jax_chem_rhs": os.environ.get("VULCAN_JAX_CHEM_RHS", ""),
             "xla_flags": os.environ.get("XLA_FLAGS", "")}
     if prof["backend"] in ("gpu", "cuda"):
         cc = str(getattr(dev, "compute_capability", ""))

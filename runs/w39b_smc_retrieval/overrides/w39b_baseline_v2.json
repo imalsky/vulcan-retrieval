@@ -1,0 +1,18 @@
+{
+  "_comment": "WASP-39b baseline v2 (nautilus, n_eff 5000): Retry C two-pass chemistry, per-instrument noise inflation, log10gamma down to -3, 792 lanes. Keys starting with _ are dropped (run_smc.make_config). Every key but walltime_seconds enters the target manifest, so run it in a fresh SMC_RETRIEVAL_OUT_DIR. Env, not Config: NAUTILUS_N_EFF=5000, VULCAN_JAX_CHEM_RHS=grouped, PROFILE_BATCH=3 (see run_nas_w39b.pbs, BASELINE V2).",
+  "cfg_overrides": {"Rp": 8650532000.0, "rtol": 0.1},
+  "_cfg_overrides": "REPLACES case.py's dict, so Rp (1.21 R_J, case.py) is restated. rtol 0.1: the first-pass step tolerance (W39b.yaml default 0.2).",
+  "count_max": 3000,
+  "chem_retry": true,
+  "chem_retry_rtol": 0.2,
+  "chem_retry_count_max": 5000,
+  "_chem_retry": "Retry C: a draw uncertified (VULCAN's own certificate) within 3000 accepted steps at rtol 0.1 is re-solved once from the same start at rtol 0.2 within 5000; still uncertified -> rejected (analysis/fix_investigation/bistability/out/rtol_arms_main_summary.json RETRY_C). warm_count_max stays 1500 <= count_max.",
+  "noise_inflation_per_group": true,
+  "_noise": "one b per group (NIRISS, G395H_NRS1, G395H_NRS2), each log10_uniform on prior_noise_inflation (0.5, 3); needs infer_noise_inflation (on in the gpu preset). n_dim 13 -> 15.",
+  "prior_log10gamma": [-3.0, 0.3010299956639812],
+  "_priors": "log10gamma lower bound -2 -> -3 (draft_overrides_priors_v2.json). lnKzz keeps [ln 0.1, ln 1000]: no validation solve below ln 0.1 exists and the lowest covered band certifies worst (baseline rehearsal report). Tint and log10kappa unchanged.",
+  "cold_lanes": 264,
+  "_lanes": "x FFI_BLOCKS_PER_SM 3 (run_nautilus) = 792 lanes; n_batch defaults to 3 x 792 = 2376 unless NAUTILUS_N_BATCH is set",
+  "walltime_seconds": 165600,
+  "_walltime": "nautilus governor 46 h for a 48 h PBS wall (target-free: a RESUME may change it)"
+}

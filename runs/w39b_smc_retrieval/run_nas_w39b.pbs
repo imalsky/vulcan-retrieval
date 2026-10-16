@@ -95,6 +95,13 @@
 #                           nsys-jax in one thread per file at exit (tens of minutes).
 #     qsub -v PROFILE_BATCH=3 run_nas_w39b.pbs
 #
+# BASELINE V2 (overrides/w39b_baseline_v2.json: Retry C two-pass chemistry, per-group
+# noise inflation, log10gamma >= -3, 792 lanes), from this case dir, in a fresh out dir:
+#   qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v2.json,\
+#     SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v2,NAUTILUS_N_EFF=5000,\
+#     VULCAN_JAX_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs
+#   (one line, no spaces after the commas; output in data/w39b_baseline_v2_nautilus)
+#
 # With SAMPLER=smc, the plots run automatically on a successful run. Under
 # smc_chem_mode="warm" so do the warm-vs-cold validation (validate_warm; PASS gate
 # max|dlogL| < 0.1; the verdict lands in the log + validate_warm.npz) and
@@ -204,6 +211,18 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 # instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
 # still overrides it.
 export VULCAN_JAX_SOLVER="${VULCAN_JAX_SOLVER:-ffi}"
+# The ffi kernel libraries (CUDA and CPU twins) are per checkout and gitignored (*.so);
+# one not built from the checkout's present sources is refused at the first solve
+# (vulcan_jax.solver_fast._register). Build them here when stale (a no-op when current),
+# so a pulled kernel change is built in the first minute, not failed hours into the job.
+if [ "${VULCAN_JAX_SOLVER}" = "ffi" ]; then
+  { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan_jax.solver_fast \
+    && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
+         python -m vulcan_jax.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
+fi
+# Opt-in grouped chemistry RHS (VULCAN_JAX_CHEM_RHS=grouped, VULCAN-JAX 3154d6d: bitwise
+# on the GH200 ffi path, so not part of the target; config.json hardware records it).
+echo "solver: VULCAN_JAX_SOLVER=${VULCAN_JAX_SOLVER} VULCAN_JAX_CHEM_RHS=${VULCAN_JAX_CHEM_RHS:-<unset>}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
 if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
