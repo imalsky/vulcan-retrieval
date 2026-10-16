@@ -1,7 +1,7 @@
 {
   "_comment": "WASP-39b baseline v2 (nautilus, n_eff 5000): Retry C two-pass chemistry, per-instrument noise inflation, log10gamma down to -3, 792 lanes. Keys starting with _ are dropped (run_smc.make_config). Every key but walltime_seconds enters the target manifest, so run it in a fresh SMC_RETRIEVAL_OUT_DIR. Env, not Config: NAUTILUS_N_EFF=5000, VULCAN_JAX_CHEM_RHS=grouped, PROFILE_BATCH=3 (see run_nas_w39b.pbs, BASELINE V2).",
-  "cfg_overrides": {"Rp": 8650532000.0, "rtol": 0.1},
-  "_cfg_overrides": "REPLACES case.py's dict, so Rp (1.21 R_J, case.py) is restated. rtol 0.1: the first-pass step tolerance (W39b.yaml default 0.2).",
+  "cfg_overrides": {"Rp": 8650532000.0, "rtol": 0.1, "queue_compact": [264, 132]},
+  "_cfg_overrides": "REPLACES case.py's dict, so Rp (1.21 R_J, case.py) is restated. rtol 0.1: the first-pass step tolerance (W39b.yaml default 0.2). queue_compact: VULCAN-JAX run_queue tail compaction 792 -> 264 -> 132 lanes (needs VULCAN-JAX >= 01f1558; the retry program inherits it, config_schema.retry_profile).",
   "count_max": 3000,
   "chem_retry": true,
   "chem_retry_rtol": 0.2,
