@@ -378,6 +378,11 @@ TARGET_FREE_KEYS = frozenset({
     "run_inference", "ppc_draws", "ppc_chunk_size",
     "num_samples", "num_chains",
 })
+# Keys bound only while their switch is on. Off, they change nothing, so they
+# stay out of the manifest and a run from before they existed keeps its digest.
+SWITCHED_KEYS = {
+    "chem_retry": ("chem_retry", "chem_retry_rtol", "chem_retry_count_max"),
+}
 
 
 def target_manifest(cfg, pipe) -> dict:
@@ -389,6 +394,10 @@ def target_manifest(cfg, pipe) -> dict:
     """
     from dataclasses import asdict
     cfg_bound = {k: v for k, v in asdict(cfg).items() if k not in TARGET_FREE_KEYS}
+    for switch, keys in SWITCHED_KEYS.items():
+        if not cfg_bound.get(switch):
+            for k in keys:
+                cfg_bound.pop(k, None)
 
     # The likelihood's actual inputs, not the file paths that produced them.
     h = hashlib.sha256()

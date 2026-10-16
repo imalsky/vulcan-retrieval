@@ -264,6 +264,21 @@ class Config:
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
+    # ---- chemistry retry (run_nautilus only; off by default) -------------------
+    # chem_retry=True: every draw is first solved as now (the base config's
+    # rtol, capped at count_max accepted steps). A draw whose solve does not
+    # certify under VULCAN's own certificate (conv_normal) within that cap is
+    # re-solved ONCE, from the same start (its warm anchor column, or the cold
+    # two-stage seed), by a second compiled chemistry program at
+    # rtol=chem_retry_rtol capped at chem_retry_count_max, and is kept only if
+    # that solve certifies; otherwise it is rejected as before. Only the step
+    # tolerance and the cap change: the certificate is VULCAN's in both passes.
+    # rtol is a compile-time static of the step acceptance (VULCAN-JAX
+    # _Statics.rtol_accept), hence the second program. The SMC/MALA (gradient)
+    # paths refuse it. Off, none of the three enters the target manifest.
+    chem_retry: bool = False
+    chem_retry_rtol: float = 0.05
+    chem_retry_count_max: int = 5000
 
     # posterior draws
     num_samples: int = 48
@@ -509,6 +524,32 @@ def hardware_warnings(prof: dict) -> list:
     return out
 
 
+def retry_profile(cfg: Config) -> Dict[str, Any]:
+    """The chemistry profile of the ``chem_retry`` program: ``cfg.profile()``
+    with ``cfg_overrides["rtol"] = chem_retry_rtol`` and ``count_max =
+    chem_retry_count_max``; nothing else changes. ``skip_warmup``: the
+    build-time warm-up solve is diagnostic only (the main program's
+    ``baseline_conv_normal`` is the one read), so the retry build keeps the
+    runner closure only and compiles on its first solve."""
+    p = cfg.profile()
+    p["cfg_overrides"] = {**p["cfg_overrides"], "rtol": float(cfg.chem_retry_rtol)}
+    p["count_max"] = int(cfg.chem_retry_count_max)
+    p["skip_warmup"] = True
+    return p
+
+
+def refuse_chem_retry(cfg: Config, where: str) -> None:
+    """Raise if ``cfg.chem_retry`` is on: the retry is a primal likelihood policy
+    of run_nautilus. The SMC entry points (the jvp'd MALA evaluators, the init
+    cull and their validators) run one compiled chemistry program and would
+    silently ignore it."""
+    if bool(getattr(cfg, "chem_retry", False)):
+        raise ValueError(
+            f"{where}: chem_retry=True is a run_nautilus likelihood policy; the SMC "
+            "(MALA / RWM) paths do not implement it and would ignore it. Unset "
+            "chem_retry or run retrieval_framework.run_nautilus.")
+
+
 def validate_config(cfg: Config) -> None:
     if cfg.smc_num_particles <= 0:
         raise ValueError("smc_num_particles must be > 0")
@@ -565,6 +606,18 @@ def validate_config(cfg: Config) -> None:
         raise ValueError(
             f"warm_count_max={cfg.warm_count_max} exceeds count_max={cfg.count_max}: "
             "the warm cap must be at most the cold cap")
+    if not isinstance(cfg.chem_retry, bool):
+        raise ValueError(f"chem_retry must be true or false, got {cfg.chem_retry!r}")
+    if cfg.chem_retry:
+        r = float(cfg.chem_retry_rtol)
+        if not (math.isfinite(r) and 0.0 < r < 1.0):
+            raise ValueError(f"chem_retry_rtol must be in (0, 1), got {cfg.chem_retry_rtol!r}")
+        if int(cfg.chem_retry_count_max) < int(cfg.warm_count_max):
+            # the retry program is built with this cap as its count_max, and
+            # vulcan_chem refuses warm_count_max > count_max
+            raise ValueError(
+                f"chem_retry_count_max={cfg.chem_retry_count_max} is below "
+                f"warm_count_max={cfg.warm_count_max}")
     # [lnZ, c_o, lnKzz] is unpacked by fixed position (theta[0:3] chem,
     # theta[3:3+n_tp] T-P); dropping one shifts every later index, so all three
     # must be inferred.
@@ -645,6 +698,10 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"warm_count_max={int(cfg.warm_count_max)} (mutation-proposal cap)",
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "
         "high-Kzz non-convergence)",
+        *([f"    chem_retry ON (nautilus): a draw uncertified within count_max={cmax} is "
+           f"re-solved once from the same start at rtol={float(cfg.chem_retry_rtol):g}, "
+           f"count_max={int(cfg.chem_retry_count_max)}; still uncertified -> rejected"]
+          if cfg.chem_retry else []),
         f"    cold-init: draw {cfg.init_oversample:g}xN, REJECT non-converged draws (-inf), "
         f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
         "raise only if < N survive)",
