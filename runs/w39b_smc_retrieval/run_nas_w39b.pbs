@@ -79,6 +79,21 @@
 #                           one-command minimum graph size: the arm that shows whether
 #                           the whole step loop is captured as one graph
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
+#   PROFILE_BATCH=<k>       nautilus only: run under nsys-jax and capture ONE batch, the
+#                           k-th likelihood batch of this job (3 = the first steady warm
+#                           batch of a fresh run), plus the nautilus update after it
+#                           (run_nautilus.BatchProfiler, cudaProfilerApi capture,
+#                           --capture-range-end=stop: the run continues unprofiled).
+#                           Report: ${PROFILE_DIR}/pipeline_gh200_jax_profile.zip
+#                           (default PROFILE_DIR=logs/nsys_<jobid>). nsys writes the
+#                           .nsys-rep at the stop, while the run goes on (in nsys-jax's
+#                           ${TMPDIR}/tmp*/ dir); nsys-jax archives it when the run exits.
+#                           NSYS_JAX (nsys-jax executable), NSYS_BIN (nsys binary),
+#                           PROFILE_HLO=1 (off by default) also dumps the HLO protos into
+#                           the archive, compiling into an empty JAX cache: ~1.6 GB per
+#                           jit_eval_batch proto, ~10 GB in all, lzma-compressed by
+#                           nsys-jax in one thread per file at exit (tens of minutes).
+#     qsub -v PROFILE_BATCH=3 run_nas_w39b.pbs
 #
 # With SAMPLER=smc, the plots run automatically on a successful run. Under
 # smc_chem_mode="warm" so do the warm-vs-cold validation (validate_warm; PASS gate
@@ -356,7 +371,49 @@ elif [ "${SAMPLER:-nautilus}" = "nautilus" ]; then
   # exits 0 unfinished; continue with RESUME=1. No plots or certificate (both
   # read the SMC files).
   echo "========== NAUTILUS RETRIEVAL =========="
-  python -u -m retrieval_framework.run_nautilus "${SMC_DIR}" || rc=$?
+  NAUT_CMD=(python -u -m retrieval_framework.run_nautilus "${SMC_DIR}")
+  if [ -n "${PROFILE_BATCH:-}" ]; then
+    # One-batch nsys-jax profile (off by default). nsys-jax calls `nsys` from PATH:
+    # a one-file bin dir puts the chosen binary first (cuda-12.6's nsys wrapper is
+    # not installed on the GH200 nodes).
+    PROFILE_DIR="${PROFILE_DIR:-${LOG_DIR}/nsys_${_jobid%%.*}}"
+    NSYS_JAX="${NSYS_JAX:-${PROJECT_ROOT}/analysis/speed_explore/profile/tools/nsysjax_venv/bin/nsys-jax}"
+    NSYS_BIN="${NSYS_BIN:-/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys}"
+    mkdir -p "${PROFILE_DIR}/bin"
+    ln -sfn "${NSYS_BIN}" "${PROFILE_DIR}/bin/nsys"
+    export PATH="${PROFILE_DIR}/bin:${PATH}"
+    echo "profile: batch ${PROFILE_BATCH} -> ${PROFILE_DIR}; nsys $(nsys --version | awk '{print $NF}'); ${NSYS_JAX}"
+    if [ "${PROFILE_HLO:-0}" = "1" ]; then
+      export JAX_COMPILATION_CACHE_DIR="${PROFILE_DIR}/jax_cache"   # compile, so XLA dumps
+      mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
+    else
+      export XLA_FLAGS="${XLA_FLAGS} --xla_dump_hlo_as_proto=false"   # nsys-jax: no dump
+    fi
+    # nsys-jax sets -1 (whole tracebacks in the HLO metadata) only when unset; JAX's
+    # default keeps the programs, and their cache entries, the production ones
+    export JAX_TRACEBACK_IN_LOCATIONS_LIMIT="${JAX_TRACEBACK_IN_LOCATIONS_LIMIT:-10}"
+    # NVTX3 is header-only: a 3-function shim gives the batch-phase ranges
+    printf '%s\n' '#include <nvtx3/nvToolsExt.h>' \
+      'int vp_push(const char* s) { return nvtxRangePushA(s); }' \
+      'int vp_pop(void) { return nvtxRangePop(); }' > "${PROFILE_DIR}/nvtx_shim.c"
+    if gcc -O2 -shared -fPIC -I/usr/local/cuda-12.6/include "${PROFILE_DIR}/nvtx_shim.c" \
+         -o "${PROFILE_DIR}/libnvtxshim.so" -ldl; then
+      export VULCAN_NVTX_LIB="${PROFILE_DIR}/libnvtxshim.so"
+    fi
+    export VULCAN_PROFILE_BATCH="${PROFILE_BATCH}"
+    NAUT_CMD=("${NSYS_JAX}" --trace=cuda,nvtx,osrt --sample=cpu --cpuctxsw=process-tree
+              --capture-range=cudaProfilerApi --capture-range-end=stop -f
+              --output="${PROFILE_DIR}/pipeline_gh200_jax_profile" --
+              "$(command -v python)" -u -m retrieval_framework.run_nautilus "${SMC_DIR}")
+  fi
+  "${NAUT_CMD[@]}" || rc=$?
+  if [ -n "${PROFILE_BATCH:-}" ] && [ -f "${PROFILE_DIR}/pipeline_gh200_jax_profile.zip" ]; then
+    # nsys-jax exits 1 when only its source-file gathering failed (no XLA .proto
+    # files on the node); the archive is complete then. It prints "Application
+    # returned unexpected code" when the run itself failed: then rc stands.
+    echo "profile: ${PROFILE_DIR}/pipeline_gh200_jax_profile.zip written"
+    [ "${rc}" -eq 1 ] && ! grep -q "Application returned unexpected code" "${LOG_FILE}" && rc=0
+  fi
 else
   echo "========== SMC RETRIEVAL =========="
   python -u -m retrieval_framework.run_smc "${SMC_DIR}" || rc=$?
