@@ -49,7 +49,9 @@ Env: NAUTILUS_N_LIVE (default N_LIVE; n_update follows at half of it),
 NAUTILUS_N_EFF (default N_EFF), NAUTILUS_N_BATCH (default BATCH_PER_LANE x the
 lane count, so a lane whose column certifies refills from the same batch; with
 cold_lanes = 0, one lockstep batch of config_schema.device_lane_count() columns),
-NAUTILUS_WARM (default 1).
+NAUTILUS_WARM (default 1), and the profiling hook (BatchProfiler, off unless
+VULCAN_PROFILE_BATCH is set): VULCAN_PROFILE_BATCH, VULCAN_PROFILE_EXIT_AFTER,
+VULCAN_NVTX_LIB.
 
 Sampler settings (the constants below): 2 ReLU + 2 SiLU networks, n_update =
 n_live / 2, exploration until f_live = F_LIVE, bounds enlarged by
@@ -67,9 +69,12 @@ lanes resident per SM (396 lanes on a GH200).
 from __future__ import annotations
 
 import argparse
+import atexit
+import ctypes
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -143,8 +148,113 @@ class Anchors:
                 self.refs[idx])
 
 
+class BatchProfiler:
+    """Env-gated profiling hook; inert (no library loaded, no call made) unless
+    VULCAN_PROFILE_BATCH is set.
+
+    VULCAN_PROFILE_BATCH=k: cudaProfilerStart just before likelihood batch k of
+    THIS process (the k-th evaluator call, i.e. the k-th line it appends to
+    batches.jsonl; batch 1 compiles the cold evaluator and the first warm batch
+    compiles the warm one, so k = 3 is the first steady warm batch of a fresh
+    run) and cudaProfilerStop when batch k+1 starts (or at exit): the window
+    holds batch k and the nautilus update after it. Meant for nsys / nsys-jax
+    --capture-range=cudaProfilerApi --capture-range-end=stop, so the run goes on
+    unprofiled after the window.
+    VULCAN_PROFILE_EXIT_AFTER=n: exit 0 when batch n+1 would start (smoke tests).
+    VULCAN_NVTX_LIB: a shared library exporting vp_push(const char*) / vp_pop()
+    (an NVTX3 shim) for the phase ranges; without it, or with the `nvtx` package
+    absent, no ranges (the window still works). Ranges, every batch:
+    batch<k>/anchors (host nearest-anchor lookup), batch<k>/evaluator (ONE XLA
+    program: the chemistry lane queue, then the RT; under nsys XLA's own NVTX
+    thunk ranges split it by op), batch<k>/post (rejection classes, anchors),
+    nautilus/update (the sampler's work between two batches)."""
+
+    def __init__(self):
+        self.k = int(os.environ.get("VULCAN_PROFILE_BATCH", "0") or 0)
+        self.exit_after = int(os.environ.get("VULCAN_PROFILE_EXIT_AFTER", "0") or 0)
+        self.n = 0
+        self.active = False
+        self.t_batch = None
+        self._push = self._pop = None
+        self._open = []
+        if self.k <= 0 and self.exit_after <= 0:
+            return
+        if self.k > 0:
+            self._rt = self._cudart()
+            atexit.register(self.stop)
+            lib = os.environ.get("VULCAN_NVTX_LIB", "").strip()
+            try:
+                if lib:
+                    nv = ctypes.CDLL(lib)
+                    nv.vp_push.argtypes = [ctypes.c_char_p]
+                    self._push = lambda s: nv.vp_push(s.encode())
+                    self._pop = nv.vp_pop
+                else:
+                    import nvtx  # optional package
+                    self._push, self._pop = nvtx.push_range, nvtx.pop_range
+            except (OSError, ImportError, AttributeError) as e:
+                log.warning(f"profile: no NVTX ranges ({e})")
+        log.info(f"profile: capture batch {self.k or '-'} (cudaProfilerStart/Stop), exit after "
+                 f"batch {self.exit_after or '-'}, NVTX {'on' if self._push else 'off'}")
+
+    @staticmethod
+    def _cudart():
+        paths = []
+        try:
+            import nvidia.cuda_runtime as m  # the CUDA runtime of the jax wheels
+            paths = [os.path.join(p, "lib", "libcudart.so.12") for p in m.__path__]
+        except ImportError:
+            pass
+        for p in [*paths, "libcudart.so.12", "libcudart.so"]:
+            try:
+                return ctypes.CDLL(p)
+            except OSError:
+                continue
+        raise OSError("VULCAN_PROFILE_BATCH: no libcudart to call cudaProfilerStart from")
+
+    def push(self, name):
+        if self._push is not None:
+            self._push(name)
+            self._open.append(name)
+
+    def pop(self):
+        if self._pop is not None and self._open:
+            self._pop()
+            self._open.pop()
+
+    def stop(self):
+        if self.active:
+            rc = int(self._rt.cudaProfilerStop())
+            self.active = False
+            log.info(f"profile: cudaProfilerStop after batch {self.k} (rc {rc})")
+
+    def batch_begin(self):
+        """Called before every evaluator call; device work of the previous batch
+        is complete here (its results were fetched to the host)."""
+        self.pop()                                  # nautilus/update, if open
+        now = time.perf_counter()
+        if self.t_batch is not None and (self.k or self.exit_after):
+            log.info(f"profile: batch {self.n} period {now - self.t_batch:.2f} s "
+                     "(evaluator + host + nautilus update)")
+        self.t_batch = now
+        self.n += 1
+        if self.k and self.n == self.k + 1:
+            self.stop()
+        if self.exit_after and self.n == self.exit_after + 1:
+            self.stop()
+            log.info(f"profile: VULCAN_PROFILE_EXIT_AFTER={self.exit_after}: exiting 0")
+            logging.shutdown()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+        if self.k and self.n == self.k:
+            rc = int(self._rt.cudaProfilerStart())
+            self.active = True
+            log.info(f"profile: cudaProfilerStart before batch {self.k} (rc {rc})")
+
+
 def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
-                 batch_log: Path | None = None):
+                 batch_log: Path | None = None, prof: BatchProfiler | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a compiled evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with copies of its last row) and
@@ -175,20 +285,32 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             if m < n_batch:
                 Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
             Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
+            if prof is not None:
+                prof.batch_begin()
+                prof.push(f"batch{prof.n}/anchors")
             t0 = time.perf_counter()
             warm = anchors is not None and len(anchors) > 0
             if warm:
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
+                if prof is not None:
+                    prof.pop()
+                    prof.push(f"batch{prof.n}/evaluator")
                 L, Ynew, rnew, st = ev_warm(Uj, jnp.asarray(Yw, pipe.dtype),
                                             jnp.asarray(rw, pipe.dtype))
                 acc, conv = st.acc, st.conv_ok
             else:
+                if prof is not None:
+                    prof.pop()
+                    prof.push(f"batch{prof.n}/evaluator")
                 L, Ynew, rnew, cd = ev_cold(Uj, Y0, refs0)
                 acc, conv = cd.accept_count, cd.conv_normal
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(conv), bool)[:m]
+            if prof is not None:
+                prof.pop()
+                prof.push(f"batch{prof.n}/post")
             if batch_log is not None:
                 with open(batch_log, "a") as fh:
                     fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
@@ -218,6 +340,8 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 anchors.add(Zc[:m][alive][:, :k],
                             np.asarray(jax.device_get(Ynew), np.float64)[:m][alive],
                             np.asarray(jax.device_get(rnew), np.float64)[:m][alive])
+            if prof is not None:
+                prof.pop()
         return out
 
     return loglike
@@ -299,13 +423,15 @@ def main() -> None:
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
-    like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl")
+    prof = BatchProfiler()
+    like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl", prof)
 
     def loglike_saved(Z):
         L = like(Z)
         tmp = tally_path.with_name(f".{tally_path.name}.part")
         tmp.write_text(json.dumps(tally, indent=2) + "\n")
         os.replace(tmp, tally_path)
+        prof.push("nautilus/update")    # closed when the next batch begins
         return L
 
     sampler = nautilus.Sampler(lambda z: z, loglike_saved, n_dim=pipe.n_dim, n_live=n_live,
