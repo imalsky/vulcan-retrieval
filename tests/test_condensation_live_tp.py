@@ -165,8 +165,8 @@ def _s8_cols(chem):
 
 
 def _sat_n_s8(jnp, T):
-    from vulcan_jax.atm_setup import sat_p_jax
-    from vulcan_jax.phy_const import kb
+    from vulcan3.atm_setup import sat_p_jax
+    from vulcan3.phy_const import kb
 
     return sat_p_jax("S8", jnp.asarray(T)) / kb / jnp.asarray(T)
 
@@ -255,7 +255,7 @@ def chem_guillot(stack):
         from exojax.atm.atmprof import atmprof_Guillot
     except Exception as e:  # pragma: no cover - env-dependent
         pytest.skip(f"exojax unavailable: {e}")
-    from vulcan_jax.phy_const import G_grav
+    from vulcan3.phy_const import G_grav
 
     from retrieval_framework.forward.config import RP_CM
     gs_cgs = 1000.0

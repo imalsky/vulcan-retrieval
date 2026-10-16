@@ -232,7 +232,7 @@ def main() -> None:
 
     cfg, preset = make_config(Path(args.run_dir))
     lanes = int(cfg.cold_lanes)
-    if os.environ.get("VULCAN_JAX_SOLVER") == "ffi":   # set by make_config
+    if os.environ.get("VULCAN3_SOLVER") == "ffi":   # set by make_config
         lanes *= FFI_BLOCKS_PER_SM
     cfg = replace(cfg, cold_lanes=lanes,
                   out_dir=cfg.out_dir.parent / f"{cfg.out_dir.name}_nautilus")

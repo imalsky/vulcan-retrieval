@@ -186,9 +186,9 @@ esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 # Production solver: `ffi`, the CUDA block-Thomas kernel. Pinned here, not left to config_schema.choose_solver(),
 # so the job script states the choice and a missing kernel build fails loudly
-# instead of falling back to `fast`. A chain arm or `qsub -v VULCAN_JAX_SOLVER=fast`
+# instead of falling back to `fast`. A chain arm or `qsub -v VULCAN3_SOLVER=fast`
 # still overrides it.
-export VULCAN_JAX_SOLVER="${VULCAN_JAX_SOLVER:-ffi}"
+export VULCAN3_SOLVER="${VULCAN3_SOLVER:-ffi}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------
 if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
@@ -259,7 +259,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
   # the fixed-step step-cost bench (calibrate_count_max --fixed-steps), sized by
   # its CALIBRATE_N_DRAWS (default: the preset's particle count, the GPU's SM
   # count), CALIBRATE_FIXED_STEPS (150) and CALIBRATE_GRAD.
-  # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN_JAX_SOLVER passes through.
+  # An arm's XLA_CMDBUF rebuilds its XLA_FLAGS; VULCAN3_SOLVER passes through.
   # Every override file is checked BEFORE the first arm runs.
   # Arms run in order, each in a subshell that exports its own env; the chain file is read
   # on fd 3 so an arm's process cannot swallow the remaining lines.
@@ -287,7 +287,7 @@ elif [ -n "${CALIBRATE_CHAIN:-}" ]; then
         for kv in "${kvs[@]}"; do [ -n "${kv}" ] && export "${kv?}"; done
       fi
       case ";${envs};" in *";XLA_CMDBUF="*) set_xla_flags || exit 1 ;; esac
-      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN_JAX_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS}"
+      echo "arm env: overrides=${ovf} out=${outd} solver=${VULCAN3_SOLVER:-default} XLA_FLAGS=${XLA_FLAGS}"
       if [ "${mode}" = "probe" ]; then
         python -u -m retrieval_framework.probe_memory "${SMC_DIR}"
       elif [ "${mode}" = "bench" ]; then

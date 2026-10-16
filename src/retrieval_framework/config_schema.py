@@ -63,7 +63,7 @@ class Config:
     use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
     # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
     # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
-    # overridden: they inherit the vulcan_cfg_name config (vulcan_jax/configs/W39b.yaml).
+    # overridden: they inherit the vulcan_cfg_name config (vulcan3/configs/W39b.yaml).
     yconv_cri: float = 0.01
     molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
     nu_min: float = 1923.0             # ~5.2 um
@@ -115,7 +115,7 @@ class Config:
     # Placeholders so the dataclass is constructible; validate_config refuses an
     # unset value.
     # VULCAN baseline config name for the chemistry pre-loop, loaded via
-    # vulcan_jax.load_config (e.g. "W39b").
+    # vulcan3.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
     # Planet/stellar radii for the RT depth normalization (cm).
     # tp_gravity_cgs below doubles as the RT's gravity at rp_cm; the planet mass
@@ -444,7 +444,7 @@ def hardware_profile() -> dict:
                            else os.cpu_count()),
             "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE")
                                   * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
-            "vulcan_jax_solver": os.environ.get("VULCAN_JAX_SOLVER", "fast"),
+            "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
             "xla_flags": os.environ.get("XLA_FLAGS", "")}
     if prof["backend"] in ("gpu", "cuda"):
         cc = str(getattr(dev, "compute_capability", ""))
@@ -456,34 +456,34 @@ def hardware_profile() -> dict:
 
 
 def choose_solver() -> str:
-    """Set VULCAN_JAX_SOLVER for this process from the device, unless the user
+    """Set VULCAN3_SOLVER for this process from the device, unless the user
     set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
     the only card it is validated on, and only when its CUDA library is
     built; `fast` everywhere else. Import-frozen by VULCAN-JAX, so this runs before
-    the first vulcan_jax import (make_config calls it). Returns the choice and
+    the first vulcan3 import (make_config calls it). Returns the choice and
     why, for the log."""
     import importlib.util
     import jax
 
-    if "VULCAN_JAX_SOLVER" in os.environ:
-        return f"{os.environ['VULCAN_JAX_SOLVER']} (set by the user)"
-    step = sys.modules.get("vulcan_jax.jax_step")
+    if "VULCAN3_SOLVER" in os.environ:
+        return f"{os.environ['VULCAN3_SOLVER']} (set by the user)"
+    step = sys.modules.get("vulcan3.jax_step")
     if step is not None:        # already frozen by an earlier import: report it
-        os.environ["VULCAN_JAX_SOLVER"] = step._SOLVER
-        return f"{step._SOLVER} (vulcan_jax was imported before the choice)"
+        os.environ["VULCAN3_SOLVER"] = step._SOLVER
+        return f"{step._SOLVER} (vulcan3 was imported before the choice)"
     dev = jax.devices()[0]
     cc = str(getattr(dev, "compute_capability", ""))
-    spec = importlib.util.find_spec("vulcan_jax")
+    spec = importlib.util.find_spec("vulcan3")
     lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"
     if (jax.default_backend() in ("gpu", "cuda") and cc == FFI_COMPUTE_CAPABILITY
             and lib.is_file()):
-        os.environ["VULCAN_JAX_SOLVER"] = "ffi"
+        os.environ["VULCAN3_SOLVER"] = "ffi"
         return f"ffi (compute capability {cc}, {lib.name} built)"
-    os.environ["VULCAN_JAX_SOLVER"] = "fast"
+    os.environ["VULCAN3_SOLVER"] = "fast"
     why = ("not a CUDA device" if jax.default_backend() not in ("gpu", "cuda") else
            f"compute capability {cc} is not {FFI_COMPUTE_CAPABILITY}"
            if cc != FFI_COMPUTE_CAPABILITY else
-           f"{lib} is not built (python -c 'from vulcan_jax import solver_fast; "
+           f"{lib} is not built (python -c 'from vulcan3 import solver_fast; "
            "solver_fast.build(cuda=True)' on the GPU host)")
     return f"fast ({why})"
 
@@ -581,7 +581,7 @@ def validate_config(cfg: Config) -> None:
     # Planet identity must be set by the case preset.
     if not str(cfg.vulcan_cfg_name).strip():
         raise ValueError("vulcan_cfg_name is unset: the case must name its VULCAN "
-                         "baseline config (e.g. 'W39b', loaded from vulcan_jax/configs/)")
+                         "baseline config (e.g. 'W39b', loaded from vulcan3/configs/)")
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): "
                          "the case must set both (cm)")

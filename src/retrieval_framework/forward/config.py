@@ -1,6 +1,6 @@
 """Retrieval-side configuration for the shared vulcan-forward engine.
 
-Pure constants + paths: NO heavy imports here (no jax, no vulcan_jax, no exojax),
+Pure constants + paths: NO heavy imports here (no jax, no vulcan3, no exojax),
 so this module is safe to import before the env-order-sensitive VULCAN-JAX setup
 runs.
 
@@ -48,8 +48,8 @@ DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 # rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
 
-# WASP-39b geometry (cm): the Rp and r_star of vulcan_jax/configs/W39b.yaml.
-R_SUN_CM = 6.957e10        # = vulcan_jax.phy_const.r_sun (not imported: import-light)
+# WASP-39b geometry (cm): the Rp and r_star of vulcan3/configs/W39b.yaml.
+R_SUN_CM = 6.957e10        # = vulcan3.phy_const.r_sun (not imported: import-light)
 R_JUP_CM = 7.1492e9        # upstream VULCAN phy_const.r_jup
 # The literature radius and the gravity there, G*Mp/Rp^2 with the cfg's Mp.
 # They apply at the config's p_ref_bar; the retrieval's free lnR0 scales the

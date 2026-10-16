@@ -6,7 +6,7 @@
 # but must set VULCAN_PROJECT_ROOT so the repo data/ tree (observations +
 # opacity caches) resolves -- see forward/config.py.
 #
-# The vulcan-jax dependency below is the TestPyPI release line. The exact
+# The vulcan3 dependency below is the TestPyPI release line. The exact
 # validated chemistry commit for HPC runs is pinned in requirements-hpc.txt.
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -40,7 +40,7 @@ dependencies = [
     # only cold start, which this package assumes.
     "vulcan-forward>=0.28.0",
     # Floor: conv_normal and validate_overrides (vulcan-forward's own floor).
-    "vulcan-jax>=0.17.0",
+    "vulcan3>=0.18.0",
 ]
 
 [project.urls]

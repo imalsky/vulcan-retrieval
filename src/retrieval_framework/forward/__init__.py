@@ -10,9 +10,9 @@ other. What remains here is this repo's own:
                      heavy imports; always safe to import first. The shared
                      physics constants are ``vulcan_forward.constants``.
 
-Import order: ``vulcan_forward.vulcan_chem`` sets the VULCAN_JAX_* import-frozen
+Import order: ``vulcan_forward.vulcan_chem`` sets the VULCAN3_* import-frozen
 env vars and jax x64 at import and must precede exojax (it raises otherwise).
 
 This ``__init__`` imports nothing, so importing the subpackage stays free of
-jax/vulcan_jax/exojax side effects.
+jax/vulcan3/exojax side effects.
 """

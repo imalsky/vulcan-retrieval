@@ -147,7 +147,7 @@ stamp = {
     "python": "%d.%d.%d" % sys.version_info[:3],
     "jax": jax.__version__,
     "jaxlib": jaxlib.__version__,
-    "vulcan_jax_sha": sha("${PROJECT_ROOT}/VULCAN-JAX"),
+    "vulcan3_sha": sha("${PROJECT_ROOT}/VULCAN-JAX"),
     "vulcan_forward_sha": sha("${PROJECT_ROOT}/vulcan-forward"),
     "vulcan_retrieval_sha": sha("${REPO_DIR}"),
 }

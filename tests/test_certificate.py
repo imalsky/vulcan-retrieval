@@ -31,7 +31,7 @@ from retrieval_framework.certificate import (
 _ART_CFG = {"art_ptop_bar": 1e-9, "nz": 62, "art_nlayer": 67,
             "yconv_cri": 0.01, "molecules": ["H2O", "CO2"]}
 _ART_REPOS = {name: {"commit": "a" * 40}
-              for name in ("jax-vulcan", "vulcan-forward", "vulcan-retrieval")}
+              for name in ("VULCAN3", "vulcan-forward", "vulcan-retrieval")}
 # CONTENT identity of the opacity/CIA files; the artifact and the run must match
 _ART_DATA = {"opacity_sha256": {"H2O": "f" * 64, "CO2": "e" * 64},
              "cia_sha256": {"H2-H2_2011.cia": "1" * 64,
@@ -44,7 +44,7 @@ def _passing_cert():
         "code": {
             "repos": {name: {"commit": "a" * 40, "dirty": False,
                              "dirty_files": []}
-                      for name in ("jax-vulcan", "vulcan-forward",
+                      for name in ("VULCAN3", "vulcan-forward",
                                    "vulcan-retrieval")},
             "versions": {"jax": "0.6.2", "numpy": "1.26.4"},
         },
@@ -153,7 +153,7 @@ _REFUSALS = [
      _set("convergence", value={"reached_beta1": False, "final_beta": 0.83, "n_stages": 19}), _replay, ("TEMPERED",)),
     ("beta_just_below_one", _passing_cert, _set("convergence", "final_beta", value=0.999), _replay, ("not 1 within",)),
     ("dirty_repo", _passing_cert,                     # unattributable to a committed state = not evidence
-     _set("code", "repos", "jax-vulcan", "dirty", value=True), _replay, ("DIRTY",)),
+     _set("code", "repos", "VULCAN3", "dirty", value=True), _replay, ("DIRTY",)),
     ("opacity_mode_unrecorded", _passing_cert, lambda c: c["resolved_config"].pop("opacity_mode"), _replay, ("opacity_mode",)),
     ("opacity_mode_removed_lbl", _passing_cert, _set("resolved_config", "opacity_mode", value="lbl"), _replay, ("removed",)),
     ("cold_replay_not_run", _passing_cert, _noop, lambda: None, ("cold replay not run",)),
@@ -564,7 +564,7 @@ def test_resume_without_a_checkpoint_writes_nothing(tmp_path, monkeypatch):
     from retrieval_framework import run_smc
     (tmp_path / "run.log").write_text("the killed job's log\n")
     for k, v in (("SMC_RETRIEVAL_PRESET", "smoke"), ("SMC_RETRIEVAL_OUT_DIR", str(tmp_path)),
-                 ("SMC_RESUME", "1"), ("VULCAN_JAX_SOLVER", "fast")):
+                 ("SMC_RESUME", "1"), ("VULCAN3_SOLVER", "fast")):
         monkeypatch.setenv(k, v)
     monkeypatch.setattr("sys.argv", ["run_smc", str(RUN_DIR)])
     with pytest.raises(FileNotFoundError, match="no checkpoint"):
