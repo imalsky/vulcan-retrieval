@@ -47,6 +47,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from retrieval_framework import config_schema as C  # light import (no jax)
+from retrieval_framework import observations as OBS  # numpy only
 from retrieval_framework.observations import PPM
 from retrieval_framework.certificate import _repo_states, refuse_mismatched_resume
 
@@ -223,7 +224,9 @@ def predictive_replicates(mu_draws, obs_sigma, infl, rng):
 
     The likelihood is diagonal Gaussian with sigma_eff = obs_sigma *
     noise_inflation, and mu already carries the instrument offsets, so a
-    posterior-predictive replicate is mu + N(0, sigma_eff^2). Returns
+    posterior-predictive replicate is mu + N(0, sigma_eff^2). ``infl`` is
+    (n_draw, 1) for one b or (n_draw, n_bin) per bin
+    (observations.noise_scale_per_bin, either noise mode). Returns
     (y_rep, sigma_eff). The spread of ``mu_draws`` alone is the LATENT band and
     is not comparable to data -- it ignores the inferred noise entirely.
     """
@@ -587,8 +590,8 @@ def main() -> None:
     # second is comparable to the data, and only it responds to the inferred
     # noise inflation. Both are saved, named apart.
     names = list(pipe.names)
-    ni = names.index("noise_inflation") if "noise_inflation" in names else None
-    infl = sel[:, ni][:, None] if ni is not None else np.ones((sel.shape[0], 1))
+    # per bin and per draw: one b, one b per group, or 1 (no inflation)
+    infl = OBS.noise_scale_per_bin(sel, names, pipe.obs["group"])
     y_rep, sig_eff = predictive_replicates(mu_draws, pipe.obs_sigma, infl, rng)
 
     # Calibrated posterior-predictive check on the likelihood's OWN discrepancy
@@ -600,7 +603,8 @@ def main() -> None:
 
     theta_med = np.median(theta_all, axis=0)
     mu_med = np.asarray(pipe.observed_depth_model_jit(jnp.asarray(theta_med, pipe.dtype)))
-    sig_med = np.asarray(pipe.obs_sigma) * (float(theta_med[ni]) if ni is not None else 1.0)
+    sig_med = np.asarray(pipe.obs_sigma) * OBS.noise_scale_per_bin(
+        theta_med, names, pipe.obs["group"])
     dof = int(pipe.n_bin) - int(pipe.n_dim)
     chi2_nu = (float(np.sum(((pipe.obs_depth - mu_med) / sig_med) ** 2) / dof)
                if dof > 0 else float("nan"))
