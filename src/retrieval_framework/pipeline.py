@@ -254,6 +254,46 @@ def _map_chunks(fn, args, chunk):
         lambda x: x.reshape((-1,) + x.shape[2:])[:n], out)
 
 
+def _map_chunks_rows(fn, args, chunk, need, fill):
+    """``_map_chunks`` on the rows where ``need`` (an (n,) bool) holds; ``fill``
+    elsewhere. The rows are reordered needed-first (row order kept within
+    each group) into the stacked ``(n_chunks, chunk)`` layout ``_map_chunks``
+    builds, and a while loop runs ``fn`` on the first ``ceil(sum(need) /
+    chunk)`` chunks only, so a row nobody reads costs no RT. Its body is
+    ``lax.map``'s (one chunk sliced out of the stack, the result written back
+    into the stacked output), so each chunk is the same computation on the
+    same shapes. ``fn`` must return one (chunk,) leaf. ``chunk<=0`` (or >= n)
+    is ONE call on the whole batch, as in ``_map_chunks``, masked afterwards."""
+    leaves = jax.tree_util.tree_leaves(args)
+    n = int(leaves[0].shape[0])
+    if chunk <= 0 or chunk >= n:
+        return jnp.where(need, fn(args), fill)
+    n_pad = (-n) % chunk
+    # needed rows first, each group in row order (a stable sort of ~need)
+    order = jnp.argsort(jnp.logical_not(need).astype(jnp.int32), stable=True).astype(jnp.int32)
+    if n_pad:
+        order = jnp.concatenate([order, order[:n_pad]])
+    n_chunks = (n + n_pad) // chunk
+    xs = jax.tree_util.tree_map(
+        lambda x: x[order].reshape((n_chunks, chunk) + x.shape[1:]), args)
+    n_need = jnp.sum(need.astype(jnp.int32))
+    n_run = (n_need + chunk - 1) // chunk
+    fill = jnp.asarray(fill)
+
+    def body(c):
+        k, ys = c
+        x = jax.tree_util.tree_map(
+            lambda a: jax.lax.dynamic_index_in_dim(a, k, 0, keepdims=False), xs)
+        return k + 1, jax.lax.dynamic_update_index_in_dim(ys, fn(x), k, 0)
+
+    ys0 = jnp.full((n_chunks, chunk), fill, dtype=fill.dtype)
+    _, ys = jax.lax.while_loop(lambda c: c[0] < n_run, body, (jnp.int32(0), ys0))
+    # stacked position p holds row order[p]; the first n_need are the needed rows
+    pos = jnp.arange(n + n_pad, dtype=jnp.int32)
+    dst = jnp.where(pos < n_need, order, jnp.int32(n))
+    return jnp.full((n,), fill, dtype=fill.dtype).at[dst].set(ys.reshape(-1), mode="drop")
+
+
 def build_pipeline(cfg: C.Config) -> Pipeline:
     """Build the forward, observation operators, u-space prior/likelihood, and the
     forward-mode-gradient likelihood wrapper. No inference, no run output written.
@@ -586,7 +626,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return val, g, bad_grad
 
     def _make_batch_eval(mode: str, want_grad: bool, diag: bool = False,
-                         mutation_cap: bool = True, retry: bool = False):
+                         mutation_cap: bool = True, retry: bool = False,
+                         rt_kept_only: bool = False):
         """Build eval(U, Y, refs) -> (L, G, Y_new, refs_new, n_bad_grad, stats)
         when want_grad (``stats`` an EvalStats), else (L, Y_new, refs_new, stats)
         -- or (L, Y_new, refs_new, per-particle ConvDiag) when diag; all
@@ -611,10 +652,23 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
         ``retry=True`` (cfg.chem_retry, run_nautilus's second pass): the same
         evaluator on the chem_retry program (the retry rtol, gated at the retry
-        count_max). Primal only, and warm only uncapped (mutation_cap=False)."""
+        count_max). Primal only, and warm only uncapped (mutation_cap=False).
+
+        Primal evaluators (want_grad=False) also take ``active`` (an optional
+        (N,) bool, eval(U, Y, refs, active)): a False row is padding. On the lane
+        queue its chemistry takes no step; it is never ``usable`` (L is the
+        reject sentinel, Y the baseline) and is never RT'd. None is the
+        program without the mask. ``rt_kept_only=True`` (run_nautilus) runs
+        the RT only on the rows whose L can survive: T-P in window, certified
+        under the cap and active (``_map_chunks_rows``); the others get the
+        reject sentinel without an RT. The kept rows' L are the full RT's. On
+        the gated path this is the same L for every row; on the ungated
+        ``diag`` path it gates L like the gated path."""
         warm = (mode == "warm")
         if diag and (warm or want_grad):
             raise ValueError("diag is cold+no-grad only")
+        if rt_kept_only and want_grad:
+            raise ValueError("rt_kept_only is for the primal evaluators")
         if retry:
             if want_grad:
                 raise ValueError("the chem_retry evaluators are primal only: the "
@@ -730,19 +784,36 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # caller reads the ConvDiag): this evaluator is the FD reference
             # (smoke_retrieval) and the certificate's cold replay, so it must be
             # the same likelihood. The diag rides the primal carry.
-            def _chem_primal(C_, Y, refs):
+            def _chem_primal(C_, Y, refs, active=None):
                 """Chemistry for the whole particle batch -> (AUX, Y_new, ConvDiag):
                 one batched call (the cold two-stage map, or the warm continuation
                 under the mutation cap unless ``mutation_cap=False``). Lanes
                 freeze at their own exits; agreement with the per-lane map is at
-                the convergence scale."""
+                the convergence scale. ``active`` masks padded rows."""
+                kw = {} if active is None else {"active": active}
                 if warm:
-                    Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1])
+                    Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], **kw)
                 else:
-                    Y_new, CD = cold_solve(C_)
+                    Y_new, CD = cold_solve(C_, **kw)
                 return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
-        def eval_batch(U, Y, refs):
+            def _rt_vals(AUX, Theta, CD, valid, active):
+                """The RT log L of every row, or (rt_kept_only) of the rows
+                that can be kept: in-window, certified under the cap, active."""
+                if not rt_kept_only:
+                    return _map_chunks(jax.vmap(_rt_val), (AUX, Theta), rt_chunk)
+                need = (valid & (CD.accept_count.astype(jnp.int32) < wcmax)
+                        & (CD.conv_normal > 0.5))
+                if active is not None:
+                    need = need & active
+                return _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk,
+                                        need, _REJECT)
+
+        def eval_batch(U, Y, refs, active=None):
+            if active is not None:
+                if want_grad:
+                    raise ValueError("active (padded rows) is for the primal evaluators")
+                active = jnp.asarray(active, bool)
             U = jnp.asarray(U, dtype)
             Theta = jax.vmap(theta_from_u)(U)                        # (N, n_dim)
             _, dTh = jax.vmap(
@@ -793,16 +864,22 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     acc=ACC, longdy=CD[:, 1], conv_ok=conv_ok,
                     bad_grad=bads & usable, chem_tan_bad=chem_bad)
             elif diag:
-                AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs)
-                vals = _map_chunks(jax.vmap(_rt_val), (AUX, Theta), rt_chunk)
+                AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs, active)
+                vals = _rt_vals(AUX, Theta, CDIAG, valid, active)
                 G = None
+                if active is not None:
+                    # the diag path's L stays ungated; a padded row's state
+                    # is pinned to the baseline below like a rejected one
+                    usable = valid & active
             else:
-                AUX, Ynew, CDL = _chem_primal(C_, Y, refs)
-                vals = _map_chunks(jax.vmap(_rt_val), (AUX, Theta), rt_chunk)
+                AUX, Ynew, CDL = _chem_primal(C_, Y, refs, active)
+                vals = _rt_vals(AUX, Theta, CDL, valid, active)
                 G = None
                 ACC = CDL.accept_count.astype(jnp.int32)
                 conv_ok = CDL.conv_normal > 0.5
                 under_cap = ACC < wcmax
+                if active is not None:
+                    valid = valid & active      # a padded row is never tallied
                 usable = valid & under_cap & conv_ok
                 # Same two rejection classes the gradient branch tallies above.
                 # The gradient-free (rwm) mutation kernel runs THIS branch, and
@@ -864,6 +941,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # the RT half of the gradient evaluators; tests/test_stage_split.py
         # builds its single-chain reference on it
         _rt_val_grad=_rt_val_grad,
+        # the per-particle primal RT stage (L from aux), for the RT-skip checks
+        _rt_val=_rt_val,
         batch_eval_cold_vg=_make_batch_eval("cold", True),
         batch_eval_cold_l=_make_batch_eval("cold", False),
         batch_eval_cold_l_diag=_make_batch_eval("cold", False, diag=True),

@@ -7,7 +7,9 @@ certified columns become anchors. With chem_retry, exactly the in-window rows
 the first solve left uncertified are re-solved once, from the same start, on
 the retry evaluator; a row is kept only if that solve certifies, and the
 tally, the batch log and the anchors' rtol record the second pass. Off, none
-of that appears."""
+of that appears. Padding is masked: a short chunk's filler rows and the retry
+bucket's filler rows reach the evaluator as ``active`` False, and the warm
+evaluators can be compiled ahead on a host thread."""
 import json
 import math
 from types import SimpleNamespace
@@ -24,7 +26,8 @@ jax.config.update("jax_enable_x64", True)
 from conftest import StubConvDiag
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
-from retrieval_framework.run_nautilus import Anchors, make_loglike, retry_width
+from retrieval_framework.run_nautilus import (RETRY_PRECOMPILE, Anchors, make_loglike,
+                                              retry_width)
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 
@@ -34,7 +37,17 @@ class _Stats(NamedTuple):
     conv_ok: jnp.ndarray
 
 
-def _stub_pipe():
+def _masked(name, seen, active, L, acc, conv):
+    """The pipeline's padding contract: an inactive row takes no step (acc 0,
+    uncertified) and scores the reject sentinel. Records (name, active) per call."""
+    if seen is not None:
+        jax.debug.callback(lambda a: seen.append((name, np.asarray(a).tolist())), active,
+                           ordered=True)
+    return (jnp.where(active, L, P.REJECT_LOGL), jnp.where(active, acc, 0),
+            active & conv)
+
+
+def _stub_pipe(seen=None):
     specs = [C.ParamSpec(f"p{i}", f"p{i}", "uniform", 0.0, 1.0, MU, "chem") for i in range(D)]
     theta_from_u, _, _ = P.make_uspace(specs, jnp.float64)
 
@@ -45,17 +58,22 @@ def _stub_pipe():
         conv = th[:, 1] >= 0.35                                     # stalled below
         return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L), acc, conv   # T-P window
 
-    def cold(U, Y, refs):          # the column is a code of the point's own chemistry
+    def cold(U, Y, refs, active):  # the column is a code of the point's own chemistry
         th, L, acc, conv = common(U)
+        L, acc, conv = _masked("cold", seen, active, L, acc, conv)
         return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], StubConvDiag(acc, conv)
 
-    def warm(U, Y, refs):          # hands back the column it started from; like the
+    def warm(U, Y, refs, active):  # hands back the column it started from; like the
         _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
+        L, acc, conv = _masked("warm", seen, active, L, acc, conv)
         L = jnp.where(conv & (acc < COUNT_MAX), L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
-    return SimpleNamespace(batch_eval_cold_l_diag=cold,
-                           _make_batch_eval=lambda mode, grad, mutation_cap: warm,
+    def make(mode, grad, diag=False, mutation_cap=True, rt_kept_only=False):
+        assert not grad and rt_kept_only and diag == (mode == "cold")
+        return cold if mode == "cold" else warm
+
+    return SimpleNamespace(_make_batch_eval=make, n_dim=D,
                            theta_from_u=theta_from_u, tp_valid=lambda th: th[2] <= 0.7,
                            dtype=jnp.float64, n_chem_tp=2, has_chem_state=False,
                            fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX)))
@@ -110,8 +128,8 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
 RETRY_MAX, DL_RETRY, RTOL0, RTOL1 = 80, 0.5, 0.2, 0.05
 
 
-def _retry_stub_pipe():
-    base = _stub_pipe()
+def _retry_stub_pipe(seen=None):
+    base = _stub_pipe(seen)
     theta_from_u = base.theta_from_u
 
     def second(U):
@@ -121,20 +139,27 @@ def _retry_stub_pipe():
         conv = th[:, 1] >= 0.2
         return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L + DL_RETRY), acc, conv
 
-    def cold2(U, Y, refs):
+    def cold2(U, Y, refs, active):
         th, L, acc, conv = second(U)
+        L, acc, conv = _masked("cold2", seen, active, L, acc, conv)
         code = (th[:, 0] + 1000 * th[:, 1] + 0.5)[:, None, None]
         return L, code, th[:, :2], StubConvDiag(acc, conv)
 
-    def warm2(U, Y, refs):
+    def warm2(U, Y, refs, active):
         _, L, acc, conv = second(U)
+        L, acc, conv = _masked("warm2", seen, active, L, acc, conv)
         L = jnp.where(conv & (acc < RETRY_MAX), L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
-    evals = {("warm", False): base._make_batch_eval("warm", False, False),
-             ("cold", True): cold2, ("warm", True): warm2}
-    base._make_batch_eval = (lambda mode, grad, diag=False, mutation_cap=True, retry=False:
-                             evals[(mode, retry)])
+    first = base._make_batch_eval
+
+    def make(mode, grad, diag=False, mutation_cap=True, retry=False, rt_kept_only=False):
+        if not retry:
+            return first(mode, grad, diag, mutation_cap, rt_kept_only)
+        assert not grad and rt_kept_only and diag == (mode == "cold")
+        return cold2 if mode == "cold" else warm2
+
+    base._make_batch_eval = make
     base.chem_retry = SimpleNamespace(rtol_first=RTOL0, count_max_first=COUNT_MAX,
                                       rtol=RTOL1, count_max=RETRY_MAX)
     return base
@@ -153,8 +178,10 @@ def _expected(z):
 
 
 def test_retry_width_pads_to_the_bucket():
-    assert [retry_width(n) for n in (0, 1, 31, 32, 33, 64, 65, 396)] == [
-        0, 32, 32, 32, 64, 64, 96, 416]
+    assert [retry_width(n) for n in (0, 1, 131, 132, 133, 264, 265, 660, 661)] == [
+        0, 132, 132, 132, 264, 264, 396, 660, 792]
+    assert [retry_width(n, 2) for n in (1, 2, 3)] == [2, 2, 4]
+    assert all(b == retry_width(b) for b in RETRY_PRECOMPILE)
 
 
 def test_retry_resolves_exactly_the_uncertified_rows_from_their_start(tmp_path):
@@ -210,7 +237,7 @@ def test_retry_resolves_exactly_the_uncertified_rows_from_their_start(tmp_path):
     for r, ek, zz in zip(rows, (e1, e2), (z1, z2)):
         rr = np.flatnonzero(ek["fail1"])
         assert r["retry"]["rows"] == rr.tolist()
-        assert r["retry"]["width"] == retry_width(len(rr)) == 32
+        assert r["retry"]["width"] == retry_width(len(rr)) == 132
         assert r["acc"] == np.where(zz[:, 0] > 0.6, COUNT_MAX, 10).tolist()   # first pass
         assert r["retry"]["acc"] == np.where(zz[rr, 0] > 0.8, RETRY_MAX, 60).tolist()
         assert (r["retry"]["rtol"], r["retry"]["count_max"]) == (RTOL1, RETRY_MAX)
@@ -228,3 +255,65 @@ def test_retry_off_writes_nothing_new(tmp_path):
     for f in sorted(tmp_path.glob("anchors_*.npz")):
         with np.load(f) as d:
             assert set(d.files) == {"z", "Y", "refs"}
+
+
+def test_padding_rows_are_masked(tmp_path):
+    """A chunk shorter than n_batch and the retry bucket are filled with copies
+    of their last row that reach the evaluators as active=False: the real rows
+    lead, in order, and only they are active."""
+    rng = np.random.default_rng(5)
+    seen, tally = [], {}
+    anchors, log = Anchors(tmp_path, 2), tmp_path / "batches.jsonl"
+    like = make_loglike(_retry_stub_pipe(seen), 16, tally, anchors, log)
+    z1 = rng.uniform(0.02, 0.98, (5, D))
+    z1[:2] = [[0.7, 0.5, 0.3], [0.5, 0.3, 0.3]]        # both fail the first pass
+    L1 = like(z1)                                       # cold: 5 real rows of 16
+    z2 = rng.uniform(0.02, 0.98, (16, D))
+    z2[:3] = [[0.75, 0.5, 0.3], [0.5, 0.25, 0.3], [0.95, 0.5, 0.3]]
+    L2 = like(z2)                                       # warm: a full chunk
+    jax.effects_barrier()
+    e1, e2 = _expected(z1), _expected(z2)
+    for L, e in ((L1, e1), (L2, e2)):
+        np.testing.assert_allclose(L[e["kept"]], e["L"][e["kept"]], rtol=0, atol=1e-12)
+        assert np.all(np.isneginf(L[~e["kept"]]))
+    calls = [name for name, _ in seen]
+    assert calls == ["cold", "cold2", "warm", "warm2"], calls
+    act = dict(seen)
+    n1, n2 = int(e1["fail1"].sum()), int(e2["fail1"].sum())
+    assert act["cold"] == [True] * 5 + [False] * 11
+    assert act["cold2"] == [True] * n1 + [False] * (retry_width(n1) - n1)
+    assert act["warm"] == [True] * 16
+    assert act["warm2"] == [True] * n2 + [False] * (retry_width(n2) - n2)
+    assert tally["n_eval"] == 21 and tally["retry_width_sum"] == retry_width(n1) + retry_width(n2)
+
+
+def test_precompile_builds_the_warm_programs_ahead(tmp_path):
+    """precompile=True: once the cold first chunk is dispatched, the warm
+    first-pass program and every RETRY_PRECOMPILE retry bucket compile on a
+    host thread; the warm chunks then run on them, and the results are the
+    ones compiled at first use."""
+    rng = np.random.default_rng(3)
+    z1, z2 = rng.uniform(0.02, 0.98, (16, D)), rng.uniform(0.02, 0.98, (16, D))
+    z1[:2] = [[0.7, 0.5, 0.3], [0.5, 0.3, 0.3]]
+    z2[:2] = [[0.75, 0.5, 0.3], [0.5, 0.25, 0.3]]
+    out = {}
+    for pre in (False, True):
+        tally, anchors = {}, Anchors(tmp_path / f"a{int(pre)}", 2)
+        like = make_loglike(_retry_stub_pipe(), 16, tally, anchors, precompile=pre)
+        L1 = like(z1)
+        progs = like.programs
+        ahead = {("warm", 16)} | {("retry_warm", b) for b in RETRY_PRECOMPILE}
+        if pre:
+            assert ahead <= set(progs.pending) | set(progs.exe)
+            for f in list(progs.pending.values()):
+                f.result()
+        else:
+            assert not progs.pending and not (ahead & set(progs.exe))
+        L2 = like(z2)
+        out[pre] = (L1, L2, tally)
+        assert ("warm", 16) in progs.exe
+    for a, b in zip(out[False][:2], out[True][:2]):
+        assert np.array_equal(a, b)
+    counts = [{k: v for k, v in t.items() if not k.endswith("wall_s")} for t in
+              (out[False][2], out[True][2])]
+    assert counts[0] == counts[1]

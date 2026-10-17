@@ -76,6 +76,13 @@ reporting a production result.
 Nested sampling uses the same case and presets:
 `python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval` writes to
 `<out_dir>_nautilus`. It does not yet write plots or a certificate.
+With `chem_retry` on, the second pass runs on a bucket of 132 lanes per step
+(`RETRY_BUCKET` in `run_nautilus.py`), and the padding rows of a bucket or of a
+short chunk are masked: they take no chemistry step and no RT. Each pass runs
+the RT only on the rows whose likelihood it can keep. `NAUTILUS_PRECOMPILE=1`
+(the default) compiles the warm first-pass program and the retry buckets
+132-660 (`RETRY_PRECOMPILE`) on a host thread while the cold first batch runs;
+`NAUTILUS_PRECOMPILE=0` compiles each program at its first use.
 
 ## Limits
 

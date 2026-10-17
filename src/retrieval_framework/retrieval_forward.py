@@ -230,9 +230,18 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             validate_warm chunk) therefore takes the same route as the production
             run instead of silently switching to the lockstep batch.
             ``cold_lanes = 0`` is the lockstep batch, call for call. ``ch`` is the
-            main chemistry, or the chem_retry program on the retry route."""
+            main chemistry, or the chem_retry program on the retry route.
+
+            ``active`` (optional (N,) bool, run_nautilus's padded rows): on the
+            lane queue a False row is a placeholder whose lane starts done and
+            takes no step (vulcan_forward ``converged_y_queue(active=)``); the
+            lockstep batch has no mask and solves every row. Either way the
+            caller discards those rows. None is the program without a mask."""
+            active = kw.pop("active", None)
             lanes = int(cfg.cold_lanes)
             if lanes > 0:
+                if active is not None:
+                    kw["active"] = active
                 return ch.converged_y_queue(C, min(lanes, int(C.shape[0])),
                                             chunk=int(cfg.cold_refill_chunk), **kw)
             return ch.converged_y_batch(C, return_conv_diag=True, **kw)
@@ -240,7 +249,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     _chem_batch_route = _route_for(chem)
 
-    def chem_solve_cold_diag_batch(C):
+    def chem_solve_cold_diag_batch(C, active=None):
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
         ``(y, ConvDiag)`` with a leading particle axis on every field.
 
@@ -255,8 +264,13 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         The cold gradient path takes the same route,
         one ``jax.jvp`` per direction through the stage twins below, and so do
         the batched warm continuations (``chem_solve_warm_diag_batch``). Every
-        batch goes through ``_chem_batch_route``."""
-        return chem_stage2_diag_batch(C, chem_stage1_batch(C))
+        batch goes through ``_chem_batch_route``. ``active`` masks padded rows
+        in both stages (``_chem_batch_route``)."""
+        if active is None:
+            return chem_stage2_diag_batch(C, chem_stage1_batch(C))
+        Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0),
+                                    active=active)
+        return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
 
     def chem_stage1_batch(C):
         """``chem_stage1`` for a STACK of chem_thetas ``C`` (N, n_chem_tp) ->
@@ -301,7 +315,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                                 lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                 return_conv_diag=True, warm_cap=False)
 
-    def chem_solve_warm_diag_batch(C, Y, lnZ_ref, c_o_ref):
+    def chem_solve_warm_diag_batch(C, Y, lnZ_ref, c_o_ref, active=None):
         """``chem_solve_warm_diag`` for a STACK: every particle's own carried
         column ``Y`` (N, nz, ni) re-converged at its own proposal ``C``
         (N, n_chem_tp) with its own reference composition ``lnZ_ref`` /
@@ -314,33 +328,35 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         SMC mutation path, primal and gradient (pipeline._make_batch_eval jvps
         through this for the whole cloud at once)."""
         return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                 warm_cap=True)
+                                 warm_cap=True, active=active)
 
-    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref):
+    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, active=None):
         """``chem_solve_warm_diag_batch`` WITHOUT the mutation cap (the cold
         count_max): run_nautilus's anchored warm starts and, in warm chem mode,
         the INIT phase-2 pass, whose inputs are phase-1 survivors
-        re-certifying from their own converged columns."""
+        re-certifying from their own converged columns. ``active`` masks
+        padded rows (``_chem_batch_route``)."""
         return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                 warm_cap=False)
+                                 warm_cap=False, active=active)
 
     chem_solve_cold_diag_batch_retry = chem_solve_warm_diag_full_batch_retry = None
     if chem_retry is not None:
         _retry_route = _route_for(chem_retry)
 
-        def chem_solve_cold_diag_batch_retry(C):
+        def chem_solve_cold_diag_batch_retry(C, active=None):
             """``chem_solve_cold_diag_batch`` on the chem_retry program: both cold
             stages (the equilibrium-seeded stage 1 and the stage-2 warm
-            re-convergence) at the retry rtol and cap."""
-            Y1, _cd = _retry_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
-            return _retry_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
+            re-convergence) at the retry rtol and cap. ``active`` masks padded
+            rows in both stages."""
+            Y1, _cd = _retry_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0), active=active)
+            return _retry_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
 
-        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref):
+        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, active=None):
             """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
             same warm continuation (same columns, same references) at the
-            retry rtol, under the retry cap."""
+            retry rtol, under the retry cap. ``active`` masks padded rows."""
             return _retry_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                warm_cap=False)
+                                warm_cap=False, active=active)
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)

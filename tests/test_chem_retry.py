@@ -137,7 +137,7 @@ def test_real_pipeline_retries_every_uncertified_draw(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="mutation_cap"):
         pipe._make_batch_eval("warm", False, retry=True)
 
-    monkeypatch.setattr(RN, "RETRY_PAD", 2)        # keep the CPU second pass at 2 lanes
+    monkeypatch.setattr(RN, "RETRY_BUCKET", 2)     # keep the CPU second pass at 2 lanes
     U = np.asarray(pipe.sample_prior_u(jax.random.PRNGKey(0), 2))   # T-P in window
     Z = 1.0 / (1.0 + np.exp(-U))
     tally, log = {}, tmp_path / "batches.jsonl"
