@@ -912,6 +912,31 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
         return eval_batch
 
+    def _make_presolve_eval(mode: str):
+        """cfg.chem_presolve (run_nautilus's first pass): the MAIN chemistry
+        program (the base rtol, the cold count_max; warm uncapped by
+        warm_count_max) as a start generator, eval(U, Y, refs, active) ->
+        (Y_new, refs_new, accept_count, conv_normal). Chemistry only: no RT, no
+        gating and no pinning -- Y_new is every row's raw exit column and
+        refs_new its own (lnZ, c_o); the caller decides which columns to use.
+        ``active`` masks padded rows (no step) as in the batch evaluators."""
+        if fwd.chem_retry is None or not bool(getattr(cfg, "chem_presolve", False)):
+            raise ValueError("presolve evaluator requested but cfg.chem_presolve is off")
+        warm = (mode == "warm")
+
+        def eval_presolve(U, Y, refs, active=None):
+            U = jnp.asarray(U, dtype)
+            C_ = jax.vmap(theta_from_u)(U)[:, :n_chem_tp]
+            kw = {} if active is None else {"active": jnp.asarray(active, bool)}
+            if warm:
+                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(C_, Y, refs[:, 0], refs[:, 1], **kw)
+            else:
+                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, **kw)
+            return (Y_new, C_[:, :2], CD.accept_count.astype(jnp.int32),
+                    CD.conv_normal > 0.5)
+
+        return eval_presolve
+
     # ---- assemble ----
     pipe.__dict__.update(dict(
         cfg=cfg, dtype=dtype, npdtype=npdtype,
@@ -938,6 +963,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # also called directly by run_nautilus (the uncapped warm map) and
         # smoke_retrieval
         _make_batch_eval=_make_batch_eval,
+        # cfg.chem_presolve's chemistry-only first pass (run_nautilus)
+        _make_presolve_eval=_make_presolve_eval,
         # the RT half of the gradient evaluators; tests/test_stage_split.py
         # builds its single-chain reference on it
         _rt_val_grad=_rt_val_grad,
@@ -958,7 +985,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             rtol_first=fwd.chem_rtol, count_max_first=int(fwd.chem.count_max),
             rtol=(float(cfg.chem_retry_rtol) if fwd.chem_retry_rtol is None
                   else fwd.chem_retry_rtol),
-            count_max=int(fwd.chem_retry.count_max))),
+            count_max=int(fwd.chem_retry.count_max),
+            # cfg.chem_presolve (only when on, so an off run records what it
+            # did before): the first pass is a start generator and the retry
+            # program solves and certifies every in-window draw
+            **({"presolve": True} if bool(getattr(cfg, "chem_presolve", False)) else {}))),
         # observations injected by set_observations
         obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None,
     ))

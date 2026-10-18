@@ -317,3 +317,147 @@ def test_precompile_builds_the_warm_programs_ahead(tmp_path):
     counts = [{k: v for k, v in t.items() if not k.endswith("wall_s")} for t in
               (out[False][2], out[True][2])]
     assert counts[0] == counts[1]
+
+
+# ---- chem_presolve -------------------------------------------------------------
+# The retry stub plus a presolve that "certifies" where the stub's first pass
+# does (p0 <= 0.6, p1 >= 0.35) and hands back the column code + 0.25. Every
+# in-window row then goes through the retry program (warm2 hands back the
+# column it started from), so a kept row's anchor column tells which start the
+# second pass used.
+PRE_CODE = 0.25
+
+
+def _presolve_stub_pipe(seen=None):
+    base = _retry_stub_pipe(seen)
+    theta_from_u = base.theta_from_u
+
+    def make_pre(mode):
+        name = f"pre_{mode}"
+
+        def ev(U, Y, refs, active):
+            th = jax.vmap(theta_from_u)(U)
+            acc = jnp.where(th[:, 0] > 0.6, COUNT_MAX, 10)
+            conv = th[:, 1] >= 0.35
+            _, acc, conv = _masked(name, seen, active, jnp.zeros(th.shape[0]), acc, conv)
+            code = (th[:, 0] + 1000 * th[:, 1] + PRE_CODE)[:, None, None]
+            return code, th[:, :2], acc, conv
+        return ev
+
+    base._make_presolve_eval = make_pre
+    base.chem_retry.presolve = True
+    return base
+
+
+def _expected_presolve(z):
+    tp_out = z[:, 2] > 0.7
+    pre_ok = ~tp_out & (z[:, 0] <= 0.6) & (z[:, 1] >= 0.35)
+    kept = ~tp_out & (z[:, 0] <= 0.8) & (z[:, 1] >= 0.2)
+    L = np.sum(-0.5 * ((z - MU) / SD) ** 2 - math.log(SD * math.sqrt(2 * math.pi)), axis=1)
+    return dict(tp_out=tp_out, pre_ok=pre_ok, kept=kept, L=np.where(kept, L + DL_RETRY, -np.inf),
+                exhausted=~tp_out & (z[:, 0] > 0.8), stalled=~tp_out & (z[:, 0] <= 0.8) & (z[:, 1] < 0.2))
+
+
+def test_presolve_solves_every_in_window_row_from_its_presolve_column(tmp_path):
+    rng = np.random.default_rng(7)
+    seen, tally = [], {}
+    anchors, log = Anchors(tmp_path, 2), tmp_path / "batches.jsonl"
+    like = make_loglike(_presolve_stub_pipe(seen), 16, tally, anchors, log)
+    z1 = rng.uniform(0.02, 0.98, (16, D))
+    z1[:4] = [[0.7, 0.5, 0.3], [0.9, 0.5, 0.3], [0.5, 0.3, 0.3], [0.5, 0.1, 0.3]]
+    L1 = like(z1)                                   # cold chunk
+    e1 = _expected_presolve(z1)
+    np.testing.assert_allclose(L1[e1["kept"]], e1["L"][e1["kept"]], rtol=0, atol=1e-12)
+    assert np.all(np.isneginf(L1[~e1["kept"]]))
+    # cold chunk: every second pass starts from the presolve's exit column
+    code1 = anchors.columns(np.arange(len(anchors)))[0][:, 0, 0]
+    assert np.allclose(code1, (z1[:, 0] + 1000 * z1[:, 1] + PRE_CODE)[e1["kept"]])
+    z_a = anchors.z.copy()
+    with np.load(tmp_path / "anchors_00000.npz") as d:
+        assert np.all(d["rtol"] == RTOL1)              # every kept column is the retry's
+
+    z2 = rng.uniform(0.02, 0.98, (16, D))
+    z2[:3] = [[0.75, 0.5, 0.3], [0.5, 0.25, 0.3], [0.5, 0.5, 0.3]]
+    L2 = like(z2)                                   # warm chunk
+    e2 = _expected_presolve(z2)
+    assert e2["kept"][:3].all() and not e2["pre_ok"][:2].any() and e2["pre_ok"][2]
+    np.testing.assert_allclose(L2[e2["kept"]], e2["L"][e2["kept"]], rtol=0, atol=1e-12)
+    assert np.all(np.isneginf(L2[~e2["kept"]]))
+    # warm chunk: from the presolve column where the presolve certified, else
+    # from the nearest anchor (the row's original start)
+    new = np.arange(len(z_a), len(anchors))
+    near = code1[((anchors.z[new, None, :] - z_a[None]) ** 2).sum(-1).argmin(1)]
+    zk = z2[e2["kept"]]
+    want = np.where(e2["pre_ok"][e2["kept"]], zk[:, 0] + 1000 * zk[:, 1] + PRE_CODE, near)
+    assert np.allclose(anchors.columns(new)[0][:, 0, 0], want)
+
+    jax.effects_barrier()
+    act = {}
+    for name, a in seen:
+        act.setdefault(name, []).append(a)
+    assert [n for n, _ in seen] == ["pre_cold", "warm2", "pre_warm", "warm2"]
+    for z, e, a2 in ((z1, e1, act["warm2"][0]), (z2, e2, act["warm2"][1])):
+        n_in = int((~e["tp_out"]).sum())
+        assert a2 == [True] * n_in + [False] * (16 - n_in)     # fixed width n_batch
+    e = {k: np.concatenate([e1[k], e2[k]]) for k in e1}
+    assert {k: tally[k] for k in ("n_eval", "tp_out", "exhausted", "stalled", "nonfinite",
+                                  "retried", "retry_certified", "presolve_certified")} == {
+        "n_eval": 32, "tp_out": int(e["tp_out"].sum()), "exhausted": int(e["exhausted"].sum()),
+        "stalled": int(e["stalled"].sum()), "nonfinite": 0, "retried": int((~e["tp_out"]).sum()),
+        "retry_certified": int(e["kept"].sum()), "presolve_certified": int(e["pre_ok"].sum())}
+    assert tally["retry_width_sum"] == 32 and "presolve_wall_s" in tally
+    rows = [json.loads(r) for r in log.read_text().splitlines()]
+    for r, ek in zip(rows, (e1, e2)):
+        assert r["retry"]["rows"] == np.flatnonzero(~ek["tp_out"]).tolist()
+        assert r["retry"]["width"] == 16
+        assert r["presolve"] == {"certified": int(ek["pre_ok"].sum()), "rtol": RTOL0,
+                                 "count_max": COUNT_MAX}
+
+
+def test_presolve_off_is_the_stock_retry(tmp_path):
+    """A chem_retry namespace with presolve False is the stock retry, row for row."""
+    rng = np.random.default_rng(3)
+    z1, z2 = rng.uniform(0.02, 0.98, (16, D)), rng.uniform(0.02, 0.98, (16, D))
+    out = []
+    for flag in (None, False):
+        pipe = _retry_stub_pipe()
+        if flag is not None:
+            pipe.chem_retry.presolve = flag
+        tally, anchors = {}, Anchors(tmp_path / f"a{flag}", 2)
+        log = tmp_path / f"b{flag}.jsonl"
+        like = make_loglike(pipe, 16, tally, anchors, log)
+        L = np.concatenate([like(z1), like(z2)])
+        rows = [{k: v for k, v in json.loads(r).items() if k not in ("t", "t_first")}
+                for r in log.read_text().splitlines()]
+        for r in rows:
+            r["retry"].pop("t")
+        out.append((L, {k: v for k, v in tally.items() if not k.endswith("wall_s")}, rows,
+                    anchors.columns(np.arange(len(anchors)))[0]))
+        assert set(like.programs.fns) == {"cold", "warm", "retry_cold", "retry_warm"}
+    assert np.array_equal(out[0][0], out[1][0]) and out[0][1] == out[1][1]
+    assert out[0][2] == out[1][2] and np.array_equal(out[0][3], out[1][3])
+    assert not any(k.startswith("presolve") for k in out[1][1])
+
+
+def test_presolve_precompiles_only_the_n_batch_programs(tmp_path):
+    """precompile with the presolve: the retry program and the warm presolve at
+    n_batch, no retry bucket; the results equal those compiled at first use."""
+    rng = np.random.default_rng(11)
+    z1, z2 = rng.uniform(0.02, 0.98, (16, D)), rng.uniform(0.02, 0.98, (16, D))
+    out = {}
+    for pre in (False, True):
+        tally, anchors = {}, Anchors(tmp_path / f"p{int(pre)}", 2)
+        like = make_loglike(_presolve_stub_pipe(), 16, tally, anchors, precompile=pre)
+        L1 = like(z1)
+        progs = like.programs
+        if pre:
+            assert set(progs.pending) | set(progs.exe) >= {("retry_warm", 16), ("pre_warm", 16)}
+            for f in list(progs.pending.values()):
+                f.result()
+        L2 = like(z2)
+        assert all(w == 16 for _, w in progs.exe)       # nothing at a bucket width
+        assert not any(name in ("warm", "retry_cold") for name, _ in progs.exe)
+        out[pre] = (L1, L2, {k: v for k, v in tally.items() if not k.endswith("wall_s")})
+    for a, b in zip(out[False][:2], out[True][:2]):
+        assert np.array_equal(a, b)
+    assert out[False][2] == out[True][2]

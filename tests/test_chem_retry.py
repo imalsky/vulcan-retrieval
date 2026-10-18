@@ -29,6 +29,7 @@ from retrieval_framework import pipeline as P  # noqa: E402
 
 VALID = dict(vulcan_cfg_name="W39b", rp_cm=1.0, rstar_cm=10.0)
 RETRY_KEYS = certificate.SWITCHED_KEYS["chem_retry"]
+SWITCHED = {k for keys in certificate.SWITCHED_KEYS.values() for k in keys}
 
 
 def _digest_pipe():
@@ -52,12 +53,44 @@ def frozen_code(monkeypatch):
 def test_off_leaves_the_manifest_as_before(frozen_code):
     pipe, base = _digest_pipe(), C.Config(molecules=("H2O",))
     man = certificate.target_manifest(base, pipe)
-    # exactly the manifest of a Config that never had the retry fields
+    # exactly the manifest of a Config that never had the retry / presolve fields
     assert man["config"] == {k: v for k, v in asdict(base).items()
-                             if k not in certificate.TARGET_FREE_KEYS and k not in RETRY_KEYS}
+                             if k not in certificate.TARGET_FREE_KEYS and k not in SWITCHED}
     d0 = certificate.target_digest(base, pipe)
     assert certificate.target_digest(
         replace(base, chem_retry_rtol=0.01, chem_retry_count_max=9000), pipe) == d0
+    # the presolve switch off (its default) changes nothing, with the retry on too
+    on = replace(base, chem_retry=True)
+    assert "chem_presolve" not in certificate.target_manifest(on, pipe)["config"]
+    assert certificate.target_digest(replace(on, chem_presolve=False), pipe) == \
+        certificate.target_digest(on, pipe)
+
+
+def test_presolve_on_binds_the_manifest(frozen_code):
+    pipe = _digest_pipe()
+    on = C.Config(molecules=("H2O",), chem_retry=True, chem_presolve=True)
+    man = certificate.target_manifest(on, pipe)
+    assert man["config"]["chem_presolve"] is True
+    assert {k: man["config"][k] for k in RETRY_KEYS} == {
+        "chem_retry": True, "chem_retry_rtol": 0.05, "chem_retry_count_max": 5000}
+    assert certificate.target_digest(on, pipe) != certificate.target_digest(
+        replace(on, chem_presolve=False), pipe)
+
+
+def test_validate_config_refuses_a_presolve_without_the_retry():
+    C.validate_config(C.Config(**VALID, chem_retry=True, chem_presolve=True))
+    with pytest.raises(ValueError, match="chem_presolve=True needs chem_retry"):
+        C.validate_config(C.Config(**VALID, chem_presolve=True))
+    with pytest.raises(ValueError, match="chem_presolve must be"):
+        C.validate_config(C.Config(**VALID, chem_retry=True, chem_presolve=1))
+
+
+def test_banner_names_the_presolve_only_when_on():
+    off = C.describe_config(C.Config(**VALID, count_max=3000, chem_retry=True))
+    on = C.describe_config(C.Config(**VALID, count_max=3000, chem_retry=True,
+                                    chem_presolve=True))
+    assert "chem_presolve" not in off and "chem_retry ON" in off
+    assert "chem_presolve ON" in on and "chem_retry ON" not in on
 
 
 def test_on_binds_the_manifest(frozen_code):
@@ -147,5 +180,36 @@ def test_real_pipeline_retries_every_uncertified_draw(tmp_path, monkeypatch):
     assert tally["retry_certified"] == tally["tp_out"] == 0
     row = json.loads(log.read_text().splitlines()[0])
     assert row["mode"] == "cold" and min(row["acc"]) >= CAPPED_COLD_CMAX
+    assert row["retry"]["rows"] == [0, 1] and row["retry"]["width"] == 2
+    assert min(row["retry"]["acc"]) >= retry_cmax and not any(row["retry"]["conv"])
+
+
+@pytest.mark.slow
+def test_real_pipeline_presolve_sends_every_draw_through_the_retry(tmp_path):
+    """chem_presolve on the REAL smoke pipeline: the presolve evaluator is the
+    main program's chemistry (no RT), and every in-window draw is solved again
+    on the retry program at the fixed width n_batch (here no solve certifies:
+    both caps sit below count_min)."""
+    from conftest import CAPPED_COLD_CMAX, build_smoke_pipe
+    from retrieval_framework import run_nautilus as RN
+    retry_cmax = CAPPED_COLD_CMAX + 10
+    pipe = build_smoke_pipe(count_max=CAPPED_COLD_CMAX, warm_count_max=5, chem_retry=True,
+                            chem_retry_rtol=0.05, chem_retry_count_max=retry_cmax,
+                            chem_presolve=True)
+    assert pipe.chem_retry.presolve is True
+    U = np.asarray(pipe.sample_prior_u(jax.random.PRNGKey(0), 2))   # T-P in window
+    Y, refs = P._blank_state(pipe, 2)
+    Yp, rp, acc, conv = jax.jit(pipe._make_presolve_eval("cold"))(U, Y, refs, np.ones(2, bool))
+    th = np.asarray(jax.vmap(pipe.theta_from_u)(U))
+    assert np.allclose(np.asarray(rp), th[:, :2]) and np.all(np.isfinite(np.asarray(Yp)))
+    assert np.all(np.asarray(acc) >= CAPPED_COLD_CMAX) and not np.any(np.asarray(conv))
+    Z = 1.0 / (1.0 + np.exp(-U))
+    tally, log = {}, tmp_path / "batches.jsonl"
+    L = RN.make_loglike(pipe, 2, tally, None, log)(Z)
+    assert np.all(np.isneginf(L))
+    assert tally["retried"] == tally["retry_exhausted"] == tally["exhausted"] == 2
+    assert tally["presolve_certified"] == 0 and tally["retry_certified"] == 0
+    row = json.loads(log.read_text().splitlines()[0])
+    assert (row["presolve"]["certified"], row["presolve"]["count_max"]) == (0, CAPPED_COLD_CMAX)
     assert row["retry"]["rows"] == [0, 1] and row["retry"]["width"] == 2
     assert min(row["retry"]["acc"]) >= retry_cmax and not any(row["retry"]["conv"])

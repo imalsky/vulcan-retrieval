@@ -382,6 +382,7 @@ TARGET_FREE_KEYS = frozenset({
 # stay out of the manifest and a run from before they existed keeps its digest.
 SWITCHED_KEYS = {
     "chem_retry": ("chem_retry", "chem_retry_rtol", "chem_retry_count_max"),
+    "chem_presolve": ("chem_presolve",),
 }
 
 

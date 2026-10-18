@@ -1,0 +1,19 @@
+{
+  "_comment": "WASP-39b baseline v3 (nautilus, n_eff 5000): the chem_presolve chemistry (a chemistry-only presolve at rtol 0.2, then every in-window draw solved and certified at rtol 0.05), photolysis every step, per-instrument noise inflation, log10gamma down to -3, 792 lanes. Keys starting with _ are dropped (run_smc.make_config). Every key but walltime_seconds enters the target manifest, so run it in a fresh SMC_RETRIEVAL_OUT_DIR. Env, not Config: NAUTILUS_N_EFF=5000, VULCAN3_CHEM_RHS=grouped (see run_nas_w39b.pbs).",
+  "cfg_overrides": {"Rp": 8650532000.0, "rtol": 0.2, "ini_update_photo_frq": 1, "final_update_photo_frq": 1, "queue_compact": [528, 396, 264, 132]},
+  "_cfg_overrides": "REPLACES case.py's dict, so Rp (1.21 R_J, case.py) is restated. rtol 0.2: the PRESOLVE's step tolerance (W39b.yaml default). ini/final_update_photo_frq 1: photolysis every step in both programs (W39b.yaml 5/5): it removes the photolysis-triggered step collapses of the low-Kzz band (analysis/lowkzz_fix: 100% of reject cascades start on a photolysis tick at 5) and costs ~42% per tick at 792 lanes. queue_compact: run_queue tail compaction 792 -> 528 -> 396 -> 264 -> 132 lanes; the chem_retry program inherits all of cfg_overrides but rtol (config_schema.retry_profile).",
+  "count_max": 3000,
+  "chem_retry": true,
+  "chem_retry_rtol": 0.05,
+  "chem_retry_count_max": 5000,
+  "chem_presolve": true,
+  "_chem_presolve": "Every draw: presolve at rtol 0.2 within 3000 accepted steps (a start only, no RT, never kept), then solved at rtol 0.05 within 5000 warm from the presolve column (or from its original start where the presolve did not certify); only that solve's VULCAN certificate keeps it, so every kept column and anchor is at rtol 0.05 (master's cfg_wasp39b rtol). analysis/lowkzz_fix: production-path job 93676 vs Retry C on 2 real 2376-row batches: 4276 vs 4118 certified, in-window rejections 2.5% vs 6.1%, a compile-free batch 816 s vs 1082 s; low-Kzz accuracy vs a tight reference median 0.03 vs 0.21 logL. The stage-B cap stays 5000: 8000 rescues 1 of the 9 prior-edge hard lanes that pass 5000 (the others need > 8000) for ~+11% chemistry (queue model).",
+  "noise_inflation_per_group": true,
+  "_noise": "one b per group (NIRISS, G395H_NRS1, G395H_NRS2), each log10_uniform on prior_noise_inflation (0.5, 3); needs infer_noise_inflation (on in the gpu preset). n_dim 15.",
+  "prior_log10gamma": [-3.0, 0.3010299956639812],
+  "_priors": "as baseline v2: log10gamma lower bound -3; lnKzz keeps [ln 0.1, ln 1000].",
+  "cold_lanes": 264,
+  "_lanes": "x FFI_BLOCKS_PER_SM 3 (run_nautilus) = 792 lanes; n_batch defaults to 3 x 792 = 2376 unless NAUTILUS_N_BATCH is set",
+  "walltime_seconds": 165600,
+  "_walltime": "nautilus governor 46 h for a 48 h PBS wall (target-free: a RESUME may change it)"
+}

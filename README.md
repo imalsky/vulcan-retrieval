@@ -84,6 +84,22 @@ the RT only on the rows whose likelihood it can keep. `NAUTILUS_PRECOMPILE=1`
 132-660 (`RETRY_PRECOMPILE`) on a host thread while the cold first batch runs;
 `NAUTILUS_PRECOMPILE=0` compiles each program at its first use.
 
+`chem_presolve` (off by default; needs `chem_retry`) turns the first pass into
+a presolve: a chemistry-only solve at the base `rtol` and `count_max` whose
+column is only a starting state (no RT, never a likelihood). Every in-window
+draw is then solved and certified by the `chem_retry` program
+(`chem_retry_rtol`, `chem_retry_count_max`) warm from that column, on one fixed
+width of `n_batch` rows, so no retry bucket compiles mid-run. Only that solve's
+VULCAN certificate keeps a draw, and every kept column carries
+`chem_retry_rtol`. Off, it stays out of the target manifest and nothing changes.
+The WASP-39b setting is
+`runs/w39b_smc_retrieval/overrides/w39b_baseline_v3_presolve.json`: presolve at
+rtol 0.2, then rtol 0.05, both with photolysis every step. On the low-Kzz
+draws, the presolve gets past two step-size traps that stall direct rtol-0.05
+solves: photolysis-triggered step collapses, and a near-atol trace cell at the
+model top. The certified solve then starts near its steady state. The study,
+with measurements, is in the WASP-39b analysis tree (`analysis/lowkzz_fix`).
+
 ## Limits
 
 - The likelihood is diagonal Gaussian.

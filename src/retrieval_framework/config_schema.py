@@ -286,6 +286,21 @@ class Config:
     chem_retry: bool = False
     chem_retry_rtol: float = 0.05
     chem_retry_count_max: int = 5000
+    # chem_presolve=True (needs chem_retry; run_nautilus only, off by default):
+    # the first pass becomes a PRESOLVE, a chemistry-only solve (no RT, never a
+    # likelihood) at the base config's rtol and count_max whose exit column is
+    # only a starting state. EVERY in-window draw is then solved by the
+    # chem_retry program (chem_retry_rtol, chem_retry_count_max), on one fixed
+    # width of n_batch rows, warm from the presolve's column at the draw's own
+    # (lnZ, c_o) where the presolve certified, else from the draw's original
+    # start (a warm chunk's anchor column; on a cold chunk the presolve's exit
+    # column, or the baseline column if that is non-finite). Only that second
+    # solve's certificate (VULCAN's own) keeps a draw, so every kept column
+    # carries chem_retry_rtol. analysis/lowkzz_fix (W39b): presolve rtol 0.2 with
+    # photolysis every step escapes the low-Kzz step-size traps fast; the
+    # certified rtol-0.05 solve then starts near its steady state. Off, it
+    # leaves the target manifest.
+    chem_presolve: bool = False
 
     # posterior draws
     num_samples: int = 48
@@ -635,6 +650,11 @@ def validate_config(cfg: Config) -> None:
             raise ValueError(
                 f"chem_retry_count_max={cfg.chem_retry_count_max} is below "
                 f"warm_count_max={cfg.warm_count_max}")
+    if not isinstance(cfg.chem_presolve, bool):
+        raise ValueError(f"chem_presolve must be true or false, got {cfg.chem_presolve!r}")
+    if cfg.chem_presolve and not cfg.chem_retry:
+        raise ValueError("chem_presolve=True needs chem_retry=True: the chem_retry program "
+                         "is the one that solves and certifies every draw")
     if cfg.noise_inflation_per_group and not cfg.infer_noise_inflation:
         raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
                          "(it splits the inferred inflation by group; alone it would "
@@ -722,7 +742,12 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         *([f"    chem_retry ON (nautilus): a draw uncertified within count_max={cmax} is "
            f"re-solved once from the same start at rtol={float(cfg.chem_retry_rtol):g}, "
            f"count_max={int(cfg.chem_retry_count_max)}; still uncertified -> rejected"]
-          if cfg.chem_retry else []),
+          if cfg.chem_retry and not cfg.chem_presolve else []),
+        *([f"    chem_presolve ON (nautilus): every draw is presolved (chemistry only, a start, "
+           f"never kept) within count_max={cmax}, then solved and certified at "
+           f"rtol={float(cfg.chem_retry_rtol):g}, count_max={int(cfg.chem_retry_count_max)} "
+           "warm from the presolve column; uncertified -> rejected"]
+          if cfg.chem_retry and cfg.chem_presolve else []),
         f"    cold-init: draw {cfg.init_oversample:g}xN, REJECT non-converged draws (-inf), "
         f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
         "raise only if < N survive)",
