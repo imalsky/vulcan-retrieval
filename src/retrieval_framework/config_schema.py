@@ -296,7 +296,7 @@ class Config:
     # start (a warm chunk's anchor column; on a cold chunk the presolve's exit
     # column, or the baseline column if that is non-finite). Only that second
     # solve's certificate (VULCAN's own) keeps a draw, so every kept column
-    # carries chem_retry_rtol. analysis/lowkzz_fix (W39b): presolve rtol 0.2 with
+    # carries chem_retry_rtol. lowkzz_fix (notes.md, W39b): presolve rtol 0.2 with
     # photolysis every step escapes the low-Kzz step-size traps fast; the
     # certified rtol-0.05 solve then starts near its steady state. Off, it
     # leaves the target manifest.

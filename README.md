@@ -100,7 +100,7 @@ rtol 0.2, then rtol 0.05, both with photolysis every step. On the low-Kzz
 draws, the presolve gets past two step-size traps that stall direct rtol-0.05
 solves: photolysis-triggered step collapses, and a near-atol trace cell at the
 model top. The certified solve then starts near its steady state. The study,
-with measurements, is in the WASP-39b analysis tree (`analysis/lowkzz_fix`).
+with measurements, is summarized in `notes.md` (lowkzz_fix).
 
 ## Limits
 

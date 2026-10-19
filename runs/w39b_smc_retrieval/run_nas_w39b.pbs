@@ -394,9 +394,11 @@ elif [ "${SAMPLER:-nautilus}" = "nautilus" ]; then
   if [ -n "${PROFILE_BATCH:-}" ]; then
     # One-batch nsys-jax profile (off by default). nsys-jax calls `nsys` from PATH:
     # a one-file bin dir puts the chosen binary first (cuda-12.6's nsys wrapper is
-    # not installed on the GH200 nodes).
+    # not installed on the GH200 nodes). The default nsys-jax is a python3.12 venv:
+    #   python3.12 -m venv ${VULCAN_SCRATCH}/tools/nsysjax_venv && .../bin/pip install
+    #   "git+https://github.com/NVIDIA/JAX-Toolbox.git@f9d55b6#subdirectory=.github/container/nsys_jax"
     PROFILE_DIR="${PROFILE_DIR:-${LOG_DIR}/nsys_${_jobid%%.*}}"
-    NSYS_JAX="${NSYS_JAX:-${PROJECT_ROOT}/analysis/speed_explore/profile/tools/nsysjax_venv/bin/nsys-jax}"
+    NSYS_JAX="${NSYS_JAX:-${VULCAN_SCRATCH}/tools/nsysjax_venv/bin/nsys-jax}"
     NSYS_BIN="${NSYS_BIN:-/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys}"
     mkdir -p "${PROFILE_DIR}/bin"
     ln -sfn "${NSYS_BIN}" "${PROFILE_DIR}/bin/nsys"
