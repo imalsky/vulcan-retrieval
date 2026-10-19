@@ -75,7 +75,9 @@ reporting a production result.
 
 Nested sampling uses the same case and presets:
 `python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval` writes to
-`<out_dir>_nautilus`. It does not yet write plots or a certificate.
+`<out_dir>_nautilus`. It does not yet write plots or a certificate. The
+sampler is stock `nautilus-sampler` 1.0.6 from PyPI with its default networks,
+and the exploration phase is discarded (`make_sampler` in `run_nautilus.py`).
 With `chem_retry` on, the second pass runs on a bucket of 132 lanes per step
 (`RETRY_BUCKET` in `run_nautilus.py`), and the padding rows of a bucket or of a
 short chunk are masked: they take no chemistry step and no RT. Each pass runs

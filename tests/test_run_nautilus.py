@@ -26,8 +26,9 @@ jax.config.update("jax_enable_x64", True)
 from conftest import StubConvDiag
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
-from retrieval_framework.run_nautilus import (RETRY_PRECOMPILE, Anchors, make_loglike,
-                                              retry_width)
+from retrieval_framework.run_nautilus import (DISCARD_EXPLORATION, F_LIVE, N_NETWORKS,
+                                              RETRY_PRECOMPILE, Anchors, make_loglike,
+                                              make_sampler, retry_width)
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 
@@ -94,6 +95,27 @@ def test_zero_filled_evidence_and_rejection_classes():
     exact = (math.log(ndtr(1.0) - ndtr(-5.0)) + math.log(ndtr(5.0) - ndtr(-1.5))
              + math.log(ndtr(2.0) - ndtr(-5.0)))
     assert abs(s.log_z - exact) < 0.05
+
+
+def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
+    """run_nautilus builds a STOCK nautilus.Sampler (PyPI 1.0.6, not the former
+    SiLU / spread_batch fork) with nautilus's default networks, discards the
+    exploration phase, and on the stub pipeline gets the exact zero-filled evidence;
+    its checkpoint resumes."""
+    assert nautilus.__version__ == "1.0.6"
+    assert not hasattr(nautilus.Sampler, "add_samples_spread")
+    like = make_loglike(_stub_pipe(), 64, {})
+    f = tmp_path / "ckpt.hdf5"
+    s = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f))
+    assert type(s) is nautilus.Sampler
+    assert s.n_networks == N_NETWORKS == 4 and s.neural_network_kwargs == {}
+    assert DISCARD_EXPLORATION is True
+    s.run(f_live=F_LIVE, n_eff=2000, discard_exploration=DISCARD_EXPLORATION, verbose=False)
+    exact = (math.log(ndtr(1.0) - ndtr(-5.0)) + math.log(ndtr(5.0) - ndtr(-1.5))
+             + math.log(ndtr(2.0) - ndtr(-5.0)))
+    assert s.n_eff >= 2000 and abs(s.log_z - exact) < 0.05
+    r = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f), resume=True)
+    assert r.n_like == s.n_like and r.explored and abs(r.log_z - s.log_z) < 1e-12
 
 
 def test_warm_starts_from_the_nearest_certified_column(tmp_path):

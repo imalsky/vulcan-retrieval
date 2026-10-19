@@ -26,8 +26,10 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      spectrum CSVs, and the ExoMolOP k-tables and H2-H2 + H2-He CIA at the
      paths vulcan_forward.paths resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs;
-  9. nautilus (nautilus-sampler) imports and is the maintainer's fork:
-     run_nautilus needs its SiLU networks and spread_batch.
+  9. nautilus (nautilus-sampler) imports and is the stock PyPI release
+     NAUTILUS_PIN that run_nautilus is written for; the maintainer's former
+     fork (SiLU networks, spread_batch), which carried the same version string,
+     is refused so a run's sampler is unambiguous.
 
 Usage:
     python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
@@ -259,25 +261,32 @@ def _check_exogibbs() -> None:
         _ok(f"exogibbs {got}")
 
 
-NAUTILUS_FORK = "https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip"
+NAUTILUS_PIN = "1.0.6"  # keep in lockstep with pyproject.toml and requirements-hpc.txt
 
 
 def _check_nautilus() -> None:
     """run_nautilus (PBS SAMPLER=nautilus) imports nautilus inside the job,
-    after the config resolves; catch a missing install, or stock nautilus
-    (no SiLU networks, no spread_batch), here."""
-    fix = (f'pip install --user --no-deps --force-reinstall "nautilus-sampler @ {NAUTILUS_FORK}" '
+    after the config resolves; catch a missing install, another version, or the
+    former fork (SiLU networks, spread_batch; same version string), here."""
+    fix = (f'pip install --user --no-deps --force-reinstall "nautilus-sampler=={NAUTILUS_PIN}" '
            "(tools/bootstrap_nas_env.pbs does).")
     try:
         import nautilus
-        from nautilus.neural import SiLUMLPRegressor  # noqa: F401
+        import nautilus.neural
     except Exception as e:  # noqa: BLE001
-        _err(f"nautilus fork failed to import: {e!r}. Install it: {fix}")
+        _err(f"nautilus failed to import: {e!r}. Install it: {fix}")
         return
-    if not hasattr(nautilus.Sampler, "add_samples_spread"):
-        _err(f"nautilus at {nautilus.__file__} has no spread_batch. Install the fork: {fix}")
+    got = str(getattr(nautilus, "__version__", ""))
+    if got != NAUTILUS_PIN:
+        _err(f"nautilus {got or '?'} at {nautilus.__file__}; run_nautilus is pinned to "
+             f"{NAUTILUS_PIN}. Install it: {fix}")
         return
-    _ok(f"nautilus {getattr(nautilus, '__version__', '?')} (fork: SiLU, spread_batch)")
+    if (hasattr(nautilus.Sampler, "add_samples_spread")
+            or hasattr(nautilus.neural, "SiLUMLPRegressor")):
+        _err(f"nautilus at {nautilus.__file__} is the former fork (spread_batch, SiLU "
+             f"networks), not the PyPI release. Replace it: {fix}")
+        return
+    _ok(f"nautilus {got} (stock PyPI release)")
 
 
 def main(argv: list[str] | None = None) -> int:

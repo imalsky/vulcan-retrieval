@@ -56,11 +56,15 @@ RETRY_PRECOMPILE bucket -- on a host thread while the cold first batch runs;
 VULCAN_PROFILE_BATCH is set): VULCAN_PROFILE_BATCH, VULCAN_PROFILE_EXIT_AFTER,
 VULCAN_NVTX_LIB.
 
-Sampler settings (the constants below): 2 ReLU + 2 SiLU networks, n_update =
-n_live / 2, exploration until f_live = F_LIVE, bounds enlarged by
-ENLARGE_PER_DIM, and sampling-phase batches spread over several shells
-(``spread_batch``). The SiLU networks and ``spread_batch`` exist only in the
-maintainer's nautilus fork; validate_env refuses stock nautilus.
+Sampler settings (the constants below, built by make_sampler): STOCK
+nautilus-sampler 1.0.6 from PyPI with its default networks (N_NETWORKS ReLU MLPs),
+n_update = n_live / 2, exploration until f_live = F_LIVE, bounds enlarged by
+ENLARGE_PER_DIM, and the exploration phase discarded (DISCARD_EXPLORATION, the
+unbiased estimator; keeping it biased log Z by about -0.2 on surrogates of the W39b
+posterior). Each sampling-phase batch goes to one shell, as in stock nautilus; with
+the exploration discarded every shell starts the sampling phase empty and gets one
+whole batch first. validate_env refuses the maintainer's former fork (SiLU networks,
+spread_batch), which carried the same 1.0.6 version string.
 
 Every likelihood chunk appends one line to ``batches.jsonl``: its wall time,
 start mode and the accepted step count of each column.
@@ -120,7 +124,8 @@ N_LIVE = 1000       # live points
 N_EFF = 10_000      # effective posterior samples at which nautilus stops
 F_LIVE = 0.03       # exploration ends when the live set holds this evidence share
 ENLARGE_PER_DIM = 1.3
-NETWORKS = [{}, {"activation": "silu"}, {}, {"activation": "silu"}]
+N_NETWORKS = 4      # nautilus's default ReLU networks (hidden layers 100-50-20)
+DISCARD_EXPLORATION = True
 BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 # ffi one-buffer blocks resident per SM at ni 89 on compute capability 9.0:
 # ~63 KB of shared memory each in the SM's 228 KB (VULCAN-JAX
@@ -640,6 +645,18 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     return loglike
 
 
+def make_sampler(loglike, n_dim: int, n_live: int, n_batch: int, seed: int,
+                 filepath: str | None = None, resume: bool = False):
+    """The stock nautilus sampler with run_nautilus's settings. The prior is the
+    identity on the unit cube (the pipeline maps u = logit(z) -> theta); loglike
+    takes a (n, n_dim) batch (vectorized)."""
+    import nautilus
+    return nautilus.Sampler(lambda z: z, loglike, n_dim=n_dim, n_live=n_live,
+                            n_update=n_live // 2, enlarge_per_dim=ENLARGE_PER_DIM,
+                            n_networks=N_NETWORKS, n_batch=n_batch, vectorized=True,
+                            pass_dict=False, seed=seed, filepath=filepath, resume=resume)
+
+
 def main() -> None:
     t_start = time.time()
     ap = argparse.ArgumentParser()
@@ -666,7 +683,8 @@ def main() -> None:
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_update={n_update} n_eff={n_eff} "
              f"n_batch={n_batch} (cold_lanes={lanes}) f_live={F_LIVE} "
-             f"enlarge_per_dim={ENLARGE_PER_DIM} networks={NETWORKS} spread_batch "
+             f"enlarge_per_dim={ENLARGE_PER_DIM} networks={N_NETWORKS}x relu (nautilus default) "
+             f"discard_exploration={DISCARD_EXPLORATION} "
              f"seed={cfg.seed} starts={'anchored warm (growing)' if warm else 'cold'}")
     log.info(C.describe_config(cfg, preset))
 
@@ -675,7 +693,7 @@ def main() -> None:
 
     from retrieval_framework import pipeline as P
     log.info(f"jax backend={jax.default_backend()} devices={jax.devices()} "
-             f"nautilus {nautilus.__version__}")
+             f"nautilus {nautilus.__version__} (stock, {nautilus.__file__})")
     log_hardware()
 
     t0 = time.perf_counter()
@@ -704,8 +722,7 @@ def main() -> None:
     tally_path = out / "nautilus_tally.json"
     want = (f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
             f"|n_batch={n_batch}|n_live={n_live}|n_update={n_update}|f_live={F_LIVE}"
-            f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={json.dumps(NETWORKS)}"
-            f"|spread_batch")
+            f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock")
     resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
     if resume:
         if not ckpt.exists():
@@ -741,18 +758,14 @@ def main() -> None:
         prof.push("nautilus/update")    # closed when the next batch begins
         return L
 
-    sampler = nautilus.Sampler(lambda z: z, loglike_saved, n_dim=pipe.n_dim, n_live=n_live,
-                               n_update=n_update, enlarge_per_dim=ENLARGE_PER_DIM,
-                               n_networks=len(NETWORKS), neural_network_kwargs=NETWORKS,
-                               n_batch=n_batch, vectorized=True, pass_dict=False,
-                               seed=int(cfg.seed), filepath=str(ckpt), resume=resume,
-                               spread_batch=True)
+    sampler = make_sampler(loglike_saved, pipe.n_dim, n_live, n_batch, int(cfg.seed),
+                           filepath=str(ckpt), resume=resume)
     budget = float(cfg.walltime_seconds)
     timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
     log.info(f"nautilus: starting at n_like={sampler.n_like}; timeout {timeout / 3600:.2f} h")
     t0 = time.perf_counter()
-    done = sampler.run(f_live=F_LIVE, n_eff=n_eff, discard_exploration=True, timeout=timeout,
-                       verbose=True)
+    done = sampler.run(f_live=F_LIVE, n_eff=n_eff, discard_exploration=DISCARD_EXPLORATION,
+                       timeout=timeout, verbose=True)
     log.info(f"nautilus: {'finished' if done else 'stopped at the wall budget'} after "
              f"{(time.perf_counter() - t0) / 3600:.2f} h | n_like={sampler.n_like} "
              f"| log_z={sampler.log_z:.3f} | n_eff={sampler.n_eff:.0f} | tally={tally}")
@@ -775,7 +788,9 @@ def main() -> None:
         "logZ_box": float(sampler.log_z), "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff), "n_live": n_live, "n_batch": n_batch,
         "n_update": n_update, "f_live": F_LIVE, "enlarge_per_dim": ENLARGE_PER_DIM,
-        "networks": NETWORKS, "spread_batch": True,
+        "networks": f"{N_NETWORKS}x relu (nautilus default)",
+        "discard_exploration": DISCARD_EXPLORATION,
+        "nautilus": f"{nautilus.__version__} (stock)",
         "starts": "anchored warm (growing)" if warm else "cold",
         "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
         **({"chem_retry": vars(pipe.chem_retry)} if pipe.chem_retry is not None else {}),

@@ -26,8 +26,9 @@ matplotlib
 corner
 tqdm
 h5py>=3
-# run_nautilus needs the maintainer's nautilus fork (SiLU networks, spread_batch)
-nautilus-sampler @ https://github.com/imalsky/nautilus/archive/830e17b6e1f27649c1292d3ec75814be160547d6.zip
+# run_nautilus: the stock PyPI release (validate_env checks the version and refuses
+# the former SiLU / spread_batch fork, which carried the same version string)
+nautilus-sampler==1.0.6
 vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@eeb4873119b496ed875b57720ed51e00464e9030
 vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@39c2c45e7edd1818598b9a7abf6f1c3595f8d000
 -e .

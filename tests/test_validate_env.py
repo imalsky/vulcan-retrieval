@@ -2,11 +2,13 @@
 
 The interpreter/jax/editable checks are exercised for real by the PBS preflight
 and the bootstrap; here we pin the environment-independent logic: version-file
-parsing, the data-tree fingerprints and the exogibbs floor.
+parsing, the data-tree fingerprints, the exogibbs floor and the nautilus pin.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from retrieval_framework import validate_env as V
 
@@ -71,3 +73,29 @@ def test_exogibbs_floor_rejects_an_old_release(monkeypatch):
     monkeypatch.setattr(exogibbs, "__version__", V.EXOGIBBS_MIN, raising=False)
     V._check_exogibbs()
     assert V._ERRORS == [] and V._WARNINGS == []
+
+
+def test_nautilus_check_wants_the_stock_release_and_refuses_the_former_fork(monkeypatch):
+    """run_nautilus is written for stock nautilus-sampler NAUTILUS_PIN; the former
+    fork (SiLU networks, spread_batch) carried the same version string, so the
+    check looks for its additions, not only at the version."""
+    pytest.importorskip("nautilus")
+    import nautilus
+    import nautilus.neural
+    _reset()
+    V._check_nautilus()                       # the installed release (stock in CI)
+    assert V._ERRORS == [] and V._WARNINGS == []
+
+    for owner, attr in ((nautilus.Sampler, "add_samples_spread"),
+                        (nautilus.neural, "SiLUMLPRegressor")):
+        _reset()
+        with monkeypatch.context() as m:
+            m.setattr(owner, attr, object, raising=False)
+            V._check_nautilus()
+        assert len(V._ERRORS) == 1 and "former fork" in V._ERRORS[0]
+
+    _reset()
+    with monkeypatch.context() as m:
+        m.setattr(nautilus, "__version__", "1.0.5")
+        V._check_nautilus()
+    assert len(V._ERRORS) == 1 and V.NAUTILUS_PIN in V._ERRORS[0]
