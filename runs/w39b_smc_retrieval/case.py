@@ -103,8 +103,12 @@ _W39B = dict(
     #         Tint-flux relation; an interior fit gives ~300 K (arXiv:2410.04470).
     #         Fixed at 358 K in this radiative Guillot profile (no convective
     #         adjustment) it puts the preferred profiles' 7 bar level at ~4400 K,
-    #         so it is retrieved over 100-500 K instead.
-    prior_Tint=(100.0, 500.0),          # K
+    #         so it is retrieved instead, uniform over 50-600 K: 50 K is about
+    #         where a 7-9 Gyr, 0.28 MJ planet cools to with no extra heating
+    #         (Fortney+2020 tracks, extrapolated), 600 K is above the
+    #         heated-interior estimates (~300-400 K). The 320-2980 K window
+    #         (tp_profile.py) cuts most Tint above ~280 K at the preferred kappa.
+    prior_Tint=(50.0, 600.0),           # K
     #   lnR0 = ln(R(1 mbar) / rp_cm) at fixed mass: the continuum depths put
     #         the transit radius ~3% above the 1.279 RJ literature radius (with
     #         this rstar), so expect ~+0.02-0.03.
