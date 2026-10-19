@@ -5,11 +5,6 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# Local-only files.
-CLAUDE.md
-/notes.md
-/todo.md
-runs/*/notes.md
 
 
 # Opacity caches (CIA tables) and the ExoMolOP k-tables (~389 MB/species;
