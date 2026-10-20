@@ -5,11 +5,9 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
 
 1. [decision] Launch the next run, baseline v4 at uniform 100 layers (needs only the maintainer's NAS pull of the three trees, the bootstrap and the qsub).
 2. [science] After the v4 run, check the Tint posterior against the T-P window's effective prior, settle what is reported beside the posterior, and run the solver measurements owed to VULCAN3.
-3. [decision] T-P profile: retrieve T at 1 bar instead of Tint (fix B), or build a pressure-dependent opacity plus adiabat profile (fix C).
-4. [decision] Planet mass: keep it fixed as a stated 11% systematic on T/mu, or add a Gaussian ln M nuisance.
-5. [unverified] Confirm the live retrieval choices whose provenance is not recorded, the Kzz bounds first.
-6. [unverified] Confirm the 2026-10-17 TestPyPI releases and their tags.
-7. [low] Archive the GitHub fork imalsky/nautilus.
+3. [unverified] Confirm the live retrieval choices whose provenance is not recorded, the Kzz bounds first.
+4. [unverified] Confirm the 2026-10-17 TestPyPI releases and their tags.
+5. [low] Archive the GitHub fork imalsky/nautilus.
 
 ## 1. Next run: baseline v4 at 100 layers
 
@@ -56,26 +54,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   element-budget certificate terms, and the Ros2 stage repair on/off.
 - Done means: the numbers in notes "Runs" and the maintainer's call on what is reported.
 
-## 3. T-P profile
-
-- Decide between fix B (retrieve T at 1 bar instead of Tint, ~1/2-1 day) and C
-  (pressure-dependent opacity + adiabat, e.g. Parmentier+2015; several days, plan first).
-  Evidence: notes "Priors and the T-P profile".
-- Done means: the maintainer's choice recorded in notes; a chosen fix opens its own item.
-
-## 4. Planet mass: systematic or nuisance
-
-- Mancini+2018 (arXiv:1802.03859 Table 15): 0.281 +- 0.031 +- 0.006 MJ, R* 0.939 +-
-  0.019 R_sun (the case uses 0.932). At fixed observed depths T/mu scales with GM: 11% on
-  the photospheric T/mu, about 20% on the equivalent Kzz (notes "Physics assumptions and
-  limitations"). One review rated it acceptable fixed for this run; another proposed a
-  nuisance ln(M/M0) ~ N(0, 0.11). No mass parameter exists in the code.
-- A nuisance needs: an RT argument scaling GM at fixed R(p_ref) in vulcan-forward
-  `transmission_depth_r` (RT-only, like lnR0) and a Gaussian prior type in
-  `config_schema.ParamSpec` / `pipeline.make_uspace` (today uniform and log10_uniform).
-- Done means: the maintainer's choice recorded in notes.
-
-## 5. Confirm provenance (retrieval side)
+## 3. Confirm provenance (retrieval side)
 
 - The list is in notes "Provenance". First: the Kzz bounds (ceiling x1000 chosen after
   seeing the data, 18da2a0; floor x0.1, 52ad7be / 611f62b).
@@ -87,7 +66,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
 - Done means: each item confirmed or reverted by the maintainer, the result in notes
   "Provenance".
 
-## 6. TestPyPI releases of 2026-10-17
+## 4. TestPyPI releases of 2026-10-17
 
 - vulcan3 0.18.0, vulcan-forward 0.29.0, vulcan-retrieval 0.27.0 and
   jwst-transit-authority 0.72.0 and their tags; provenance not recorded. All four
@@ -95,7 +74,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   2026-10-19).
 - Done means: the maintainer confirms them or yanks them.
 
-## 7. Archive the nautilus fork
+## 5. Archive the nautilus fork
 
 - GitHub `imalsky/nautilus`, Settings > Archive. Its branches are kept as tags
   `archive/vulcan-multishell-2026-10-19` and `archive/per-network-kwargs-silu-2026-10-19`;

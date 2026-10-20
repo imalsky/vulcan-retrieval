@@ -423,6 +423,16 @@ HPC
 
 ## Design records
 
+- WASP-39b case, decided 2026-10-20: keep the Guillot (2010) profile with Tint free
+  (uniform 50-600 K). Free Tint is standard for Guillot retrievals of this planet
+  (Khorshid et al. 2024, A&A, arXiv 2405.12061: log-flat 10-3000 K); the four Guillot
+  parameters fix T(P) everywhere, so T(1 bar) or the T-P band is read off the posterior
+  rather than retrieved. Tint is degenerate with kappa and shaped by the T-P window, so
+  it is reported as a profile parameter, never as an interior-flux measurement.
+- WASP-39b case, decided 2026-10-20: the planet mass stays fixed at 0.281 MJ (Mancini
+  et al. 2018). Results are conditional on that mass and say so; the mass uncertainty
+  is not propagated (see "Physics assumptions and limitations").
+
 - Two-stage solve. With a moving T-P the hydrostatic density rebuild makes the fixed
   point forget the initial inventory (dL/dlnZ ~ 1e-20, FD agreeing). Stage 1 converges
   at (T(theta), Kzz(theta)) with baseline composition; stage 2 scales metals and C/O on
@@ -501,8 +511,11 @@ HPC
 
 ## Physics assumptions and limitations (read before publishing a number)
 
-- Planet mass fixed at 0.281 MJ: its 11% uncertainty is an 11% systematic on the
-  photospheric T/mu and ~20% on the equivalent Kzz, in no posterior width (todo).
+- Planet mass fixed at 0.281 MJ (WASP-39b case): its 11% uncertainty is not in the
+  posterior widths. If the observed scale height and the fitted radius stayed fixed,
+  T/mu would scale with the mass, ~11% [E]; the ~20% figure for Kzz assumed a mixing
+  length that scales with gravity and is not established. A +-1 sigma mass check would
+  measure the real shift (not done).
 - Guillot T-P, f = 1/4, no convective adjustment: (Tirr, kappa, gamma, Tint) shape one
   1D limb; Tint is a deep-temperature knob. One profile drives both grids.
 - Closed column; lnZ / c_o are exact column-ratio directions; fixed-O C/O keeps each
