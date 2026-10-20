@@ -41,8 +41,9 @@ mask invalid bins before injection.
   within it is rejected (log L = -inf), never extended. Do not raise it without a
   measured reason.
 - Every Config key outside `provenance.TARGET_FREE_KEYS` (e.g. `walltime_seconds`), the
-  solver, the start policy and the nautilus settings define the target: a change needs a
-  fresh `SMC_RETRIEVAL_OUT_DIR`; `run_nautilus` refuses a resume across it.
+  solver env choices (`VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_FACTOR`,
+  `VULCAN3_BT_BUFFERS`), the start policy and the nautilus settings define the target: a
+  change needs a fresh `SMC_RETRIEVAL_OUT_DIR`; `run_nautilus` refuses a resume across it.
 - Report a finished run from `nautilus_certificate.json` (written when a run finishes;
   a run stopped by the governor has none until it finishes) and the figures of
   `python -m retrieval_framework.nautilus_report <out_dir> [--spectra N]` (the PBS does
@@ -81,8 +82,7 @@ mask invalid bins before injection.
 - Solver: `run_nas_w39b.pbs` pins `VULCAN3_SOLVER=ffi` and builds a stale kernel at job
   start, failing loudly if the build fails. Off the PBS, `make_config` calls
   `config_schema.choose_solver`: an explicit `VULCAN3_SOLVER` wins, else `ffi` on compute
-  capability 9.0 with the CUDA library built, else `fast`. The solver is in the target
-  manifest.
+  capability 9.0 with the CUDA library built, else `fast`.
 - Lanes: `cold_lanes > 0` runs every chemistry batch on the lane queue
   (`retrieval_forward._chem_batch_route`); `run_nautilus` runs `cold_lanes` x
   `FFI_BLOCKS_PER_SM` (3) lanes under `ffi` (the overrides set 264 or 176: 792 or 528
@@ -90,7 +90,10 @@ mask invalid bins before injection.
   `_chem_batch_route` (never a per-row `vmap` of solves), and a narrow call (a padded
   last chunk, a few model spectra) must not switch to the lockstep batch. A refilled
   draw moves at the convergence scale, so a lane-count change is a config change:
-  regenerate, never resume.
+  regenerate, never resume. On daw (`fast`, so the lanes are `cold_lanes` as given) a
+  batched W39b run uses `cold_lanes` 284 via `SMC_RETRIEVAL_OVERRIDES`, with
+  `XLA_PYTHON_CLIENT_PREALLOCATE=true XLA_PYTHON_CLIENT_MEM_FRACTION=0.90` and a fresh
+  out dir (notes "HPC (NAS GH200) and daw").
 
 ## Opacity and the RT
 
@@ -113,9 +116,10 @@ mask invalid bins before injection.
 
 `use_condense=True` works for T-varying forward models (`make_conden_spec` once,
 per-proposal rebuild). Inference with condensation is refused twice (`validate_config`
-and `retrieval_forward._refuse_condense_inference`, the resolved config); the only
-opt-in is `allow_condense_inference=True` after validating the gradient on the column.
-Never remove either gate. Conden-on does
+and `retrieval_forward._refuse_condense_inference`, the resolved config) because no
+retrieval with condensation has been validated; the only opt-in is
+`allow_condense_inference=True` after validating it on the case (notes "Evidence behind
+the rules"). Never remove either gate. Conden-on does
 not reduce to conden-off where nothing condenses; enable it only where a species
 condenses. Production configs keep it off. The recipe is pinned by
 `tests/test_condensation_live_tp.py`, which starts from the cfg's const_mix column.
@@ -141,7 +145,7 @@ automatically.
 - Command buffers are on by default (`XLA_CMDBUF=1`); off is `XLA_CMDBUF=0` (the empty
   flag). Never pass comma lists through `qsub -v`.
 - Never `module load cuda` in a JAX process on the node.
-- Recipes (queues, login, k-table fetch, env): notes.md, "HPC (NAS GH200)".
+- Recipes (queues, login, k-table fetch, env): notes.md, "HPC (NAS GH200) and daw".
 
 ## Layout, install, tests
 
@@ -160,7 +164,7 @@ automatically.
   tests -n 8` (`-n` needs pytest-xdist, which the root workspace env has; CI runs
   serially); pyproject's addopts deselect `slow`. Full, before a production run or
   after a change to the chemistry/RT path or a likelihood gate: add `-m "slow or not
-  slow"` (not re-timed since the SMC removal). A single slow file or node id needs
+  slow"`. A single slow file or node id needs
   `-m slow`. Mark a test slow if it builds a real pipeline (`build_pipeline` on a real
   config); claims that share one heavy build stay in one test (xdist builds a fixture
   once per worker). The production forward build is opt-in:
