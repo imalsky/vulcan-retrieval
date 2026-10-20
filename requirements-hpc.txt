@@ -29,6 +29,6 @@ h5py>=3
 # run_nautilus: the stock PyPI release (validate_env checks the version and refuses
 # the former SiLU / spread_batch fork, which carried the same version string)
 nautilus-sampler==1.0.6
-vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@eeb4873119b496ed875b57720ed51e00464e9030
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@39c2c45e7edd1818598b9a7abf6f1c3595f8d000
+vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@92c3b1e45f60c9d52e86d8d854c5da3a2f6fc5ae
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@32adc859137d03db9abd43b8c0203cea301c95dd
 -e .

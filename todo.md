@@ -23,10 +23,10 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   took +62% calls on the surrogate, so expect ~20-26 h. The governor stops at 46 h of a
   48 h PBS wall; RESUME=1 continues.
 - Before launch: decide items 2 and 3 (both define the target, so they go in before the
-  first batch or not at all). Commit and push the 2026-10-20 cleanup in all three repos,
-  move `requirements-hpc.txt`'s vulcan3 and vulcan-forward pins (now `eeb4873` /
-  `39c2c45`) to the pushed commits, then `git pull --ff-only` the three trees on NAS and
-  re-run `tools/bootstrap_nas_env.pbs` (`validate_env` must pass). The full tier passed
+  first batch or not at all). The 2026-10-20 cleanup is pushed and
+  `requirements-hpc.txt` pins vulcan3 `92c3b1e` and vulcan-forward `32adc85`;
+  `git pull --ff-only` the three trees on NAS and re-run `tools/bootstrap_nas_env.pbs`
+  (`validate_env` must pass). The full tier passed
   on daw on the cleanup working tree (notes "Current state").
 - From `runs/w39b_smc_retrieval` on cghfe01/02:
   `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`

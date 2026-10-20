@@ -143,7 +143,7 @@ automatically.
   version or dependency change needs `tools/bootstrap_nas_env.pbs` again. Jobs never
   install anything; `validate_env` runs in every preflight.
 - Never resume a checkpoint on changed physics or a changed target.
-- Data is not in git. `overrides/prod_*.json` is local-only.
+- Data is not in git. An `overrides/prod_*.json` file is local-only (gitignored).
 - Command buffers are on by default (`XLA_CMDBUF=1`); off is `XLA_CMDBUF=0` (the empty
   flag). Never pass comma lists through `qsub -v`.
 - Never `module load cuda` in a JAX process on the node.
