@@ -12,10 +12,9 @@
 # after cloning/seeding (and again only when validate_env says so -- i.e. when
 # packaging metadata changed: versions, dependencies, entry points).
 #
-# This is the ONLY place pip ever writes to the user site. Batch jobs
-# (run_nas_w39b.pbs) are read-only on the environment: they activate, run
-# `python -m retrieval_framework.validate_env`, and hard-fail with a pointer
-# here if anything is missing or stale.
+# Production jobs (run_nas_w39b.pbs) are read-only on the environment: they
+# activate, run `python -m retrieval_framework.validate_env`, and hard-fail
+# with a pointer here if anything is missing or stale.
 #
 # Runs on a GH200 node (not the x86 front end) because the jax-GPU check needs
 # the target architecture.

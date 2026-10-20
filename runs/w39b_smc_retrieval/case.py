@@ -64,9 +64,7 @@ _W39B = dict(
 
     # ---- realistic WASP-39b priors (literature-anchored) ---------------------
     # Sources: Tsai et al. 2023 (Nature, VULCAN photochemistry grid for W39b) and
-    # Rustamkulov et al. 2023 (Nature, NIRSpec PRISM ERS retrieval). All bounded,
-    # kept wide enough not to pre-decide the posterior but physical enough that the
-    # forward model converges.
+    # Rustamkulov et al. 2023 (Nature, NIRSpec PRISM ERS retrieval). All bounded.
     #
     #   metallicity : Tsai nominal 10x solar (tested 5-20x); ERS ~10x solar. Kept WIDE
     #                 1-100x solar (lnZ rel. to the 10x baseline) so the data localizes it.

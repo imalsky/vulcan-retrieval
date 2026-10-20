@@ -35,6 +35,7 @@ dist/
 
 # Local scratch output
 output/
+validation/results/
 
 # Local production-ladder overrides stay out of the repo; calibration overrides are
 # tracked so a pull brings the chain's inputs.
