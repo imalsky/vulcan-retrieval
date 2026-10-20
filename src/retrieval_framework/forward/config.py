@@ -6,7 +6,7 @@ runs.
 
 The shared physics constants and the molecule/opacity table live in
 ``vulcan_forward.constants``; import them from there. What is local: this
-repo's filesystem layout, the WASP-39 b case constants and the SMOKE profile.
+repo's filesystem layout and the WASP-39 b case constants.
 Importing this module hands the engine its data root (see the paths
 section), so the opacity caches live in this repo's data/ tree.
 """
@@ -57,26 +57,3 @@ R_JUP_CM = 7.1492e9        # upstream VULCAN phy_const.r_jup
 RP_CM = 1.279 * R_JUP_CM   # planet radius (cm) at p_ref_bar
 GS_CGS = 422.0             # gravity (cm/s^2) at RP_CM
 RSTAR_CM = 0.932 * R_SUN_CM
-
-# Run profile (the condensation test's SMOKE column)
-# Wavenumbers in cm^-1. wavelength(um) = 1e4 / nu.
-#
-# Two requirements for a valid forward-mode tangent:
-#   * Photochemistry ON (jvp vs re-converged FD < 0.1% at nz=150): photo-off, the
-#     forward model does not settle on a comparable state.
-#   * Default count_min/count_max: a pinned step count (dt forced to dt_max) drives
-#     the Ros2 step's forward tangent singular.
-SMOKE = {
-    "use_photo": True,
-    "nz": 40,                 # coarse column -> cheaper solves + jvps
-    "yconv_cri": 1.0e-3,
-    "molecules": ["CO"],       # fully offline
-    "nu_min": 4280.0,          # ~2.29-2.34 um, the cached CO 2-0 band
-    "nu_max": 4360.0,
-    "opacity_mode": "exomolop",
-    "art_nlayer": 20,
-    # planet identity, explicit: the engine requires it rather than
-    # defaulting to WASP-39 b (a forgotten key would silently model a
-    # different planet).
-    "rp_cm": RP_CM, "gs_cgs": GS_CGS, "rstar_cm": RSTAR_CM,
-}

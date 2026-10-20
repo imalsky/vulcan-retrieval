@@ -41,7 +41,7 @@ from vulcan_forward import interp_map    # differentiable log-P bridge
 
 
 def _refuse_condense_inference(chem, cfg) -> None:
-    """Refuse inference through a condensing steady state.
+    """Refuse a retrieval through a condensing steady state.
 
     The early ``cfg_overrides`` gate in ``config_schema.validate_config`` catches
     the common case, but a base VULCAN config can default ``use_condense=True``
@@ -53,15 +53,15 @@ def _refuse_condense_inference(chem, cfg) -> None:
     untested.
     """
     if (getattr(chem, "conden_spec", None) is not None
-            and bool(getattr(cfg, "run_inference", False))
             and not bool(getattr(cfg, "allow_condense_inference", False))):
         raise ValueError(
             "condensation is active in the RESOLVED VULCAN config "
-            f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}) with "
-            "run_inference=True: no retrieval with condensation has been "
-            "validated (certification and start dependence of condensing "
-            "columns are untested). Run it as a forward model "
-            "(run_inference=False) or set allow_condense_inference=True."
+            f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}): no "
+            "retrieval with condensation has been validated (certification and "
+            "start dependence of condensing columns are untested). Run a "
+            "condensation forward model through "
+            "vulcan_forward.vulcan_chem.build_chem_model, or set "
+            "allow_condense_inference=True."
         )
 
 
@@ -114,12 +114,13 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     chem = vulcan_chem.build_chem_model(profile, tp_eval=tpm.eval, n_tp_params=n_tp)
 
-    # Condensation is a FORWARD-model capability only; refuse inference on the
-    # RESOLVED config (closes the base-config bypass of the early cfg_overrides
-    # gate).
+    # Condensation is an engine (forward-model) capability only; refuse it here on
+    # the RESOLVED config (closes the base-config bypass of the early
+    # cfg_overrides gate).
     _refuse_condense_inference(chem, cfg)
 
-    # chem_retry: the SAME chemistry at another step tolerance and cap. rtol is
+    # chem_retry (the presolve chain's certifying program): the SAME chemistry at
+    # another step tolerance and cap. rtol is
     # a compile-time static of the step acceptance, so it is a second program
     # (its own runner, compiled on its first solve). Refuse anything else
     # differing: only numerical settings may change.
@@ -138,8 +139,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
                     f"beyond the step tolerance and the cap ({extra}); refusing")
         logger.info(f"[chem retry] retry program: rtol {_rtol_accept(chem)} -> "
                     f"{_rtol_accept(chem_retry)}, count_max {int(chem.count_max)} -> "
-                    f"{int(chem_retry.count_max)} (re-solves draws uncertified "
-                    "within the first cap, from the same start)")
+                    f"{int(chem_retry.count_max)} (solves and certifies every draw "
+                    "after the presolve)")
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns
@@ -201,9 +202,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         draw's own column. accept_count alone is not a convergence
         test; gate on ``conv_normal`` too.
 
-        Used by native_depth_aux (the scalar likelihood); the
-        batched evaluators use chem_solve_cold_diag_batch and reject a
-        non-converged cold proposal as a warm one is rejected."""
+        Used by native_depth_aux (the synthetic truth spectrum and the
+        plots); the batched evaluators use chem_solve_cold_diag_batch and
+        reject a non-converged cold proposal as a warm one is rejected."""
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
     def _route_for(ch):
@@ -211,7 +212,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
             point for every batched solve, cold stage or warm continuation (the
             knob keeps its ``cold_lanes`` name; ``kw`` carries ``warm_y`` /
-            ``lnZ_ref`` / ``c_o_ref`` / ``warm_cap``). ONE route per config:
+            ``lnZ_ref`` / ``c_o_ref``). ONE route per config:
             ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
             ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
             draw count ``run_queue`` refills nothing and runs the plain batch's
@@ -236,7 +237,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             return ch.converged_y_batch(C, return_conv_diag=True, **kw)
         return _chem_batch_route
 
-    _chem_batch_route = _route_for(chem)
+    _main_route = _route_for(chem)
 
     def chem_solve_cold_diag_batch(C, active=None):
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
@@ -249,58 +250,25 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         whole batch instead of on every lane every iteration. A lane is NOT
         bit-identical to its solo solve: the cadence rides the loop's iteration
         tick, and on the lane queue a refilled draw starts at the tick its lane
-        was freed at (agreement at the convergence scale). Every batch, cold
-        stage or warm continuation, goes through ``_chem_batch_route``.
+        was freed at (agreement at the convergence scale). Stage 1 is not gated
+        (it carries no certificate); stage 2's ConvDiag certifies each draw.
         ``active`` masks padded rows in both stages (``_chem_batch_route``)."""
-        if active is None:
-            return chem_stage2_diag_batch(C, chem_stage1_batch(C))
-        Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0),
-                                    active=active)
-        return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
+        Y1, _cd = _main_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0), active=active)
+        return _main_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
 
-    def chem_stage1_batch(C):
-        """``chem_stage1`` for a STACK of chem_thetas ``C`` (N, n_chem_tp) ->
-        Y1 (N, nz, ni), through ``_chem_batch_route``: one solve for the whole
-        batch instead of a per-particle vmap of solves, so the photolysis and
-        geometry cadences follow the loop tick shared by the batch. Not gated
-        (stage 1 carries no certificate)."""
-        Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
-        return Y1
+    def _warm_for(route):
+        def warm(C, Y, lnZ_ref, c_o_ref, active=None):
+            """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
+            ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
+            ``c_o_ref`` ((N,) arrays), under the route's count_max: run_nautilus's
+            anchored warm starts, and the presolve chain's certifying pass on the
+            chem_retry program. ``active`` masks padded rows."""
+            return route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, active=active)
+        return warm
 
-    def chem_stage2_diag_batch(C, Y1):
-        """``chem_stage2_diag`` for a STACK: warm re-convergence of each
-        particle's own stage-1 column ``Y1`` (N, nz, ni) at its (lnZ, c_o) ->
-        ``(y (N, nz, ni), ConvDiag with a leading particle axis)``, the
-        ConvDiag that certifies each draw."""
-        return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
-
-    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, active=None):
-        """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
-        ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
-        ``c_o_ref`` ((N,) arrays), under the cold count_max: run_nautilus's
-        anchored warm starts. Goes through ``_chem_batch_route``; ``active`` masks
-        padded rows."""
-        return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                 warm_cap=False, active=active)
-
-    chem_solve_cold_diag_batch_retry = chem_solve_warm_diag_full_batch_retry = None
-    if chem_retry is not None:
-        _retry_route = _route_for(chem_retry)
-
-        def chem_solve_cold_diag_batch_retry(C, active=None):
-            """``chem_solve_cold_diag_batch`` on the chem_retry program: both cold
-            stages (the equilibrium-seeded stage 1 and the stage-2 warm
-            re-convergence) at the retry rtol and cap. ``active`` masks padded
-            rows in both stages."""
-            Y1, _cd = _retry_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0), active=active)
-            return _retry_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
-
-        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, active=None):
-            """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
-            same warm continuation (same columns, same references) at the
-            retry rtol, under the retry cap. ``active`` masks padded rows."""
-            return _retry_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                warm_cap=False, active=active)
+    chem_solve_warm_diag_full_batch = _warm_for(_main_route)
+    chem_solve_warm_diag_full_batch_retry = (
+        None if chem_retry is None else _warm_for(_route_for(chem_retry)))
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)
@@ -325,9 +293,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
         canonical convergence bit AND accept_count under count_max -- the same
         predicate the staged batch evaluators apply (the conv_normal gate plus
-        the cap). The scalar likelihood rejects on it,
-        so no likelihood entry point accepts a finite spectrum from an uncertified
-        solve. Reading the diag is free: every field rides the primal carry.
+        the cap). The synthetic injection refuses an uncertified truth on it
+        (pipeline.generate_observations). Reading the diag is free: every
+        field rides the primal carry.
 
         ``cloud`` is None (off) or a (2,) array [log10 kappac0, alphac] for the
         ExoJax powerlaw_clouds term (see exojax_rt /
@@ -354,11 +322,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
-        # chem_retry (None when off): the retry program and its two solves
+        # chem_retry (None when off): the presolve chain's certifying program and
+        # its warm solve
         chem_retry=chem_retry,
         chem_rtol=_rtol_accept(chem),
         chem_retry_rtol=None if chem_retry is None else _rtol_accept(chem_retry),
-        chem_solve_cold_diag_batch_retry=chem_solve_cold_diag_batch_retry,
         chem_solve_warm_diag_full_batch_retry=chem_solve_warm_diag_full_batch_retry,
         aux_from_y=aux_from_y,
         y_baseline=np.asarray(chem.y0, dtype=np.float64),

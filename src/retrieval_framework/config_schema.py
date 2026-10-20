@@ -82,10 +82,6 @@ class Config:
     co_mode: str = "fixed_O"           # C/O GUESS construction (the engine repairs it exactly)
     count_min: Optional[int] = None
     count_max: Optional[int] = None
-    # The engine's capped warm-continuation limit (accepted steps), passed in the
-    # chemistry profile. run_nautilus's warm starts run under count_max, not
-    # this. validate_config requires warm_count_max <= count_max.
-    warm_count_max: int = 1500
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
     # physically meaningless large-dt Ros2 oscillations without changing the canonical
     # convergence criteria.
@@ -203,11 +199,11 @@ class Config:
     generate_synthetic_data: bool = False
 
     # ---- inference ------------------------------------------------------------
-    run_inference: bool = True
-    # Expert opt-in: inference with condensation ON. Off by default: no
+    # Expert opt-in: a pipeline with condensation ON. Off by default: no
     # retrieval with condensation has been validated (certification and start
     # dependence of condensing columns under the presolve chain are untested).
-    # Condensation forward solves are always allowed.
+    # A condensation forward model goes through the engine directly
+    # (vulcan_forward.vulcan_chem.build_chem_model), which has no such gate.
     allow_condense_inference: bool = False
     # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
     smc_rt_chunk: int = 16
@@ -222,25 +218,19 @@ class Config:
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
     cold_refill_chunk: int = 8
-    # ---- chemistry retry (run_nautilus only; off by default) -------------------
-    # chem_retry=True: every draw is first solved as now (the base config's
-    # rtol, capped at count_max accepted steps). A draw whose solve does not
-    # certify under VULCAN's own certificate (conv_normal) within that cap is
-    # re-solved ONCE, from the same start (its warm anchor column, or the cold
-    # two-stage seed), by a second compiled chemistry program at
-    # rtol=chem_retry_rtol capped at chem_retry_count_max, and is kept only if
-    # that solve certifies; otherwise it is rejected as before. Only the step
-    # tolerance and the cap change: the certificate is VULCAN's in both passes.
-    # rtol is a compile-time static of the step acceptance (VULCAN-JAX
-    # _Statics.rtol_accept), hence the second program. Off, none of the three
-    # enters the target manifest.
+    # ---- the presolve chain (run_nautilus only; off by default) ----------------
+    # chem_retry and chem_presolve are set together. chem_retry builds the
+    # second, certifying chemistry program: the same chemistry at
+    # rtol=chem_retry_rtol capped at chem_retry_count_max. Only the step
+    # tolerance and the cap change; rtol is a compile-time static of the step
+    # acceptance (VULCAN-JAX _Statics.rtol_accept), hence the second program.
+    # Off, none of the four keys enters the target manifest.
     chem_retry: bool = False
     chem_retry_rtol: float = 0.05
     chem_retry_count_max: int = 5000
-    # chem_presolve=True (needs chem_retry; run_nautilus only, off by default):
-    # the first pass becomes a PRESOLVE, a chemistry-only solve (no RT, never a
-    # likelihood) at the base config's rtol and count_max whose exit column is
-    # only a starting state. EVERY in-window draw is then solved by the
+    # chem_presolve=True: the first pass is a PRESOLVE, a chemistry-only solve
+    # (no RT, never a likelihood) at the base config's rtol and count_max whose
+    # exit column is only a starting state. EVERY in-window draw is then solved by the
     # chem_retry program (chem_retry_rtol, chem_retry_count_max), on one fixed
     # width of n_batch rows, warm from the presolve's column at the draw's own
     # (lnZ, c_o) where the presolve certified, else from the draw's original
@@ -249,8 +239,7 @@ class Config:
     # solve's certificate (VULCAN's own) keeps a draw, so every kept column
     # carries chem_retry_rtol. On W39b a presolve at rtol 0.2 with photolysis
     # every step escapes the low-Kzz step-size traps fast, and the certified
-    # rtol-0.05 solve then starts near its steady state. Off, it leaves the
-    # target manifest.
+    # rtol-0.05 solve then starts near its steady state.
     chem_presolve: bool = False
 
     # ---- walltime governor ----------------------------------------------------
@@ -282,7 +271,6 @@ class Config:
             p["count_min"] = int(self.count_min)
         if self.count_max is not None:
             p["count_max"] = int(self.count_max)
-        p["warm_count_max"] = int(self.warm_count_max)
         if self.dt_max is not None:
             p["dt_max"] = float(self.dt_max)
         if self.vulcan_cfg_name:
@@ -485,7 +473,7 @@ def hardware_warnings(prof: dict) -> list:
 
 
 def retry_profile(cfg: Config) -> Dict[str, Any]:
-    """The chemistry profile of the ``chem_retry`` program: ``cfg.profile()``
+    """The chemistry profile of the ``chem_retry`` (certifying) program: ``cfg.profile()``
     with ``cfg_overrides["rtol"] = chem_retry_rtol`` and ``count_max =
     chem_retry_count_max``; nothing else changes."""
     p = cfg.profile()
@@ -505,39 +493,33 @@ def validate_config(cfg: Config) -> None:
                          f"one lockstep call), got {cfg.cold_lanes!r}")
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
-    # Inference with condensation ON is refused by default (see
-    # allow_condense_inference); allow_condense_inference=True is the opt-in.
+    # Every pipeline evaluates a likelihood, so condensation ON is refused here
+    # unless allow_condense_inference=True (the opt-in).
     if (bool(cfg.cfg_overrides.get("use_condense", False))
-            and cfg.run_inference and not cfg.allow_condense_inference):
+            and not cfg.allow_condense_inference):
         raise ValueError(
-            "use_condense=True with run_inference=True is refused: no retrieval "
-            "with condensation has been validated (certification and start "
-            "dependence of condensing columns are untested). Run condensation "
-            "as a forward model (run_inference=False), or set "
+            "use_condense=True is refused in a retrieval: no retrieval with "
+            "condensation has been validated (certification and start dependence "
+            "of condensing columns are untested). Run a condensation forward model "
+            "through vulcan_forward.vulcan_chem.build_chem_model, or set "
             "allow_condense_inference=True after validating it on your case.")
-    if int(cfg.warm_count_max) < 1:
-        raise ValueError("warm_count_max must be >= 1")
-    if cfg.count_max is not None and int(cfg.warm_count_max) > int(cfg.count_max):
-        raise ValueError(
-            f"warm_count_max={cfg.warm_count_max} exceeds count_max={cfg.count_max}: "
-            "the warm cap must be at most the cold cap")
     if not isinstance(cfg.chem_retry, bool):
         raise ValueError(f"chem_retry must be true or false, got {cfg.chem_retry!r}")
     if cfg.chem_retry:
         r = float(cfg.chem_retry_rtol)
         if not (math.isfinite(r) and 0.0 < r < 1.0):
             raise ValueError(f"chem_retry_rtol must be in (0, 1), got {cfg.chem_retry_rtol!r}")
-        if int(cfg.chem_retry_count_max) < int(cfg.warm_count_max):
-            # the retry program is built with this cap as its count_max, and
-            # vulcan_chem refuses warm_count_max > count_max
+        if int(cfg.chem_retry_count_max) < 1:
             raise ValueError(
-                f"chem_retry_count_max={cfg.chem_retry_count_max} is below "
-                f"warm_count_max={cfg.warm_count_max}")
+                f"chem_retry_count_max must be >= 1, got {cfg.chem_retry_count_max!r}")
     if not isinstance(cfg.chem_presolve, bool):
         raise ValueError(f"chem_presolve must be true or false, got {cfg.chem_presolve!r}")
-    if cfg.chem_presolve and not cfg.chem_retry:
-        raise ValueError("chem_presolve=True needs chem_retry=True: the chem_retry program "
-                         "is the one that solves and certifies every draw")
+    if cfg.chem_presolve != cfg.chem_retry:
+        raise ValueError(
+            "chem_retry and chem_presolve go together: the presolve chain is the only "
+            "two-program mode (the chem_retry program solves and certifies every draw "
+            "after the presolve; the retry-only mode is removed). Got "
+            f"chem_retry={cfg.chem_retry}, chem_presolve={cfg.chem_presolve}")
     if cfg.noise_inflation_per_group and not cfg.infer_noise_inflation:
         raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
                          "(it splits the inferred inflation by group; alone it would "
@@ -614,14 +596,9 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"   co_mode={cfg.co_mode}"
         f"   cold batch: {lanes}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
-        f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}   "
-        f"warm_count_max={int(cfg.warm_count_max)}",
+        f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}",
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "
         "high-Kzz non-convergence)",
-        *([f"    chem_retry ON (nautilus): a draw uncertified within count_max={cmax} is "
-           f"re-solved once from the same start at rtol={float(cfg.chem_retry_rtol):g}, "
-           f"count_max={int(cfg.chem_retry_count_max)}; still uncertified -> rejected"]
-          if cfg.chem_retry and not cfg.chem_presolve else []),
         *([f"    chem_presolve ON (nautilus): every draw is presolved (chemistry only, a start, "
            f"never kept) within count_max={cmax}, then solved and certified at "
            f"rtol={float(cfg.chem_retry_rtol):g}, count_max={int(cfg.chem_retry_count_max)} "

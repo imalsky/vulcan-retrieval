@@ -6,11 +6,13 @@ would silently test stale code. Fail collection loudly instead (same convention 
 VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 
 Also the real smoke pipeline builder (its capped session fixture is built
-once per session, per xdist worker) and the shared ConvDiag stub.
+once per session, per xdist worker), the shared ConvDiag stub and the
+target-digest stand-in.
 """
 import dataclasses
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 # Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
@@ -33,7 +35,6 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays finite
-CAPPED_WARM_CMAX = 5    # validate_config requires warm_count_max <= count_max
 
 
 class StubConvDiag(NamedTuple):
@@ -74,5 +75,24 @@ def build_smoke_pipe(**overrides):
 @pytest.fixture(scope="session")
 def capped_smoke_pipe():
     """The smoke pipeline at count_max=50: no solve can certify at this cap."""
-    return build_smoke_pipe(count_max=CAPPED_COLD_CMAX,
-                            warm_count_max=CAPPED_WARM_CMAX)
+    return build_smoke_pipe(count_max=CAPPED_COLD_CMAX)
+
+
+@pytest.fixture
+def digest_pipe(monkeypatch):
+    """What provenance.target_manifest reads from a pipeline, with the code
+    state and the version record frozen (the version record imports exojax,
+    which must not precede vulcan_chem in a worker)."""
+    import numpy as np
+
+    from retrieval_framework import provenance
+    monkeypatch.setattr(provenance, "_repo_states",
+                        lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    return SimpleNamespace(
+        obs={"wl": np.array([1.0, 2.0]), "wl_lo": np.array([0.9, 1.9]),
+             "wl_hi": np.array([1.1, 2.1]), "group": ["A", "A"]},
+        obs_depth=np.array([1e-2, 1.1e-2]), obs_sigma=np.array([1e-4, 1e-4]),
+        names=["lnZ", "c_o"], prior_types=["uniform", "uniform"],
+        param_prior_lo=np.array([-1.0, -1.0]), param_prior_hi=np.array([1.0, 1.0]),
+        groups=["A"], n_bin=2)

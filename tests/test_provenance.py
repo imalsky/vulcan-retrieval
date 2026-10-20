@@ -5,13 +5,12 @@ and nothing that churns, and the data identity says why when it cannot resolve.
 from __future__ import annotations
 
 import os
-
-import numpy as np
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
-from types import SimpleNamespace
+
 import pytest
 
+from retrieval_framework import config_schema as C
 from retrieval_framework import provenance
 
 
@@ -36,44 +35,50 @@ def test_data_identity_never_reports_null_opacity_without_saying_why(
 
 # --- target identity: what a checkpoint's numbers belong to --------------------
 
-def _digest_pipe():
-    """Minimal stand-in carrying exactly what target_manifest reads."""
-    return SimpleNamespace(
-        obs={"wl": np.array([1.0, 2.0]), "wl_lo": np.array([0.9, 1.9]),
-             "wl_hi": np.array([1.1, 2.1]), "group": ["A", "A"]},
-        obs_depth=np.array([1e-2, 1.1e-2]), obs_sigma=np.array([1e-4, 1e-4]),
-        names=["lnZ", "c_o"], prior_types=["uniform", "uniform"],
-        param_prior_lo=np.array([-1.0, -1.0]),
-        param_prior_hi=np.array([1.0, 1.0]),
-        groups=["A"], n_bin=2)
+CHAIN = dict(chem_retry=True, chem_presolve=True)
 
 
-@pytest.mark.parametrize("field, value, moves", [
-    ("yconv_cri", 0.001, True),            # convergence tolerance
-    ("molecules", ("H2O",), True),         # opacity list
-    ("nz", 80, True),                      # chemistry grid
-    ("art_ptop_bar", 1e-8, True),          # pressure domain
-    ("prior_lnZ", (-1.0, 1.0), True),      # prior definition
-    ("seed", 999, True),                   # RNG identity (bit-identical resume)
-    ("count_max", 4000, True),             # solver-defined support
-    ("walltime_seconds", 3600.0, False),   # per-JOB governor
-    ("smc_rt_chunk", 24, False),           # batch split, numerically identical
-    ("out_dir", Path("/tmp/elsewhere"), False),
+@pytest.mark.parametrize("base_kw, field, value, moves", [
+    ({}, "yconv_cri", 0.001, True),            # convergence tolerance
+    ({}, "molecules", ("H2O",), True),         # opacity list
+    ({}, "nz", 80, True),                      # chemistry grid
+    ({}, "art_ptop_bar", 1e-8, True),          # pressure domain
+    ({}, "prior_lnZ", (-1.0, 1.0), True),      # prior definition
+    ({}, "seed", 999, True),                   # RNG identity (bit-identical resume)
+    ({}, "count_max", 4000, True),             # solver-defined support
+    ({}, "walltime_seconds", 3600.0, False),   # per-JOB governor
+    ({}, "smc_rt_chunk", 24, False),           # batch split, numerically identical
+    ({}, "out_dir", Path("/tmp/elsewhere"), False),
+    # a switched key binds only while its switch is on
+    ({}, "chem_retry", True, True),
+    ({}, "chem_presolve", True, True),
+    ({}, "chem_retry_rtol", 0.01, False),
+    ({}, "chem_retry_count_max", 9000, False),
+    (CHAIN, "chem_retry_rtol", 0.1, True),
+    (CHAIN, "chem_retry_count_max", 8000, True),
 ])
-def test_target_digest_moves_with_every_bound_class(field, value, moves, monkeypatch):
+def test_target_digest_moves_with_every_bound_class(base_kw, field, value, moves,
+                                                    digest_pipe):
     """Each manifest class must change the digest, or a resume could carry
     numbers from a different density. A chained RESUME job legitimately changes
     the per-job settings; binding them would refuse the documented NAS chaining
     workflow."""
-    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
-    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    from retrieval_framework import config_schema as _C
-    pipe = _digest_pipe()
-    base = _C.Config(molecules=("H2O", "CO2"))
+    base = C.Config(molecules=("H2O", "CO2"), **base_kw)
     assert getattr(base, field) != value, f"{field} probe equals the default"
     changed = replace(base, **{field: value})
-    assert (provenance.target_digest(base, pipe)
-            != provenance.target_digest(changed, pipe)) is moves
+    assert (provenance.target_digest(base, digest_pipe)
+            != provenance.target_digest(changed, digest_pipe)) is moves
+
+
+def test_switches_off_leave_the_manifest_as_before(digest_pipe):
+    """Off, the switched keys stay out of the manifest: it is exactly the
+    manifest of a Config that never had them, so every earlier run keeps its
+    digest."""
+    switched = {k for keys in provenance.SWITCHED_KEYS.values() for k in keys}
+    base = C.Config(molecules=("H2O",))
+    assert provenance.target_manifest(base, digest_pipe)["config"] == {
+        k: v for k, v in asdict(base).items()
+        if k not in provenance.TARGET_FREE_KEYS and k not in switched}
 
 
 @pytest.mark.parametrize("var, value", [
@@ -82,27 +87,21 @@ def test_target_digest_moves_with_every_bound_class(field, value, moves, monkeyp
     ("VULCAN3_BT_FACTOR", "lu"),
     ("VULCAN3_BT_BUFFERS", "1"),
 ])
-def test_target_digest_binds_the_solver_env(var, value, monkeypatch):
+def test_target_digest_binds_the_solver_env(var, value, digest_pipe, monkeypatch):
     """Each env var is a numerical choice of the solve, so a resume must not
     switch it."""
-    from retrieval_framework import config_schema as _C
-    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
-    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    cfg = C.Config(molecules=("H2O",))
     monkeypatch.delenv(var, raising=False)
-    d0 = provenance.target_digest(cfg, pipe)
+    d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setenv(var, value)
-    assert provenance.target_digest(cfg, pipe) != d0, f"{var} not bound"
+    assert provenance.target_digest(cfg, digest_pipe) != d0, f"{var} not bound"
 
 
-def test_target_digest_moves_with_the_observations(monkeypatch):
-    from retrieval_framework import config_schema as _C
-    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
-    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: {"r": {"commit": "a" * 40, "dirty": False}})
-    a = provenance.target_digest(cfg, pipe)
-    pipe.obs_sigma = pipe.obs_sigma * 2.0
-    assert provenance.target_digest(cfg, pipe) != a, "observations not bound"
+def test_target_digest_moves_with_the_observations(digest_pipe):
+    cfg = C.Config(molecules=("H2O",))
+    a = provenance.target_digest(cfg, digest_pipe)
+    digest_pipe.obs_sigma = digest_pipe.obs_sigma * 2.0
+    assert provenance.target_digest(cfg, digest_pipe) != a, "observations not bound"
 
 
 def _repo(**over):
@@ -118,37 +117,33 @@ def _repo(**over):
     ({"src_diff": "e" * 64}, True),               # a DIFFERENT uncommitted src edit
     ({"commit": "b" * 40}, True),                 # a different commit
 ])
-def test_target_digest_binds_code_state_not_file_churn(state, moves, monkeypatch):
+def test_target_digest_binds_code_state_not_file_churn(state, moves, digest_pipe,
+                                                       monkeypatch):
     """A scratch edit must not refuse a resume, but a different source diff must.
 
     `dirty_files` churns with any untracked file; `src_diff` is the content hash
     of `git diff HEAD -- src`, so it moves only when the code that defines the
     target changed.
     """
-    from retrieval_framework import config_schema as _C
-    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    cfg = C.Config(molecules=("H2O",))
     monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
-    d0 = provenance.target_digest(cfg, pipe)
+    d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo(**state))
-    assert (provenance.target_digest(cfg, pipe) != d0) is moves
+    assert (provenance.target_digest(cfg, digest_pipe) != d0) is moves
 
 
-def test_target_digest_binds_the_cia_tables(monkeypatch):
+def test_target_digest_binds_the_cia_tables(digest_pipe, monkeypatch):
     """The CIA tables are the only target-affecting input outside git, so nothing
     else can notice a swapped continuum."""
-    from retrieval_framework import config_schema as _C
-    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
-    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    cfg = C.Config(molecules=("H2O",))
     monkeypatch.setattr(provenance, "_cia_identity",
                         lambda *a, **k: {n: {"sha256": "1" * 64}
                                          for n in provenance.CIA_TABLES})
-    d0 = provenance.target_digest(cfg, pipe)
+    d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setattr(provenance, "_cia_identity",
                         lambda *a, **k: {n: {"sha256": "2" * 64}
                                          for n in provenance.CIA_TABLES})
-    assert provenance.target_digest(cfg, pipe) != d0
+    assert provenance.target_digest(cfg, digest_pipe) != d0
 
 
 # --- run-directory identity: a refused resume must not rewrite it -------------

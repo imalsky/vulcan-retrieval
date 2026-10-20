@@ -238,7 +238,6 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
 TARGET_FREE_KEYS = frozenset({
     "out_dir", "run_label", "walltime_seconds",
     "smc_rt_chunk",
-    "run_inference",
 })
 # Keys bound only while their switch is on. Off, they change nothing, so they
 # stay out of the manifest and a run from before they existed keeps its digest.

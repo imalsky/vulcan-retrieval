@@ -82,7 +82,7 @@ addopts = "-ra --tb=short -m 'not slow'"
 markers = [
     # Integration tests that build a real chemistry + RT pipeline
     # (test_cold_reject, test_condensation_live_tp, test_set_observations, and
-    # two tests in test_chem_retry).
+    # one test in test_chem_retry).
     "slow: builds a real chemistry/RT pipeline; minutes, not seconds",
 ]
 

@@ -60,7 +60,7 @@ python -m retrieval_framework.nautilus_report \
   runs/w39b_smc_retrieval/data/smoke_nautilus
 ```
 
-The `smoke`, `gpu`, and `prod` presets are defined in
+The `smoke` and `gpu` presets are defined in
 [`runs/w39b_smc_retrieval/case.py`](runs/w39b_smc_retrieval/case.py). Copy the
 case file to `runs/<new-case>/` for another target.
 
@@ -75,20 +75,18 @@ has no pass/fail verdict: read its caveats before reporting a production result.
 The sampler is stock `nautilus-sampler` 1.0.6 from PyPI with its default
 networks, and the exploration phase is discarded (`make_sampler` in
 `run_nautilus.py`).
-With `chem_retry` on, the second pass runs on a bucket of 132 lanes per step
-(`RETRY_BUCKET` in `run_nautilus.py`), and the padding rows of a bucket or of a
-short chunk are masked: they take no chemistry step and no RT. Each pass runs
-the RT only on the rows whose likelihood it can keep. `NAUTILUS_PRECOMPILE=1`
-(the default) compiles the warm first-pass program and the retry buckets
-132-660 (`RETRY_PRECOMPILE`) on a host thread while the cold first batch runs;
-`NAUTILUS_PRECOMPILE=0` compiles each program at its first use.
+The padding rows of a short chunk are masked: they take no chemistry step and
+no RT. Each pass runs the RT only on the rows whose likelihood it can keep.
+`NAUTILUS_PRECOMPILE=1` (the default) compiles the warm programs at the batch
+width on a host thread while the cold first batch runs; `NAUTILUS_PRECOMPILE=0`
+compiles each program at its first use.
 
-`chem_presolve` (off by default; needs `chem_retry`) turns the first pass into
+`chem_presolve` and `chem_retry` (off by default; set together) turn the first pass into
 a presolve: a chemistry-only solve at the base `rtol` and `count_max` whose
 column is only a starting state (no RT, never a likelihood). Every in-window
 draw is then solved and certified by the `chem_retry` program
 (`chem_retry_rtol`, `chem_retry_count_max`) warm from that column, on one fixed
-width of `n_batch` rows, so no retry bucket compiles mid-run. Only that solve's
+width of `n_batch` rows, so nothing compiles mid-run. Only that solve's
 VULCAN certificate keeps a draw, and every kept column carries
 `chem_retry_rtol`. Off, it stays out of the target manifest and nothing changes.
 The WASP-39b setting is

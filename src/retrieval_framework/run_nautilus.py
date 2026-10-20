@@ -43,11 +43,9 @@ NAUTILUS_N_EFF (default N_EFF), NAUTILUS_N_BATCH (default BATCH_PER_LANE x the
 lane count, so a lane whose column certifies refills from the same batch; with
 cold_lanes = 0, one lockstep batch of config_schema.device_lane_count() columns),
 NAUTILUS_WARM (default 1), NAUTILUS_PRECOMPILE (default 1: compile the warm
-evaluators -- the first pass at n_batch and the retry pass at every
-RETRY_PRECOMPILE bucket -- on a host thread while the cold first batch runs;
+evaluators at n_batch on a host thread while the cold first batch runs;
 0 compiles each one at its first use), and the profiling hook (BatchProfiler, off unless
-VULCAN_PROFILE_BATCH is set): VULCAN_PROFILE_BATCH, VULCAN_PROFILE_EXIT_AFTER,
-VULCAN_NVTX_LIB.
+VULCAN_PROFILE_BATCH is set): VULCAN_PROFILE_BATCH, VULCAN_NVTX_LIB.
 
 Sampler settings (the constants below, built by make_sampler): STOCK
 nautilus-sampler 1.0.6 from PyPI with its default networks (N_NETWORKS ReLU MLPs),
@@ -62,31 +60,22 @@ spread_batch), which carried the same 1.0.6 version string.
 Every likelihood chunk appends one line to ``batches.jsonl``: its wall time,
 start mode and the accepted step count of each column.
 
-Chemistry retry (``cfg.chem_retry``, off by default; make_loglike): a draw whose
-first solve does not certify under VULCAN's own certificate within count_max
-(exhausted or stalled, T-P in window) is re-solved once from the same start by a
-second compiled program at ``chem_retry_rtol``, capped at
-``chem_retry_count_max``, and kept only if that solve certifies. The rejection
-classes then describe each draw's final solve; the tally adds ``retried`` and
-``retry_*``, a chunk's batches.jsonl line adds ``retry`` (its rows, widths,
+The presolve chain (``cfg.chem_retry`` with ``cfg.chem_presolve``, off by
+default; make_loglike): the first pass is a chemistry-only PRESOLVE at the base
+rtol (no RT, never a likelihood) and EVERY in-window draw is then solved, and
+certified, by the second compiled program (``chem_retry_rtol``, capped at
+``chem_retry_count_max``) on one fixed width of n_batch rows, warm from its
+presolve column (from its original start where the presolve did not certify).
+The rejection classes describe each draw's second solve; the tally adds
+``retried``, ``retry_*``, ``presolve_certified`` and ``presolve_wall_s``, a
+chunk's batches.jsonl line adds ``presolve`` and ``retry`` (its rows, width,
 step counts and wall time; ``t`` is both passes, ``acc`` the first), and every
-anchor file records the ``rtol`` that certified each column. Off, every path
-below is the stock one.
+anchor carries the retry ``rtol``. Off, every path below is the stock one.
 
-Chemistry presolve (``cfg.chem_presolve``, needs chem_retry, off by default):
-the first pass is a chemistry-only PRESOLVE at the base rtol (no RT, never a
-likelihood) and EVERY in-window draw is then solved, and certified, by the
-retry program on one fixed width of n_batch rows, warm from its presolve column
-(from its original start where the presolve did not certify). The tally adds
-``presolve_certified`` and ``presolve_wall_s``, a chunk's batches.jsonl line adds
-``presolve``, and every anchor carries the retry ``rtol``. Off, nothing changes.
-
-Padding costs no solve: a chunk shorter than n_batch and the retry pass's
-bucket (``retry_width``) are filled with copies of their last row that the
-evaluator masks (``active``): their lanes take no chemistry step and no RT.
-Each pass runs the RT only on the rows whose log L it can keep (T-P in window,
-certified under the cap; ``rt_kept_only``), so a row the first pass leaves
-uncertified is RT'd once, after its retry.
+Padding costs no solve: a chunk shorter than n_batch and the second pass's
+unused rows are filled with copies of their last row that the evaluator masks
+(``active``): their lanes take no chemistry step and no RT. The RT runs only
+on the rows whose log L can be kept (T-P in window, certified under the cap).
 
 Lanes: ``cfg.cold_lanes`` (one SM per lane in the gpu preset), times
 FFI_BLOCKS_PER_SM under the ffi solver, whose one-buffer kernels keep that many
@@ -100,7 +89,6 @@ import ctypes
 import json
 import logging
 import os
-import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -124,21 +112,6 @@ BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 # ~63 KB of shared memory each in the SM's 228 KB (VULCAN-JAX
 # block_thomas_cuda.cu, bt_choose picks that variant at this width).
 FFI_BLOCKS_PER_SM = 3
-# chem_retry: the second pass runs on a width rounded up to a multiple of
-# RETRY_BUCKET, padded with masked copies of its last row (no step, no RT). The
-# retry program compiles once per width, and the buckets up to
-# RETRY_PRECOMPILE[-1] are compiled ahead (NAUTILUS_PRECOMPILE). 132 is the
-# GH200's SM count: the compaction rungs (264, 132) are multiples of it, and
-# W39b baseline v2 (job 93269, 59 batches) retried 32-586 rows per batch, so
-# five buckets cover every batch it ran; a wider pass compiles its own bucket.
-RETRY_BUCKET = 132
-RETRY_PRECOMPILE = (132, 264, 396, 528, 660)
-
-
-def retry_width(n: int, bucket: int | None = None) -> int:
-    """The padded second-pass width (bucket) of ``n`` retried rows."""
-    b = int(RETRY_BUCKET if bucket is None else bucket)
-    return int(-(-int(n) // b) * b)
 
 
 class _Programs:
@@ -229,7 +202,7 @@ class Anchors:
         self.refs = np.concatenate([self.refs, refs])
 
     def add(self, z, Y, refs, rtol=None):
-        """Append certified columns as one new file. ``rtol`` (chem_retry runs):
+        """Append certified columns as one new file. ``rtol`` (presolve-chain runs):
         per column, the step tolerance of the solve that certified it, stored
         as the file's ``rtol`` (a reload reads z / Y / refs only)."""
         if len(z):
@@ -270,44 +243,41 @@ class BatchProfiler:
     holds batch k and the nautilus update after it. Meant for nsys / nsys-jax
     --capture-range=cudaProfilerApi --capture-range-end=stop, so the run goes on
     unprofiled after the window.
-    VULCAN_PROFILE_EXIT_AFTER=n: exit 0 when batch n+1 would start (smoke tests).
     VULCAN_NVTX_LIB: a shared library exporting vp_push(const char*) / vp_pop()
     (an NVTX3 shim) for the phase ranges; without it, or with the `nvtx` package
     absent, no ranges (the window still works). Ranges, every batch:
     batch<k>/anchors (host nearest-anchor lookup), batch<k>/evaluator (ONE XLA
     program: the chemistry lane queue, then the RT; under nsys XLA's own NVTX
-    thunk ranges split it by op), batch<k>/retry (cfg.chem_retry only: the
-    second-pass solve of the chunk's uncertified rows, inside batch k's window),
+    thunk ranges split it by op), batch<k>/retry (the presolve chain only: the
+    certifying second pass, inside batch k's window),
     batch<k>/post (rejection classes, anchors), nautilus/update (the sampler's
     work between two batches)."""
 
     def __init__(self):
         self.k = int(os.environ.get("VULCAN_PROFILE_BATCH", "0") or 0)
-        self.exit_after = int(os.environ.get("VULCAN_PROFILE_EXIT_AFTER", "0") or 0)
         self.n = 0
         self.active = False
         self.t_batch = None
         self._push = self._pop = None
         self._open = []
-        if self.k <= 0 and self.exit_after <= 0:
+        if self.k <= 0:
             return
-        if self.k > 0:
-            self._rt = self._cudart()
-            atexit.register(self.stop)
-            lib = os.environ.get("VULCAN_NVTX_LIB", "").strip()
-            try:
-                if lib:
-                    nv = ctypes.CDLL(lib)
-                    nv.vp_push.argtypes = [ctypes.c_char_p]
-                    self._push = lambda s: nv.vp_push(s.encode())
-                    self._pop = nv.vp_pop
-                else:
-                    import nvtx  # optional package
-                    self._push, self._pop = nvtx.push_range, nvtx.pop_range
-            except (OSError, ImportError, AttributeError) as e:
-                log.warning(f"profile: no NVTX ranges ({e})")
-        log.info(f"profile: capture batch {self.k or '-'} (cudaProfilerStart/Stop), exit after "
-                 f"batch {self.exit_after or '-'}, NVTX {'on' if self._push else 'off'}")
+        self._rt = self._cudart()
+        atexit.register(self.stop)
+        lib = os.environ.get("VULCAN_NVTX_LIB", "").strip()
+        try:
+            if lib:
+                nv = ctypes.CDLL(lib)
+                nv.vp_push.argtypes = [ctypes.c_char_p]
+                self._push = lambda s: nv.vp_push(s.encode())
+                self._pop = nv.vp_pop
+            else:
+                import nvtx  # optional package
+                self._push, self._pop = nvtx.push_range, nvtx.pop_range
+        except (OSError, ImportError, AttributeError) as e:
+            log.warning(f"profile: no NVTX ranges ({e})")
+        log.info(f"profile: capture batch {self.k} (cudaProfilerStart/Stop), "
+                 f"NVTX {'on' if self._push else 'off'}")
 
     @staticmethod
     def _cudart():
@@ -345,20 +315,13 @@ class BatchProfiler:
         is complete here (its results were fetched to the host)."""
         self.pop()                                  # nautilus/update, if open
         now = time.perf_counter()
-        if self.t_batch is not None and (self.k or self.exit_after):
+        if self.t_batch is not None and self.k:
             log.info(f"profile: batch {self.n} period {now - self.t_batch:.2f} s "
                      "(evaluator + host + nautilus update)")
         self.t_batch = now
         self.n += 1
         if self.k and self.n == self.k + 1:
             self.stop()
-        if self.exit_after and self.n == self.exit_after + 1:
-            self.stop()
-            log.info(f"profile: VULCAN_PROFILE_EXIT_AFTER={self.exit_after}: exiting 0")
-            logging.shutdown()
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(0)
         if self.k and self.n == self.k:
             rc = int(self._rt.cudaProfilerStart())
             self.active = True
@@ -373,31 +336,23 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     ``n_batch`` (a short last chunk is padded with masked copies of its last
     row, which take no chemistry step and no RT) and adds this call's counts
     to ``tally``. ``precompile``: from the first chunk on, compile the warm
-    evaluators (n_batch, and the retry buckets RETRY_PRECOMPILE) on a host
-    thread while the first (cold) chunk runs. With ``anchors``, a chunk starts
+    evaluators at n_batch on a host thread while the first (cold) chunk runs.
+    With ``anchors``, a chunk starts
     from the nearest certified column (warm, cold count_max) once one exists,
     and every certified column it returns becomes an anchor. With
     ``batch_log``, each chunk appends its wall time, mode and per-column
     accepted step counts there.
 
-    With ``pipe.chem_retry`` (cfg.chem_retry), the rows of a chunk whose first
-    solve does not certify within the first cap (exhausted or stalled, T-P in
-    window) are re-solved once from the SAME start -- the anchor column and
-    references the first solve started from, or the cold two-stage map on a
-    cold chunk -- on the retry program, in one second lane-queue call of
-    ``retry_width`` rows (masked copies of the last retried row pad it). A
-    retried row keeps its second solve, judged at the retry cap: certified ->
-    kept (and an anchor), else rejected in the class of that solve.
-
-    With ``pipe.chem_retry.presolve`` (cfg.chem_presolve) the first pass is the
+    With ``pipe.chem_retry`` (the presolve chain) the first pass is the
     chemistry-only presolve (``pipe._make_presolve_eval``: no RT, every L -inf)
-    and the second pass takes EVERY in-window row at the fixed width n_batch
-    (rows first, masked copies after), warm from the presolve's exit column at
-    the row's own references where the presolve certified under count_max,
-    else from the row's original start (warm chunk: its anchor column; cold
-    chunk: the presolve's exit column, the baseline column if non-finite).
-    Precompile then queues the retry program and the warm presolve at n_batch
-    only."""
+    and the second pass, on the retry program, takes EVERY in-window row at the
+    fixed width n_batch (rows first, masked copies after), warm from the
+    presolve's exit column at the row's own references where the presolve
+    certified under count_max, else from the row's original start (warm chunk:
+    its anchor column; cold chunk: the presolve's exit column, the baseline
+    column if non-finite). A row keeps its second solve, judged at the retry
+    cap: certified -> kept (and an anchor), else rejected in the class of that
+    solve. Precompile then queues the retry program and the warm presolve."""
     import jax
     import jax.numpy as jnp
 
@@ -409,57 +364,39 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     k = int(pipe.n_chem_tp)
     retry = getattr(pipe, "chem_retry", None)
     # every evaluator masks padded rows (active) and RTs only the rows it can keep
-    fns = {"cold": jax.jit(pipe._make_batch_eval("cold", diag=True, rt_kept_only=True))}
+    fns = {"cold": jax.jit(pipe._make_batch_eval("cold", diag=True))}
     if anchors is not None:
-        fns["warm"] = jax.jit(pipe._make_batch_eval("warm", rt_kept_only=True))
+        fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
     if retry is not None:
-        fns["retry_cold"] = jax.jit(pipe._make_batch_eval("cold", diag=True, retry=True,
-                                                          rt_kept_only=True))
-        if anchors is not None:
-            fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True,
-                                                              rt_kept_only=True))
+        # the presolve chain: the first pass is the chemistry-only presolve (a
+        # start generator) and every in-window row is solved again, and
+        # certified, by the retry program at the fixed width n_batch, warm from
+        # its presolve column
+        fns["pre_cold"] = jax.jit(pipe._make_presolve_eval("cold"))
+        fns["pre_warm"] = jax.jit(pipe._make_presolve_eval("warm"))
+        fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True))
         count_max_retry = int(retry.count_max)
         rtol_first = np.nan if retry.rtol_first is None else float(retry.rtol_first)
         rtol_retry = float(retry.rtol)
-    # cfg.chem_presolve: the first pass is the chemistry-only presolve (a start
-    # generator) and every in-window row is solved again, and certified, by the
-    # retry program at the fixed width n_batch, warm from its presolve column
-    presolve = retry is not None and bool(getattr(retry, "presolve", False))
-    if presolve:
-        fns["pre_cold"] = jax.jit(pipe._make_presolve_eval("cold"))
-        fns["pre_warm"] = jax.jit(pipe._make_presolve_eval("warm"))
-        if "retry_warm" not in fns:      # a cold chunk's second pass is warm too
-            fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True,
-                                                              rt_kept_only=True))
         y_base = np.asarray(Y0[0], np.float64)
     progs = _Programs(fns, getattr(pipe, "n_dim", None), Y0.shape[1:], pipe.dtype)
     ahead = []
     if precompile and anchors is not None:
-        if presolve:   # the second pass runs at n_batch only: no bucket compiles
-            ahead = [("retry_warm", n_batch), ("pre_warm", n_batch)]
-        else:
-            ahead = [("warm", n_batch)] + (
-                [("retry_warm", b) for b in sorted(RETRY_PRECOMPILE, reverse=True)]
-                if retry is not None else [])
+        ahead = ([("retry_warm", n_batch), ("pre_warm", n_batch)] if retry is not None
+                 else [("warm", n_batch)])
 
-    def second_pass(rows, warm, Uj, Yw, rw, width=None):
-        """The retry solve of chunk rows ``rows`` from their first-pass starts:
-        host (L, Y, refs, acc, conv) of those rows, the padded width, wall s.
-        ``width``: a fixed padded width (chem_presolve: n_batch) instead of
-        the bucket."""
-        w = retry_width(len(rows)) if width is None else int(width)
+    def second_pass(rows, Uj, Ys, rs):
+        """The retry solve of chunk rows ``rows`` from the starts ``Ys`` /
+        ``rs`` at the fixed width n_batch: host (L, Y, refs, acc, conv) of those
+        rows, the padded width, wall s."""
+        w = n_batch
         sel = np.concatenate([rows, np.repeat(rows[-1:], w - len(rows))])
         act = jnp.asarray(np.arange(w) < len(rows))
         t1 = time.perf_counter()
-        if warm:
-            L2, Y2, r2, st2 = progs.call("retry_warm", w, Uj[sel],
-                                         jnp.asarray(Yw[sel], pipe.dtype),
-                                         jnp.asarray(rw[sel], pipe.dtype), act)
-            acc2, conv2 = st2.acc, st2.conv_ok
-        else:
-            Yb, rb = P._blank_state(pipe, w)
-            L2, Y2, r2, cd2 = progs.call("retry_cold", w, Uj[sel], Yb, rb, act)
-            acc2, conv2 = cd2.accept_count, cd2.conv_normal
+        L2, Y2, r2, st2 = progs.call("retry_warm", w, Uj[sel],
+                                     jnp.asarray(Ys[sel], pipe.dtype),
+                                     jnp.asarray(rs[sel], pipe.dtype), act)
+        acc2, conv2 = st2.acc, st2.conv_ok
         n = len(rows)
         out2 = (np.asarray(jax.device_get(L2), np.float64)[:n],
                 np.array(jax.device_get(Y2), np.float64)[:n],
@@ -496,7 +433,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 if prof is not None:
                     prof.pop()
                     prof.push(f"batch{prof.n}/evaluator")
-                if presolve:     # a start only: no likelihood from this pass
+                if retry is not None:     # a start only: no likelihood from this pass
                     Ynew, rnew, acc, conv = progs.call("pre_warm", n_batch, Uj,
                                                        jnp.asarray(Yw, pipe.dtype),
                                                        jnp.asarray(rw, pipe.dtype), act)
@@ -510,7 +447,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 if prof is not None:
                     prof.pop()
                     prof.push(f"batch{prof.n}/evaluator")
-                if presolve:
+                if retry is not None:
                     Ynew, rnew, acc, conv = progs.call("pre_cold", n_batch, Uj, Y0, refs0, act)
                     L = np.full(n_batch, -np.inf)
                 else:
@@ -531,41 +468,32 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             tp_out = ~np.asarray(jax.device_get(tp_ok(Uj)), bool)[:m]
             cap = count_max
             if retry is not None:
-                # second pass: every in-window row the first solve left
-                # uncertified (exhausted or stalled), from the same start
+                # second pass: every in-window row, warm from its presolve column
+                # where the presolve certified; else from its original start (the
+                # anchor column), or on a cold chunk from the presolve's exit
+                # column (the baseline column if non-finite)
                 acc_first = acc
                 L, acc, conv = L.copy(), acc.copy(), conv.copy()
                 Yh = np.array(jax.device_get(Ynew), np.float64)[:m]
                 rh = np.array(jax.device_get(rnew), np.float64)[:m]
                 retried = np.zeros(m, bool)
-                if presolve:
-                    # every in-window row, warm from its presolve column where
-                    # the presolve certified; else from its original start (the
-                    # anchor column), or on a cold chunk from the presolve's
-                    # exit column (the baseline column if non-finite)
-                    rows = np.flatnonzero(~tp_out)
-                    fin = np.all(np.isfinite(Yh), axis=tuple(range(1, Yh.ndim)))
-                    ok_pre = conv & (acc < count_max) & fin
-                    if warm:
-                        Ys = np.where(ok_pre[:, None, None], Yh, np.asarray(Yw, np.float64)[:m])
-                        rs = np.where(ok_pre[:, None], rh, np.asarray(rw, np.float64)[:m])
-                    else:
-                        Ys = np.where(fin[:, None, None], Yh, y_base[None])
-                        rs = np.where(fin[:, None], rh, 0.0)
-                    pre = {"certified": int((ok_pre & ~tp_out).sum()), "rtol": rtol_first,
-                           "count_max": count_max}
+                rows = np.flatnonzero(~tp_out)
+                fin = np.all(np.isfinite(Yh), axis=tuple(range(1, Yh.ndim)))
+                ok_pre = conv & (acc < count_max) & fin
+                if warm:
+                    Ys = np.where(ok_pre[:, None, None], Yh, np.asarray(Yw, np.float64)[:m])
+                    rs = np.where(ok_pre[:, None], rh, np.asarray(rw, np.float64)[:m])
                 else:
-                    rows = np.flatnonzero(~tp_out & ((acc >= count_max) | ~conv))
+                    Ys = np.where(fin[:, None, None], Yh, y_base[None])
+                    rs = np.where(fin[:, None], rh, 0.0)
+                pre = {"certified": int((ok_pre & ~tp_out).sum()), "rtol": rtol_first,
+                       "count_max": count_max}
                 w, t2, acc2, conv2 = 0, 0.0, np.empty(0, np.int64), np.empty(0, bool)
                 if rows.size:
                     if prof is not None:     # the second pass gets its own range
                         prof.pop()
                         prof.push(f"batch{prof.n}/retry")
-                    if presolve:
-                        L2, Y2, r2, acc2, conv2, w, t2 = second_pass(rows, True, Uj, Ys, rs,
-                                                                     width=n_batch)
-                    else:
-                        L2, Y2, r2, acc2, conv2, w, t2 = second_pass(rows, warm, Uj, Yw, rw)
+                    L2, Y2, r2, acc2, conv2, w, t2 = second_pass(rows, Uj, Ys, rs)
                     if prof is not None:
                         prof.pop()
                         prof.push(f"batch{prof.n}/post")
@@ -577,16 +505,15 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                         fh.write(json.dumps({
                             "t": round(t_first + t2, 2), "t_first": round(t_first, 2),
                             "mode": "warm" if warm else "cold", "acc": acc_first.tolist(),
-                            **({"presolve": pre} if presolve else {}),
+                            "presolve": pre,
                             "retry": {"t": round(t2, 2), "width": int(w),
                                       "rows": rows.tolist(), "acc": acc2.tolist(),
                                       "conv": conv2.tolist(), "rtol": rtol_retry,
                                       "count_max": count_max_retry}}) + "\n")
-                if presolve:
-                    tally["presolve_certified"] = (tally.get("presolve_certified", 0)
-                                                   + pre["certified"])
-                    tally["presolve_wall_s"] = round(tally.get("presolve_wall_s", 0.0)
-                                                     + float(t_first), 2)
+                tally["presolve_certified"] = (tally.get("presolve_certified", 0)
+                                               + pre["certified"])
+                tally["presolve_wall_s"] = round(tally.get("presolve_wall_s", 0.0)
+                                                 + float(t_first), 2)
             # solver state first: the warm evaluator already floors L on a
             # stalled or exhausted exit, which is not a non-finite forward
             exhausted = ~tp_out & (acc >= cap)
@@ -691,18 +618,12 @@ def main() -> None:
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names}")
     obs_save = set_observations(cfg, pipe, P)
-    if pipe.chem_retry is not None and getattr(pipe.chem_retry, "presolve", False):
+    if pipe.chem_retry is not None:
         r = pipe.chem_retry
         log.info(f"nautilus: chem_presolve ON: every draw is presolved at rtol {r.rtol_first} "
                  f"within {r.count_max_first} accepted steps (chemistry only, a start, never "
                  f"kept), then solved and certified at rtol {r.rtol} within {r.count_max} "
                  f"warm from the presolve column, on {n_batch} rows; uncertified -> rejected")
-    elif pipe.chem_retry is not None:
-        r = pipe.chem_retry
-        log.info(f"nautilus: chem_retry ON: a draw uncertified at rtol {r.rtol_first} within "
-                 f"{r.count_max_first} accepted steps is re-solved once from the same start "
-                 f"at rtol {r.rtol} within {r.count_max} (second pass on a multiple of "
-                 f"{RETRY_BUCKET} rows, padding masked); still uncertified -> rejected")
 
     # resume identity before anything in the run directory is written; the
     # start policy, the batch width (the lane queue's composition) and the

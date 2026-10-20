@@ -26,7 +26,8 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the provenance module
-from retrieval_framework.provenance import _repo_states, science_data_identity
+from retrieval_framework.provenance import (_data_identity, _repo_states, _versions,
+                                            science_data_identity)
 
 logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -80,16 +81,6 @@ def bin_trapz(wl, y, edges):
     return out
 
 
-def _versions() -> dict:
-    out = {"python": sys.version.split()[0]}
-    for mod in ("jax", "jaxlib", "numpy", "scipy", "exojax"):
-        try:
-            out[mod] = __import__(mod).__version__
-        except (ImportError, AttributeError):
-            out[mod] = None
-    return out
-
-
 def _devices() -> list[str]:
     """JAX devices, if jax is already imported. Never imports it."""
     jax = sys.modules.get("jax")
@@ -101,54 +92,11 @@ def _devices() -> list[str]:
         return []
 
 
-def _data_identity() -> dict:
-    """Identity of the opacity trees the RT reads.
-
-    Hashing tens of gigabytes is off the table; the resolved real path plus a
-    (count, total bytes, newest mtime) summary changes whenever a tree is
-    swapped, extended, or regenerated, which is what matters here.
-    """
-    out = {}
-    for env in ("VULCAN_FORWARD_DATA", "VULCAN_FORWARD_OPACITY_CACHE"):
-        out[env] = os.environ.get(env)
-    # The env vars above are recorded for transparency. This repo hands the
-    # engine its tree via paths.set_data_root, which overrides
-    # $VULCAN_FORWARD_DATA but not $VULCAN_FORWARD_OPACITY_CACHE, so the
-    # trees must be resolved through the engine to be the ones a run read.
-    tree_dirs = {}
-    try:
-        # importing this module is what hands the engine this repo's data tree
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
-        from vulcan_forward import paths as _fwd_paths
-        out["data_root_resolved"] = str(_fwd_paths.data_root())
-        tree_dirs = {"opacity_cache": Path(_fwd_paths.opacity_cache_dir()),
-                     "exomolop": Path(_fwd_paths.exomolop_dir())}
-    # broad: a provenance collector records any failure instead of raising
-    except Exception as exc:                                # pragma: no cover
-        out["engine_data_error"] = f"{type(exc).__name__}: {exc}"
-        return out
-    for sub in ("opacity_cache", "exomolop"):
-        p = tree_dirs[sub]
-        if not p.is_dir():
-            out[sub] = None
-            continue
-        n = tot = 0
-        newest = 0.0
-        for f in p.rglob("*"):
-            if f.is_file():
-                st = f.stat()
-                n += 1
-                tot += st.st_size
-                newest = max(newest, st.st_mtime)
-        out[sub] = {"path": str(p.resolve()), "files": n, "bytes": tot,
-                    "newest_mtime_utc": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest)) if n else None}
-    return out
-
-
 def collect_provenance(resolved_config: dict | None = None) -> dict:
     """Everything needed to tie a number to an exact state."""
     repos = _repo_states(REPO.parent)
+    # top_pressure_ladder nests its two grids under "production"/"extended"
+    rc = (resolved_config or {}).get("production", resolved_config or {})
     prov = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
@@ -162,11 +110,11 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
             "cpu_count": os.cpu_count(),
             "hostname": socket.gethostname(),
         },
-        "data": _data_identity(),
+        # the data root, the VULCAN config and its network (no observations here)
+        "data": _data_identity(RESULTS, rc),
         "env_overrides": {
             k: os.environ[k] for k in sorted(os.environ)
-            if k.startswith(("SMC_", "VULCAN_", "JAX_", "XLA_", "PROBE_",
-                             "CALIBRATE_", "VALIDATE_"))
+            if k.startswith(("SMC_", "VULCAN_", "JAX_", "XLA_", "VALIDATE_"))
         },
     }
     try:
@@ -181,13 +129,7 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         # CONTENT identity of the opacity/CIA files this measurement read, in
         # the same shape the run's target manifest records, so an artifact
         # measured against different data can be told apart from the run's.
-        # The tree summary in prov["data"] cannot do that job -- it carries
-        # mtimes. top_pressure_ladder nests its two grids under
-        # "production"/"extended", so the molecule list is read from either
-        # shape rather than silently reading as empty.
-        _rc = resolved_config.get("production", resolved_config)
-        prov["science_data"] = science_data_identity(
-            _rc.get("molecules") or ())
+        prov["science_data"] = science_data_identity(rc.get("molecules") or ())
     return prov
 
 

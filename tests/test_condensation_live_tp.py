@@ -28,7 +28,7 @@ steady state is transport-limited -- the upper S8 reservoir drains through
 the condensation front on the Kzz timescale (~1e9 s) while dt stays capped
 at the front's condensation timescale, so every solve exhausts count_max.
 Builds two chem models (~1-2 min each, compile-dominated); every test skips
-cleanly when the chem stack is unavailable (same policy as test_warm_reject).
+cleanly when the chem stack is unavailable.
 """
 from __future__ import annotations
 
@@ -108,18 +108,8 @@ _CFG_OVERRIDES = {
 
 
 def _profile(**extra):
-    from retrieval_framework.forward import config
-
-    prof = dict(config.SMOKE)
-    prof.update(
-        nz=NZ,
-        use_photo=False,
-        yconv_cri=1.0e-2,
-        count_max=5000,
-        cfg_overrides=dict(_CFG_OVERRIDES),
-    )
-    prof.update(extra)
-    return prof
+    return {"nz": NZ, "use_photo": False, "yconv_cri": 1.0e-2, "count_max": 5000,
+            "cfg_overrides": dict(_CFG_OVERRIDES), **extra}
 
 
 def _const_mix(chem):

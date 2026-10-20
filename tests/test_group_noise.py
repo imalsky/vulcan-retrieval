@@ -8,7 +8,8 @@ Stack-free:
 * observations.build_group_design / noise_scale_per_bin in all three modes;
 * pipeline.make_noise_model, the likelihood's sigma, is sigma0 times
   noise_scale_per_bin, the inflation the predictive band uses, in every mode;
-* nautilus_report.predictive_replicates with a per-bin inflation.
+* nautilus_report.predictive_replicates with one b and with a per-group
+  inflation.
 
 Opt-in production preflight (RUN_PRODUCTION_PREFLIGHT=1): the real three-group
 spectrum gets three inflations, in the pipeline's group order.
@@ -64,11 +65,10 @@ def test_per_group_layout():
         MathTextParser("path").parse(s.label)
 
 
-def test_per_group_needs_groups_and_the_inference_flag():
+def test_per_group_needs_the_groups():
+    # the inference flag is validate_config's (test_run_nautilus)
     with pytest.raises(ValueError, match="groups"):
         C.specs_from_config(_cfg(noise_inflation_per_group=True))
-    with pytest.raises(ValueError, match="infer_noise_inflation"):
-        C.validate_config(C.Config(noise_inflation_per_group=True))
 
 
 def test_group_design_and_scale_per_bin():
@@ -106,7 +106,7 @@ def test_likelihood_sigma_is_the_predictive_inflation(per_group):
     gpb, sig0 = _toy()
     specs, names, kinds = _layout(_cfg(noise_inflation_per_group=per_group))
     sigma_for = P.make_noise_model(names, kinds, GROUPS, gpb, lambda: sig0, jnp.float64)
-    theta_from_u, _, _ = P.make_uspace(specs, jnp.float64)
+    theta_from_u, _ = P.make_uspace(specs, jnp.float64)
     theta = theta_from_u(jnp.asarray(np.random.default_rng(1).normal(size=len(specs))))
     np.testing.assert_allclose(
         np.asarray(sigma_for(theta)),
@@ -116,18 +116,24 @@ def test_likelihood_sigma_is_the_predictive_inflation(per_group):
     assert s(theta) is sig0                                    # no noise parameter
 
 
-def test_replicates_with_a_per_group_inflation():
+@pytest.mark.parametrize("names, b, want_b", [
+    (["noise_inflation"], [2.5], [2.5, 2.5, 2.5]),                    # one b
+    (["noise_inflation_A", "noise_inflation_B"], [1.5, 0.8], [1.5, 1.5, 0.8]),
+])
+def test_replicates_carry_the_likelihood_sigma(names, b, want_b):
+    """The predictive band is replicated data, mu + N(0, (sigma b)^2) with the
+    run's own inflation, centred on the latent model."""
     from retrieval_framework.nautilus_report import predictive_replicates
-    rng = np.random.default_rng(0)
+    rng, n = np.random.default_rng(0), 20000
     gpb = np.array(["A", "A", "B"])
     sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])
-    th = np.tile([1.5, 0.8], (20000, 1))
-    infl = OBS.noise_scale_per_bin(th, ["noise_inflation_A", "noise_inflation_B"], gpb)
-    mu = np.tile(np.array([1e-2, 2e-2, 3e-2]), (20000, 1))
+    infl = OBS.noise_scale_per_bin(np.tile(b, (n, 1)), names, gpb)
+    mu = np.tile(np.array([1e-2, 2e-2, 3e-2]), (n, 1))
     y_rep, sig_eff = predictive_replicates(mu, sigma, infl, rng)
-    want = sigma * np.array([1.5, 1.5, 0.8])
+    want = sigma * np.asarray(want_b)
     np.testing.assert_allclose(sig_eff[0], want, rtol=1e-15)
     np.testing.assert_allclose(y_rep.std(axis=0), want, rtol=0.05)
+    assert np.allclose(y_rep.mean(axis=0), mu[0], atol=4 * want / np.sqrt(n))
 
 
 @pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",

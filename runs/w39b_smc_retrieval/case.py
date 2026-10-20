@@ -161,8 +161,7 @@ def gpu_config(**overrides: Any) -> Config:
         # (validation/opacity_leave_one_out.py).
         molecules=("H2O", "CO2", "CO", "CH4", "SO2", "HCN", "C2H2", "H2S",
                    "NH3", "OCS", "SH", "SO"),
-        # ExoMolOP correlated-k is the only opacity path. Its 16-point g axis is
-        # carried through the RT vjp, so the vjp chunk below sets its memory.
+        # ExoMolOP correlated-k is the only opacity path.
         nu_min=1900.0, nu_max=9900.0, art_nlayer=67,
         combo=("NIRISS", "G395H_NRS1", "G395H_NRS2"),
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
@@ -185,13 +184,5 @@ def gpu_config(**overrides: Any) -> Config:
     return Config(**base)
 
 
-def prod_config(**overrides: Any) -> Config:
-    """Higher-fidelity variant (nz=100, no governor) for when >24 h is available.
-    Inherits the gpu preset's other settings."""
-    base = dict(nz=100, walltime_seconds=0.0)
-    base.update(overrides)
-    return gpu_config(**base)
-
-
-PRESETS = {"smoke": smoke_config, "gpu": gpu_config, "prod": prod_config}
+PRESETS = {"smoke": smoke_config, "gpu": gpu_config}
 DEFAULT_PRESET = "smoke"

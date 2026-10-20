@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N VJAX_W39B_SMC
+#PBS -N VJAX_W39B_NAUTILUS
 #PBS -q gpu_long
 #PBS -W group_list=s2458
 #PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
@@ -36,7 +36,7 @@
 #
 # Env knobs (-v):
 #   CONDA_ENV               interpreter env            (default pyt2_8_gh)
-#   SMC_RETRIEVAL_PRESET    smoke | gpu | prod         (default gpu)
+#   SMC_RETRIEVAL_PRESET    smoke | gpu                (default gpu)
 #   SMC_RETRIEVAL_OVERRIDES JSON Config overrides      (optional)
 #   SMC_RETRIEVAL_OVERRIDES_FILE  JSON Config overrides file, relative to this dir (optional)
 #   SEED=<int>              independent seed in its own out_dir (data/<preset>_seed<N>;
@@ -67,17 +67,18 @@
 #                           nsys-jax in one thread per file at exit (tens of minutes).
 #     qsub -v PROFILE_BATCH=3 run_nas_w39b.pbs
 #
-# BASELINE V2 (overrides/w39b_baseline_v2.json: Retry C two-pass chemistry, per-group
-# noise inflation, log10gamma >= -3, 792 lanes), from this case dir, in a fresh out dir:
-#   qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v2.json,\
-#     SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v2,NAUTILUS_N_EFF=5000,\
+# BASELINE V4 (overrides/w39b_baseline_v4_nz100.json: the presolve chain, per-group
+# noise inflation, 100 layers, 528 lanes), from this case dir, in a fresh out dir:
+#   qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,\
+#     SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,\
 #     VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs
-#   (one line, no spaces after the commas; output in data/w39b_baseline_v2_nautilus)
+#   (one line, no spaces after the commas; output in data/w39b_baseline_v4_nz100_nautilus)
+# Baseline v2 (job 93269) ran overrides/w39b_baseline_v2.json, kept at tag w39b-baseline-v2.
 #
 # Figures and the spectrum fit of a finished run:
 #   python -m retrieval_framework.nautilus_report <out_dir>   (--spectra 0: no forward model)
 #
-# Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_SMC_<jobid>.log
+# Live log:  tail -f <w39b_smc_retrieval>/logs/W39B_NAUTILUS_<jobid>.log
 # =============================================================================
 set -euo pipefail
 
@@ -105,7 +106,7 @@ export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes forward/config.py portabl
 LOG_DIR="${SMC_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 _jobid="${PBS_JOBID:-manual_$$}"
-LOG_FILE="${LOG_DIR}/W39B_SMC_${_jobid%%.*}.log"
+LOG_FILE="${LOG_DIR}/W39B_NAUTILUS_${_jobid%%.*}.log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "Live log: tail -f ${LOG_FILE}"
 echo "Job ${PBS_JOBID:-?} started $(date) on $(hostname) ($(uname -m))"
@@ -120,7 +121,7 @@ export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${htt
 export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
 export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
 # Log every compile and every persistent-cache hit (WARNING level), so a chained
-# job's log shows whether it reused the last job's ~22 min gradient compiles:
+# job's log shows whether it reused the last job's compiles:
 # grep "Persistent compilation cache hit" in the second job's log.
 export JAX_LOG_COMPILES="${JAX_LOG_COMPILES:-1}"
 export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"

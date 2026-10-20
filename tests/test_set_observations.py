@@ -81,9 +81,10 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     assert pipe.n_bin == obs["wl"].size >= 4
     assert pipe.target_digest, "the run carries no target identity"
 
-    logl = float(pipe.log_likelihood_u(
-        pipe.sample_prior_u(jax.random.PRNGKey(0), 1)[0]))
-    assert np.isfinite(logl) and logl > -1e29, f"non-finite/rejected likelihood: {logl}"
+    U = pipe.sample_prior_u(jax.random.PRNGKey(0), 1)
+    Y0, refs0 = P._blank_state(pipe, 1)
+    logl = float(jax.jit(pipe._make_batch_eval("cold", diag=True))(U, Y0, refs0)[0][0])
+    assert np.isfinite(logl) and logl > P.REJECT_BELOW, f"non-finite/rejected likelihood: {logl}"
 
     # The opacity leave-one-out screen selects its states from this same pipe;
     # prove the selection on the real object before a GPU run.

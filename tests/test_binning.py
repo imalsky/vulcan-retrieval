@@ -110,27 +110,6 @@ def test_offset_design_groups():
     assert np.array_equal(design[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
 
 
-# --- posterior predictive -----------------------------------------------------
-
-def test_replicates_carry_the_likelihood_conditional_variance():
-    """The saved predictive band is replicated data (mu + N(0, (sigma*b)^2)),
-    and must widen with the noise inflation b."""
-    from retrieval_framework.nautilus_report import predictive_replicates
-    rng = np.random.default_rng(0)
-    n_draw = 20000
-    sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])
-    mu = np.tile(np.array([1e-2, 2e-2, 3e-2]), (n_draw, 1))
-
-    for b in (1.0, 2.5):
-        infl = np.full((n_draw, 1), b)
-        y_rep, sig_eff = predictive_replicates(mu, sigma, infl, rng)
-        assert np.allclose(sig_eff, sigma[None, :] * b)
-        # the realized spread is the conditional sigma the likelihood declares
-        assert np.allclose(y_rep.std(axis=0), sigma * b, rtol=0.05)
-        # and it is centred on the latent model, not shifted by it
-        assert np.allclose(y_rep.mean(axis=0), mu[0], atol=4 * sigma * b / np.sqrt(n_draw))
-
-
 def test_rprs_products_propagate_to_depth(tmp_path):
     """A product row in (Rp/Rs) with errors -e/+e becomes depth (Rp/Rs)^2 with
     sigma 2 (Rp/Rs) e, first-order propagation; a padding row is dropped."""

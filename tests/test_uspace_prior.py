@@ -1,4 +1,4 @@
-"""u-space transform: bounds, midpoints, induced-prior uniformity, finite gradients.
+"""u-space transform: bounds, midpoints, induced-prior uniformity.
 Light: imports pipeline (jax) but never builds the VULCAN forward."""
 import importlib.util
 
@@ -25,7 +25,7 @@ SPECS = [
 
 
 def test_bounds_and_midpoint():
-    f, _, _ = P.make_uspace(SPECS, jnp.float64)
+    f, _ = P.make_uspace(SPECS, jnp.float64)
     th0 = np.asarray(f(jnp.zeros(2)))
     assert np.isclose(th0[0], 0.5)                       # uniform midpoint
     assert np.isclose(th0[1], np.sqrt(0.5 * 3.0))        # log10 midpoint = geometric mean
@@ -36,7 +36,7 @@ def test_bounds_and_midpoint():
 
 
 def test_prior_samples_uniform_in_theta():
-    f, _, s = P.make_uspace(SPECS, jnp.float64)
+    f, s = P.make_uspace(SPECS, jnp.float64)
     U = s(jax.random.PRNGKey(0), 40000)
     TH = np.asarray(jax.vmap(f)(U))
     # uniform dim: mean = center, var = span^2/12
@@ -47,14 +47,6 @@ def test_prior_samples_uniform_in_theta():
     lo, hi = np.log10(0.5), np.log10(3.0)
     assert abs(lg.mean() - 0.5 * (lo + hi)) < 0.01
     assert abs(lg.var() - (hi - lo) ** 2 / 12.0) < 0.01
-
-
-def test_log_prior_gradient_finite():
-    _, lp, _ = P.make_uspace(SPECS, jnp.float64)
-    g = jax.grad(lp)(jnp.asarray([0.3, -20.0]))
-    assert np.all(np.isfinite(np.asarray(g)))
-    # log-prior maximized at u=0 (theta mid-box)
-    assert float(lp(jnp.zeros(2))) > float(lp(jnp.asarray([3.0, -3.0])))
 
 
 def test_tp_window_is_inset_inside_the_opacity_range():

@@ -37,7 +37,9 @@ jobs:
           # pyyaml: vulcan3 is installed --no-deps below but its
           # config loader imports yaml at collection time
           pip install "jax>=0.6" numpy scipy pytest pyyaml
-          pip install "nautilus-sampler==1.0.6"   # tests/test_run_nautilus.py
+          # tests/test_run_nautilus.py; h5py is nautilus's checkpoint format (the
+          # nautilus extra), which nautilus-sampler does not install itself
+          pip install "nautilus-sampler==1.0.6" "h5py>=3"
           pip install matplotlib corner   # tests/test_nautilus_report.py
           pip install pandas   # exogibbs imports it; pandas needs its own deps (pytz, dateutil)
           pip install --no-deps "exogibbs==0.6.0"   # vulcan3's eq_seed imports it; its declared deps (pyfastchem...) are not needed

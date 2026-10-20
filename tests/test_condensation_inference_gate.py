@@ -1,6 +1,8 @@
 """Resolved-config condensation inference gate.
 
-Condensation is a forward-model capability only. The early ``cfg_overrides`` gate
+Condensation is an engine (forward-model) capability only: every retrieval
+pipeline evaluates a likelihood, so it refuses condensation unless
+``allow_condense_inference``. The early ``cfg_overrides`` gate
 in ``config_schema.validate_config`` catches the common case, but a base VULCAN
 config can default ``use_condense=True`` (e.g. ``Earth.yaml``) without the flag
 appearing in ``cfg_overrides``. ``retrieval_forward._refuse_condense_inference``
@@ -26,16 +28,14 @@ if importlib.util.find_spec("exojax") is None:                  # pragma: no cov
 from retrieval_framework.retrieval_forward import _refuse_condense_inference  # noqa: E402
 
 
-@pytest.mark.parametrize("conden, run_inference, allow, refused", [
-    (True, True, False, True),     # inference through a resolved condensing state
-    (True, False, False, False),   # a forward / synthetic solve is always allowed
-    (True, True, True, False),     # the explicit expert opt-in
-    (False, True, False, False),   # conden_spec is None: condensation off
+@pytest.mark.parametrize("conden, allow, refused", [
+    (True, False, True),     # a retrieval through a resolved condensing state
+    (True, True, False),     # the explicit expert opt-in
+    (False, False, False),   # conden_spec is None: condensation off
 ])
-def test_inference_gate_reads_the_resolved_conden_spec(conden, run_inference, allow, refused):
+def test_gate_reads_the_resolved_conden_spec(conden, allow, refused):
     chem = SimpleNamespace(conden_spec=object() if conden else None)
-    cfg = SimpleNamespace(run_inference=run_inference, allow_condense_inference=allow,
-                          vulcan_cfg_name="Earth")
+    cfg = SimpleNamespace(allow_condense_inference=allow, vulcan_cfg_name="Earth")
     if refused:
         with pytest.raises(ValueError, match="RESOLVED VULCAN config"):
             _refuse_condense_inference(chem, cfg)
