@@ -24,8 +24,18 @@ L = log-likelihood.
   `397d8bb`, "Superseded designs"), warm starts from a growing anchor set, solver `ffi`
   pinned by `run_nas_w39b.pbs`, and from the override file the chemistry presolve
   chain, per-instrument noise inflation and log10gamma down to -3: 15 parameters (the
-  gpu preset alone is 13-D). Last finished run: baseline_v2 (job 93269). Next:
-  baseline v4 at uniform 100 layers (todo).
+  gpu preset alone is 13-D). Last finished run: baseline_v2 (job 93269).
+- Next run, ready to launch: baseline v4 at uniform 100 layers
+  (`overrides/w39b_baseline_v4_nz100.json`: presolve chain, 528 lanes, per-instrument
+  noise, log10gamma down to -3; case.py's Tint prior 50-600 K; stock nautilus 1.0.6).
+  ~20-26 h [E]; the governor stops at 46 h of the 48 h wall and RESUME=1 continues. On
+  NAS: `git pull --ff-only` the three trees, re-run `tools/bootstrap_nas_env.pbs`
+  (`validate_env` must pass), then from `runs/w39b_smc_retrieval` on cghfe01/02:
+  `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`.
+  After it: its numbers in "Runs" and `nautilus_report` on its output before any number
+  is reported. 660 lanes compiled (~79 GiB) but were never timed.
+- The 2026-10-17 TestPyPI releases (vulcan3 0.18.0, vulcan-forward 0.29.0, this repo
+  0.27.0, jwst-transit-authority 0.72.0) and their tags are confirmed by the maintainer.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws `plots/corner.png`,
@@ -258,8 +268,9 @@ L = log-likelihood.
 
 - Commits before 2026-10-13 were made on other machines; their decision records are not
   all traceable (256 vulcan-retrieval commits, ~70 change science).
-- Live on main, provenance not recorded; each needs the maintainer's confirmation:
-  3eafb1b discard_exploration and the ffi solver default (`VULCAN3_SOLVER` in
+- The Kzz bounds are confirmed by the maintainer (2026-10-20); the paper states that
+  the x1000 ceiling was set after seeing the data. The rest stay live with provenance
+  not recorded: 3eafb1b discard_exploration and the ffi solver default (`VULCAN3_SOLVER` in
   run_nas_w39b.pbs); 3e40f03 + 4c23465 warm-start anchors and warm nautilus by default
   (results depend on evaluation order); 8e633bf + 500b340 lane queue default; a16188e
   p_ref 1 mbar, fixed-mass lnR0, chemistry Rp 1.21 RJ, free Tint, split NRS offsets,
@@ -510,6 +521,14 @@ HPC
 
 ## Physics assumptions and limitations (read before publishing a number)
 
+- Beside the v4 posterior, report: Tint against the T-P window's induced prior
+  ("Priors and the T-P profile"; on a Tint ~ kappa^-1/4 ridge report T at 1 bar or at
+  the quench level instead); the mass above Thorngren & Fortney's 54.5x
+  (arXiv:1811.11859 Table 1); the posterior truncated at Kzz <= x10 and the weight at the
+  x0.1 floor (a solver limit); Tint's marginal against 297 K (arXiv:2410.04470) and
+  358 K; the 84% and 99% quantiles against each prior edge (the certificate has no
+  prior-rail check). Before quoting v4's logZ, re-solve posterior rows warm vs cold (the
+  postrun_93269 method).
 - Guillot T-P, f = 1/4, no convective adjustment: (Tirr, kappa, gamma, Tint) shape one
   1D limb; Tint is a deep-temperature knob. One profile drives both grids.
 - Closed column; lnZ / c_o are exact column-ratio directions; fixed-O C/O keeps each
