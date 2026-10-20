@@ -597,7 +597,7 @@ data with AD gradients: no precedent found (searches 2026-07 and 2026-09, not ex
 - The nautilus fork `imalsky/nautilus` (2 ReLU + 2 SiLU networks, spread_batch; runs
   90302 and 93269): retired at 83b2980 (spreading biases logZ ~0.02 low and overstates
   n_eff; SiLU = ReLU). Its branches are tags `archive/vulcan-multishell-2026-10-19` and
-  `archive/per-network-kwargs-silu-2026-10-19`.
+  `archive/per-network-kwargs-silu-2026-10-19`; the GitHub repo is archived.
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1
   nat; replaced in production by the presolve chain (cdcffd1). The retry-only mode
   (`chem_retry` without `chem_presolve`: its second pass, the retry width buckets,
