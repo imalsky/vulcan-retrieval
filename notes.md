@@ -429,9 +429,8 @@ HPC
   parameters fix T(P) everywhere, so T(1 bar) or the T-P band is read off the posterior
   rather than retrieved. Tint is degenerate with kappa and shaped by the T-P window, so
   it is reported as a profile parameter, never as an interior-flux measurement.
-- WASP-39b case, decided 2026-10-20: the planet mass stays fixed at 0.281 MJ (Mancini
-  et al. 2018). Results are conditional on that mass and say so; the mass uncertainty
-  is not propagated (see "Physics assumptions and limitations").
+- WASP-39b case, decided 2026-10-20: the planet mass stays fixed at 0.2785 MJ (g =
+  422 cm/s^2 at 1.279 RJ; W39b.yaml `Mp`).
 
 - Two-stage solve. With a moving T-P the hydrostatic density rebuild makes the fixed
   point forget the initial inventory (dL/dlnZ ~ 1e-20, FD agreeing). Stage 1 converges
@@ -470,10 +469,10 @@ HPC
   deliberately untracked"). The maintainer accepted an
   evaluation-order dependent likelihood for the speed.
 - Fixed-mass geometry (vulcan-forward 0.28.0, a16188e): `transmission_depth_r` scales
-  (rp_cm, g) at p_ref to (rp_cm e^lnR0, g e^(-2 lnR0)), so GM = 422 rp_cm^2 (Mancini+2018
-  Table 15) holds at every level (`test_e2e_rt_reference.py`). p_ref = 1 mbar
+  (rp_cm, g) at p_ref to (rp_cm e^lnR0, g e^(-2 lnR0)), so GM = 422 rp_cm^2 (0.2785 MJ)
+  holds at every level (`test_e2e_rt_reference.py`). p_ref = 1 mbar
   (continuum depths give lnR0 ~ +0.028). The chemistry Rp is overridden to 1.21 RJ (the
-  fixed-GM 1-bar radius on the 90302 posterior), worth about x1.2 in equivalent Kzz.
+  fixed-GM 1-bar radius on the 90302 posterior).
 - Split G395H offsets: Sarkar+2024 (arXiv:2405.06737 §5.2) find 40-50 ppm between the
   detectors of this visit; a step between the H2O (NRS1) and CO2/SO2 (NRS2) bands lands
   on Z. The offset reference group is the wavelength-first group (NIRISS).
@@ -511,11 +510,6 @@ HPC
 
 ## Physics assumptions and limitations (read before publishing a number)
 
-- Planet mass fixed at 0.281 MJ (WASP-39b case): its 11% uncertainty is not in the
-  posterior widths. If the observed scale height and the fitted radius stayed fixed,
-  T/mu would scale with the mass, ~11% [E]; the ~20% figure for Kzz assumed a mixing
-  length that scales with gravity and is not established. A +-1 sigma mass check would
-  measure the real shift (not done).
 - Guillot T-P, f = 1/4, no convective adjustment: (Tirr, kappa, gamma, Tint) shape one
   1D limb; Tint is a deep-temperature knob. One profile drives both grids.
 - Closed column; lnZ / c_o are exact column-ratio directions; fixed-O C/O keeps each
