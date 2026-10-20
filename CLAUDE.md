@@ -32,12 +32,13 @@ mask invalid bins before injection.
   evaluation order; a warm run's evidence is approximate. An evidence claim uses
   `NAUTILUS_WARM=0`.
 - The chemistry policy comes from the override file, not the gpu preset:
-  `chem_retry` + `chem_presolve` (`overrides/w39b_baseline_v4_nz100.json`). The
+  `chem_retry` + `chem_presolve` (`overrides/w39b_baseline_v4_nz100.json`), set
+  together: the presolve chain is the only two-program mode. The
   presolve runs at `count_max` (3000) and rtol 0.2 and is only a start; every in-window
   draw is then solved at `chem_retry_rtol` (0.05) within `chem_retry_count_max`, and
   only that solve's VULCAN certificate keeps it.
 - The certifying solve's cap is 5000 accepted steps: `gpu_config`'s `count_max`, or
-  `chem_retry_count_max` under the retry/presolve policy. A draw that does not certify
+  `chem_retry_count_max` under the presolve chain. A draw that does not certify
   within it is rejected (log L = -inf), never extended. Do not raise it without a
   measured reason.
 - Every Config key outside `provenance.TARGET_FREE_KEYS` (e.g. `walltime_seconds`), the
@@ -51,8 +52,7 @@ mask invalid bins before injection.
   `nautilus_posterior.npz`, not `nautilus_summary.json`'s medians (equal-weight draws).
 - Kept names, do not rename: the env vars `SMC_RETRIEVAL_*` / `SMC_RESUME`, the
   `runs/w39b_smc_retrieval` directory and `smc_rt_chunk` (the NAS launch command and
-  archived runs' `config.json` use them). `warm_count_max` is an engine key that
-  `validate_config` keeps <= `count_max`; run_nautilus's warm starts run under
+  archived runs' `config.json` use them). run_nautilus's warm starts run under
   `count_max`.
 
 ## Solver and numerics (do not change without a measured reason)
@@ -68,9 +68,10 @@ mask invalid bins before injection.
   ConvDiag is the certificate; stage 1 (baseline composition) is not gated.
 - Composition knobs act on a T-converged column (the two-stage solve), never on the cold
   equilibrium init.
-- One certificate for every likelihood entry point: `retrieval_forward.native_depth_aux`
-  returns canonical convergence AND `accept_count < cap`; every evaluator and the scalar
-  `log_likelihood_u` reject on it, and a new sampler adapter goes through one of them.
+- One certificate for every likelihood entry point: canonical convergence AND
+  `accept_count < cap`. Every batched evaluator rejects on it, and a new sampler adapter
+  goes through one of them; `generate_observations` refuses a synthetic truth spectrum
+  without it (`retrieval_forward.native_depth_aux`'s bit, `pipe.binned_ok_jit`).
   `observed_depth_model_jit` and `observed_depth_from_y_jit` are the only ungated
   spectra (plots and diagnostics). Pinned by `tests/test_cold_reject.py`.
 - Chemistry stays f64.
@@ -114,8 +115,9 @@ mask invalid bins before injection.
 
 ## Condensation
 
-`use_condense=True` works for T-varying forward models (`make_conden_spec` once,
-per-proposal rebuild). Inference with condensation is refused twice (`validate_config`
+`use_condense=True` works for T-varying forward models through the engine
+(`vulcan_forward.vulcan_chem.build_chem_model`: `make_conden_spec` once, per-proposal
+rebuild). A retrieval pipeline with condensation is refused twice (`validate_config`
 and `retrieval_forward._refuse_condense_inference`, the resolved config) because no
 retrieval with condensation has been validated; the only opt-in is
 `allow_condense_inference=True` after validating it on the case (notes "Evidence behind

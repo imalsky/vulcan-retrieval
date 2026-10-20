@@ -35,7 +35,7 @@ L = log-likelihood.
 - Tests: the normal tier (plain `pytest tests`; CI runs it serially on Python
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
-  `test_set_observations`' production preflight, two tests in `test_chem_retry`). On
+  `test_set_observations`' production preflight, one test in `test_chem_retry`). On
   the 2026-10-20 working tree, daw, CPU, `-n 8`: normal 77 passed / 1 skipped in 20 s,
   full 87 passed / 2 skipped in 8.6 min [M].
 
@@ -62,6 +62,8 @@ L = log-likelihood.
   recovered L 1192.57 < max-L 1194.35: no hidden better fit.
 
 ### baseline_v2 (job 93269, tag w39b-baseline-v2)
+- Override file `overrides/w39b_baseline_v2.json`: removed from main with the
+  retry-only mode ("Superseded designs"); it is at tag `w39b-baseline-v2`.
 - Code: VULCAN-JAX d7021cb, vulcan-forward d26e9d3, vulcan-retrieval 29aa87e. Retry C
   two-pass chemistry (rtol 0.1 to 3000 steps, then rtol 0.2 to 5000), per-instrument
   noise, log10gamma down to -3, 792 lanes x n_batch 2376, compaction [264, 132], the
@@ -103,7 +105,8 @@ L = log-likelihood.
   dt collapses a median 6.9 dex); (B) at lnKzz < -2 and rtol <= 0.05 one near-atol cell
   (atomic S at 1e-9 bar) sets the step while a C2H4/C2H2 drift at ~5e-3 bar needs
   19-23k steps; (C) at 62 layers two states really exist (see bistable_policy).
-- PRESOLVE CHAIN (vulcan-retrieval cdcffd1, opt-in `Config.chem_presolve`;
+- PRESOLVE CHAIN (vulcan-retrieval cdcffd1, opt-in `Config.chem_presolve` with
+  `chem_retry`, the only two-program mode;
   `pipeline._make_presolve_eval` and the presolve branch of `run_nautilus.make_loglike`;
   the 62-layer study override `w39b_baseline_v3_presolve.json` is in git at `397d8bb`,
   `w39b_baseline_v4_nz100.json` carries the chain now): stage A chemistry-only presolve
@@ -231,8 +234,8 @@ L = log-likelihood.
 - Time accounting of 93269 (56,043 s through batch 55): pass-1 chemistry 38.7%, pass-1
   RT 24.6% [I], retry chemistry 24.1%, retry compiles 3.5%, host/nautilus 5.6%.
   Chemistry lane time: useful 35%, capped or uncertified 38%, idle lanes 27% [I].
-- speed2 (all bitwise, on main): retry width buckets compiled ahead, masked padding
-  rows, RT only on kept rows (764ccb8; `run_nautilus.RETRY_BUCKET` 132,
+- speed2 (all bitwise): retry width buckets compiled ahead (removed with the
+  retry-only mode), masked padding rows, RT only on kept rows (764ccb8;
   NAUTILUS_PRECOMPILE), plus VULCAN3 a5b1215 / eeb4873 and vulcan-forward 5e8d43a /
   39c2c45. Pass-1 batch 344.0 -> 287.3 s; full batch ~892 -> 628 s excluding compiles;
   RT pass 256 -> 60 s.
@@ -395,7 +398,9 @@ Evidence semantics and condensation
 - Inference with condensation is refused by default because no retrieval with
   condensation has been validated: whether condensing columns certify, and how they
   depend on their start under the presolve chain, is untested (`allow_condense_inference`
-  is the opt-in). Gradients are a separate matter, relevant only to a gradient sampler:
+  is the opt-in). The gates read `use_condense` alone: a `run_inference` flag they
+  also read let `run_inference=False` pass them while nautilus still sampled, so the
+  flag was removed; a condensation forward model goes through the engine. Gradients are a separate matter, relevant only to a gradient sampler:
   through the pinned state the pinned-species tangent is order-unity wrong (0.91
   relative, FD ~ 1/dT); the gas + condensate reservoir matches to 18-22% on aarch64 and
   misses the 35% gate on x86 (rel. 0.407, xfail there).
@@ -427,8 +432,10 @@ HPC
   (accept_count < cap) & conv_normal; stalled exits are a rejection class. Healthy warm
   proposals certify on the LOOSE branch, so a tight-only predicate (P2) rejects
   everything, and P0 (longdy < yconv_min at exit) is a no-op for the failing class.
-  `native_depth_aux` returns the certificate bit; `observed_depth_model_jit` and
-  `observed_depth_from_y_jit` are the only ungated spectra (plots, diagnostics).
+  `native_depth_aux` returns the certificate bit; the synthetic injection refuses an
+  uncertified truth spectrum on it (before, the truth was checked for finiteness
+  only). `observed_depth_model_jit` and `observed_depth_from_y_jit` are the only
+  ungated spectra (plots, diagnostics).
   Defect in the cap clause: the runner stops on `accept_count > count_max`, so a lane
   can certify at cap or cap + 1, and `conv_normal` already excludes every cap exit; the
   clause rejects those certified draws and drops their anchors and presolve columns.
@@ -562,8 +569,10 @@ data with AD gradients: no precedent found (searches 2026-07 and 2026-09, not ex
   n_eff; SiLU = ReLU). Its branches are tags `archive/vulcan-multishell-2026-10-19` and
   `archive/per-network-kwargs-silu-2026-10-19`.
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1
-  nat; replaced in production by the presolve chain (cdcffd1). `chem_retry` alone stays
-  in the code.
+  nat; replaced in production by the presolve chain (cdcffd1). The retry-only mode
+  (`chem_retry` without `chem_presolve`: its second pass, the retry width buckets,
+  the cold retry evaluator) was then removed; `validate_config` refuses the pair
+  unless both are set. baseline_v2's override file is at tag `w39b-baseline-v2`.
 - 62 chemistry layers in production: bistable at low Kzz, up to 0.45 sigma resolution
   error; the next run uses 100 by override (the gpu preset is still 62).
 - RT anchored at 7 bar with fixed g (90302 and earlier): the model's GM was e^(2 lnR0)
