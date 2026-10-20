@@ -79,7 +79,9 @@ python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
   ls -la "${PROJECT_ROOT}"/VULCAN-JAX/src/vulcan3/csrc/libblock_thomas_*
 )
 # --- the GPU test, in the production job's JAX environment (run_nas_w39b.pbs) ----
-unset JAX_PLATFORMS
+# Set, not unset: both repos' tests/conftest.py default an unset JAX_PLATFORMS
+# to cpu, which would skip every CUDA test and run the ckd fold on the CPU.
+export JAX_PLATFORMS=cuda,cpu
 export JAX_PLATFORM_NAME=gpu JAX_ENABLE_X64=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
 nvidia-smi -L
 python -c "import jax; d = jax.devices(); print(jax.__version__, d); assert d[0].platform == 'gpu', d" || {
