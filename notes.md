@@ -13,8 +13,8 @@ L = log-likelihood.
 
 - Version 0.27.0 on main after the 2026-10-20 cleanup (SMC path removed, nautilus
   report added, merged docs; the last commit with SMC is `397d8bb`). pyproject floors: vulcan-forward>=0.28.0,
-  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `92c3b1e`, vulcan-forward
-  `32adc85` (the 2026-10-20 cleanup), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
+  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `a420570`, vulcan-forward
+  `acdf63e` (the 2026-10-20 cleanup), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
   refuses the former fork (same version string). After any version bump reinstall all
   three trees editable, or `validate_env` fails on stale metadata; on NAS re-run
   `tools/bootstrap_nas_env.pbs`. The vulcan3 rename (882b9e5) is on main and pinned
