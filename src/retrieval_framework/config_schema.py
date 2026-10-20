@@ -204,8 +204,9 @@ class Config:
 
     # ---- inference ------------------------------------------------------------
     run_inference: bool = True
-    # Expert opt-in: inference with condensation ON. Off by default:
-    # the tangent through the condensing+pinned state disagrees with FD at O(1).
+    # Expert opt-in: inference with condensation ON. Off by default: no
+    # retrieval with condensation has been validated (certification and start
+    # dependence of condensing columns under the presolve chain are untested).
     # Condensation forward solves are always allowed.
     allow_condense_inference: bool = False
     # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
@@ -486,14 +487,10 @@ def hardware_warnings(prof: dict) -> list:
 def retry_profile(cfg: Config) -> Dict[str, Any]:
     """The chemistry profile of the ``chem_retry`` program: ``cfg.profile()``
     with ``cfg_overrides["rtol"] = chem_retry_rtol`` and ``count_max =
-    chem_retry_count_max``; nothing else changes. ``skip_warmup``: the
-    build-time warm-up solve is diagnostic only (the main program's
-    ``baseline_conv_normal`` is the one read), so the retry build keeps the
-    runner closure only and compiles on its first solve."""
+    chem_retry_count_max``; nothing else changes."""
     p = cfg.profile()
     p["cfg_overrides"] = {**p["cfg_overrides"], "rtol": float(cfg.chem_retry_rtol)}
     p["count_max"] = int(cfg.chem_retry_count_max)
-    p["skip_warmup"] = True
     return p
 
 
@@ -508,18 +505,16 @@ def validate_config(cfg: Config) -> None:
                          f"one lockstep call), got {cfg.cold_lanes!r}")
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
-    # Inference with condensation ON is refused by default: the fix_species pin
-    # captures the column at a discrete accepted step, so the pinned-species
-    # tangent disagrees with FD at O(1). allow_condense_inference=True
-    # is the opt-in.
+    # Inference with condensation ON is refused by default (see
+    # allow_condense_inference); allow_condense_inference=True is the opt-in.
     if (bool(cfg.cfg_overrides.get("use_condense", False))
             and cfg.run_inference and not cfg.allow_condense_inference):
         raise ValueError(
-            "use_condense=True with run_inference=True is refused: gradient "
-            "inference through the condensing+pinned state is not validated. Run "
-            "condensation as a forward model (run_inference=False), or set "
-            "allow_condense_inference=True after validating the gradient on your "
-            "column.")
+            "use_condense=True with run_inference=True is refused: no retrieval "
+            "with condensation has been validated (certification and start "
+            "dependence of condensing columns are untested). Run condensation "
+            "as a forward model (run_inference=False), or set "
+            "allow_condense_inference=True after validating it on your case.")
     if int(cfg.warm_count_max) < 1:
         raise ValueError("warm_count_max must be >= 1")
     if cfg.count_max is not None and int(cfg.warm_count_max) > int(cfg.count_max):

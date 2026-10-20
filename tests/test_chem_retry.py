@@ -129,7 +129,7 @@ def test_retry_profile_changes_only_rtol_and_the_cap():
     cfg = C.Config(**VALID, count_max=3000, chem_retry=True, cfg_overrides={"Rp": 1.0})
     p0, p1 = cfg.profile(), C.retry_profile(cfg)
     assert p1.pop("cfg_overrides") == {"Rp": 1.0, "rtol": 0.05}
-    assert (p1.pop("count_max"), p1.pop("skip_warmup")) == (5000, True)
+    assert p1.pop("count_max") == 5000
     p0.pop("cfg_overrides")
     p0.pop("count_max")
     assert p1 == p0

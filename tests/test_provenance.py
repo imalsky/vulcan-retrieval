@@ -76,6 +76,25 @@ def test_target_digest_moves_with_every_bound_class(field, value, moves, monkeyp
             != provenance.target_digest(changed, pipe)) is moves
 
 
+@pytest.mark.parametrize("var, value", [
+    ("VULCAN3_SOLVER", "ffi"),
+    ("VULCAN3_CHEM_RHS", "grouped"),
+    ("VULCAN3_BT_FACTOR", "lu"),
+    ("VULCAN3_BT_BUFFERS", "1"),
+])
+def test_target_digest_binds_the_solver_env(var, value, monkeypatch):
+    """Each env var is a numerical choice of the solve, so a resume must not
+    switch it."""
+    from retrieval_framework import config_schema as _C
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
+    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    monkeypatch.delenv(var, raising=False)
+    d0 = provenance.target_digest(cfg, pipe)
+    monkeypatch.setenv(var, value)
+    assert provenance.target_digest(cfg, pipe) != d0, f"{var} not bound"
+
+
 def test_target_digest_moves_with_the_observations(monkeypatch):
     from retrieval_framework import config_schema as _C
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})

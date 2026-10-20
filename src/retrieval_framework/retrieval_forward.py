@@ -47,8 +47,10 @@ def _refuse_condense_inference(chem, cfg) -> None:
     the common case, but a base VULCAN config can default ``use_condense=True``
     without the flag ever appearing in ``cfg_overrides``.
     ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
-    condensation is active), so gating on it closes that bypass. The pinned
-    condensation state is not reliably differentiable.
+    condensation is active), so gating on it closes that bypass. No nautilus
+    retrieval with condensation has been validated: whether condensing columns
+    certify, and how they depend on their start under the presolve chain, is
+    untested.
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
@@ -56,8 +58,9 @@ def _refuse_condense_inference(chem, cfg) -> None:
         raise ValueError(
             "condensation is active in the RESOLVED VULCAN config "
             f"(vulcan_cfg_name={getattr(cfg, 'vulcan_cfg_name', '?')!r}) with "
-            "run_inference=True: gradient inference through the pinned condensing "
-            "state is not validated. Run it as a forward model "
+            "run_inference=True: no retrieval with condensation has been "
+            "validated (certification and start dependence of condensing "
+            "columns are untested). Run it as a forward model "
             "(run_inference=False) or set allow_condense_inference=True."
         )
 
@@ -115,18 +118,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # RESOLVED config (closes the base-config bypass of the early cfg_overrides
     # gate).
     _refuse_condense_inference(chem, cfg)
-
-    # Warn, do not refuse: nothing consumes the warm-up column (cold solves start
-    # from the equilibrium seed) and every draw certifies itself; a failure only
-    # flags a configuration that may not converge.
-    if bool(cfg.run_inference) and not bool(
-            getattr(chem, "baseline_conv_normal", True)):
-        logger.warning(
-            "the chemistry warm-up solve failed its check (see the '[chem] the warm-up "
-            "solve did not end certified ...' warning above for end_case / "
-            "termination_reason / longdy). Its column is not "
-            "used and every draw certifies itself, but this configuration may "
-            "not converge: check the T-P window / Kzz / dt_max settings.")
 
     # chem_retry: the SAME chemistry at another step tolerance and cap. rtol is
     # a compile-time static of the step acceptance, so it is a second program

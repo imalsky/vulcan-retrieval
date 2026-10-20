@@ -2,9 +2,9 @@
 
 The target digest is the sha256 of the canonical target manifest
 (``target_manifest``: resolved config, ordered priors, observation arrays,
-opacity and CIA content, code commits and versions, the solver). A run writes
-the manifest beside its outputs and binds its checkpoint to the digest, so a
-resume across a change is refused.
+opacity and CIA content, code commits and versions, the solver env choices). A
+run writes the manifest beside its outputs and binds its checkpoint to the
+digest, so a resume across a change is refused.
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ def target_manifest(cfg, pipe) -> dict:
     h.update("\x00".join(map(str, pipe.obs.get("group", []))).encode())
 
     return {
-        "manifest_version": 2,
+        "manifest_version": 3,
         "config": cfg_bound,
         "params": {"names": list(pipe.names),
                    "prior_types": list(pipe.prior_types),
@@ -289,8 +289,14 @@ def target_manifest(cfg, pipe) -> dict:
                  for r, s in _repo_states().items()},
         "versions": _versions(),
         # the solver moves every column at the convergence scale (fast vs ffi
-        # agree to residual, not bitwise), so a resume must not switch it
+        # agree to residual, not bitwise), so a resume must not switch it. The
+        # chemistry RHS form and the ffi kernel's forced factor and buffer
+        # variant are numerical choices of the same solve, bound the same way
+        # (the defaults: codegen RHS; unset = the kernel chooses per call).
         "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
+        "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", "codegen"),
+        "vulcan3_bt_factor": os.environ.get("VULCAN3_BT_FACTOR") or "per-call",
+        "vulcan3_bt_buffers": os.environ.get("VULCAN3_BT_BUFFERS") or "per-call",
     }
 
 

@@ -4,7 +4,9 @@ that. The reusable machinery lives in the ``vulcan-retrieval`` package
 
 theta (gpu preset, 13-D): [lnZ, dln(C/O), lnKzz, Tirr, log10kappa, log10gamma, Tint,
 lnR0, log10kappa_cloud, cloud_alpha, offset_G395H_NRS1, offset_G395H_NRS2,
-noise_inflation].
+noise_inflation]. With noise_inflation_per_group=True (the production overrides)
+the one noise_inflation becomes one per group (NIRISS, G395H_NRS1, G395H_NRS2):
+15-D = 3 chemistry + 4 T-P + lnR0 + 2 cloud + 2 offsets + 3 noise.
 
 Run (from the repo root, or via the PBS script in this directory):
 

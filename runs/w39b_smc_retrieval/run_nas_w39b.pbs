@@ -192,7 +192,8 @@ if [ "${VULCAN3_SOLVER}" = "ffi" ]; then
          python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
 fi
 # Opt-in grouped chemistry RHS (VULCAN3_CHEM_RHS=grouped, VULCAN-JAX 3154d6d: bitwise
-# on the GH200 ffi path, so not part of the target; config.json hardware records it).
+# on the GH200 ffi path). The target manifest binds it with the solver, so a RESUME
+# must keep the value the run started with.
 echo "solver: VULCAN3_SOLVER=${VULCAN3_SOLVER} VULCAN3_CHEM_RHS=${VULCAN3_CHEM_RHS:-<unset>}"
 
 # --- preflight: GPU visible, JAX on it, packages + data present ---------------

@@ -5,12 +5,10 @@ model. It uses VULCAN-JAX for chemical kinetics and ExoJAX for radiative
 transfer through the shared
 [`vulcan-forward`](https://github.com/imalsky/vulcan-forward) package.
 
-Two samplers run on the same likelihood: nested sampling with nautilus
-(`run_nautilus`, the default of the NAS job script) and adaptive-tempered
-sequential Monte Carlo (SMC, `run_smc`). Optional MALA moves in the SMC use
-forward derivatives from the atmosphere model. The repository contains a
-WASP-39 b case with a small synthetic preset, validation scripts, and a
-run-certificate check.
+The sampler is nested sampling with nautilus (`run_nautilus`, which the NAS
+job script runs). The repository contains a WASP-39 b case with a small
+synthetic preset, validation scripts, and a run report (`nautilus_report`)
+that writes a certificate and figures.
 
 This is research software. Validate a new target and model setup before using
 the posterior in a publication.
@@ -47,37 +45,36 @@ python -m retrieval_framework.validate_env ..
 
 ## Test and run
 
-Start with the fast tests and the gradient smoke check:
+Start with the fast tests:
 
 ```bash
 python -m pytest tests -q -m "not slow"
-python -m retrieval_framework.smoke_retrieval runs/w39b_smc_retrieval
 ```
 
-Run the small SMC preset and plot it:
+Run the small preset and report it:
 
 ```bash
 SMC_RETRIEVAL_PRESET=smoke \
-  python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
-python -m retrieval_framework.plot_smc \
-  runs/w39b_smc_retrieval/data/smoke
+  python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval
+python -m retrieval_framework.nautilus_report \
+  runs/w39b_smc_retrieval/data/smoke_nautilus
 ```
 
 The `smoke`, `gpu`, and `prod` presets are defined in
 [`runs/w39b_smc_retrieval/case.py`](runs/w39b_smc_retrieval/case.py). Copy the
 case file to `runs/<new-case>/` for another target.
 
-Each run writes its resolved configuration, checkpoints, posterior samples,
-diagnostics, predictions, and plots to the case data directory. Check
-`reached_beta1` before treating samples as posterior samples. Run
-`python -m retrieval_framework.certificate runs/w39b_smc_retrieval` before
-reporting a production result.
+Each run writes its resolved configuration, target manifest, checkpoint, and
+rejection tally to `<out_dir>_nautilus`, and when it finishes the weighted
+posterior (`nautilus_posterior.npz`), a summary, and `nautilus_certificate.json`.
+`python -m retrieval_framework.nautilus_report <out_dir> [--spectra N]` writes
+the certificate again and draws the corner, T-P, and spectrum figures (N cold
+re-solved posterior draws, default 32; 0 skips the spectrum). The certificate
+has no pass/fail verdict: read its caveats before reporting a production result.
 
-Nested sampling uses the same case and presets:
-`python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval` writes to
-`<out_dir>_nautilus`. It does not yet write plots or a certificate. The
-sampler is stock `nautilus-sampler` 1.0.6 from PyPI with its default networks,
-and the exploration phase is discarded (`make_sampler` in `run_nautilus.py`).
+The sampler is stock `nautilus-sampler` 1.0.6 from PyPI with its default
+networks, and the exploration phase is discarded (`make_sampler` in
+`run_nautilus.py`).
 With `chem_retry` on, the second pass runs on a bucket of 132 lanes per step
 (`RETRY_BUCKET` in `run_nautilus.py`), and the padding rows of a bucket or of a
 short chunk are masked: they take no chemistry step and no RT. Each pass runs
@@ -95,7 +92,7 @@ width of `n_batch` rows, so no retry bucket compiles mid-run. Only that solve's
 VULCAN certificate keeps a draw, and every kept column carries
 `chem_retry_rtol`. Off, it stays out of the target manifest and nothing changes.
 The WASP-39b setting is
-`runs/w39b_smc_retrieval/overrides/w39b_baseline_v3_presolve.json`: presolve at
+`runs/w39b_smc_retrieval/overrides/w39b_baseline_v4_nz100.json`: presolve at
 rtol 0.2, then rtol 0.05, both with photolysis every step. On the low-Kzz
 draws, the presolve gets past two step-size traps that stall direct rtol-0.05
 solves: photolysis-triggered step collapses, and a near-atol trace cell at the
@@ -113,8 +110,9 @@ with measurements, is summarized in `notes.md` (lowkzz_fix).
   converge, are rejected and the target is renormalized over what remains.
   The figures carry the two surviving fractions.
 - Condensation is refused during inference.
-- A certificate checks required artifacts and numerical gates. It does not
-  prove that the physical model is complete.
+- The certificate records the run's settings, rejection fractions, and
+  caveats. It has no pass/fail verdict and does not prove that the physical
+  model is complete.
 - Results depend on the reaction network, opacity coverage, pressure and
   temperature profiles, clouds, priors, and data-reduction assumptions.
 

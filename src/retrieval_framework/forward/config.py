@@ -68,7 +68,7 @@ RSTAR_CM = 0.932 * R_SUN_CM
 #     the Ros2 step's forward tangent singular.
 SMOKE = {
     "use_photo": True,
-    "nz": 40,                 # coarse column -> cheaper warm-up + jvps
+    "nz": 40,                 # coarse column -> cheaper solves + jvps
     "yconv_cri": 1.0e-3,
     "molecules": ["CO"],       # fully offline
     "nu_min": 4280.0,          # ~2.29-2.34 um, the cached CO 2-0 band
