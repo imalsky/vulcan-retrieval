@@ -25,17 +25,15 @@ L = log-likelihood.
   pinned by `run_nas_w39b.pbs`, and from the override file the chemistry presolve
   chain, per-instrument noise inflation and log10gamma down to -3: 15 parameters (the
   gpu preset alone is 13-D). Last finished run: baseline_v2 (job 93269).
-- Next run, ready to launch: baseline v4 at uniform 100 layers
-  (`overrides/w39b_baseline_v4_nz100.json`: presolve chain, 528 lanes, per-instrument
-  noise, log10gamma down to -3; case.py's Tint prior 50-600 K; stock nautilus 1.0.6).
-  ~20-26 h [E]; the governor stops at 46 h of the 48 h wall and RESUME=1 continues. On
-  NAS: `git pull --ff-only` the three trees, re-run `tools/bootstrap_nas_env.pbs`
-  (`validate_env` must pass), run `tools/gpu_kernel_test.pbs` (VULCAN3 main carries
-  a CUDA solve change not yet compiled; VULCAN3 todo), then from
-  `runs/w39b_smc_retrieval` on cghfe01/02:
+- Running: baseline v4 at uniform 100 layers, job 94946 (started 2026-10-20, 48 h wall;
+  "Runs", baseline_v4), from `overrides/w39b_baseline_v4_nz100.json` (presolve chain,
+  528 lanes, per-instrument noise, log10gamma down to -3; case.py's Tint prior 50-600 K;
+  stock nautilus 1.0.6), submitted from `runs/w39b_smc_retrieval` on cghfe01 with
   `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`.
-  After it: its numbers in "Runs" and `nautilus_report` on its output before any number
-  is reported. 660 lanes compiled (~79 GiB) but were never timed.
+  ~20-26 h [E]; the governor stops at 46 h of the 48 h wall and RESUME=1 with the same
+  overrides file, out dir and `VULCAN3_CHEM_RHS` continues. After it: its numbers in
+  "Runs" and `nautilus_report` on `data/w39b_baseline_v4_nz100_nautilus` before any
+  number is reported. 660 lanes compiled (~79 GiB) but were never timed.
 - The 2026-10-17 TestPyPI releases (vulcan3 0.18.0, vulcan-forward 0.29.0, this repo
   0.27.0, jwst-transit-authority 0.72.0) and their tags are confirmed by the maintainer.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
@@ -104,6 +102,17 @@ L = log-likelihood.
 - vs fixedmass: log10gamma -2.17 vs -1.73 (64% of the mass below -2 once the prior
   reaches -3); lnZ +0.73 old sigma; logZ -0.48 (Occam penalty of the wider prior ~-0.36);
   the fixedmass lnKzz dip at -1.3..-1.1 is gone.
+
+### baseline_v4 (job 94946, running)
+- Code: VULCAN-JAX a420570, vulcan-forward acdf63e, vulcan-retrieval d850ce4 (the
+  `requirements-hpc.txt` pins). Launch and resume: "Current state".
+- Gates on the same tree [M]: bootstrap 94874, `validate_env` PASS;
+  `tools/gpu_kernel_test.pbs` 94875, `tests/test_solver_fast.py` 53 passed / 21 skipped
+  plain and again under XLA_CMDBUF=2's flags (the CUDA cases ran), vulcan-forward
+  `tests/test_ckd.py` 7 passed on the GPU. The job's start-up build found the CUDA
+  library current (same stamp; nvcc 12.6 V12.6.85, sm_90), so it runs the tested build.
+- Batches 1-7 [M]: cold 1568 s, then warm 729-872 s. Batch 3 was profiled: "Pipeline
+  speed", v4 batch profile.
 
 ## Low-Kzz hole
 
@@ -257,6 +266,16 @@ L = log-likelihood.
   against 1,119 cold (the first batch's prior draws), 2.21x [M]; the CPU screen predicted
   2.13x. The batch time follows the capped columns: a batch with any column at the cap
   runs the full cap, so a tick costs the same whether its lanes are busy or done.
+- v4 batch profile (job 94946, batch 3, warm, nz 100, 528 lanes, nsys-jax) [M]: 843 s =
+  presolve program 397 + certify program 438 (its last 37 s the RT on kept rows) +
+  nautilus update 8. Over the chemistry loops the GPU is active 95.7% of the wall and
+  the host spends 813 s in `cuStreamSynchronize`: launch cost is not the limit. The lane
+  queue compacts 528 -> 396 -> 264 -> 132 (the kernels' gridX); the 132-lane tails take
+  370 s (115 presolve, 255 certify) at ~3,950 lane-steps/s against ~5,050 at 528. GPU
+  time in the chemistry: block-Thomas factor 216 s and solve 121 s (44% of all GPU
+  time), device-to-device copies 74 s (1.12 M), other XLA kernels 351 s, idle 34 s.
+  Kernel rates: VULCAN3 notes "Efficiency program". Trace caveats: "HPC (NAS GH200) and
+  daw".
 - Not done: RT overlapped with the retry pass, aborting doomed lanes (a new rejection
   rule: the maintainer's call), longest-first ordering, halving the host update.
 - T-P-invalid draws take no chemistry step and no RT from baseline v4 (the maintainer's
@@ -305,7 +324,14 @@ L = log-likelihood.
   (rebuild recipe in run_nas_w39b.pbs next to NSYS_JAX). Profiling lessons: nsys masks
   the exit code (64604), a full trace hits the 100 GiB cap after ~340 s (66476), a
   windowed nsys can orphan the app with its 90% preallocation (78814), ncu's lock file
-  cannot live on the /nobackup TMPDIR (80076).
+  cannot live on the /nobackup TMPDIR (80076). PROFILE_BATCH's `.nsys-rep` is written
+  to nsys-jax's `${TMPDIR}/tmp*/` when the window stops; the zip in
+  `logs/nsys_<jobid>` only at exit (94946). The front end reads it:
+  `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys export --type
+  sqlite` took 43 s for 14.6 M events. In that trace the RT pass shows 0.5 s of kernels
+  in 37 s while the host waits on the stream (kernels inside CUDA-graph conditional
+  bodies not traced per node, probably [I]), and CUPTI's device-to-device byte counts
+  are unphysical (238 MB per 66 us copy): use copy durations, not bytes.
 - JAX compile cache: see VULCAN3 notes (private cache for any memory fraction != 0.90).
 - daw lane benchmark [M, 2026-10-20, GPU 0 RTX 6000 Ada; `fast` solver; the v4 config:
   nz 100, the presolve program at rtol 0.2, photolysis every step, grouped RHS; 150
