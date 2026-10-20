@@ -1,14 +1,16 @@
 """run_nautilus.make_loglike on a stub pipeline: every rejection class (T-P
-window, count_max exhausted, stall-certified, non-finite) is log L = -inf, so
-the stock sampler's evidence is the zero-filled box integral (pinned against
+window, count_max exhausted, stall-certified, non-finite) is log L = -inf and a
+solve the solver certified at the cap is kept, so the stock sampler's evidence
+is the zero-filled box integral (pinned against
 the exact value on a 3-D Gaussian with three cut regions); with
 anchors, each warm solve starts from the nearest certified column and only
 certified columns become anchors. With the presolve chain, every in-window
 row is solved again on the retry evaluator from its presolve column (or its
 original start); a row is kept only if that solve certifies, and the tally,
 the batch log and the anchors' rtol record the second pass. Off, none of that
-appears. Padding is masked: a short chunk's filler rows and the second pass's
-unused rows reach the evaluator as ``active`` False, and the warm evaluators
+appears. Padding and T-P-invalid rows are masked: a short chunk's filler rows,
+its out-of-window rows and the second pass's unused rows reach the evaluator as
+``active`` False, and the warm evaluators
 can be compiled ahead on a host thread. Last, every config
 refusal of validate_config."""
 import json
@@ -59,8 +61,10 @@ def _stub_pipe(seen=None):
     def common(U):
         th = jax.vmap(theta_from_u)(U)
         L = jnp.sum(-0.5 * ((th - MU) / SD) ** 2 - math.log(SD * math.sqrt(2 * math.pi)), axis=1)
-        acc = jnp.where(th[:, 0] > 0.6, COUNT_MAX, 10)            # exhausted
-        conv = th[:, 1] >= 0.35                                     # stalled below
+        conv = (th[:, 1] >= 0.35) & (th[:, 0] <= 0.6)              # stalled below p1 0.35
+        # at the cap: exhausted above p0 = 0.6 (a cap exit never certifies),
+        # certified AT the cap in (0.55, 0.6] (kept, as the solver says)
+        acc = jnp.where((th[:, 0] > 0.6) | (conv & (th[:, 0] > 0.55)), COUNT_MAX, 10)
         return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L), acc, conv   # T-P window
 
     def cold(U, Y, refs, active):  # the column is a code of the point's own chemistry
@@ -71,7 +75,7 @@ def _stub_pipe(seen=None):
     def warm(U, Y, refs, active):  # hands back the column it started from; like the
         _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
         L, acc, conv = _masked("warm", seen, active, L, acc, conv)
-        L = jnp.where(conv & (acc < COUNT_MAX), L, P.REJECT_LOGL)
+        L = jnp.where(conv, L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
     def make(mode, diag=False):
@@ -87,11 +91,12 @@ def _stub_pipe(seen=None):
 def test_rejection_classes():
     tally = {}
     like = make_loglike(_stub_pipe(), 64, tally)
-    z = np.array([[0.5, 0.5, 0.5], [0.65, 0.5, 0.5], [0.5, 0.3, 0.5], [0.5, 0.5, 0.75]])
-    L = like(z)                                  # 4 rows through one padded chunk of 64
-    assert np.isfinite(L[0]) and np.all(np.isneginf(L[1:]))
+    z = np.array([[0.5, 0.5, 0.5], [0.65, 0.5, 0.5], [0.5, 0.3, 0.5], [0.5, 0.5, 0.75],
+                  [0.58, 0.5, 0.5]])             # the last certifies at the cap
+    L = like(z)                                  # 5 rows through one padded chunk of 64
+    assert np.all(np.isfinite(L[[0, 4]])) and np.all(np.isneginf(L[1:4]))
     assert {k: tally[k] for k in ("n_eval", "tp_out", "exhausted", "stalled", "nonfinite")} == {
-        "n_eval": 4, "tp_out": 1, "exhausted": 1, "stalled": 1, "nonfinite": 0}
+        "n_eval": 5, "tp_out": 1, "exhausted": 1, "stalled": 1, "nonfinite": 0}
 
 
 def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
@@ -155,8 +160,9 @@ def _presolve_stub_pipe(seen=None):
         L = jnp.sum(-0.5 * ((th - MU) / SD) ** 2 - math.log(SD * math.sqrt(2 * math.pi)), axis=1)
         L = jnp.where(th[:, 2] > 0.7, -jnp.inf, L + DL_RETRY)
         acc = jnp.where(th[:, 0] > 0.8, RETRY_MAX, 60)
-        L, acc, conv = _masked("warm2", seen, active, L, acc, th[:, 1] >= 0.2)
-        L = jnp.where(conv & (acc < RETRY_MAX), L, P.REJECT_LOGL)
+        L, acc, conv = _masked("warm2", seen, active, L, acc,
+                               (th[:, 1] >= 0.2) & (th[:, 0] <= 0.8))
+        L = jnp.where(conv, L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
     first = base._make_batch_eval
@@ -173,7 +179,7 @@ def _presolve_stub_pipe(seen=None):
         def ev(U, Y, refs, active):
             th = jax.vmap(theta_from_u)(U)
             acc = jnp.where(th[:, 0] > 0.6, COUNT_MAX, 10)
-            conv = th[:, 1] >= 0.35
+            conv = (th[:, 1] >= 0.35) & (th[:, 0] <= 0.6)
             _, acc, conv = _masked(name, seen, active, jnp.zeros(th.shape[0]), acc, conv)
             code = (th[:, 0] + 1000 * th[:, 1] + PRE_CODE)[:, None, None]
             return code, th[:, :2], acc, conv
@@ -248,6 +254,8 @@ def test_presolve_solves_every_in_window_row_from_its_presolve_column(tmp_path):
         act.setdefault(name, []).append(a)
     assert [n for n, _ in seen] == ["pre_cold", "warm2", "pre_warm", "warm2"]
     assert act["pre_cold"] == [[True] * 5 + [False] * 11]      # the padded rows
+    # a T-P-invalid row takes no presolve step (and scores -inf above)
+    assert e2["tp_out"].any() and act["pre_warm"] == [(~e2["tp_out"]).tolist()]
     for z, e, a2 in ((z1, e1, act["warm2"][0]), (z2, e2, act["warm2"][1])):
         n_in = int((~e["tp_out"]).sum())
         assert a2 == [True] * n_in + [False] * (16 - n_in)     # fixed width n_batch

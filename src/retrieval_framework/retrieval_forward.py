@@ -291,9 +291,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chemistry) without re-running or re-differentiating the VULCAN while_loop.
 
         ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
-        canonical convergence bit AND accept_count under count_max -- the same
-        predicate the staged batch evaluators apply (the conv_normal gate plus
-        the cap). The synthetic injection refuses an uncertified truth on it
+        canonical convergence bit, the predicate the staged batch evaluators
+        apply. No accept_count clause: the runner stops on accept_count >
+        count_max with convergence first, so a certified solve can exit at cap
+        or cap + 1, and conv_normal is False on every cap exit. The synthetic
+        injection refuses an uncertified truth on it
         (pipeline.generate_observations). Reading the diag is free: every
         field rides the primal carry.
 
@@ -302,8 +304,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         vulcan_forward.constants.CLOUD_NUC0)."""
         chem_theta = jnp.asarray(chem_theta)
         y, cd = chem_solve_cold_diag(chem_theta)                   # (nz, ni) absolute
-        ok = ((jnp.asarray(cd.conv_normal) > 0.5)
-              & (cd.accept_count < int(chem.count_max))).astype(y.dtype)
+        ok = (jnp.asarray(cd.conv_normal) > 0.5).astype(y.dtype)
         aux = aux_from_y(y, chem_theta)                            # ART-grid profiles
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         depth = rt.transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0),

@@ -68,12 +68,14 @@ mask invalid bins before injection.
   ConvDiag is the certificate; stage 1 (baseline composition) is not gated.
 - Composition knobs act on a T-converged column (the two-stage solve), never on the cold
   equilibrium init.
-- One certificate for every likelihood entry point: canonical convergence AND
-  `accept_count < cap`. Every batched evaluator rejects on it, and a new sampler adapter
-  goes through one of them; `generate_observations` refuses a synthetic truth spectrum
-  without it (`retrieval_forward.native_depth_aux`'s bit, `pipe.binned_ok_jit`).
-  `observed_depth_model_jit` and `observed_depth_from_y_jit` are the only ungated
-  spectra (plots and diagnostics). Pinned by `tests/test_cold_reject.py`.
+- One certificate for every likelihood entry point: the solver's canonical convergence
+  (`conv_normal`), with no accept-count clause (a solve can certify at cap or cap + 1;
+  every cap exit is uncertified). Every batched evaluator rejects on it, and a new
+  sampler adapter goes through one of them; `generate_observations` refuses a synthetic
+  truth spectrum without it (`retrieval_forward.native_depth_aux`'s bit,
+  `pipe.binned_ok_jit`). `observed_depth_model_jit` and `observed_depth_from_y_jit` are
+  the only ungated spectra (plots and diagnostics). Pinned by
+  `tests/test_cold_reject.py` and `tests/test_run_nautilus.py`.
 - Chemistry stays f64.
 - No T-P clipping: a draw whose profile leaves [320, 2980] K on the ART grid is rejected
   (`pipeline.tp_valid` / `sample_prior_u`).

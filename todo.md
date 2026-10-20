@@ -3,15 +3,13 @@
 The evidence behind each item is in `notes.md` (sections named below); solver and engine
 items live in VULCAN3's and vulcan-forward's own `todo.md`.
 
-1. [decision] Launch the next run, baseline v4 at uniform 100 layers (needs the maintainer's launch OK, items 2 and 3 settled first, and the HPC pins moved to the pushed cleanup).
-2. [bug?] The retrieval rejects a draw that certified at exactly the step cap or one step above it; fix it before v4 or accept it explicitly.
-3. [decision] Mask T-P-invalid draws before the stage-A chemistry: in the v4 target or not at all.
-4. [science] After the v4 run, check the Tint posterior against the T-P window's effective prior, settle what is reported beside the posterior, and run the solver measurements owed to VULCAN3.
-5. [decision] T-P profile: retrieve T at 1 bar instead of Tint (fix B), or build a pressure-dependent opacity plus adiabat profile (fix C).
-6. [decision] Planet mass: keep it fixed as a stated 11% systematic on T/mu, or add a Gaussian ln M nuisance.
-7. [unverified] Confirm the live retrieval choices whose provenance is not recorded, the Kzz bounds first.
-8. [unverified] Confirm the 2026-10-17 TestPyPI releases and their tags.
-9. [low] Archive the GitHub fork imalsky/nautilus.
+1. [decision] Launch the next run, baseline v4 at uniform 100 layers (needs only the maintainer's NAS pull of the three trees, the bootstrap and the qsub).
+2. [science] After the v4 run, check the Tint posterior against the T-P window's effective prior, settle what is reported beside the posterior, and run the solver measurements owed to VULCAN3.
+3. [decision] T-P profile: retrieve T at 1 bar instead of Tint (fix B), or build a pressure-dependent opacity plus adiabat profile (fix C).
+4. [decision] Planet mass: keep it fixed as a stated 11% systematic on T/mu, or add a Gaussian ln M nuisance.
+5. [unverified] Confirm the live retrieval choices whose provenance is not recorded, the Kzz bounds first.
+6. [unverified] Confirm the 2026-10-17 TestPyPI releases and their tags.
+7. [low] Archive the GitHub fork imalsky/nautilus.
 
 ## 1. Next run: baseline v4 at 100 layers
 
@@ -22,12 +20,12 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
 - Wall [E]: ~16 h at 100 layers with the old fork's call count; stock without spreading
   took +62% calls on the surrogate, so expect ~20-26 h. The governor stops at 46 h of a
   48 h PBS wall; RESUME=1 continues.
-- Before launch: decide items 2 and 3 (both define the target, so they go in before the
-  first batch or not at all). The 2026-10-20 cleanup is pushed and
-  `requirements-hpc.txt` pins vulcan3 `92c3b1e` and vulcan-forward `32adc85`;
-  `git pull --ff-only` the three trees on NAS and re-run `tools/bootstrap_nas_env.pbs`
-  (`validate_env` must pass). The full tier passed
-  on daw on the cleanup working tree (notes "Current state").
+- Before launch: the v4 target (the certificate without a cap clause and T-P-invalid
+  draws masked before the chemistry, notes "Design records" and "Pipeline speed") is on
+  this repo's main, to be pushed; `requirements-hpc.txt` pins vulcan3 `92c3b1e` and
+  vulcan-forward `32adc85`. `git pull --ff-only` the three trees on NAS and re-run
+  `tools/bootstrap_nas_env.pbs` (`validate_env` must pass). The full tier passed on daw
+  on this tree (notes "Current state").
 - From `runs/w39b_smc_retrieval` on cghfe01/02:
   `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`
 - Optional: 660 lanes compiled at ~79 GiB but were never timed (528 is measured).
@@ -36,40 +34,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   report's first real use; notes "Design records", run certificate) before any number is
   reported.
 
-## 2. Certified draws rejected at the cap
-
-- Evidence: notes "Design records", Certification. The runner can take `count_max + 1`
-  accepted steps and reports a certified exit (reason 1) when it certifies at
-  `count_max` or `count_max + 1`; `conv_normal` already excludes every cap exit. The
-  extra accept-count clause rejects those draws and drops their anchors and presolve
-  columns.
-- Sites: `pipeline.py` (`usable` and the `need` mask in `_rt_vals`),
-  `retrieval_forward.native_depth_aux` (`cd.accept_count < int(chem.count_max)`),
-  `run_nautilus.py` (the tally's `exhausted = ~tp_out & (acc >= cap)` and the presolve
-  `ok_pre = conv & (acc < count_max) & fin`); `tests/test_cold_reject.py` pins the old
-  predicate.
-- Smallest fix: use the solver's verdict. Drop the cap clauses, make the tally class
-  `exhausted = ~tp_out & ~conv & (acc >= cap)` and `ok_pre = conv & fin`, and update the
-  test. Target-defining: only on a fresh run, never on a resume.
-- Size ~3e-6 of draws [I]: immaterial next to the recorded cold-start offset. The exact
-  count in 93269 needs its batch log on NAS (`retry.acc` in {5000, 5001} with
-  `retry.conv` true).
-- Done means: the maintainer chose fix-now (landed before v4, with the test) or accept
-  (recorded in notes "Design records").
-
-## 3. T-P-invalid draws and the stage-A chemistry
-
-- Evidence: notes "Pipeline speed". `run_nautilus.make_loglike` solves every row and
-  applies `tp_ok` afterwards, so about 32% of the box prior runs a presolve that is
-  thrown away. Masking them first (`act = act & tp_ok(Uj)`) removes jobs from the lane
-  queue, which shifts later jobs' entry ticks and so the shared refresh cadence:
-  retained draws are not bitwise the same. The gain sits in the exploration phase and
-  the first batches (the v4 rehearsal's cold batch took about twice the later ones).
-- Target-defining: in v4 from its first batch, or not at all for this run.
-- Done means: the maintainer's choice recorded in notes "Design records" (and, if yes,
-  the change landed before the launch).
-
-## 4. After the run: Tint, what to report, owed solver measurements
+## 2. After the run: Tint, what to report, owed solver measurements
 
 - Tint (notes "Priors and the T-P profile", Induced prior): the effective prior the T-P
   window induces is measured. Compare the v4 posterior with it and plot Tint against
@@ -91,14 +56,14 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   element-budget certificate terms, and the Ros2 stage repair on/off.
 - Done means: the numbers in notes "Runs" and the maintainer's call on what is reported.
 
-## 5. T-P profile
+## 3. T-P profile
 
 - Decide between fix B (retrieve T at 1 bar instead of Tint, ~1/2-1 day) and C
   (pressure-dependent opacity + adiabat, e.g. Parmentier+2015; several days, plan first).
   Evidence: notes "Priors and the T-P profile".
 - Done means: the maintainer's choice recorded in notes; a chosen fix opens its own item.
 
-## 6. Planet mass: systematic or nuisance
+## 4. Planet mass: systematic or nuisance
 
 - Mancini+2018 (arXiv:1802.03859 Table 15): 0.281 +- 0.031 +- 0.006 MJ, R* 0.939 +-
   0.019 R_sun (the case uses 0.932). At fixed observed depths T/mu scales with GM: 11% on
@@ -110,7 +75,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   `config_schema.ParamSpec` / `pipeline.make_uspace` (today uniform and log10_uniform).
 - Done means: the maintainer's choice recorded in notes.
 
-## 7. Confirm provenance (retrieval side)
+## 5. Confirm provenance (retrieval side)
 
 - The list is in notes "Provenance". First: the Kzz bounds (ceiling x1000 chosen after
   seeing the data, 18da2a0; floor x0.1, 52ad7be / 611f62b).
@@ -122,7 +87,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
 - Done means: each item confirmed or reverted by the maintainer, the result in notes
   "Provenance".
 
-## 8. TestPyPI releases of 2026-10-17
+## 6. TestPyPI releases of 2026-10-17
 
 - vulcan3 0.18.0, vulcan-forward 0.29.0, vulcan-retrieval 0.27.0 and
   jwst-transit-authority 0.72.0 and their tags; provenance not recorded. All four
@@ -130,7 +95,7 @@ items live in VULCAN3's and vulcan-forward's own `todo.md`.
   2026-10-19).
 - Done means: the maintainer confirms them or yanks them.
 
-## 9. Archive the nautilus fork
+## 7. Archive the nautilus fork
 
 - GitHub `imalsky/nautilus`, Settings > Archive. Its branches are kept as tags
   `archive/vulcan-multishell-2026-10-19` and `archive/per-network-kwargs-silu-2026-10-19`;

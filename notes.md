@@ -36,8 +36,8 @@ L = log-likelihood.
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
   `test_set_observations`' production preflight, one test in `test_chem_retry`). On
-  the 2026-10-20 working tree, daw, CPU, `-n 8`: normal 77 passed / 1 skipped in 20 s,
-  full 87 passed / 2 skipped in 8.6 min [M].
+  the v4-target tree (2026-10-20), daw, CPU, `-n 16`: normal 79 passed / 1 skipped in
+  18 s, full 88 passed / 2 skipped in 4.5 min [M].
 
 ## Runs
 
@@ -247,11 +247,12 @@ L = log-likelihood.
   runs the full cap, so a tick costs the same whether its lanes are busy or done.
 - Not done: RT overlapped with the retry pass, aborting doomed lanes (a new rejection
   rule: the maintainer's call), longest-first ordering, halving the host update.
-- T-P-invalid draws run the stage-A chemistry: `loglike` solves every row and applies
-  `tp_ok` afterwards; 32.4% of the box prior is out of window [M, outside review] (in
-  the sampling phase the shells hold far fewer [I]). Masking them first is not bitwise
-  for the retained draws on the lane queue: queue admission shifts the shared tick
-  cadence (todo).
+- T-P-invalid draws take no chemistry step and no RT from baseline v4 (the maintainer's
+  choice; manifest_version 4): `loglike` ANDs `tp_ok` into the `active` mask before
+  the first pass. 32.4% of the box prior is out of window [M, outside review]; the
+  saving sits in the exploration phase and the first batches (the shells hold far
+  fewer [I]). Not bitwise for the kept draws: fewer jobs on the lane queue shift the
+  shared tick cadence. `batches.jsonl` records acc 0 for those rows.
 
 ## Provenance
 
@@ -332,7 +333,8 @@ Sampler and policy
   3e4 / 1e4 gave open-ended init tails (64073, 64163); 29% stayed censored at 20000.
 - Override keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the
   exceptions; `run_nautilus` refuses a resume across a digest or setting change): no
-  measurement. The manifest (`manifest_version` 3) also binds the solver choices
+  measurement. The manifest (`manifest_version` 4; the version also moves when the
+  evaluators' keep/reject logic changes at a fixed config) also binds the solver choices
   `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_FACTOR` and `VULCAN3_BT_BUFFERS`,
   so a resume cannot switch them (design; not every one moves results).
 - Quote from the weighted points: `nautilus_summary.json`'s medians come from
@@ -429,17 +431,19 @@ HPC
   starting column is repaired on He/H2O/CO/N2/H2S so column ratios hit their targets to
   ~1e-15; atom_ini is rebuilt from it.
 - Certification: `ConvDiag` rides the runner's primal carry; usable = valid &
-  (accept_count < cap) & conv_normal; stalled exits are a rejection class. Healthy warm
+  conv_normal; stalled exits are a rejection class. Healthy warm
   proposals certify on the LOOSE branch, so a tight-only predicate (P2) rejects
   everything, and P0 (longdy < yconv_min at exit) is a no-op for the failing class.
   `native_depth_aux` returns the certificate bit; the synthetic injection refuses an
   uncertified truth spectrum on it (before, the truth was checked for finiteness
   only). `observed_depth_model_jit` and `observed_depth_from_y_jit` are the only
   ungated spectra (plots, diagnostics).
-  Defect in the cap clause: the runner stops on `accept_count > count_max`, so a lane
-  can certify at cap or cap + 1, and `conv_normal` already excludes every cap exit; the
-  clause rejects those certified draws and drops their anchors and presolve columns.
-  Size ~3e-6 of draws [I, second referee, from one count in 384 replayed solves] (todo).
+  No accept-count clause, from baseline v4 (the maintainer's choice; manifest_version
+  4): the runner stops on `accept_count > count_max` with convergence first, so a lane
+  can certify at cap or cap + 1, and `conv_normal` is False on every cap exit. The
+  former `accept_count < cap` clause rejected those certified draws (~3e-6 of draws
+  [I, from one count in 384 replayed solves]); the tally's exhausted class is
+  `~conv & (acc >= cap)`.
 - Cold start: the in-graph Gibbs equilibrium (`vulcan3.ini_abun.eq_seed`, ExoGibbs) at
   the proposal's own T(P) and elemental ratios, the engine's only cold start; zero
   tangent, lnZ / c_o tangents enter through the elemental projection.

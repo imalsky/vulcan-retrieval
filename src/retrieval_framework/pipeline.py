@@ -337,7 +337,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     def _binned_ok(theta):
         """(binned model depth, ok): ok is the cold certificate bit from
-        fwd.native_depth_aux (canonical convergence AND under count_max).
+        fwd.native_depth_aux (VULCAN's canonical convergence, conv_normal).
         generate_observations refuses a truth spectrum without it."""
         theta = jnp.asarray(theta, dtype=dtype)
         native, _aux, ok = fwd.native_depth_aux(theta[:n_chem_tp], theta[lnR0_idx],
@@ -412,14 +412,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         cold solve instead of silently carrying it into L.
 
         ``retry=True`` (mode="warm" only; the presolve chain's certifying pass):
-        the same evaluator on the chem_retry program (the retry rtol, gated at
+        the same evaluator on the chem_retry program (the retry rtol, capped at
         the retry count_max).
 
         ``active`` (an optional (N,) bool): a False row is padding. On the lane
         queue its chemistry takes no step; it is never ``usable`` (L is the
         reject sentinel, Y the baseline) and is never RT'd. None is the
         program without the mask. The RT runs only on the rows whose L can
-        survive: T-P in window, certified under the cap and active
+        survive: T-P in window, certified and active
         (``_map_chunks_rows``); the others get the reject sentinel without an
         RT, so the ``diag`` path's L is gated like the other path's."""
         warm = (mode == "warm")
@@ -430,13 +430,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         if retry and not warm:
             raise ValueError("the chem_retry program runs warm only (the presolve "
                              "chain's certifying pass)")
-        # Cap of the convergence gate: the cold count_max, warm or cold, or the
-        # chem_retry program's own.
-        wcmax = int(fwd.chem.count_max)
         warm_solve = fwd.chem_solve_warm_diag_full_batch
         cold_solve = fwd.chem_solve_cold_diag_batch
         if retry:
-            wcmax = int(fwd.chem_retry.count_max)
             warm_solve = fwd.chem_solve_warm_diag_full_batch_retry
 
         # ``diag`` keeps an uncertified row's state (the caller reads the
@@ -455,10 +451,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
         def _rt_vals(AUX, Theta, CD, valid, active):
-            """The RT log L of the rows that can be kept: in-window, certified
-            under the cap, active."""
-            need = (valid & (CD.accept_count.astype(jnp.int32) < wcmax)
-                    & (CD.conv_normal > 0.5))
+            """The RT log L of the rows that can be kept: in-window, certified,
+            active."""
+            need = valid & (CD.conv_normal > 0.5)
             if active is not None:
                 need = need & active
             return _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk,
@@ -473,7 +468,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # per-particle T-P window mask (no clip): an out-of-window draw is
             # rejected (L = REJECT_LOGL, state pinned to baseline)
             valid = jax.vmap(tp_valid)(Theta)
-            usable = valid   # narrowed to (valid & under cap & certified) except on the diag path
+            usable = valid   # narrowed to (valid & certified) except on the diag path
             if diag:
                 AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs, active)
                 vals = _rt_vals(AUX, Theta, CDIAG, valid, active)
@@ -488,11 +483,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                 conv_ok = CDL.conv_normal > 0.5
                 if active is not None:
                     valid = valid & active      # a padded row is never usable
-                usable = valid & (ACC < wcmax) & conv_ok
+                # the solver's verdict alone: the runner stops on accept_count >
+                # count_max with convergence first, so a certified solve can exit
+                # at cap or cap + 1, and conv_normal is False on every cap exit
+                usable = valid & conv_ok
                 stats = EvalStats(acc=ACC, conv_ok=conv_ok)
             L = jnp.where(jnp.isfinite(vals) & usable, vals, _REJECT)
-            # a rejected solve -- non-finite forward, an out-of-window T-P, OR a
-            # capped or uncertified one -- must not poison the carried state
+            # a rejected solve -- non-finite forward, an out-of-window T-P, OR an
+            # uncertified one -- must not poison the carried state
             # arithmetic: pin it to the baseline column.
             ok = jnp.all(jnp.isfinite(Ynew), axis=(1, 2)) & usable
             Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])

@@ -258,9 +258,8 @@ def model_spectra(out_dir, n: int):
     t0 = time.perf_counter()
     Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(th[:, :pipe.n_chem_tp])
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
-    ok = ((np.asarray(cd.conv_normal) > 0.5)
-          & (np.asarray(cd.accept_count) < int(pipe.fwd.chem.count_max))
-          & np.all(np.isfinite(mu), axis=1))
+    # the runs' certificate: conv_normal alone (a solve can certify at cap + 1)
+    ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
     log.info(f"model spectra: {int(ok.sum())}/{len(ok)} draws certified cold in "
              f"{time.perf_counter() - t0:.0f} s")
     P.save_npz(out / "nautilus_spectra.npz", theta=theta, model=mu, certified=ok)

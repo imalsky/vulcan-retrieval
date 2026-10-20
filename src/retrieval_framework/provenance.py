@@ -268,7 +268,9 @@ def target_manifest(cfg, pipe) -> dict:
     h.update("\x00".join(map(str, pipe.obs.get("group", []))).encode())
 
     return {
-        "manifest_version": 3,
+        # bumped when the manifest's fields change, or when the evaluators'
+        # keep/reject or start logic changes the target at a fixed config
+        "manifest_version": 4,
         "config": cfg_bound,
         "params": {"names": list(pipe.names),
                    "prior_types": list(pipe.prior_types),

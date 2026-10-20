@@ -72,10 +72,11 @@ chunk's batches.jsonl line adds ``presolve`` and ``retry`` (its rows, width,
 step counts and wall time; ``t`` is both passes, ``acc`` the first), and every
 anchor carries the retry ``rtol``. Off, every path below is the stock one.
 
-Padding costs no solve: a chunk shorter than n_batch and the second pass's
-unused rows are filled with copies of their last row that the evaluator masks
-(``active``): their lanes take no chemistry step and no RT. The RT runs only
-on the rows whose log L can be kept (T-P in window, certified under the cap).
+Padding and out-of-window draws cost no solve: a chunk shorter than n_batch
+and the second pass's unused rows are filled with copies of their last row,
+and the evaluator masks those and every T-P-invalid row (``active``): their
+lanes take no chemistry step and no RT. The RT runs only on the rows whose
+log L can be kept (T-P in window, certified).
 
 Lanes: ``cfg.cold_lanes`` (one SM per lane in the gpu preset), times
 FFI_BLOCKS_PER_SM under the ffi solver, whose one-buffer kernels keep that many
@@ -334,9 +335,10 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a compiled evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with masked copies of its last
-    row, which take no chemistry step and no RT) and adds this call's counts
-    to ``tally``. ``precompile``: from the first chunk on, compile the warm
-    evaluators at n_batch on a host thread while the first (cold) chunk runs.
+    row; those and the T-P-invalid rows take no chemistry step and no RT) and
+    adds this call's counts to ``tally``. ``precompile``: from the first chunk
+    on, compile the warm evaluators at n_batch on a host thread while the
+    first (cold) chunk runs.
     With ``anchors``, a chunk starts
     from the nearest certified column (warm, cold count_max) once one exists,
     and every certified column it returns becomes an anchor. With
@@ -348,7 +350,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     and the second pass, on the retry program, takes EVERY in-window row at the
     fixed width n_batch (rows first, masked copies after), warm from the
     presolve's exit column at the row's own references where the presolve
-    certified under count_max, else from the row's original start (warm chunk:
+    certified, else from the row's original start (warm chunk:
     its anchor column; cold chunk: the presolve's exit column, the baseline
     column if non-finite). A row keeps its second solve, judged at the retry
     cap: certified -> kept (and an anchor), else rejected in the class of that
@@ -414,7 +416,12 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             if m < n_batch:
                 Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
             Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
-            act = jnp.asarray(np.arange(n_batch) < m)       # padded rows: masked
+            # padded rows and T-P-invalid rows are masked: an out-of-window draw
+            # is rejected whatever its chemistry, so its lane takes no step and no
+            # RT. Not bitwise for the kept rows: fewer jobs on the lane queue
+            # shift the shared refresh cadence.
+            tp_in = np.asarray(jax.device_get(tp_ok(Uj)), bool)
+            act = jnp.asarray((np.arange(n_batch) < m) & tp_in)
             if ahead:
                 # compile the warm programs on a host thread from the first chunk
                 # on: an evaluator call returns only when its queue loop has
@@ -465,7 +472,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                                          "mode": "warm" if warm else "cold",
                                          "acc": acc.tolist()}) + "\n")
             t_first = time.perf_counter() - t0
-            tp_out = ~np.asarray(jax.device_get(tp_ok(Uj)), bool)[:m]
+            tp_out = ~tp_in[:m]
             cap = count_max
             if retry is not None:
                 # second pass: every in-window row, warm from its presolve column
@@ -479,7 +486,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 retried = np.zeros(m, bool)
                 rows = np.flatnonzero(~tp_out)
                 fin = np.all(np.isfinite(Yh), axis=tuple(range(1, Yh.ndim)))
-                ok_pre = conv & (acc < count_max) & fin
+                ok_pre = conv & fin
                 if warm:
                     Ys = np.where(ok_pre[:, None, None], Yh, np.asarray(Yw, np.float64)[:m])
                     rs = np.where(ok_pre[:, None], rh, np.asarray(rw, np.float64)[:m])
@@ -515,8 +522,11 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 tally["presolve_wall_s"] = round(tally.get("presolve_wall_s", 0.0)
                                                  + float(t_first), 2)
             # solver state first: the warm evaluator already floors L on a
-            # stalled or exhausted exit, which is not a non-finite forward
-            exhausted = ~tp_out & (acc >= cap)
+            # stalled or exhausted exit, which is not a non-finite forward. The
+            # solver's verdict decides: a solve certified at cap or cap + 1 is
+            # kept (the runner stops on accept_count > count_max, convergence
+            # first)
+            exhausted = ~tp_out & ~conv & (acc >= cap)
             stalled = ~tp_out & ~exhausted & ~conv
             nonfinite = (~tp_out & ~exhausted & conv
                          & (~np.isfinite(L) | (L <= P.REJECT_BELOW)))
