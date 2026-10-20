@@ -1,4 +1,4 @@
-"""Static configuration schema for one VULCAN-JAX -> ExoJax transmission SMC retrieval.
+"""Static configuration schema for one VULCAN-JAX -> ExoJax transmission retrieval.
 
 This mirrors the SWAMPE ``pipeline.Config`` pattern: a single frozen dataclass, with
 per-planet ``*_config()`` PRESETS living in each run's ``case.py`` (see
@@ -11,8 +11,8 @@ per-planet ``*_config()`` PRESETS living in each run's ``case.py`` (see
                                                               one b per group (G)
 
 The chemistry parameters (lnZ, dln(C/O), lnKzz) and the T-P parameters all require
-re-converging VULCAN and are the *expensive* directions of every forward-mode
-gradient; ``lnR0`` and the two cloud parameters enter only the RT (no chemistry
+re-converging VULCAN and are the *expensive* part of every likelihood call;
+``lnR0`` and the two cloud parameters enter only the RT (no chemistry
 solve), and the instrument offsets are applied analytically after the
 spectrum; all are cheap.
 
@@ -24,7 +24,7 @@ original WASP-39b application; every case preset overrides what defines its plan
 
 All fields are overridable per preset via kwargs, and at run time via the
 ``SMC_RETRIEVAL_OVERRIDES`` / ``SMC_RETRIEVAL_OVERRIDES_FILE`` JSON hooks read by
-``retrieval_framework.run_smc``.
+``retrieval_framework.run_setup``.
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ class Config:
     # applied, integrated over each R=1000 band offline; the band grid and the
     # 16-point quadrature come from the files, so there is no spectral-resolution
     # knob). This is the only value the engine accepts (build_rt_model refuses
-    # anything else); the certificate refuses a run that recorded another.
+    # anything else).
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
@@ -82,34 +82,14 @@ class Config:
     co_mode: str = "fixed_O"           # C/O GUESS construction (the engine repairs it exactly)
     count_min: Optional[int] = None
     count_max: Optional[int] = None
-    # Warm mutation cap (accepted steps): a proposal unconverged here is an MH
-    # rejection. conv_step=500 sets the effective floor; 1500 leaves margin.
-    # Cold solves keep count_max; validate_config requires
-    # warm_count_max <= count_max.
+    # The engine's capped warm-continuation limit (accepted steps), passed in the
+    # chemistry profile. run_nautilus's warm starts run under count_max, not
+    # this. validate_config requires warm_count_max <= count_max.
     warm_count_max: int = 1500
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
     # physically meaningless large-dt Ros2 oscillations without changing the canonical
     # convergence criteria.
     dt_max: Optional[float] = None
-    # Cold init rejects draws that do not converge within count_max and oversamples
-    # (pipeline._init_state):
-    #   init_oversample            -- draw factor (>= 1); 2.0 tolerates up to 50%
-    #                                 non-convergence.
-    #   init_max_nonconverged_frac -- gate: _init_state raises above this reject
-    #                                 fraction (the certificate warns at the tighter
-    #                                 CONV_ATTRITION_JUSTIFY / CONV_ATTRITION_WARN).
-    # Stubs draw exactly N.
-    init_max_nonconverged_frac: float = 0.1
-    init_oversample: float = 2.0
-    # The independent demonstration that the region the solver rejected carries
-    # negligible posterior mass (an artifact name, job number or DOI).
-    # The certificate WARNS on a run whose attrition exceeds
-    # CONV_ATTRITION_JUSTIFY with this left empty.
-    attrition_justification: str = ""
-    # Phase 2 evaluates target_n + init_phase2_spare survivors, culls columns that
-    # cannot re-certify within count_max, and backfills from the spares. A true RT/AD
-    # failure still raises.
-    init_phase2_spare: int = 8
     cfg_overrides: Dict[str, Any] = field(default_factory=dict)
 
     # ---- planet identity (every case MUST set these; unset is a hard error) ----
@@ -222,51 +202,21 @@ class Config:
     #         sigma (or the synthetic grid's), and fit that (recovery self-test).
     generate_synthetic_data: bool = False
 
-    # ---- inference: adaptive-tempered SMC (plain JAX) + forward-mode-jvp MALA --
+    # ---- inference ------------------------------------------------------------
     run_inference: bool = True
-    # Expert opt-in: gradient-MALA inference with condensation ON. Off by default:
+    # Expert opt-in: inference with condensation ON. Off by default:
     # the tangent through the condensing+pinned state disagrees with FD at O(1).
     # Condensation forward solves are always allowed.
     allow_condense_inference: bool = False
-    smc_num_particles: int = 48
-    smc_target_ess_frac: float = 0.6
-    # MALA sweeps per stage: a linear wall-clock knob (each sweep is one batched
-    # gradient). Published MALA-within-SMC practice is 3-10 (Chopin & Ridgway; Dau &
-    # Chopin; Buchholz+ 2018).
-    smc_num_mcmc_steps: int = 6
-    # "mala": preconditioned MALA on the staged forward-jvp(chem)+vjp(RT)
-    #         gradient; "rwm": full-covariance random-walk Metropolis on the SAME
-    #         Cholesky preconditioner, primal-only, symmetric proposal so log q
-    #         cancels. Both read the step as the scale of the proposal
-    #         covariance 2*step*C, so the step (seeded at MALA_STEP0), its clamps
-    #         and the Robbins-Monro state are shared; only the target acceptance
-    #         differs (TARGET_ACCEPT).
-    smc_mcmc_kernel: str = "mala"
-    smc_max_steps: int = 40             # max tempering stages before giving up on beta=1
-    # Per-sweep systematic-breakage backstop for the tangent-blown class (finite
-    # certified primal, non-finite tangent), which runs as zero-drift MALA moves
-    # logged as badgrad= with forensics. A sweep above ceil(this * N) raises.
-    smc_tangent_bad_max_frac: float = 0.25
-    # "cold" (default): the two-stage map for every evaluation; the likelihood does
-    #         not depend on sampler history, up to the lane refill tick.
-    # "warm": continuation from the carried column, cheaper but history-dependent;
-    #         stamped approximate and needs both post-run validators.
-    smc_chem_mode: str = "cold"
-    # Particles per lax.map chunk through the ExoJAX RT. 0 = one all-particle
-    # batch. RT VJP is the memory wall; PROBE_MEMORY=1 reads the
-    # peak when a width or the band grows a lot.
-    smc_rt_chunk: int = 16              # primal-likelihood RT chunk
-    # Gradient-sweep RT chunk. Correlated-k carries a 16-point g axis through the
-    # random-overlap folds, so its memory is linear in this width.
-    smc_rt_vjp_chunk: int = 6
+    # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
+    smc_rt_chunk: int = 16
     # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
     # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
     # and refills a lane that certifies with the next draw inside the same
     # while loop (vulcan_forward.converged_y_queue), so wall time follows total
-    # work / k. The gpu preset sets it and smc_num_particles to
-    # `device_lane_count()`, one kernel wave of the card. Below
-    # smc_num_particles a sweep's proposals queue slowest first. The schema
-    # default is the off-GPU width.
+    # work / k. The gpu preset sets it to `device_lane_count()`, one kernel wave
+    # of the card (run_nautilus multiplies it by FFI_BLOCKS_PER_SM under the
+    # ffi solver). The schema default is the off-GPU width.
     cold_lanes: int = OFF_GPU_LANES
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
@@ -281,8 +231,8 @@ class Config:
     # that solve certifies; otherwise it is rejected as before. Only the step
     # tolerance and the cap change: the certificate is VULCAN's in both passes.
     # rtol is a compile-time static of the step acceptance (VULCAN-JAX
-    # _Statics.rtol_accept), hence the second program. The SMC/MALA (gradient)
-    # paths refuse it. Off, none of the three enters the target manifest.
+    # _Statics.rtol_accept), hence the second program. Off, none of the three
+    # enters the target manifest.
     chem_retry: bool = False
     chem_retry_rtol: float = 0.05
     chem_retry_count_max: int = 5000
@@ -296,24 +246,15 @@ class Config:
     # start (a warm chunk's anchor column; on a cold chunk the presolve's exit
     # column, or the baseline column if that is non-finite). Only that second
     # solve's certificate (VULCAN's own) keeps a draw, so every kept column
-    # carries chem_retry_rtol. lowkzz_fix (notes.md, W39b): presolve rtol 0.2 with
-    # photolysis every step escapes the low-Kzz step-size traps fast; the
-    # certified rtol-0.05 solve then starts near its steady state. Off, it
-    # leaves the target manifest.
+    # carries chem_retry_rtol. On W39b a presolve at rtol 0.2 with photolysis
+    # every step escapes the low-Kzz step-size traps fast, and the certified
+    # rtol-0.05 solve then starts near its steady state. Off, it leaves the
+    # target manifest.
     chem_presolve: bool = False
 
-    # posterior draws
-    num_samples: int = 48
-    num_chains: int = 2
-
-    # ---- posterior predictive (always run after a finished ladder) ------------
-    ppc_draws: int = 64
-    ppc_chunk_size: int = 16
-
     # ---- walltime governor ----------------------------------------------------
-    # Soft wall-clock budget (seconds). run_smc_loop stops cleanly after a tempering
-    # stage once this is exceeded, so a 24 h PBS job always writes usable partial
-    # output (0 -> no limit).
+    # Soft wall-clock budget (seconds). run_nautilus stops once this is exceeded,
+    # with its checkpoint written, and exits 0; RESUME=1 continues (0 -> no limit).
     walltime_seconds: float = 0.0
 
     def profile(self) -> Dict[str, Any]:
@@ -357,22 +298,8 @@ class Config:
 
 # Fixed choices, not Config fields: no preset or override ever set them.
 GUILLOT_F = 0.25        # Guillot f: 1/4 = whole-planet average irradiation
-# The mutation step: seeded at MALA_STEP0, Robbins-Monro tuned once per stage
-# toward the kernel's TARGET_ACCEPT (0.234 is the d->inf optimal RWM rate; the
-# MALA target 0.55 sits below MALA's d->inf optimum 0.574) and clamped to
-# [STEP_MIN, STEP_MAX]. The preconditioner is the Cholesky factor of the freshly
-# resampled cloud's FULL covariance (shrunk toward the diagonal), with per-dim
-# widths clipped to [SCALE_FLOOR, SCALE_CLIP], so the proposal narrows with the
-# tempering and the step only fine-tunes.
-MALA_STEP0 = 0.2
-TARGET_ACCEPT = {"mala": 0.55, "rwm": 0.234}
-STEP_MIN, STEP_MAX = 1.0e-3, 3.0
-SCALE_FLOOR = 1.0e-3
-SCALE_CLIP = 20.0
 # Floor for a denominator or log argument that may be exactly zero.
 UNDERFLOW_DENOM = 1e-300
-# Largest cold-init draw factor validate_config accepts.
-INIT_OVERSAMPLE_MAX = 10.0
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
 FFI_COMPUTE_CAPABILITY = "9.0"
 # Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
@@ -413,17 +340,17 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
         add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
 
     # --- T-P (ExoJax Guillot) ---
-    add("Tirr", r"$T_{\rm irr}$ [K]", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
+    add("Tirr", r"$T_{\rm irr}$ (K)", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
     add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
     if cfg.tp_infer_gamma:
         add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
     if cfg.tp_infer_Tint:
-        add("Tint", r"$T_{\rm int}$ [K]", *cfg.prior_Tint, cfg.truth_Tint, "tp")
+        add("Tint", r"$T_{\rm int}$ (K)", *cfg.prior_Tint, cfg.truth_Tint, "tp")
 
     # --- radius nuisance ---
     add("lnR0", r"$\ln R_0$", *cfg.prior_lnR0, cfg.truth_lnR0, "lnR0")
 
-    # --- clouds (RT-only, like lnR0: cheap gradient dims) ---
+    # --- clouds (RT-only, like lnR0: no chemistry solve) ---
     add("log10kappa_cloud", r"$\log_{10}\kappa_{\rm cl}$", *cfg.prior_log10kappa_cloud,
         cfg.truth_log10kappa_cloud, "cloud")
     add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha,
@@ -432,7 +359,7 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
     # --- inter-instrument offsets (ppm), one per group beyond the reference ---
     if cfg.infer_offsets and groups is not None and len(groups) > 1:
         for g in groups[1:]:
-            add(f"offset_{g}", rf"$\delta_{{{g}}}$ [ppm]", *cfg.prior_offset_ppm,
+            add(f"offset_{g}", rf"$\delta_{{{g}}}$ (ppm)", *cfg.prior_offset_ppm,
                 cfg.truth_offset_ppm, "offset")
 
     # --- optional noise inflation: one b, or one per instrument group ---
@@ -465,7 +392,7 @@ def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     if not isinstance(n, int) or n <= 0:
         raise RuntimeError(
             f"device {dev} ({dev.device_kind}) reports no core_count; set "
-            "cold_lanes and smc_num_particles explicitly in the preset")
+            "cold_lanes explicitly in the preset")
     return int(n)
 
 
@@ -478,8 +405,8 @@ _FULL_RATE_FP64 = ("6.0", "7.0", "8.0", "9.0", "10.0")
 def hardware_profile() -> dict:
     """The hardware this process runs on, read from JAX and the OS: backend,
     device kind, host cores and RAM, and on a CUDA device its SM count,
-    compute capability, memory and FP64 class. run_smc logs it and records
-    it in config.json."""
+    compute capability, memory and FP64 class. run_nautilus logs it and
+    records it in config.json."""
     import jax
 
     dev = jax.devices()[0]
@@ -570,46 +497,17 @@ def retry_profile(cfg: Config) -> Dict[str, Any]:
     return p
 
 
-def refuse_chem_retry(cfg: Config, where: str) -> None:
-    """Raise if ``cfg.chem_retry`` is on: the retry is a primal likelihood policy
-    of run_nautilus. The SMC entry points (the jvp'd MALA evaluators, the init
-    cull and their validators) run one compiled chemistry program and would
-    silently ignore it."""
-    if bool(getattr(cfg, "chem_retry", False)):
-        raise ValueError(
-            f"{where}: chem_retry=True is a run_nautilus likelihood policy; the SMC "
-            "(MALA / RWM) paths do not implement it and would ignore it. Unset "
-            "chem_retry or run retrieval_framework.run_nautilus.")
-
-
 def validate_config(cfg: Config) -> None:
-    if cfg.smc_num_particles <= 0:
-        raise ValueError("smc_num_particles must be > 0")
-    if not (0.0 < cfg.smc_target_ess_frac <= 1.0):
-        raise ValueError("smc_target_ess_frac must be in (0, 1]")
-    # Counts that silently produce a broken or empty run if they reach zero: a
-    # 0-sweep ladder never mutates, 0 stages never tempers, 0 PPC draws writes an
-    # empty envelope. The RT chunk sizes are batch splits where 0 means "one batch".
-    for name in ("smc_num_mcmc_steps", "smc_max_steps", "ppc_draws",
-                 "ppc_chunk_size", "cold_refill_chunk"):
-        if int(getattr(cfg, name)) < 1:
-            raise ValueError(f"{name} must be >= 1, got {getattr(cfg, name)!r}")
-    for name in ("smc_rt_chunk", "smc_rt_vjp_chunk"):
-        if int(getattr(cfg, name)) < 0:
-            raise ValueError(f"{name} must be >= 0 (0 = no chunking), "
-                             f"got {getattr(cfg, name)!r}")
+    if int(cfg.cold_refill_chunk) < 1:
+        raise ValueError(f"cold_refill_chunk must be >= 1, got {cfg.cold_refill_chunk!r}")
+    # The RT chunk size is a batch split where 0 means "one batch".
+    if int(cfg.smc_rt_chunk) < 0:
+        raise ValueError(f"smc_rt_chunk must be >= 0 (0 = no chunking), got {cfg.smc_rt_chunk!r}")
     if int(cfg.cold_lanes) < 0:
         raise ValueError("cold_lanes must be >= 0 (0 = the whole cold batch in "
                          f"one lockstep call), got {cfg.cold_lanes!r}")
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
-    if not (0.0 < cfg.smc_tangent_bad_max_frac <= 1.0):
-        raise ValueError("smc_tangent_bad_max_frac must be in (0, 1] -- it is the "
-                         "systematic-breakage backstop, not an off switch")
-    if str(cfg.smc_mcmc_kernel).strip().lower() not in ("mala", "rwm"):
-        raise ValueError(
-            f"smc_mcmc_kernel must be 'mala' or 'rwm', got "
-            f"{cfg.smc_mcmc_kernel!r}")
     # Inference with condensation ON is refused by default: the fix_species pin
     # captures the column at a discrete accepted step, so the pinned-species
     # tangent disagrees with FD at O(1). allow_condense_inference=True
@@ -622,16 +520,6 @@ def validate_config(cfg: Config) -> None:
             "condensation as a forward model (run_inference=False), or set "
             "allow_condense_inference=True after validating the gradient on your "
             "column.")
-    if int(cfg.init_phase2_spare) < 0:
-        raise ValueError("init_phase2_spare must be >= 0")
-    if not (1.0 <= cfg.init_oversample <= INIT_OVERSAMPLE_MAX):
-        raise ValueError(f"init_oversample must be in [1, {INIT_OVERSAMPLE_MAX:g}] (draw "
-                         "factor for the cold init so the reject-and-cull leaves N "
-                         "healthy particles)")
-    if not (0.0 <= cfg.init_max_nonconverged_frac <= 1.0):
-        raise ValueError("init_max_nonconverged_frac must be in [0, 1]")
-    if str(cfg.smc_chem_mode).strip().lower() not in ("warm", "cold"):
-        raise ValueError("smc_chem_mode must be 'warm' or 'cold'")
     if int(cfg.warm_count_max) < 1:
         raise ValueError("warm_count_max must be >= 1")
     if cfg.count_max is not None and int(cfg.warm_count_max) > int(cfg.count_max):
@@ -690,7 +578,7 @@ def validate_config(cfg: Config) -> None:
 def describe_config(cfg: Config, preset: str = "") -> str:
     """A prominent, human-readable dump of the RESOLVED configuration (after preset +
     overrides) -- forward-model fidelity, convergence criteria, T-P handling, data
-    source, SMC settings, and the full parameter/prior table. Every entry point logs
+    source, run settings, and the full parameter/prior table. Every entry point logs
     this so the exact numbers a run uses (band, count_max, priors, ...)
     are visible up front."""
     # Offsets are named per non-reference group, and the reference is the
@@ -717,10 +605,6 @@ def describe_config(cfg: Config, preset: str = "") -> str:
             else "REAL observed spectrum")
     lanes = (f"{int(cfg.cold_lanes)} lanes, refill {int(cfg.cold_refill_chunk)}"
              if int(cfg.cold_lanes) > 0 else "one lockstep batch")
-    kern = str(cfg.smc_mcmc_kernel).strip().lower()
-    kern_label = ("forward-jvp MALA" if kern == "mala"
-                  else "gradient-free random-walk Metropolis")
-    kern_target = TARGET_ACCEPT[kern]
 
     lines = [
         "", bar,
@@ -736,7 +620,7 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"   cold batch: {lanes}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}   "
-        f"warm_count_max={int(cfg.warm_count_max)} (mutation-proposal cap)",
+        f"warm_count_max={int(cfg.warm_count_max)}",
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "
         "high-Kzz non-convergence)",
         *([f"    chem_retry ON (nautilus): a draw uncertified within count_max={cmax} is "
@@ -748,9 +632,6 @@ def describe_config(cfg: Config, preset: str = "") -> str:
            f"rtol={float(cfg.chem_retry_rtol):g}, count_max={int(cfg.chem_retry_count_max)} "
            "warm from the presolve column; uncertified -> rejected"]
           if cfg.chem_retry and cfg.chem_presolve else []),
-        f"    cold-init: draw {cfg.init_oversample:g}xN, REJECT non-converged draws (-inf), "
-        f"keep first N healthy   (RAISES if reject frac > {cfg.init_max_nonconverged_frac:.0%}; "
-        "raise only if < N survive)",
         rule("T-P profile"),
         f"    model=guillot   Tint={'free' if cfg.tp_infer_Tint else f'{cfg.tp_Tint_K:g}K'}"
         f"   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
@@ -758,15 +639,9 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         "    drawn RAW (no clip); profiles leaving the modelable T window are REJECTED + REDRAWN",
         rule("data"),
         f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
-        rule(f"SMC  (adaptive-tempered + {kern_label})"),
-        f"    N={cfg.smc_num_particles}   mcmc_steps={cfg.smc_num_mcmc_steps}   "
-        f"max_stages={cfg.smc_max_steps} (per JOB; RESUME continues)   "
-        f"target_ess_frac={cfg.smc_target_ess_frac:g}",
-        f"    kernel={kern}   step={MALA_STEP0:g} (proposal covariance 2*step*C)   target_accept={kern_target:g}",
-        "    preconditioner: full cloud covariance (Cholesky)   step tuning: per-stage Robbins-Monro",
-        f"    chem_mode={cfg.smc_chem_mode}   "
-        f"rt_chunk={cfg.smc_rt_chunk}   rt_vjp_chunk={cfg.smc_rt_vjp_chunk}",
-        f"    walltime governor: {cfg.walltime_seconds / 3600.0:.1f} h"
+        rule("run"),
+        f"    rt_chunk={cfg.smc_rt_chunk}   walltime governor: "
+        f"{cfg.walltime_seconds / 3600.0:.1f} h"
         + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
         rule(f"parameters ({len(specs)})   [prior : truth]"),
     ]

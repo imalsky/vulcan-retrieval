@@ -1,0 +1,161 @@
+"""Run provenance: the target digest binds every class that defines the target
+and nothing that churns, and the data identity says why when it cannot resolve.
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+import pytest
+
+from retrieval_framework import provenance
+
+
+def test_data_identity_never_reports_null_opacity_without_saying_why(
+        tmp_path, monkeypatch):
+    """The data identity must not silently claim a run read no opacity data.
+
+    This repo never sets $VULCAN_FORWARD_DATA -- it hands the engine its tree
+    through paths.set_data_root -- so resolving the trees from the environment
+    yields null for a run that read gigabytes of them. Holds in any
+    environment: either the root resolves, or the identity says why not.
+    """
+    monkeypatch.delenv("VULCAN_FORWARD_DATA", raising=False)
+    ident = provenance._data_identity(tmp_path, {})
+    assert not (ident["data_root_resolved"] is None
+                and "engine_data_error" not in ident), (
+        "data identity is null with no stated reason -- the environment-only "
+        "resolution regressed")
+    # the variable's own field reports the variable, never the resolved root
+    assert ident["VULCAN_FORWARD_DATA"] is None
+
+
+# --- target identity: what a checkpoint's numbers belong to --------------------
+
+def _digest_pipe():
+    """Minimal stand-in carrying exactly what target_manifest reads."""
+    return SimpleNamespace(
+        obs={"wl": np.array([1.0, 2.0]), "wl_lo": np.array([0.9, 1.9]),
+             "wl_hi": np.array([1.1, 2.1]), "group": ["A", "A"]},
+        obs_depth=np.array([1e-2, 1.1e-2]), obs_sigma=np.array([1e-4, 1e-4]),
+        names=["lnZ", "c_o"], prior_types=["uniform", "uniform"],
+        param_prior_lo=np.array([-1.0, -1.0]),
+        param_prior_hi=np.array([1.0, 1.0]),
+        groups=["A"], n_bin=2)
+
+
+@pytest.mark.parametrize("field, value, moves", [
+    ("yconv_cri", 0.001, True),            # convergence tolerance
+    ("molecules", ("H2O",), True),         # opacity list
+    ("nz", 80, True),                      # chemistry grid
+    ("art_ptop_bar", 1e-8, True),          # pressure domain
+    ("prior_lnZ", (-1.0, 1.0), True),      # prior definition
+    ("seed", 999, True),                   # RNG identity (bit-identical resume)
+    ("count_max", 4000, True),             # solver-defined support
+    ("walltime_seconds", 3600.0, False),   # per-JOB governor
+    ("smc_rt_chunk", 24, False),           # batch split, numerically identical
+    ("out_dir", Path("/tmp/elsewhere"), False),
+])
+def test_target_digest_moves_with_every_bound_class(field, value, moves, monkeypatch):
+    """Each manifest class must change the digest, or a resume could carry
+    numbers from a different density. A chained RESUME job legitimately changes
+    the per-job settings; binding them would refuse the documented NAS chaining
+    workflow."""
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    from retrieval_framework import config_schema as _C
+    pipe = _digest_pipe()
+    base = _C.Config(molecules=("H2O", "CO2"))
+    assert getattr(base, field) != value, f"{field} probe equals the default"
+    changed = replace(base, **{field: value})
+    assert (provenance.target_digest(base, pipe)
+            != provenance.target_digest(changed, pipe)) is moves
+
+
+def test_target_digest_moves_with_the_observations(monkeypatch):
+    from retrieval_framework import config_schema as _C
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: {"r": {"commit": "a" * 40, "dirty": False}})
+    a = provenance.target_digest(cfg, pipe)
+    pipe.obs_sigma = pipe.obs_sigma * 2.0
+    assert provenance.target_digest(cfg, pipe) != a, "observations not bound"
+
+
+def _repo(**over):
+    st = {"commit": "a" * 40, "dirty": True, "dirty_files": ["a.py"],
+          "src_diff": "d" * 64}
+    st.update(over)
+    return {"r": st}
+
+
+@pytest.mark.parametrize("state, moves", [
+    ({"dirty_files": ["a.py", "b.py"]}, False),   # the LIST churns; not an identity
+    ({"dirty": False, "dirty_files": [], "src_diff": None}, True),
+    ({"src_diff": "e" * 64}, True),               # a DIFFERENT uncommitted src edit
+    ({"commit": "b" * 40}, True),                 # a different commit
+])
+def test_target_digest_binds_code_state_not_file_churn(state, moves, monkeypatch):
+    """A scratch edit must not refuse a resume, but a different source diff must.
+
+    `dirty_files` churns with any untracked file; `src_diff` is the content hash
+    of `git diff HEAD -- src`, so it moves only when the code that defines the
+    target changed.
+    """
+    from retrieval_framework import config_schema as _C
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
+    d0 = provenance.target_digest(cfg, pipe)
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo(**state))
+    assert (provenance.target_digest(cfg, pipe) != d0) is moves
+
+
+def test_target_digest_binds_the_cia_tables(monkeypatch):
+    """The CIA tables are the only target-affecting input outside git, so nothing
+    else can notice a swapped continuum."""
+    from retrieval_framework import config_schema as _C
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    monkeypatch.setattr(provenance, "_repo_states", lambda *a, **k: _repo())
+    pipe, cfg = _digest_pipe(), _C.Config(molecules=("H2O",))
+    monkeypatch.setattr(provenance, "_cia_identity",
+                        lambda *a, **k: {n: {"sha256": "1" * 64}
+                                         for n in provenance.CIA_TABLES})
+    d0 = provenance.target_digest(cfg, pipe)
+    monkeypatch.setattr(provenance, "_cia_identity",
+                        lambda *a, **k: {n: {"sha256": "2" * 64}
+                                         for n in provenance.CIA_TABLES})
+    assert provenance.target_digest(cfg, pipe) != d0
+
+
+# --- run-directory identity: a refused resume must not rewrite it -------------
+
+def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
+    """`git diff HEAD` cannot see an untracked module, but importing one changes
+    the code that defines the target."""
+    import subprocess
+    from retrieval_framework.provenance import _src_state
+    env = {**os.environ, "HOME": str(tmp_path), "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "r"
+    (repo / "src").mkdir(parents=True)
+    for args in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t",
+                  "commit", "-qm", "x", "--allow-empty"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env,
+                       capture_output=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    clean = _src_state(repo)
+    (repo / "src" / "new_module.py").write_text("x = 1\n")
+    one = _src_state(repo)
+    (repo / "src" / "new_module.py").write_text("x = 2\n")
+    two = _src_state(repo)
+    assert clean != one != two and clean != two, "untracked src content unbound"
+    (repo / "src" / "new_module.py").unlink()
+    assert _src_state(repo) == clean

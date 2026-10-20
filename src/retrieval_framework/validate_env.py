@@ -195,7 +195,7 @@ def _check_exojax() -> None:
 def production_molecules(root: Path) -> tuple[str, ...]:
     """The case's own molecule list, read from case.py, never a copy."""
     import os
-    from retrieval_framework import run_smc as _R
+    from retrieval_framework import run_setup as _R
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
     cfg, _ = _R.make_config(root / "vulcan-retrieval" / "runs" / "w39b_smc_retrieval")
     return tuple(cfg.molecules)

@@ -17,7 +17,7 @@ continuum are untouched between rungs, so the difference is opacity alone.
     python validation/opacity_leave_one_out.py                  # every unscreened table
     python validation/opacity_leave_one_out.py --molecules NH3 SO
     python validation/opacity_leave_one_out.py --states 8       # + 8 prior draws
-    python validation/opacity_leave_one_out.py --from-posterior out/posterior_samples.npz
+    python validation/opacity_leave_one_out.py --from-posterior <out_dir>/nautilus_posterior.npz
 
 GATE (per bin, per state): |Delta binned depth| < min(5 ppm, 0.1 * quoted sigma).
 A species may be dropped from production only with a recorded bound BELOW the gate
@@ -60,7 +60,7 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
 
     Always includes the nominal state (u=0, the centre of every declared box).
     ``n_prior`` adds that many T-P-valid prior draws; ``posterior_path`` adds the
-    SAME number again from a finished run's posterior_samples.npz (4 when
+    SAME number again from a finished run's nautilus_posterior.npz (4 when
     n_prior is 0). The screen runs over a prior/posterior state set, not one
     state.
     """
@@ -118,7 +118,7 @@ def main() -> int:
                     help="prior draws on top of the nominal state (and the same "
                          "number from --from-posterior)")
     ap.add_argument("--from-posterior", default=None,
-                    help="posterior_samples.npz to draw representative states from")
+                    help="nautilus_posterior.npz to draw representative states from")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 

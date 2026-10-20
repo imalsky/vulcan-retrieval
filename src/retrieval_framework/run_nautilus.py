@@ -1,29 +1,21 @@
 """run_nautilus.py -- nested sampling (nautilus) on the retrieval's likelihood.
 
-Same case, preset, overrides and observations as run_smc; a different sampler.
-Every likelihood call goes through the pipeline's batched chemistry + RT on the
-lane queue (``lanes``, below) with the SMC init's rejection rule: a
-non-finite forward, a T-P draw outside the window, a count_max-exhausted solve
-or a stall-certified exit gets log L = -inf. The evidence is therefore a
-ZERO-FILLED box evidence, the kind of quantity an SMC run reports as
-``logZ_box`` -- not its ``logZ`` (pipeline.evidence_report) -- but not the
-identical one. nautilus gates each draw on the PRIMAL solve's certificate
-only; SMC gates on the certificate of the jvp'd program, and its init also
-culls primal survivors that fail that phase-2 re-certification (SMC's
-``logZ_box`` carries the cull as f_c2). There is no phase-2 cull here, so the
-two box evidences agree only when the phase-2 flip rate is negligible: report
-SMC's f_c2 next to any comparison.
+The case, preset, overrides and observations come from run_setup. Every
+likelihood call goes through the pipeline's batched chemistry + RT on the lane
+queue (``lanes``, below): a non-finite forward, a T-P draw outside the window,
+a count_max-exhausted solve or a stall-certified exit gets log L = -inf. The
+evidence is therefore a ZERO-FILLED box evidence, ``logZ_box``: the integral of
+prior x likelihood over the box with every rejected region at zero, so it
+depends on the solver settings (count_max, rtol) through what is rejected.
 
 Warm starts (default; NAUTILUS_WARM=0 disables them): every certified column
 becomes an anchor keyed by its unit-cube chemistry + T-P coordinates, and each
 later solve continues from its nearest anchor (the warm map at the cold
 count_max); batches before the first certified column run cold. The certified
 state and which draws are rejected then depend on the evaluation order at the
-convergence tolerance, so the posterior and evidence are
-approximate and the evidence is not an SMC run's logZ_box. An evidence claim
-uses NAUTILUS_WARM=0, the cold primal map on the lane queue (a draw's column
-depends on its batch at the convergence scale), which compares with SMC's
-logZ_box only as stated above.
+convergence tolerance, so the posterior and evidence are approximate. An
+evidence claim uses NAUTILUS_WARM=0, the cold primal map on the lane queue (a
+draw's column depends on its batch at the convergence scale).
 
 Anchors are written inside the likelihood call, before nautilus checkpoints
 the batch: a job killed in between resumes by redrawing that batch, which then
@@ -39,7 +31,8 @@ gpu_nautilus under the PBS):
 nautilus_checkpoint.hdf5 (rewritten every iteration), anchors/ (one npz of
 certified columns per batch, reloaded on resume), nautilus_tally.json
 (rejection and warm-start counts, summed over jobs), and when the run finishes
-nautilus_posterior.npz + nautilus_summary.json. ``SMC_RESUME=1`` (the PBS's
+nautilus_posterior.npz, nautilus_summary.json and nautilus_certificate.json
+(nautilus_report; its CLI also draws the figures). ``SMC_RESUME=1`` (the PBS's
 RESUME=1) continues the checkpoint; without it an existing checkpoint raises.
 The run stops at ``cfg.walltime_seconds`` (the preset's governor) and exits 0
 unfinished; resubmit with RESUME=1.
@@ -115,7 +108,7 @@ from pathlib import Path
 import numpy as np
 
 from retrieval_framework import config_schema as C
-from retrieval_framework.run_smc import (
+from retrieval_framework.run_setup import (
     log_hardware, make_config, set_observations, setup_logging, write_run_identity)
 
 log = logging.getLogger("retrieval")
@@ -416,17 +409,15 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     k = int(pipe.n_chem_tp)
     retry = getattr(pipe, "chem_retry", None)
     # every evaluator masks padded rows (active) and RTs only the rows it can keep
-    fns = {"cold": jax.jit(pipe._make_batch_eval("cold", False, diag=True,
-                                                 rt_kept_only=True))}
+    fns = {"cold": jax.jit(pipe._make_batch_eval("cold", diag=True, rt_kept_only=True))}
     if anchors is not None:
-        fns["warm"] = jax.jit(pipe._make_batch_eval("warm", False, mutation_cap=False,
-                                                    rt_kept_only=True))
+        fns["warm"] = jax.jit(pipe._make_batch_eval("warm", rt_kept_only=True))
     if retry is not None:
-        fns["retry_cold"] = jax.jit(pipe._make_batch_eval("cold", False, diag=True,
-                                                          retry=True, rt_kept_only=True))
+        fns["retry_cold"] = jax.jit(pipe._make_batch_eval("cold", diag=True, retry=True,
+                                                          rt_kept_only=True))
         if anchors is not None:
-            fns["retry_warm"] = jax.jit(pipe._make_batch_eval(
-                "warm", False, mutation_cap=False, retry=True, rt_kept_only=True))
+            fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True,
+                                                              rt_kept_only=True))
         count_max_retry = int(retry.count_max)
         rtol_first = np.nan if retry.rtol_first is None else float(retry.rtol_first)
         rtol_retry = float(retry.rtol)
@@ -438,8 +429,8 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
         fns["pre_cold"] = jax.jit(pipe._make_presolve_eval("cold"))
         fns["pre_warm"] = jax.jit(pipe._make_presolve_eval("warm"))
         if "retry_warm" not in fns:      # a cold chunk's second pass is warm too
-            fns["retry_warm"] = jax.jit(pipe._make_batch_eval(
-                "warm", False, mutation_cap=False, retry=True, rt_kept_only=True))
+            fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True,
+                                                              rt_kept_only=True))
         y_base = np.asarray(Y0[0], np.float64)
     progs = _Programs(fns, getattr(pipe, "n_dim", None), Y0.shape[1:], pipe.dtype)
     ahead = []
@@ -793,17 +784,18 @@ def main() -> None:
         "nautilus": f"{nautilus.__version__} (stock)",
         "starts": "anchored warm (growing)" if warm else "cold",
         "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
+        "chem_rtol": pipe.fwd.chem_rtol,
         **({"chem_retry": vars(pipe.chem_retry)} if pipe.chem_retry is not None else {}),
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
                          + ("; APPROXIMATE: warm starts move the likelihood and which draws "
-                            "are rejected, so this is not an SMC logZ_box (NAUTILUS_WARM=0 "
-                            "for an evidence claim)" if warm
-                            else "; compares with an SMC run's logZ_box only "
-                                 "when that run's f_c2 (phase-2 cull) is near 1"),
+                            "are rejected (NAUTILUS_WARM=0 for an evidence claim)"
+                            if warm else ""),
         "medians": {n: float(np.median(theta_eq[:, i])) for i, n in enumerate(pipe.names)},
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     log.info(f"wrote {out / 'nautilus_posterior.npz'} and nautilus_summary.json")
+    from retrieval_framework.nautilus_report import write_certificate
+    log.info(f"wrote {write_certificate(out)}")
 
 
 if __name__ == "__main__":

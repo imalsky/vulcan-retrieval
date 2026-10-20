@@ -12,9 +12,8 @@ evaluated by the SAME ExoJax profile on both the VULCAN pressure grid (inside th
 chemistry) and the ART grid (here, for the RT), so one self-consistent T(P) drives both.
 
 Everything is pure JAX and supports forward-mode ``jvp`` end-to-end (the VULCAN runner's
-``lax.while_loop`` supports jvp but not vjp -- forward-mode is the only route, which is
-also why the retrieval's MALA gradient takes forward-mode jvps through the chemistry
-and one reverse-mode vjp through the RT).
+``lax.while_loop`` supports jvp but not vjp -- forward-mode is the only route for a
+gradient through the chemistry).
 
 Import order matters: ``vulcan_chem`` (env + jax x64) is imported before ``exojax_rt`` /
 ``tp_profile`` (which import ExoJax).
@@ -42,15 +41,14 @@ from vulcan_forward import interp_map    # differentiable log-P bridge
 
 
 def _refuse_condense_inference(chem, cfg) -> None:
-    """Refuse gradient-MALA inference through a condensing steady state.
+    """Refuse inference through a condensing steady state.
 
     The early ``cfg_overrides`` gate in ``config_schema.validate_config`` catches
     the common case, but a base VULCAN config can default ``use_condense=True``
     without the flag ever appearing in ``cfg_overrides``.
     ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
     condensation is active), so gating on it closes that bypass. The pinned
-    condensation state is not reliably differentiable, and gradient MALA is the
-    default kernel.
+    condensation state is not reliably differentiable.
     """
     if (getattr(chem, "conden_spec", None) is not None
             and bool(getattr(cfg, "run_inference", False))
@@ -212,7 +210,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         draw's own column. accept_count alone is not a convergence
         test; gate on ``conv_normal`` too.
 
-        Used by native_depth_aux (scalar likelihood and block gradient); the
+        Used by native_depth_aux (the scalar likelihood); the
         batched evaluators use chem_solve_cold_diag_batch and reject a
         non-converged cold proposal as a warm one is rejected."""
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
@@ -226,9 +224,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
             ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
             ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
             draw count ``run_queue`` refills nothing and runs the plain batch's
-            ticks. A narrow call (the certificate's 4-particle replay, a
-            validate_warm chunk) therefore takes the same route as the production
-            run instead of silently switching to the lockstep batch.
+            ticks. A narrow call (a padded last chunk, a few model spectra)
+            therefore takes the same route as the production run instead of
+            silently switching to the lockstep batch.
             ``cold_lanes = 0`` is the lockstep batch, call for call. ``ch`` is the
             main chemistry, or the chem_retry program on the retry route.
 
@@ -260,12 +258,9 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         whole batch instead of on every lane every iteration. A lane is NOT
         bit-identical to its solo solve: the cadence rides the loop's iteration
         tick, and on the lane queue a refilled draw starts at the tick its lane
-        was freed at (agreement at the convergence scale).
-        The cold gradient path takes the same route,
-        one ``jax.jvp`` per direction through the stage twins below, and so do
-        the batched warm continuations (``chem_solve_warm_diag_batch``). Every
-        batch goes through ``_chem_batch_route``. ``active`` masks padded rows
-        in both stages (``_chem_batch_route``)."""
+        was freed at (agreement at the convergence scale). Every batch, cold
+        stage or warm continuation, goes through ``_chem_batch_route``.
+        ``active`` masks padded rows in both stages (``_chem_batch_route``)."""
         if active is None:
             return chem_stage2_diag_batch(C, chem_stage1_batch(C))
         Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0),
@@ -274,11 +269,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     def chem_stage1_batch(C):
         """``chem_stage1`` for a STACK of chem_thetas ``C`` (N, n_chem_tp) ->
-        Y1 (N, nz, ni), through ``_chem_batch_route``. The batched twin the cold
-        GRADIENT path jvp's through: one solve for the whole cloud instead of
-        a per-particle vmap of solves, so the photolysis and geometry
-        cadences follow the loop tick shared by the cloud. Not gated (stage 1
-        carries no certificate)."""
+        Y1 (N, nz, ni), through ``_chem_batch_route``: one solve for the whole
+        batch instead of a per-particle vmap of solves, so the photolysis and
+        geometry cadences follow the loop tick shared by the batch. Not gated
+        (stage 1 carries no certificate)."""
         Y1, _cd = _chem_batch_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0))
         return Y1
 
@@ -289,53 +283,12 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ConvDiag that certifies each draw."""
         return _chem_batch_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
-    def chem_solve_warm_diag(chem_theta, y_warm, lnZ_ref, c_o_ref):
-        """Converged absolute column y (nz, ni) and its ``ConvDiag`` by warm
-        continuation from a converged column ``y_warm`` whose inventory
-        corresponds to (lnZ_ref, c_o_ref); the lnZ / C-O scalings apply
-        incrementally (theta[0]-lnZ_ref, theta[1]-c_o_ref). Runs under the
-        warm_count_max cap (warm_cap=True). The ConvDiag lets a caller reject a
-        proposal that is not at a certified steady state (warm_count_max-exhausted
-        or a stall/budget exit) before trusting its jvp; it rides the primal
-        carry. The per-particle map for mala_reversibility and the tests; the
-        SMC runs chem_solve_warm_diag_batch."""
-        return chem.converged_y(chem_theta, warm_y=y_warm,
-                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                return_conv_diag=True, warm_cap=True)
-
-    def chem_solve_warm_diag_full(chem_theta, y_warm, lnZ_ref, c_o_ref):
-        """chem_solve_warm_diag WITHOUT the mutation cap: runs under the cold
-        count_max. The per-particle twin (for the tests) of
-        chem_solve_warm_diag_full_batch, the warm-mode INIT phase-2 solve:
-        its inputs are phase-1 SURVIVORS re-certifying from their own converged
-        columns -- proven-convergent states, not disposable proposals -- and a
-        marginal survivor (a slow phase-1 converger) can need more than
-        warm_count_max accepted steps to re-certify."""
-        return chem.converged_y(chem_theta, warm_y=y_warm,
-                                lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                return_conv_diag=True, warm_cap=False)
-
-    def chem_solve_warm_diag_batch(C, Y, lnZ_ref, c_o_ref, active=None):
-        """``chem_solve_warm_diag`` for a STACK: every particle's own carried
-        column ``Y`` (N, nz, ni) re-converged at its own proposal ``C``
-        (N, n_chem_tp) with its own reference composition ``lnZ_ref`` /
-        ``c_o_ref`` ((N,) arrays, one per carried column) ->
-        ``(y (N, nz, ni), ConvDiag with a leading particle axis)``.
-
-        Runs under the mutation cap (``warm_cap=True``), which rides the runner
-        carry per lane, and through ``_chem_batch_route``: the batched runner,
-        or the lane queue when ``cfg.cold_lanes > 0``. THE warm solve on the
-        SMC mutation path, primal and gradient (pipeline._make_batch_eval jvps
-        through this for the whole cloud at once)."""
-        return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
-                                 warm_cap=True, active=active)
-
     def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, active=None):
-        """``chem_solve_warm_diag_batch`` WITHOUT the mutation cap (the cold
-        count_max): run_nautilus's anchored warm starts and, in warm chem mode,
-        the INIT phase-2 pass, whose inputs are phase-1 survivors
-        re-certifying from their own converged columns. ``active`` masks
-        padded rows (``_chem_batch_route``)."""
+        """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
+        ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
+        ``c_o_ref`` ((N,) arrays), under the cold count_max: run_nautilus's
+        anchored warm starts. Goes through ``_chem_batch_route``; ``active`` masks
+        padded rows."""
         return _chem_batch_route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref,
                                  warm_cap=False, active=active)
 
@@ -376,13 +329,12 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         """Full chain -> (native depth, aux, ok) where aux = (vmr, vmr_h2, vmr_he,
         T_art, mmw_art) are the ART-grid primal profiles. The aux lets a caller take
         an RT-ONLY jvp (e.g. d/dlnR0 or the cloud parameters, which do not touch the
-        chemistry) without re-running or re-differentiating the VULCAN while_loop --
-        the block-structured likelihood gradient in pipeline.py relies on this split.
+        chemistry) without re-running or re-differentiating the VULCAN while_loop.
 
         ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
         canonical convergence bit AND accept_count under count_max -- the same
         predicate the staged batch evaluators apply (the conv_normal gate plus
-        the cap). The scalar likelihood and the block gradient reject on it,
+        the cap). The scalar likelihood rejects on it,
         so no likelihood entry point accepts a finite spectrum from an uncertified
         solve. Reading the diag is free: every field rides the primal carry.
 
@@ -410,11 +362,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         rt_depth=rt_depth,
         chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
-        chem_stage1_batch=chem_stage1_batch,
-        chem_stage2_diag_batch=chem_stage2_diag_batch,
-        chem_solve_warm_diag=chem_solve_warm_diag,
-        chem_solve_warm_diag_full=chem_solve_warm_diag_full,
-        chem_solve_warm_diag_batch=chem_solve_warm_diag_batch,
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
         # chem_retry (None when off): the retry program and its two solves
         chem_retry=chem_retry,

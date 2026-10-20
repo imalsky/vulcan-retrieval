@@ -1,4 +1,4 @@
-"""WASP-39b SMC retrieval case: everything planet-specific for this run, and ONLY
+"""WASP-39b retrieval case: everything planet-specific for this run, and ONLY
 that. The reusable machinery lives in the ``vulcan-retrieval`` package
 (``retrieval_framework``).
 
@@ -8,8 +8,7 @@ noise_inflation].
 
 Run (from the repo root, or via the PBS script in this directory):
 
-    SMC_RETRIEVAL_PRESET=smoke python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
-    SMC_RETRIEVAL_PRESET=gpu   python -m retrieval_framework.run_smc runs/w39b_smc_retrieval
+    SMC_RETRIEVAL_PRESET=gpu python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval
 """
 from __future__ import annotations
 
@@ -34,7 +33,7 @@ _W39B = dict(
     p_ref_bar=1.0e-3,
     # Cap physically meaningless large-dt Ros2 oscillations on high-Kzz columns.
     # This is not a convergence criterion: yconv_cri/slope_cri remain the canonical
-    # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected at init.
+    # Tsai et al. (2017) values, and genuinely non-convergent draws are rejected.
     dt_max=1.0e11,
     # Carter & May (2024) fixed-limb-darkening products (repo data/); NIRISS
     # O1+O2 share NIRISS. G395H is the two detectors as one group (one offset);
@@ -119,8 +118,8 @@ _W39B = dict(
 
 # Presets
 def smoke_config(**overrides: Any) -> Config:
-    """Tiny fully-offline preset: CO-only opacity (cached), coarse column, a small SMC
-    swarm. Proves the chain end-to-end and FD-checks the gradient in minutes on CPU."""
+    """Tiny fully-offline preset: CO-only opacity (cached), coarse column. Builds the
+    real chemistry + RT pipeline in minutes on CPU (the slow tests use it)."""
     base = dict(
         _W39B,
         nz=30,
@@ -132,9 +131,6 @@ def smoke_config(**overrides: Any) -> Config:
         obs_wl_lo=2.28, obs_wl_hi=2.36,             # overlap the cached CO band
         tp_infer_gamma=False,      # 8-D smoke: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud
         generate_synthetic_data=True,               # smoke always self-tests on an injection
-        smc_num_particles=12, smc_num_mcmc_steps=4, smc_max_steps=8,
-        smc_target_ess_frac=0.5,
-        num_samples=12, num_chains=1, ppc_draws=12, ppc_chunk_size=6,
     )
     base.update(overrides)
     return Config(**base)
@@ -146,8 +142,7 @@ def gpu_config(**overrides: Any) -> Config:
     Band note: the native model band is 1.01-5.26 um (nu 1900-9900). NIRISS SOSS
     order 1 supplies the short-wavelength water bands and offset/cloud leverage;
     the 1.02 um edge stays inside the H2-H2 CIA table. count_max=5000 is a hard
-    convergence gate, not a reason to extend failed draws. Run CALIBRATE_ONLY
-    before a full submission.
+    convergence gate, not a reason to extend failed draws.
     """
     lanes = device_lane_count()
     base = dict(
@@ -171,62 +166,27 @@ def gpu_config(**overrides: Any) -> Config:
         obs_wl_lo=1.02, obs_wl_hi=5.24,   # strictly inside the native span (1.01-5.26)
         tp_infer_Tint=True,
         generate_synthetic_data=False,
-        # N = the lane count = one kernel wave of the card (132 on the GH200,
-        # 144 off the GPU): every particle's chemistry runs in one wave and the
-        # queue never waits on a late starter. Both divide into exact RT-vjp
-        # chunks of 4.
-        # smc_max_steps is a per-JOB cap, not a per-run one (a RESUME job gets a
-        # fresh budget and the stage index continues). Exhausting it yields a
-        # TEMPERED cloud the certificate refuses and an unused stage costs
-        # nothing, so it sits well above the expected stage count and the
-        # governor is the real limit.
-        smc_num_particles=lanes, cold_lanes=lanes, smc_max_steps=80,
-        # Draw 2.5 N cold candidates (330 at N = 132) and reserve 48 phase-2
-        # spares: the N + 48 pool can cull 48 (27% at N = 132) and still return
-        # N. Peak memory remains set by the fixed RT-vjp chunk, not the number
-        # of serialized chunks.
-        init_oversample=2.5,
-        init_phase2_spare=48,
-        # Declared convergence attrition: pipeline._init_state raises above it.
-        # 0.35 covers the measured rates with margin; the certificate
-        # warns above CONV_ATTRITION_WARN until the removed region is shown to carry
-        # negligible posterior mass.
-        init_max_nonconverged_frac=0.35,
-        # Cold chemistry: a draw's column never depends on sampler history, up to
-        # the lane queue's refill tick (convergence scale). "warm" is
-        # history-dependent and its logZ approximate.
-        smc_chem_mode="cold",
-        # Four sequential cold sweeps preserve particle count but may require
-        # multiple 24 h jobs. RESUME continues the absolute stage index from the
-        # checkpoint; CALIBRATE_ONLY must fit the configured governor before submit.
-        smc_num_mcmc_steps=4,
-        smc_target_ess_frac=0.6,
+        # The lane count = one kernel wave of the card (132 on the GH200, 144
+        # off the GPU); run_nautilus multiplies it by FFI_BLOCKS_PER_SM under
+        # the ffi solver.
+        cold_lanes=lanes,
         # Free multiplicative error inflation (Line+2015). ON for real data: the
         # forward is a stiff self-consistent kinetics model, so its
         # misspecification has nowhere to go but into lnZ / C-O / the cloud deck
         # unless the noise scale is free to say the residuals are larger than the
-        # quoted sigma. Analytic gradient (no chemistry solve), so it costs one
-        # extra dimension and nothing else.
+        # quoted sigma. Analytic (no chemistry solve), so it costs one extra
+        # dimension and nothing else.
         infer_noise_inflation=True,
-        # RT-vjp chunk: memory is linear in this width; a wider chunk
-        # buys no time. Numerically identical at any width.
-        smc_rt_vjp_chunk=4,
-        num_samples=144, num_chains=2, ppc_draws=64, ppc_chunk_size=16,
-        walltime_seconds=20.0 * 3600.0,   # SMC governor; leaves ~4 h of a 24 h PBS wall
-    )                                     # for build/compile + init + PPC + plots
+        walltime_seconds=20.0 * 3600.0,   # governor; leaves ~4 h of a 24 h PBS wall
+    )                                     # for the build and compile
     base.update(overrides)
     return Config(**base)
 
 
 def prod_config(**overrides: Any) -> Config:
-    """Higher-fidelity variant (nz=100, more stages, no governor) for when >24 h is
-    available. Inherits the gpu preset's particle/chunk settings and cold target,
-    but explicitly raises the mutation budget from 4 to 8 sweeps per stage."""
-    base = dict(
-        nz=100, smc_num_mcmc_steps=8, smc_max_steps=96,
-        ppc_draws=96,
-        walltime_seconds=0.0,
-    )
+    """Higher-fidelity variant (nz=100, no governor) for when >24 h is available.
+    Inherits the gpu preset's other settings."""
+    base = dict(nz=100, walltime_seconds=0.0)
     base.update(overrides)
     return gpu_config(**base)
 

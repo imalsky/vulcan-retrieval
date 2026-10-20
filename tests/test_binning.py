@@ -115,7 +115,7 @@ def test_offset_design_groups():
 def test_replicates_carry_the_likelihood_conditional_variance():
     """The saved predictive band is replicated data (mu + N(0, (sigma*b)^2)),
     and must widen with the noise inflation b."""
-    from retrieval_framework.run_smc import predictive_replicates
+    from retrieval_framework.nautilus_report import predictive_replicates
     rng = np.random.default_rng(0)
     n_draw = 20000
     sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])

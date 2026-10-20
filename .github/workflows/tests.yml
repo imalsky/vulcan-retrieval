@@ -1,9 +1,10 @@
 name: tests
 
-# Fast, dependency-light CI: exercises the sampler core, u-space prior machinery,
-# binning matrix, and init reject-and-cull logic on stub pipelines (CPU jax only).
+# Fast, dependency-light CI: exercises the nautilus likelihood wrapper on stub
+# pipelines, the u-space prior machinery, the binning matrix, the provenance
+# digest and the run report (CPU jax only).
 # This is the normal tier: pyproject's addopts deselect the `slow` chemistry/RT
-# integration tests (test_warm_reject, ...), which run in the local full tier;
+# integration tests (test_cold_reject, ...), which run in the local full tier;
 # the other tests that need the VULCAN-JAX + ExoJax stack skip without it.
 on:
   push:
@@ -37,6 +38,7 @@ jobs:
           # config loader imports yaml at collection time
           pip install "jax>=0.6" numpy scipy pytest pyyaml
           pip install "nautilus-sampler==1.0.6"   # tests/test_run_nautilus.py
+          pip install matplotlib corner   # tests/test_nautilus_report.py
           pip install pandas   # exogibbs imports it; pandas needs its own deps (pytz, dateutil)
           pip install --no-deps "exogibbs==0.6.0"   # vulcan3's eq_seed imports it; its declared deps (pyfastchem...) are not needed
           pip install --no-deps "vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@main"

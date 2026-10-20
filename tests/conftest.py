@@ -5,20 +5,21 @@ non-editable install (pip install . or a wheel) shadows the checkout, so the sui
 would silently test stale code. Fail collection loudly instead (same convention as
 VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 
-Also the shared pipeline builders: a chemistry-free stub for the SMC-core tests
-and the real smoke pipeline (the session fixture the two rejection-gate files
-share is built once per session, per xdist worker), and the shared stubs.
+Also the real smoke pipeline builder (its capped session fixture is built
+once per session, per xdist worker) and the shared ConvDiag stub.
 """
 import dataclasses
 import os
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import numpy as np
+# Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
+# CUDA plugin would otherwise open every visible card in each worker.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
 import pytest
 
 import retrieval_framework
-from retrieval_framework.config_schema import ParamSpec
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "retrieval_framework"
 _IMPORTED = Path(retrieval_framework.__file__).resolve().parent
@@ -32,18 +33,7 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays finite
-CAPPED_WARM_CMAX = 5    # well below the cold cap, so the warm cap is what binds
-
-# Gaussian-box target: flat U(-8,8)^3 prior x independent Gaussian likelihood.
-GAUSS_M = np.array([1.0, -0.5, 0.3])
-GAUSS_S = np.array([0.40, 0.60, 0.25])
-GAUSS_SPECS = [ParamSpec(f"p{i}", f"p{i}", "uniform", -8.0, 8.0, float(GAUSS_M[i]), "chem")
-               for i in range(3)]
-
-
-def gauss_loglik(th):
-    import jax.numpy as jnp    # not at module level: each test sets x64 first
-    return -0.5 * jnp.sum(((th - jnp.asarray(GAUSS_M)) / jnp.asarray(GAUSS_S)) ** 2)
+CAPPED_WARM_CMAX = 5    # validate_config requires warm_count_max <= count_max
 
 
 class StubConvDiag(NamedTuple):
@@ -52,22 +42,6 @@ class StubConvDiag(NamedTuple):
     VULCAN env into unit tests)."""
     accept_count: Any
     conv_normal: Any
-
-
-def stub_pipeline(cfg, specs, loglik_theta):
-    """A chemistry-free Pipeline on the box prior ``specs`` with log-likelihood
-    ``loglik_theta(theta)``: the SMC core runs through its real code path
-    without the forward stack."""
-    import jax.numpy as jnp
-    import numpy as np
-
-    from retrieval_framework import pipeline as P
-    theta_from_u, log_prior_u, sample_prior_u = P.make_uspace(specs, jnp.float64)
-    return P.Pipeline(
-        cfg=cfg, dtype=jnp.float64, npdtype=np.float64, n_dim=len(specs),
-        theta_from_u=theta_from_u, log_prior_u=log_prior_u,
-        sample_prior_u=sample_prior_u,
-        log_likelihood_u=lambda u: loglik_theta(theta_from_u(u)))
 
 
 def build_smoke_pipe(**overrides):
@@ -80,7 +54,7 @@ def build_smoke_pipe(**overrides):
     import numpy as np
 
     from retrieval_framework import pipeline as P
-    from retrieval_framework import run_smc as R
+    from retrieval_framework import run_setup as R
     jax.config.update("jax_enable_x64", True)
 
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")
@@ -99,9 +73,6 @@ def build_smoke_pipe(**overrides):
 
 @pytest.fixture(scope="session")
 def capped_smoke_pipe():
-    """The smoke pipeline at count_max=50 and warm_count_max=5, in WARM chem
-    mode. No solve can certify at these caps. test_cold_reject reads its cold
-    evaluators (chem-mode independent), test_warm_reject its warm ones."""
+    """The smoke pipeline at count_max=50: no solve can certify at this cap."""
     return build_smoke_pipe(count_max=CAPPED_COLD_CMAX,
-                            warm_count_max=CAPPED_WARM_CMAX,
-                            smc_chem_mode="warm")
+                            warm_count_max=CAPPED_WARM_CMAX)

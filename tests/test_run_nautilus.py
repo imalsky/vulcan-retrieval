@@ -1,7 +1,7 @@
-"""run_nautilus.make_loglike on a stub pipeline: every rejection class the SMC
-init culls (T-P window, count_max exhausted, stall-certified, non-finite) is
-log L = -inf, so nautilus's evidence is the zero-filled box integral (pinned
-against the exact value on a 3-D Gaussian with three cut regions); with
+"""run_nautilus.make_loglike on a stub pipeline: every rejection class (T-P
+window, count_max exhausted, stall-certified, non-finite) is log L = -inf, so
+nautilus's evidence is the zero-filled box integral (pinned against the exact
+value on a 3-D Gaussian with three cut regions); with
 anchors, each warm solve starts from the nearest certified column and only
 certified columns become anchors. With chem_retry, exactly the in-window rows
 the first solve left uncertified are re-solved once, from the same start, on
@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import nautilus
 import numpy as np
+import pytest
 from scipy.special import ndtr
 
 jax.config.update("jax_enable_x64", True)
@@ -70,8 +71,8 @@ def _stub_pipe(seen=None):
         L = jnp.where(conv & (acc < COUNT_MAX), L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
-    def make(mode, grad, diag=False, mutation_cap=True, rt_kept_only=False):
-        assert not grad and rt_kept_only and diag == (mode == "cold")
+    def make(mode, diag=False, rt_kept_only=False):
+        assert rt_kept_only and diag == (mode == "cold")
         return cold if mode == "cold" else warm
 
     return SimpleNamespace(_make_batch_eval=make, n_dim=D,
@@ -175,10 +176,10 @@ def _retry_stub_pipe(seen=None):
 
     first = base._make_batch_eval
 
-    def make(mode, grad, diag=False, mutation_cap=True, retry=False, rt_kept_only=False):
+    def make(mode, diag=False, retry=False, rt_kept_only=False):
         if not retry:
-            return first(mode, grad, diag, mutation_cap, rt_kept_only)
-        assert not grad and rt_kept_only and diag == (mode == "cold")
+            return first(mode, diag, rt_kept_only)
+        assert rt_kept_only and diag == (mode == "cold")
         return cold2 if mode == "cold" else warm2
 
     base._make_batch_eval = make
@@ -240,7 +241,6 @@ def test_retry_resolves_exactly_the_uncertified_rows_from_their_start(tmp_path):
     with np.load(tmp_path / "anchors_00001.npz") as d:
         assert np.array_equal(d["rtol"], np.where(e2["fail1"], RTOL1, RTOL0)[e2["kept"]])
 
-    z = np.concatenate([z1, z2])
     e = {k: np.concatenate([e1[k], e2[k]]) for k in e1}
     assert {k: tally[k] for k in ("n_eval", "tp_out", "exhausted", "stalled", "nonfinite",
                                   "retried", "retry_certified", "retry_exhausted",
@@ -483,3 +483,12 @@ def test_presolve_precompiles_only_the_n_batch_programs(tmp_path):
     for a, b in zip(out[False][:2], out[True][:2]):
         assert np.array_equal(a, b)
     assert out[False][2] == out[True][2]
+
+
+@pytest.mark.parametrize("knob,bad", [("cold_lanes", -1), ("cold_refill_chunk", 0)])
+def test_validate_config_refuses_broken_knobs(knob, bad):
+    """A negative lane count or a zero refill chunk is a broken run, not a
+    setting (cold_lanes=0 is the single lockstep batch; the default is the
+    production lane count)."""
+    with pytest.raises(ValueError, match=knob):
+        C.validate_config(C.Config(**{knob: bad}))

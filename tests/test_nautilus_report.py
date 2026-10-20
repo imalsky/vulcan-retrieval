@@ -1,0 +1,76 @@
+"""nautilus_report on a tiny synthetic run_nautilus output directory (no
+chemistry): the certificate's fractions and caveats follow from the tally, the
+summary and the identity files, and the CLI writes the weighted corner and T-P
+figures; given model spectra, the spectrum fit too."""
+import json
+from dataclasses import asdict
+
+import numpy as np
+import pytest
+
+from retrieval_framework import config_schema as C
+from retrieval_framework import nautilus_report as NR
+from retrieval_framework import provenance
+
+NAMES = ["lnZ", "c_o", "lnKzz", "Tirr", "log10kappa", "log10gamma", "lnR0", "noise_inflation"]
+MEAN = np.array([0.2, -0.5, 0.0, 1000.0, -1.0, -1.0, 0.03, 1.2])
+SD = np.array([0.1, 0.1, 0.5, 50.0, 0.2, 0.2, 0.005, 0.05])
+# 1000 draws: 100 off-window, 45 of the 900 in-window rejected, 855 certified
+TALLY = {"n_eval": 1000, "tp_out": 100, "exhausted": 40, "stalled": 5, "nonfinite": 0,
+         "n_cold": 8, "cold_certified": 6, "n_warm": 992, "warm_certified": 849}
+
+
+def _run_dir(out):
+    rng = np.random.default_rng(0)
+    cfg = asdict(C.Config(molecules=("H2O",), vulcan_cfg_name="W39b", cold_lanes=8))
+    cfg.update(inferred_param_names=NAMES, inferred_param_labels=NAMES,
+               inferred_param_truth=[float("nan")] * len(NAMES))
+    (out / "config.json").write_text(json.dumps(cfg, default=str))
+    (out / provenance.MANIFEST_FILE).write_text(json.dumps({"manifest_version": 2, "code": {}}))
+    digest = provenance.archived_manifest_digest(out)
+    (out / "target_digest.txt").write_text(f"{digest}|warm|n_batch=8\n")
+    (out / "nautilus_tally.json").write_text(json.dumps(TALLY))
+    (out / "nautilus_summary.json").write_text(json.dumps({
+        "logZ_box": -12.3, "n_like": 990, "n_eff": 1234.0, "n_live": 100, "n_batch": 8,
+        "n_update": 50, "f_live": 0.03, "enlarge_per_dim": 1.3, "starts": "anchored warm (growing)",
+        "rejections_and_starts": TALLY, "seed": 1, "chem_rtol": 0.2}))
+    theta = MEAN + SD * rng.normal(size=(400, len(NAMES)))
+    log_w = rng.normal(size=400)
+    np.savez(out / "nautilus_posterior.npz", param_names=np.asarray(NAMES), theta=theta,
+             log_w=log_w - np.log(np.exp(log_w).sum()))
+    wl = np.linspace(3.0, 5.0, 20)
+    np.savez(out / "observations.npz", wl=wl, depth=0.02 + 1e-4 * np.sin(wl),
+             sigma=np.full(20, 1e-4), group=np.asarray(["NIRISS"] * 8 + ["G395H"] * 12))
+    return theta, 0.02 + 1e-4 * np.sin(wl)
+
+
+def test_certificate_and_figures(tmp_path, monkeypatch):
+    pytest.importorskip("corner")
+    theta, depth = _run_dir(tmp_path)
+    # the version record imports exojax, which must not precede vulcan_chem in a worker
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    NR.main([str(tmp_path), "--spectra", "0"])
+
+    cert = json.loads((tmp_path / NR.CERT_FILE).read_text())
+    rej = cert["rejections"]
+    assert rej["tp_out_of_n_eval"] == pytest.approx(0.1)
+    assert rej["rejected_of_in_window"] == pytest.approx(45 / 900)
+    assert rej["exhausted_of_in_window"] == pytest.approx(40 / 900)
+    assert rej["warm_certified_of_warm"] == pytest.approx(849 / 992)
+    assert cert["result"] == {"logZ_box": -12.3, "logZ_err": None, "n_eff": 1234.0,
+                              "n_like": 990}
+    assert cert["starts"]["mode"] == "warm" and cert["chemistry"]["rtol"] == 0.2
+    text = " ".join(cert["caveats"])
+    for phrase in ("5.0% of the draws", "no logZ error", "Warm starts", "Lane queue",
+                   "counted twice"):
+        assert phrase in text, phrase
+    assert "different run" not in text                 # the manifest hashes to the digest
+    (tmp_path / "target_digest.txt").write_text("0" * 64 + "|warm\n")
+    assert any("different run" in c for c in NR.certificate(tmp_path)["caveats"])
+
+    assert sorted(p.name for p in (tmp_path / "plots").iterdir()) == [
+        "corner.png", "tp_posterior.png"]
+    mu = depth + 2e-5 * np.random.default_rng(1).normal(size=(6, depth.size))
+    paths = NR.plot(tmp_path, (theta[:6], mu, np.arange(6) < 5))
+    assert [p.name for p in paths] == ["corner.png", "tp_posterior.png", "spectrum_fit.png"]
+    assert all(p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for p in paths)

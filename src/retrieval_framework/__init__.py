@@ -1,4 +1,4 @@
-"""Reusable VULCAN-JAX -> ExoJax transmission-retrieval framework (SMC + fwd-jvp MALA).
+"""Reusable VULCAN-JAX -> ExoJax transmission-retrieval framework (nautilus nested sampling).
 
 Planet-agnostic machinery only. A concrete retrieval lives in a CASE DIRECTORY
 (see ``runs/w39b_smc_retrieval/``) containing:
@@ -11,13 +11,7 @@ Planet-agnostic machinery only. A concrete retrieval lives in a CASE DIRECTORY
 Entry points (run from anywhere; <run_dir> defaults to the cwd):
 
     python -m retrieval_framework.run_nautilus         <run_dir>
-    python -m retrieval_framework.run_smc              <run_dir> [--calibrate]
-    python -m retrieval_framework.calibrate_count_max  <run_dir> [--n-draws N ...]
-    python -m retrieval_framework.probe_memory         <run_dir>
-    python -m retrieval_framework.smoke_retrieval      <run_dir>
-    python -m retrieval_framework.plot_smc             <out_dir>
-    python -m retrieval_framework.certificate          <run_dir>
-    python -m retrieval_framework.validate_warm        <run_dir>
+    python -m retrieval_framework.nautilus_report      <out_dir> [--spectra N]
     python -m retrieval_framework.validate_env         <project_root> [--require-gpu]
 
 Module map (the import chain is heavy-import-safe top to bottom):
@@ -26,15 +20,17 @@ Module map (the import chain is heavy-import-safe top to bottom):
     observations       observed-spectrum loading + exact linear binning/offset operators
     tp_profile         differentiable ExoJax Guillot T-P evaluator
     retrieval_forward  theta -> native transit depth (live VULCAN-JAX chemistry + ExoJax RT)
-    pipeline           u-space posterior, staged batched evaluators, SMC core, MALA kernel
-    run_smc            case-directory driver (presets, overrides, outputs, PPC)
-    plot_smc           post-run figures from the .npz bundles (numpy+matplotlib only)
+    pipeline           u-space posterior and the batched likelihood evaluators
+    provenance         code/data identity and the target manifest and digest
+    run_setup          case-directory setup (presets, overrides, logging, identity files)
+    run_nautilus       the sampler driver
+    nautilus_report    certificate and figures of a finished run
     forward/           this repo's case constants and data paths (config.py only); the
                        engine lives in the vulcan-forward distribution -- import order
                        matters there: vulcan_forward.vulcan_chem before anything
                        exojax (guard-enforced)
 
-This ``__init__`` stays import-light (no jax): run_smc and config_schema must be
+This ``__init__`` stays import-light (no jax): run_setup and config_schema must be
 importable without pulling the chemistry/RT stack.
 """
 from __future__ import annotations

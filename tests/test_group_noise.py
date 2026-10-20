@@ -6,22 +6,14 @@ Stack-free:
   offsets, each log10-uniform on prior_noise_inflation; it needs the groups and
   infer_noise_inflation;
 * observations.build_group_design / noise_scale_per_bin in all three modes;
-* pipeline.make_noise_model, the one formula BOTH gradient paths call: its
-  analytic d logL / d b equals jax.grad of the Gaussian log-likelihood (theta
-  and u space), and its scalar branch is the pre-patch expression bit for bit;
-* build_pipeline's two gradient paths route the noise entries through it;
-* run_smc.predictive_replicates with a per-bin inflation.
+* pipeline.make_noise_model, the likelihood's sigma, is sigma0 times
+  noise_scale_per_bin, the inflation the predictive band uses, in every mode;
+* nautilus_report.predictive_replicates with a per-bin inflation.
 
-Slow (real smoke pipeline, one synthetic group): the batched RT stage's noise
-gradient (_rt_val_grad) equals the forward-mode derivative of its own value.
 Opt-in production preflight (RUN_PRODUCTION_PREFLIGHT=1): the real three-group
-spectrum gets three inflations, in the pipeline's group order, with the same
-check.
+spectrum gets three inflations, in the pipeline's group order.
 """
-import ast
-import inspect
 import os
-from pathlib import Path
 
 import jax
 import numpy as np
@@ -104,89 +96,28 @@ def _toy(n_bin=40, seed=0):
     rng = np.random.default_rng(seed)
     gpb = np.asarray(GROUPS)[rng.integers(0, len(GROUPS), n_bin)]
     gpb[:len(GROUPS)] = GROUPS                                # every group present
-    sig0 = rng.uniform(50e-6, 150e-6, n_bin)
-    resid = rng.normal(size=n_bin) * sig0 * 1.3
-    return gpb, jnp.asarray(sig0), jnp.asarray(resid)
-
-
-def _gauss(resid, sig):
-    """pipeline._gauss_loglik's formula on a residual."""
-    return (-0.5 * jnp.sum((resid / sig) ** 2) - jnp.sum(jnp.log(sig))
-            - 0.5 * resid.size * jnp.log(2.0 * jnp.pi))
+    return gpb, jnp.asarray(rng.uniform(50e-6, 150e-6, n_bin))
 
 
 @pytest.mark.parametrize("per_group", [False, True])
-def test_noise_gradient_is_the_exact_derivative(per_group):
-    gpb, sig0, resid = _toy()
+def test_likelihood_sigma_is_the_predictive_inflation(per_group):
+    """The likelihood's sigma_eff (make_noise_model) and the predictive band's
+    inflation (observations.noise_scale_per_bin) are one map, in both modes."""
+    gpb, sig0 = _toy()
     specs, names, kinds = _layout(_cfg(noise_inflation_per_group=per_group))
-    sigma_for, add_grad = P.make_noise_model(names, kinds, GROUPS, gpb, lambda: sig0,
-                                             jnp.float64)
-    noise = np.array([k == "noise" for k in kinds])
+    sigma_for = P.make_noise_model(names, kinds, GROUPS, gpb, lambda: sig0, jnp.float64)
     theta_from_u, _, _ = P.make_uspace(specs, jnp.float64)
-    u = jnp.asarray(np.random.default_rng(1).normal(size=len(specs)))
-    theta = theta_from_u(u)
-
-    # the two terms of dL/db nearly cancel near b ~ |r|/sigma0, so the
-    # tolerance is absolute, on the scale of the terms (n_bin / b)
-    atol = 1e-10 * resid.size / 0.5
-    g_ad = np.asarray(jax.grad(lambda th: _gauss(resid, sigma_for(th)))(theta))
-    g_an = np.asarray(add_grad(jnp.zeros(len(specs)), resid, theta))
-    np.testing.assert_allclose(g_an[noise], g_ad[noise], rtol=1e-12, atol=atol)
-    assert np.all(g_an[~noise] == 0.0)                        # writes only its entries
-    # and through the u-space chain the MALA drift uses (log10-uniform Jacobian)
-    _, dth_du = jax.jvp(theta_from_u, (u,), (jnp.ones_like(u),))
-    gu_ad = np.asarray(jax.grad(lambda uu: _gauss(resid, sigma_for(theta_from_u(uu))))(u))
-    np.testing.assert_allclose((g_an * np.asarray(dth_du))[noise], gu_ad[noise],
-                               rtol=1e-12, atol=atol)
-    if per_group:
-        # each b sees only its own group's bins
-        b = np.asarray(theta)[noise]
-        s0, r = np.asarray(sig0), np.asarray(resid)
-        for j, g in enumerate(GROUPS):
-            m = gpb == g
-            want = np.sum(r[m] ** 2 / (s0[m] ** 2 * b[j] ** 3)) - m.sum() / b[j]
-            assert g_an[noise][j] == pytest.approx(want, rel=1e-12, abs=atol)
-
-
-def test_scalar_branch_is_the_pre_patch_expression():
-    gpb, sig0, resid = _toy()
-    sigma_for, add_grad = P.make_noise_model(["x", "noise_inflation"], ["chem", "noise"],
-                                             GROUPS, gpb, lambda: sig0, jnp.float64)
-    theta = jnp.asarray([0.3, 1.37])
-
-    def old(theta):          # pipeline.py at 40339fd, _sigma_for and _rt_val_grad
-        k = theta[1]
-        g = jnp.zeros(2).at[1].set(jnp.sum(resid * resid / (sig0 * sig0 * k ** 3))
-                                   - resid.size / k)
-        return sig0 * theta[1], g
-
-    def new(theta):
-        return sigma_for(theta), add_grad(jnp.zeros(2), resid, theta)
-
-    for f_old, f_new in ((old, new), (jax.jit(old), jax.jit(new))):
-        (s_o, g_o), (s_n, g_n) = f_old(theta), f_new(theta)
-        assert np.array_equal(np.asarray(s_o), np.asarray(s_n))
-        assert np.array_equal(np.asarray(g_o), np.asarray(g_n))
-    s, a = P.make_noise_model(["x"], ["chem"], GROUPS, gpb, lambda: sig0, jnp.float64)
-    assert s(theta) is sig0 and a("g", resid, theta) == "g"   # no noise parameter
-
-
-def test_both_gradient_paths_route_the_noise_entries_through_one_function():
-    tree = ast.parse(Path(inspect.getfile(P)).read_text())
-    build = next(n for n in tree.body
-                 if isinstance(n, ast.FunctionDef) and n.name == "build_pipeline")
-    fns = {n.name: n for n in ast.walk(build) if isinstance(n, ast.FunctionDef)}
-    for name in ("_value_and_grad_block", "_rt_val_grad", "_gauss_loglik"):
-        calls = {c.func.id for c in ast.walk(fns[name])
-                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
-        assert "_sigma_for" in calls, name
-        if name != "_gauss_loglik":
-            assert "_add_noise_grad" in calls, name
-    assert "noise_idx" not in ast.unparse(build)               # no second, hand-rolled path
+    theta = theta_from_u(jnp.asarray(np.random.default_rng(1).normal(size=len(specs))))
+    np.testing.assert_allclose(
+        np.asarray(sigma_for(theta)),
+        np.asarray(sig0) * OBS.noise_scale_per_bin(np.asarray(theta), names, gpb),
+        rtol=1e-15)
+    s = P.make_noise_model(["x"], ["chem"], GROUPS, gpb, lambda: sig0, jnp.float64)
+    assert s(theta) is sig0                                    # no noise parameter
 
 
 def test_replicates_with_a_per_group_inflation():
-    from retrieval_framework.run_smc import predictive_replicates
+    from retrieval_framework.nautilus_report import predictive_replicates
     rng = np.random.default_rng(0)
     gpb = np.array(["A", "A", "B"])
     sigma = np.array([1.0e-4, 2.0e-4, 5.0e-4])
@@ -199,44 +130,18 @@ def test_replicates_with_a_per_group_inflation():
     np.testing.assert_allclose(y_rep.std(axis=0), want, rtol=0.05)
 
 
-def _rt_stage_noise_check(pipe):
-    """The batched RT stage's noise entries against forward-mode AD of its own
-    value, at the baseline column (RT only, no chemistry solve)."""
-    idx = [i for i, k in enumerate(pipe.kinds) if k == "noise"]
-    assert idx
-    th = pipe.theta_from_u(jnp.asarray(np.linspace(-0.35, 0.4, pipe.n_dim)))
-    aux = pipe.fwd.aux_from_y(jnp.asarray(pipe.y_baseline), th[:pipe.n_chem_tp])
-    daux = jax.tree_util.tree_map(
-        lambda x: jnp.zeros((pipe.n_chem_tp,) + x.shape, x.dtype), aux)
-    val, g, _bad = pipe._rt_val_grad((aux, daux, th))
-    assert float(val) > P.REJECT_BELOW
-    for i in idx:
-        e = jnp.zeros_like(th).at[i].set(1.0)
-        _, dv = jax.jvp(lambda t: pipe._rt_val_grad((aux, daux, t))[0], (th,), (e,))
-        assert float(g[i]) == pytest.approx(float(dv), rel=1e-9), pipe.names[i]
-    return idx
-
-
-@pytest.mark.slow
-def test_smoke_pipeline_rt_stage_noise_gradient():
-    from conftest import build_smoke_pipe
-    pipe = build_smoke_pipe(infer_noise_inflation=True, noise_inflation_per_group=True)
-    idx = _rt_stage_noise_check(pipe)
-    assert [pipe.names[i] for i in idx] == [f"noise_inflation_{g}" for g in pipe.groups]
-
-
 @pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",
                     reason="opt-in: builds the exact production forward")
 def test_production_case_gets_one_inflation_per_group(monkeypatch):
     from dataclasses import replace
 
     from conftest import RUN_DIR
-    from retrieval_framework import run_smc as R
+    from retrieval_framework import run_setup as R
     monkeypatch.setenv("SMC_RETRIEVAL_PRESET", "gpu")
     cfg, _ = R.make_config(RUN_DIR)
     pipe = P.build_pipeline(replace(cfg, noise_inflation_per_group=True))
     P.load_real_into_pipe(pipe)
     assert list(pipe.groups) == GROUPS
-    idx = _rt_stage_noise_check(pipe)
+    idx = [i for i, k in enumerate(pipe.kinds) if k == "noise"]
     assert [pipe.names[i] for i in idx] == [f"noise_inflation_{g}" for g in GROUPS]
     assert pipe.n_dim == 15

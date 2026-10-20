@@ -25,8 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
-# one copy of the git/hash primitives, owned by the certificate module
-from retrieval_framework.certificate import _repo_states, science_data_identity
+# one copy of the git/hash primitives, owned by the provenance module
+from retrieval_framework.provenance import _repo_states, science_data_identity
 
 logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -38,7 +38,7 @@ def production_config():
     jax/chemistry are imported lazily so this module stays cheap at import.
     """
     os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
-    from retrieval_framework import run_smc as _R
+    from retrieval_framework import run_setup as _R
     cfg, preset = _R.make_config(REPO / "runs" / "w39b_smc_retrieval")
     if preset != "gpu":
         raise RuntimeError(
@@ -179,13 +179,12 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         prov["resolved_config_sha256"] = hashlib.sha256(
             blob.encode()).hexdigest()
         # CONTENT identity of the opacity/CIA files this measurement read, in
-        # the same shape the run's target manifest records, so the certificate
-        # (artifact_warnings) can warn on an artifact measured against
-        # different data. The tree summary in prov["data"] cannot do that
-        # job -- it carries mtimes.
-        # top_pressure_ladder nests its two grids under "production"/"extended";
-        # certificate._validation_artifacts unwraps the same way, so the molecule
-        # list is found in both shapes rather than silently reading as empty.
+        # the same shape the run's target manifest records, so an artifact
+        # measured against different data can be told apart from the run's.
+        # The tree summary in prov["data"] cannot do that job -- it carries
+        # mtimes. top_pressure_ladder nests its two grids under
+        # "production"/"extended", so the molecule list is read from either
+        # shape rather than silently reading as empty.
         _rc = resolved_config.get("production", resolved_config)
         prov["science_data"] = science_data_identity(
             _rc.get("molecules") or ())

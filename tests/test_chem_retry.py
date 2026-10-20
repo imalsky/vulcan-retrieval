@@ -2,14 +2,12 @@
 
 Off (the default) it leaves the target manifest -- so every existing run's
 digest -- and the banner as they were; on, it binds the manifest, validates
-its settings, builds the retry profile by changing only rtol and the cap, and
-every SMC entry point refuses it (the jvp'd MALA evaluators run one compiled
-chemistry program and would ignore it). The make_loglike logic is pinned on a
-stub pipeline in test_run_nautilus.py. The slow test builds the REAL smoke
-pipeline with the retry on (conftest.build_smoke_pipe at count_max=50 <
-count_min, so no first solve certifies) and checks the retry program differs
-from the main one only in rtol and the cap, that the gradient evaluators
-refuse it, and that make_loglike sends every in-window draw through it.
+its settings and builds the retry profile by changing only rtol and the cap.
+The make_loglike logic is pinned on a stub pipeline in test_run_nautilus.py.
+The slow test builds the REAL smoke pipeline with the retry on
+(conftest.build_smoke_pipe at count_max=50 < count_min, so no first solve
+certifies) and checks the retry program differs from the main one only in rtol
+and the cap, and that make_loglike sends every in-window draw through it.
 """
 import json
 import math
@@ -22,18 +20,17 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from conftest import GAUSS_SPECS, gauss_loglik, stub_pipeline  # noqa: E402
-from retrieval_framework import certificate  # noqa: E402
+from retrieval_framework import provenance  # noqa: E402
 from retrieval_framework import config_schema as C  # noqa: E402
 from retrieval_framework import pipeline as P  # noqa: E402
 
 VALID = dict(vulcan_cfg_name="W39b", rp_cm=1.0, rstar_cm=10.0)
-RETRY_KEYS = certificate.SWITCHED_KEYS["chem_retry"]
-SWITCHED = {k for keys in certificate.SWITCHED_KEYS.values() for k in keys}
+RETRY_KEYS = provenance.SWITCHED_KEYS["chem_retry"]
+SWITCHED = {k for keys in provenance.SWITCHED_KEYS.values() for k in keys}
 
 
 def _digest_pipe():
-    """What target_manifest reads (test_certificate._digest_pipe)."""
+    """What target_manifest reads (test_provenance._digest_pipe)."""
     return SimpleNamespace(
         obs={"wl": np.array([1.0, 2.0]), "wl_lo": np.array([0.9, 1.9]),
              "wl_hi": np.array([1.1, 2.1]), "group": ["A", "A"]},
@@ -45,35 +42,35 @@ def _digest_pipe():
 
 @pytest.fixture
 def frozen_code(monkeypatch):
-    monkeypatch.setattr(certificate, "_repo_states",
+    monkeypatch.setattr(provenance, "_repo_states",
                         lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
-    monkeypatch.setattr(certificate, "_versions", lambda: {"jax": "0.6.2"})
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
 
 
 def test_off_leaves_the_manifest_as_before(frozen_code):
     pipe, base = _digest_pipe(), C.Config(molecules=("H2O",))
-    man = certificate.target_manifest(base, pipe)
+    man = provenance.target_manifest(base, pipe)
     # exactly the manifest of a Config that never had the retry / presolve fields
     assert man["config"] == {k: v for k, v in asdict(base).items()
-                             if k not in certificate.TARGET_FREE_KEYS and k not in SWITCHED}
-    d0 = certificate.target_digest(base, pipe)
-    assert certificate.target_digest(
+                             if k not in provenance.TARGET_FREE_KEYS and k not in SWITCHED}
+    d0 = provenance.target_digest(base, pipe)
+    assert provenance.target_digest(
         replace(base, chem_retry_rtol=0.01, chem_retry_count_max=9000), pipe) == d0
     # the presolve switch off (its default) changes nothing, with the retry on too
     on = replace(base, chem_retry=True)
-    assert "chem_presolve" not in certificate.target_manifest(on, pipe)["config"]
-    assert certificate.target_digest(replace(on, chem_presolve=False), pipe) == \
-        certificate.target_digest(on, pipe)
+    assert "chem_presolve" not in provenance.target_manifest(on, pipe)["config"]
+    assert provenance.target_digest(replace(on, chem_presolve=False), pipe) == \
+        provenance.target_digest(on, pipe)
 
 
 def test_presolve_on_binds_the_manifest(frozen_code):
     pipe = _digest_pipe()
     on = C.Config(molecules=("H2O",), chem_retry=True, chem_presolve=True)
-    man = certificate.target_manifest(on, pipe)
+    man = provenance.target_manifest(on, pipe)
     assert man["config"]["chem_presolve"] is True
     assert {k: man["config"][k] for k in RETRY_KEYS} == {
         "chem_retry": True, "chem_retry_rtol": 0.05, "chem_retry_count_max": 5000}
-    assert certificate.target_digest(on, pipe) != certificate.target_digest(
+    assert provenance.target_digest(on, pipe) != provenance.target_digest(
         replace(on, chem_presolve=False), pipe)
 
 
@@ -95,13 +92,13 @@ def test_banner_names_the_presolve_only_when_on():
 
 def test_on_binds_the_manifest(frozen_code):
     pipe, on = _digest_pipe(), C.Config(molecules=("H2O",), chem_retry=True)
-    man = certificate.target_manifest(on, pipe)
+    man = provenance.target_manifest(on, pipe)
     assert {k: man["config"][k] for k in RETRY_KEYS} == {
         "chem_retry": True, "chem_retry_rtol": 0.05, "chem_retry_count_max": 5000}
-    d = certificate.target_digest(on, pipe)
+    d = provenance.target_digest(on, pipe)
     for ch in (dict(chem_retry=False), dict(chem_retry_rtol=0.1),
                dict(chem_retry_count_max=8000)):
-        assert certificate.target_digest(replace(on, **ch), pipe) != d, ch
+        assert provenance.target_digest(replace(on, **ch), pipe) != d, ch
 
 
 @pytest.mark.parametrize("bad, msg", [
@@ -139,18 +136,6 @@ def test_retry_profile_changes_only_rtol_and_the_cap():
     assert cfg.profile()["cfg_overrides"] == {"Rp": 1.0}            # untouched
 
 
-def test_every_smc_entry_point_refuses_the_retry():
-    C.refuse_chem_retry(C.Config(), "off")                          # off: no-op
-    cfg = C.Config(smc_num_particles=8, chem_retry=True)
-    with pytest.raises(ValueError, match="run_smc_loop: chem_retry"):
-        P.run_smc_loop(stub_pipeline(cfg, GAUSS_SPECS, gauss_loglik),
-                       key=jax.random.PRNGKey(0), progress=False)
-    import inspect
-    from retrieval_framework import run_smc, smoke_retrieval, validate_warm
-    for mod in (run_smc, smoke_retrieval, validate_warm):
-        assert "refuse_chem_retry(cfg" in inspect.getsource(mod.main), mod.__name__
-
-
 @pytest.mark.slow
 def test_real_pipeline_retries_every_uncertified_draw(tmp_path, monkeypatch):
     from conftest import CAPPED_COLD_CMAX, build_smoke_pipe
@@ -165,10 +150,6 @@ def test_real_pipeline_retries_every_uncertified_draw(tmp_path, monkeypatch):
     diff = set(RF.statics_diff(st0, st1))
     assert "count_max" in diff and diff <= RF.RETRY_STATICS_FREE, diff
     assert float(st1.rtol_accept) == 0.05 and r.rtol_first == float(st0.rtol_accept)
-    with pytest.raises(ValueError, match="primal only"):
-        pipe._make_batch_eval("warm", True, mutation_cap=False, retry=True)
-    with pytest.raises(ValueError, match="mutation_cap"):
-        pipe._make_batch_eval("warm", False, retry=True)
 
     monkeypatch.setattr(RN, "RETRY_BUCKET", 2)     # keep the CPU second pass at 2 lanes
     U = np.asarray(pipe.sample_prior_u(jax.random.PRNGKey(0), 2))   # T-P in window

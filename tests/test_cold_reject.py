@@ -1,10 +1,9 @@
 """Every likelihood entry point rejects a FINITE spectrum from an uncertified cold
-solve: the scalar log_likelihood_u, both gradient routes and the batched cold
-evaluator apply one certificate (retrieval_forward.native_depth_aux's ok bit ==
-the conv_normal gate plus the count_max cap). Real smoke pipeline at
-count_max=50 < count_min (conftest.capped_smoke_pipe), so no cold solve can
-certify while its column, and hence its spectrum, stays finite. Slow (full
-tier): five distinct chemistry compiles, ~15 min on daw."""
+solve: the scalar log_likelihood_u and the batched cold evaluator run_nautilus
+calls apply one certificate (the conv_normal gate plus the count_max cap). Real
+smoke pipeline at count_max=50 < count_min (conftest.capped_smoke_pipe), so no
+cold solve can certify while its column, and hence its spectrum, stays finite.
+Slow (full tier): builds and compiles the real chemistry."""
 import jax
 import numpy as np
 import pytest
@@ -23,10 +22,8 @@ def test_every_entry_point_rejects_uncertified_finite_spectrum(capped_smoke_pipe
     # precondition: the forward is finite -- the certificate, not a NaN, rejects
     assert np.all(np.isfinite(np.asarray(pipe.observed_depth_model_jit(theta))))
     assert float(pipe.log_likelihood_u(u0)) <= P.REJECT_BELOW
-    for vg in (pipe.value_and_grad_block, pipe.value_and_grad_naive):
-        L, G = vg(u0)
-        assert float(L) <= P.REJECT_BELOW and np.all(np.asarray(G) == 0.0)
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 2)
     Y0, refs0 = P._blank_state(pipe, 2)
-    L = pipe.batch_eval_cold_l(U, Y0, refs0)[0]
+    ev = jax.jit(pipe._make_batch_eval("cold", diag=True, rt_kept_only=True))
+    L = ev(U, Y0, refs0)[0]
     assert np.all(np.asarray(L) <= P.REJECT_BELOW)

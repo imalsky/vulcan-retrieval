@@ -61,11 +61,11 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     """Assemble the shipped case (real products, binning and offset operators)
     and evaluate one finite likelihood, so a product the binning operator
     refuses fails here rather than after a submit."""
-    from retrieval_framework import run_smc as R
+    from retrieval_framework import run_setup as R
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
-    # monkeypatch, not os.environ: test_warm_*.py select their preset with
-    # setdefault, so a leaked "gpu" here would silently SKIP them
+    # monkeypatch, not os.environ: conftest.build_smoke_pipe selects its preset
+    # with setdefault, so a leaked "gpu" here would silently SKIP its tests
     monkeypatch.setenv("SMC_RETRIEVAL_PRESET", "gpu")
     cfg, preset = R.make_config(RUN_DIR)
     assert preset == "gpu"
@@ -94,11 +94,11 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     assert np.all(st >= pipe.param_prior_lo) and np.all(st <= pipe.param_prior_hi)
     assert all(bool(pipe.tp_valid(t)) for t in st), "a screened state is off-window"
 
-    post = tmp_path / "posterior_samples.npz"
+    post = tmp_path / "nautilus_posterior.npz"
     np.savez(post, param_names=np.asarray(pipe.names, dtype="<U64"),
-             samples=np.broadcast_to(st[0], (1, 8, pipe.n_dim)))
+             samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
     assert states_for(pipe, 2, post).shape == (5, pipe.n_dim)
     np.savez(post, param_names=np.asarray(list(pipe.names)[::-1], dtype="<U64"),
-             samples=np.broadcast_to(st[0], (1, 8, pipe.n_dim)))
+             samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
     with pytest.raises(RuntimeError, match="different target"):
         states_for(pipe, 2, post)
