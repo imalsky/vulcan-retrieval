@@ -30,7 +30,9 @@ L = log-likelihood.
   noise, log10gamma down to -3; case.py's Tint prior 50-600 K; stock nautilus 1.0.6).
   ~20-26 h [E]; the governor stops at 46 h of the 48 h wall and RESUME=1 continues. On
   NAS: `git pull --ff-only` the three trees, re-run `tools/bootstrap_nas_env.pbs`
-  (`validate_env` must pass), then from `runs/w39b_smc_retrieval` on cghfe01/02:
+  (`validate_env` must pass), run `tools/gpu_kernel_test.pbs` (VULCAN3 main carries
+  a CUDA solve change not yet compiled; VULCAN3 todo), then from
+  `runs/w39b_smc_retrieval` on cghfe01/02:
   `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`.
   After it: its numbers in "Runs" and `nautilus_report` on its output before any number
   is reported. 660 lanes compiled (~79 GiB) but were never timed.
