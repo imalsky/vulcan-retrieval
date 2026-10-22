@@ -6,9 +6,9 @@ transfer through the shared
 [`vulcan-forward`](https://github.com/imalsky/vulcan-forward) package.
 
 The sampler is nested sampling with nautilus (`run_nautilus`, which the NAS
-job script runs). The repository contains a WASP-39 b case with a small
-synthetic preset, validation scripts, and a run report (`nautilus_report`)
-that writes a certificate and figures.
+job script runs). The repository contains a WASP-39 b case (the production
+run specification and a small synthetic one), validation scripts, and a run
+report (`nautilus_report`) that writes a certificate and figures.
 
 This is research software. Validate a new target and model setup before using
 the posterior in a publication.
@@ -51,22 +51,23 @@ Start with the fast tests:
 python -m pytest tests -q -m "not slow"
 ```
 
-Run the small preset and report it:
+Run the small synthetic case and report it:
 
 ```bash
-SMC_RETRIEVAL_PRESET=smoke \
-  python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval
+python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/smoke.yaml
 python -m retrieval_framework.nautilus_report \
-  runs/w39b_smc_retrieval/data/smoke_nautilus
+  output/w39b_smc_retrieval/smoke_nautilus
 ```
 
-The `smoke` and `gpu` presets are defined in
-[`runs/w39b_smc_retrieval/case.py`](runs/w39b_smc_retrieval/case.py). Copy the
-case file to `runs/<new-case>/` for another target.
+A run is one YAML specification in `runs/<case>/`: `smoke.yaml` is the small
+synthetic case and [`v5.yaml`](runs/w39b_smc_retrieval/v5.yaml) the WASP-39 b
+production run (`--dry-run` prints the resolved settings). Copy a specification
+to `runs/<new-case>/` for another target.
 
 Each run writes its resolved configuration, target manifest, checkpoint, and
-rejection tally to `<out_dir>_nautilus`, and when it finishes the weighted
-posterior (`nautilus_posterior.npz`), a summary, and `nautilus_certificate.json`.
+rejection tally to `output/<case>/<name>_nautilus/`, and when it finishes the
+weighted posterior (`nautilus_posterior.npz`), a summary, and
+`nautilus_certificate.json`.
 `python -m retrieval_framework.nautilus_report <out_dir> [--spectra N]` writes
 the certificate again and draws the corner, T-P, and spectrum figures (N cold
 re-solved posterior draws, default 32; 0 skips the spectrum). The certificate
@@ -76,26 +77,16 @@ The sampler is stock `nautilus-sampler` 1.0.6 from PyPI with its default
 networks, and the exploration phase is discarded (`make_sampler` in
 `run_nautilus.py`).
 The padding rows of a short chunk are masked: they take no chemistry step and
-no RT. Each pass runs the RT only on the rows whose likelihood it can keep.
-`NAUTILUS_PRECOMPILE=1` (the default) compiles the warm programs at the batch
-width on a host thread while the cold first batch runs; `NAUTILUS_PRECOMPILE=0`
-compiles each program at its first use.
+no RT. The RT runs only on the rows whose likelihood can be kept. Each program
+compiles at its first batch.
 
-`chem_presolve` and `chem_retry` (off by default; set together) turn the first pass into
-a presolve: a chemistry-only solve at the base `rtol` and `count_max` whose
-column is only a starting state (no RT, never a likelihood). Every in-window
-draw is then solved and certified by the `chem_retry` program
-(`chem_retry_rtol`, `chem_retry_count_max`) warm from that column, on one fixed
-width of `n_batch` rows, so nothing compiles mid-run. Only that solve's
-VULCAN certificate keeps a draw, and every kept column carries
-`chem_retry_rtol`. Off, it stays out of the target manifest and nothing changes.
-The WASP-39b setting is
-`runs/w39b_smc_retrieval/overrides/w39b_baseline_v4_nz100.json`: presolve at
-rtol 0.2, then rtol 0.05, both with photolysis every step. On the low-Kzz
-draws, the presolve gets past two step-size traps that stall direct rtol-0.05
-solves: photolysis-triggered step collapses, and a near-atol trace cell at the
-model top. The certified solve then starts near its steady state. The study,
-with measurements, is summarized in `notes.md` (lowkzz_fix).
+Each draw's chemistry is one solve at the specification's `rtol` (in
+`cfg_overrides`) within `count_max` accepted steps. A draw is kept only if
+VULCAN's own convergence test certifies that solve; an uncertified draw is
+rejected, never extended. The WASP-39 b run uses rtol 0.05 within 5000 steps,
+with photolysis every step: on the low-Kzz draws, the default photolysis cadence
+set off the step-size collapses that stalled the solves. The studies, with
+measurements, are summarized in `notes.md` ("Low-Kzz hole", "Design records").
 
 ## Limits
 
@@ -106,7 +97,7 @@ with measurements, is summarized in `notes.md` (lowkzz_fix).
 - The reported posterior is CONDITIONED, not just the evidence: draws whose
   T-P profile leaves the modelable window, or whose chemistry does not
   converge, are rejected and the target is renormalized over what remains.
-  The figures carry the two surviving fractions.
+  The certificate records the rejected fractions.
 - Condensation is refused during inference.
 - The certificate records the run's settings, rejection fractions, and
   caveats. It has no pass/fail verdict and does not prove that the physical

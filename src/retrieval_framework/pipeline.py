@@ -5,8 +5,7 @@ Each evaluator runs the chemistry of a whole batch in one call on the lane
 queue, the cold two-stage map from the baseline or a warm continuation from a
 given column, then the RT, ``lax.map``-chunked. Offsets
 and noise inflation (one b, or one per instrument group: make_noise_model) are
-analytic. run_nautilus calls them through ``pipe._make_batch_eval`` and
-``pipe._make_presolve_eval``.
+analytic. run_nautilus calls them through ``pipe._make_batch_eval``.
 """
 from __future__ import annotations
 
@@ -389,7 +388,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     observed_depth_from_y_jit = jax.jit(
         lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
 
-    def _make_batch_eval(mode: str, retry: bool = False):
+    def _make_batch_eval(mode: str):
         """Build eval(U, Y, refs, active) -> (L, Y_new, refs_new, EvalStats), all
         (N,)-batched.
 
@@ -402,10 +401,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         The EvalStats (final-stage accept_count, VULCAN's certificate) let the
         caller tell a count_max-exhausted from a stall-certified rejection.
 
-        ``retry=True`` (mode="warm" only; the presolve chain's certifying pass):
-        the same evaluator on the chem_retry program (the retry rtol, capped at
-        the retry count_max).
-
         ``active`` ((N,) bool): a False row is padding. On the lane queue its
         chemistry takes no step; it is never ``usable`` (L is the reject
         sentinel, Y the baseline) and is never RT'd. The RT runs only on the
@@ -413,15 +408,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         (``_map_chunks_rows``); the others get the reject sentinel without an
         RT."""
         warm = (mode == "warm")
-        if retry and fwd.chem_retry is None:
-            raise ValueError("retry evaluator requested but cfg.chem_retry is off")
-        if retry and not warm:
-            raise ValueError("the chem_retry program runs warm only (the presolve "
-                             "chain's certifying pass)")
-        warm_solve = fwd.chem_solve_warm_diag_full_batch
-        cold_solve = fwd.chem_solve_cold_diag_batch
-        if retry:
-            warm_solve = fwd.chem_solve_warm_diag_full_batch_retry
 
         def _chem_primal(C_, Y, refs, active):
             """Chemistry for the whole particle batch -> (AUX, Y_new, ConvDiag):
@@ -430,10 +416,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             agreement with the per-lane map is at the convergence scale.
             ``active`` masks padded rows. The ConvDiag rides the primal carry."""
             if warm:
-                Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], refs[:, 2],
-                                       active=active)
+                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(
+                    C_, Y, refs[:, 0], refs[:, 1], refs[:, 2], active=active)
             else:
-                Y_new, CD = cold_solve(C_, active=active)
+                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, active=active)
             return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
         def _rt_vals(AUX, Theta, CD, valid, active):
@@ -472,32 +458,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
         return eval_batch
 
-    def _make_presolve_eval(mode: str):
-        """cfg.chem_presolve (run_nautilus's first pass): the MAIN chemistry
-        program (the base rtol, the cold count_max, warm or cold) as a start
-        generator, eval(U, Y, refs, active) ->
-        (Y_new, refs_new, accept_count, conv_normal). Chemistry only: no RT, no
-        gating and no pinning -- Y_new is every row's raw exit column and
-        refs_new its own (lnZ, c_o, s_o); the caller decides which columns to
-        use. ``active`` masks padded rows (no step) as in the batch evaluators."""
-        if fwd.chem_retry is None or not bool(getattr(cfg, "chem_presolve", False)):
-            raise ValueError("presolve evaluator requested but cfg.chem_presolve is off")
-        warm = (mode == "warm")
-
-        def eval_presolve(U, Y, refs, active=None):
-            U = jnp.asarray(U, dtype)
-            C_ = jax.vmap(theta_from_u)(U)[:, :n_chem_tp]
-            kw = {} if active is None else {"active": jnp.asarray(active, bool)}
-            if warm:
-                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(
-                    C_, Y, refs[:, 0], refs[:, 1], refs[:, 2], **kw)
-            else:
-                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, **kw)
-            return (Y_new, _comp_refs(C_), CD.accept_count.astype(jnp.int32),
-                    CD.conv_normal > 0.5)
-
-        return eval_presolve
-
     # ---- assemble ----
     pipe.__dict__.update(dict(
         cfg=cfg, dtype=dtype, npdtype=npdtype,
@@ -518,21 +478,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         # (binned model depth, certificate bit): the synthetic truth spectrum
         binned_ok_jit=binned_ok_jit,
         y_baseline=y_baseline,
-        # the batched evaluators run_nautilus calls (cold, warm, chem_retry warm)
+        # the batched evaluators run_nautilus calls (cold, warm)
         _make_batch_eval=_make_batch_eval,
-        # cfg.chem_presolve's chemistry-only first pass (run_nautilus)
-        _make_presolve_eval=_make_presolve_eval,
-        # the presolve chain (cfg.chem_retry and cfg.chem_presolve; None when
-        # off): the two passes' step tolerances and caps; the certifying pass is
-        # _make_batch_eval("warm", retry=True)
-        chem_retry=(None if fwd.chem_retry is None else SimpleNamespace(
-            rtol_first=fwd.chem_rtol, count_max_first=int(fwd.chem.count_max),
-            rtol=(float(cfg.chem_retry_rtol) if fwd.chem_retry_rtol is None
-                  else fwd.chem_retry_rtol),
-            count_max=int(fwd.chem_retry.count_max),
-            # the first pass is a start generator and the retry program solves
-            # and certifies every in-window draw (validate_config)
-            presolve=True)),
         # observations injected by set_observations
         obs_depth_jax=None, obs_sigma_jax=None, obs_depth=None, obs_sigma=None,
     ))

@@ -52,8 +52,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
     ``chem.conden_spec`` is the resolved truth (``build_chem_model`` builds it iff
     condensation is active), so gating on it closes that bypass. No nautilus
     retrieval with condensation has been validated: whether condensing columns
-    certify, and how they depend on their start under the presolve chain, is
-    untested.
+    certify, and how they depend on their start, is untested.
     """
     if (getattr(chem, "conden_spec", None) is not None
             and not bool(getattr(cfg, "allow_condense_inference", False))):
@@ -66,28 +65,6 @@ def _refuse_condense_inference(chem, cfg) -> None:
             "vulcan_forward.vulcan_chem.build_chem_model, or set "
             "allow_condense_inference=True."
         )
-
-
-# _Statics fields a retry program may differ in from the main one: the step
-# acceptance tolerance and the cap (and the evolution buffer sized from the cap,
-# a length-1 placeholder unless save_evolution).
-RETRY_STATICS_FREE = frozenset({"rtol_accept", "count_max", "save_evo_n_max"})
-
-
-def statics_diff(sa, sb) -> list:
-    """Names of the fields in which two VULCAN-JAX ``_Statics`` differ."""
-    out = []
-    for f in sa._fields:
-        va, vb = getattr(sa, f), getattr(sb, f)
-        try:
-            xa, xb = np.asarray(va), np.asarray(vb)
-            same = xa.shape == xb.shape and bool(np.array_equal(xa, xb))
-        # broad: a non-array leaf (a callable, a tuple of names) compares by repr
-        except Exception:
-            same = repr(va) == repr(vb)
-        if not same:
-            out.append(f)
-    return out
 
 
 def _rtol_accept(chem) -> float | None:
@@ -128,30 +105,6 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # the RESOLVED config (closes the base-config bypass of the early
     # cfg_overrides gate).
     _refuse_condense_inference(chem, cfg)
-
-    # chem_retry (the presolve chain's certifying program): the SAME chemistry at
-    # another step tolerance and cap. rtol is
-    # a compile-time static of the step acceptance, so it is a second program
-    # (its own runner, compiled on its first solve). Refuse anything else
-    # differing: only numerical settings may change.
-    chem_retry = None
-    if bool(getattr(cfg, "chem_retry", False)):
-        from retrieval_framework.config_schema import retry_profile
-        chem_retry = vulcan_chem.build_chem_model(retry_profile(cfg),
-                                                  tp_eval=tpm.eval, n_tp_params=n_tp,
-                                                  chem_extras=extras)
-        st_main = getattr(getattr(chem, "_integ", None), "_statics", None)
-        st_retry = getattr(getattr(chem_retry, "_integ", None), "_statics", None)
-        if st_main is not None and st_retry is not None:
-            extra = sorted(set(statics_diff(st_main, st_retry)) - RETRY_STATICS_FREE)
-            if extra:
-                raise RuntimeError(
-                    "chem_retry: the retry chemistry differs from the main program "
-                    f"beyond the step tolerance and the cap ({extra}); refusing")
-        logger.info(f"[chem retry] retry program: rtol {_rtol_accept(chem)} -> "
-                    f"{_rtol_accept(chem_retry)}, count_max {int(chem.count_max)} -> "
-                    f"{int(chem_retry.count_max)} (solves and certifies every draw "
-                    "after the presolve)")
 
     # Fail fast if the C/O prior can leave the fixed-O knob's validity range: b_z
     # (the O-only compensation factor) must stay positive, else prior-corner columns
@@ -228,11 +181,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     lanes = int(cfg.cold_lanes)
     refill_chunk = int(cfg.cold_refill_chunk)
 
-    def _chem_batch_route(ch, C, active, **kw):
+    def _chem_batch_route(C, active, **kw):
         """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
-        point for every batched solve, cold stage or warm continuation, on
-        ``ch`` (the main chemistry, or the chem_retry program). Every call runs
-        the lane queue (``ch.converged_y_queue``) at ``min(cold_lanes, draws)``
+        point for every batched solve, cold stage or warm continuation. Every call runs
+        the lane queue (``chem.converged_y_queue``) at ``min(cold_lanes, draws)``
         lanes; with the lane count at or above the draw count ``run_queue``
         refills nothing and runs the plain batch's ticks, so a narrow call (a
         padded last chunk, a few model spectra) takes the production route.
@@ -241,7 +193,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ``active`` ((N,) bool, run_nautilus's padded and out-of-window rows): a
         False row is a placeholder whose lane starts done and takes no step;
         the caller discards it. None is the program without the mask."""
-        return ch.converged_y_queue(C, min(lanes, int(C.shape[0])),
+        return chem.converged_y_queue(C, min(lanes, int(C.shape[0])),
                                     chunk=refill_chunk, active=active, **kw)
 
     def chem_solve_cold_diag_batch(C, active=None):
@@ -256,8 +208,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         its lane was freed at (agreement at the convergence scale). Stage 1 is
         not gated (it carries no certificate); stage 2's ConvDiag certifies each
         draw. ``active`` masks padded rows in both stages."""
-        Y1, _cd = _chem_batch_route(chem, _baseline_composition(C, 1), active)
-        return _chem_batch_route(chem, C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0,
+        Y1, _cd = _chem_batch_route(_baseline_composition(C, 1), active)
+        return _chem_batch_route(C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0,
                                  s_o_ref=0.0)
 
     def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, s_o_ref, active=None):
@@ -265,17 +217,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
         ``c_o_ref`` / ``s_o_ref`` ((N,) arrays), under the cold count_max:
         run_nautilus's anchored warm starts. ``active`` masks padded rows."""
-        return _chem_batch_route(chem, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
+        return _chem_batch_route(C, active, warm_y=Y, lnZ_ref=lnZ_ref,
                                  c_o_ref=c_o_ref, s_o_ref=s_o_ref)
-
-    chem_solve_warm_diag_full_batch_retry = None
-    if chem_retry is not None:
-        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, s_o_ref,
-                                                  active=None):
-            """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
-            presolve chain's certifying pass, under the retry count_max."""
-            return _chem_batch_route(chem_retry, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
-                                     c_o_ref=c_o_ref, s_o_ref=s_o_ref)
 
     def _rt_kwargs(cloud, lnM):
         """The RT's cloud and mass keywords for this Config's cloud model."""
@@ -341,12 +284,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,
-        # chem_retry (None when off): the presolve chain's certifying program and
-        # its warm solve
-        chem_retry=chem_retry,
         chem_rtol=_rtol_accept(chem),
-        chem_retry_rtol=None if chem_retry is None else _rtol_accept(chem_retry),
-        chem_solve_warm_diag_full_batch_retry=chem_solve_warm_diag_full_batch_retry,
         aux_from_y=aux_from_y,
         y_baseline=np.asarray(chem.y0, dtype=np.float64),
         wl_um=np.asarray(rt.wl_um, dtype=np.float64),

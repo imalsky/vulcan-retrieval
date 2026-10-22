@@ -8,9 +8,8 @@ draws, and the binned-depth shift against the data's sigma.
 
 ``run`` draws ``--draws`` weighted posterior rows from ``<out_dir>``'s
 nautilus_posterior.npz (seeded, so every variant sees the same rows), solves
-them on the run's own pipeline rebuilt from its config.json with the variant's
-change (cold, then the retry program's certifying pass where the run used the
-presolve chain), and writes ``forward_check_<variant>.npz`` under
+them cold on the run's own pipeline rebuilt from its config.json with the
+variant's change, and writes ``forward_check_<variant>.npz`` under
 ``output/w39b_smc_retrieval/validation/`` (theta, binned model depth, certified
 flag, the variant's settings). ``compare`` reads two of those and reports, over
 the draws both certified, the worst per-bin |shift| / sigma, its median over
@@ -36,6 +35,7 @@ A one-sided rate-range clamp is not a variant here: vulcan3 has no switch for it
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import os
@@ -80,18 +80,12 @@ def _draws(out: Path, n: int, seed: int):
 
 def _solve(pipe, theta):
     """(column, binned model depth, certified) of the rows ``theta``: the cold
-    two-stage solve and, where the run used the presolve chain, the retry
-    program's certifying pass warm from it, as production certifies."""
+    two-stage solve, certified as production certifies."""
     import jax
     import jax.numpy as jnp
     th = jnp.asarray(theta, pipe.dtype)
     C = th[:, :pipe.n_chem_tp]
     Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(C)
-    if pipe.fwd.chem_retry is not None:
-        i_s = pipe.names.index("s_o") if "s_o" in pipe.names else None
-        s_o = C[:, i_s] if i_s is not None else jnp.zeros(C.shape[0], pipe.dtype)
-        Y, cd = jax.jit(pipe.fwd.chem_solve_warm_diag_full_batch_retry)(
-            C, Y, C[:, 0], C[:, 1], s_o)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
     ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
     return Y, mu, ok
@@ -99,6 +93,11 @@ def _solve(pipe, theta):
 
 def run(args) -> int:
     out = Path(args.out_dir).resolve()
+    # a presolve-chain run (v4) certified at a second program this tree no longer
+    # builds; its config.json would load without it (unknown keys are dropped)
+    if json.loads((out / "config.json").read_text()).get("chem_presolve"):
+        raise RuntimeError(f"{out} ran the presolve chain, removed after vulcan-retrieval "
+                           "0a2dbf3: check its draws at that commit")
     if args.variant == "network2025":
         os.environ["VULCAN3_NETWORK"] = NETWORK_2025    # before any vulcan3 import
     from vulcan_forward import vulcan_chem  # noqa: F401  (import order)

@@ -27,13 +27,12 @@ figure): N weighted posterior draws are re-solved COLD on the run's own
 pipeline, rebuilt from config.json, so its data paths must resolve on this
 machine. The cost is the pipeline build and compile plus one batched cold
 two-stage chemistry solve of N columns on the lane queue
-(``fwd.chem_solve_cold_diag_batch``, at the run's first-pass rtol and
-count_max) and N RTs (``observed_depth_from_y_jit``): about one likelihood
-batch of the run at width N. A warm or chem_retry run certified its columns
-from other starts or at chem_retry_rtol, so these spectra agree with the run's
-at the convergence scale. A draw whose cold solve does not certify within
-count_max is left out of the bands and counted in the log. The draws and
-spectra are saved to nautilus_spectra.npz.
+(``fwd.chem_solve_cold_diag_batch``, at the run's rtol and count_max) and N
+RTs (``observed_depth_from_y_jit``): about one likelihood batch of the run at
+width N. A warm run certified its columns from other starts, so these spectra
+agree with the run's at the convergence scale. A draw whose cold solve does not
+certify within count_max is left out of the bands and counted in the log. The
+draws and spectra are saved to nautilus_spectra.npz.
 """
 from __future__ import annotations
 
@@ -224,7 +223,6 @@ def certificate(out_dir) -> dict:
     in_window = n - tally.get("tp_out", 0)
     rejected = sum(tally.get(k, 0) for k in ("exhausted", "stalled", "nonfinite"))
     warm = summ["starts"] != "cold"
-    retry = summ.get("chem_retry")
     rejections = {
         "n_eval": n,
         "tp_out_of_n_eval": frac("tp_out", n),
@@ -235,10 +233,6 @@ def certificate(out_dir) -> dict:
         "cold_certified_of_cold": frac("cold_certified", tally.get("n_cold")),
         "warm_certified_of_warm": frac("warm_certified", tally.get("n_warm")),
     }
-    if retry is not None:
-        rejections.update(retried_of_in_window=frac("retried", in_window),
-                          retry_certified_of_retried=frac("retry_certified",
-                                                          tally.get("retried")))
 
     caveats = [
         f"{rejections['rejected_of_in_window'] or 0.0:.1%} of the draws with a T-P "
@@ -258,10 +252,6 @@ def certificate(out_dir) -> dict:
         caveats.append(
             "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
             "column and likelihood move with its batch at the convergence scale.")
-    if retry is not None and not retry.get("presolve"):
-        caveats.append(
-            f"chem_retry: draws not certified at rtol {retry['rtol_first']} were re-solved "
-            f"at rtol {retry['rtol']}, so the kept columns carry either tolerance.")
     if n > int(summ["n_like"]):
         caveats.append(
             f"The tally counts {n - int(summ['n_like'])} more evaluations than nautilus "
@@ -303,7 +293,9 @@ def certificate(out_dir) -> dict:
         "starts": {"mode": "warm" if warm else "cold",
                    "warm_of_n_eval": frac("n_warm", n), "cold_of_n_eval": frac("n_cold", n)},
         "rejections": rejections,
-        "chemistry": {"rtol": summ.get("chem_rtol"), "chem_retry": retry,
+        "chemistry": {"rtol": summ.get("chem_rtol"),
+                      # a presolve-chain run (v4): its certifying rtol and cap
+                      **({"chem_retry": summ["chem_retry"]} if "chem_retry" in summ else {}),
                       **{k: cfg.get(k) for k in ("count_max", "yconv_cri", "dt_max", "nz",
                                                  "cold_lanes", "cfg_overrides")}},
         "derived": derived_quantities(out),

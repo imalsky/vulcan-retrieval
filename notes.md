@@ -24,7 +24,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   confirmed by the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0,
   jwst-transit-authority 0.72.0.
 - Production: `run_nautilus`, the only sampler, warm starts from a growing anchor set,
-  solver `ffi` (the spec's `runtime` block), the chemistry presolve chain,
+  solver `ffi` (the spec's `runtime` block), one chemistry program per draw (v5: rtol
+  0.05 within 5000 accepted steps; v4 ran the presolve chain, "Superseded designs"),
   per-instrument noise inflation and log10gamma down to -3: 15 parameters in v4 (13
   before its override file's additions), 17 in v5 (s_o and lnM added, T1bar in place of
   Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), quotable
@@ -41,13 +42,13 @@ sigma = posterior standard deviation, L = log-likelihood.
 - Tests: the normal tier (plain `pytest tests`; CI runs it serially on Python
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
-  `test_set_observations`' production preflight, one test in `test_chem_retry`, and
-  `test_v5_options`, every v5 option on the real smoke pipeline). Counts [M]: the v4
-  tree, daw CPU `-n 16`, normal 79 passed / 1 skipped in 18 s, full 88 passed / 2
-  skipped in 4.5 min; the v5 tree (0.28.0), laptop CPU `-n 4`, normal 102 passed / 1
-  skipped in 17 s (`tests/test_run_spec.py` included), `test_v5_options` and
-  `test_cold_reject` 2 passed in 15.6 min of CPU. The rest of the full tier has not run
-  on the v5 tree (owed before the v5 launch, `todo.md`).
+  `test_set_observations`' production preflight and `test_v5_options`, every v5 option
+  on the real smoke pipeline). Counts [M]: the v4 tree, daw CPU `-n 16`, normal 79
+  passed / 1 skipped in 18 s, full 88 passed / 2 skipped in 4.5 min; the v5 tree
+  without the presolve chain, laptop CPU `-n 8`, normal 82 passed / 1 skipped in 15 s.
+  With the chain still in, `test_v5_options` and `test_cold_reject` passed (2 in 15.6
+  min of CPU). The full tier has not run on the tree without the chain (owed before
+  the v5 launch, `todo.md`).
 
 ## Runs
 
@@ -165,8 +166,8 @@ unless stated.
   (0.090), above x10 0.168 (0.162) [M, nautilus_posterior.npz]. Every median within
   0.1 v4 sigma: the presolve chain moves the posterior by less than the sampling noise
   and buys 1.0 point of in-window rejection and ~0.06 in logZ_box at ~4 h of wall.
-  Launched outside the documented recipe (no notes entry on NAS). The decision it
-  raises, whether v5 keeps the chain, is the maintainer's ("Design records"; `todo.md`).
+  Launched outside the documented recipe (no notes entry on NAS). On this result the
+  maintainer decided v5 runs the plain program ("Design records", the chemistry program).
 
 ## Low-Kzz hole
 
@@ -180,11 +181,10 @@ unless stated.
   6.9 dex); (B) at lnKzz < -2 and rtol <= 0.05 one near-atol cell (atomic S at 1e-9
   bar) sets the step while a C2H4/C2H2 drift at ~5e-3 bar needs 19-23k steps; (C) at 62
   layers two states really exist (see bistable_policy).
-- PRESOLVE CHAIN (vulcan-retrieval cdcffd1, opt-in `Config.chem_presolve` with
-  `chem_retry`, the only two-program mode; `pipeline._make_presolve_eval` and the
-  presolve branch of `run_nautilus.make_loglike`; the 62-layer study override
+- PRESOLVE CHAIN (vulcan-retrieval cdcffd1 to `0a2dbf3`, the last commit with it;
+  `Config.chem_presolve` with `chem_retry`; the 62-layer study override
   `w39b_baseline_v3_presolve.json` is in git at `397d8bb`, v4's
-  `w39b_baseline_v4_nz100.json` at `8e3a21c`; `v5.yaml` carries the chain): stage A
+  `w39b_baseline_v4_nz100.json` at `8e3a21c`; not in v5, "Superseded designs"): stage A
   chemistry-only presolve at rtol 0.2, photolysis every step, cap 3000, never kept;
   stage B re-solves every in-window draw at rtol 0.05, photolysis every step, cap 5000,
   warm from A's exit column where A certified, otherwise from the row's original start.
@@ -206,7 +206,8 @@ unless stated.
   (40/40) layers: a 62-layer artifact. 11% of posterior mass has >= 2 states (none above
   lnKzz -0.7). Largest |dmu|/sigma median 0.35, p90 1.08, in the SO2 band at 4.0-4.1 um.
   Start policies: warm (status quo, 581 s/batch), cold2 chain 1.77x, eq chain 1.47x, eqd
-  4.10x; every parameter shift <= 0.06 sigma, |dlnZ| <= 0.01. Kept: warm start + presolve.
+  4.10x; every parameter shift <= 0.06 sigma, |dlnZ| <= 0.01. Kept: warm start + presolve
+  (v5 keeps the warm start and drops the presolve, "Design records").
 
 ## Grid resolution (resolution_study, 10.4 GPU-h)
 
@@ -439,7 +440,9 @@ Sampler and policy
 - Stock nautilus, warm by default, evidence claims cold: "Sampler"; warm vs cold on
   93269's posterior rows ("Runs", postrun_93269) and the bistable_policy start policies
   ("Low-Kzz hole"). The warm default is the maintainer's decision.
-- Presolve chain: "Low-Kzz hole".
+- One chemistry program (rtol 0.05, cap 5000): the full-run A/B ("Runs",
+  v4_nopresolve_test) and the maintainer's decision ("Design records", the chemistry
+  program); the presolve chain's hard-set numbers: "Low-Kzz hole".
 - Certifying cap 5000: job 64575 (192 draws) 27.1% uncertified at 5000, 12.5% at 12000
   (p50 2525, p75 5420); 40000 steps rescued 0/4 (failure_diag); stage B at 8000 rescues
   1 of 9 prior-edge hard lanes for ~+11% chemistry; of 384 warm nautilus solves replayed
@@ -513,7 +516,7 @@ Evidence semantics and condensation
   evidence field: "Do not retry".
 - Inference with condensation is refused by default because no retrieval with
   condensation has been validated: whether condensing columns certify, and how they
-  depend on their start under the presolve chain, is untested (`allow_condense_inference`
+  depend on their start, is untested (`allow_condense_inference`
   is the opt-in). The gates read `use_condense` alone: a `run_inference` flag they
   also read let `run_inference=False` pass them while nautilus still sampled, so the
   flag was removed; a condensation forward model goes through the engine. Gradients are
@@ -558,7 +561,7 @@ HPC
     chemistry's hydrostatic column keeps M0; the few-% gravity inconsistency in H is a
     stated limitation. Through v4 the mass was fixed and the results conditional on it.
   - Sulfur is a free ln(S/O) on top of lnZ (the engine side is vulcan-forward's).
-  - The certifying cap stays at 5000 under the presolve chain; the Kzz headline prior
+  - The certifying cap stays at 5000; the Kzz headline prior
     is x0.1 to x30 in `v5.yaml` (x10 is the full H w_rms of the Tsai+2023 GCM; v4 ran
     x0.1 to x1000, its override at `8e3a21c`). A longer step budget at low Kzz was
     declined ("Ideas not adopted"). Kzz is reported truncated at x10 with the weight at
@@ -567,9 +570,13 @@ HPC
     grey deck (`cloud_model="deck"`) and the adiabat (`tp_adiabat`) are options the
     external review asked for; they stay in the code as Config switches with no run
     planned on them (the maintainer decided; "Ideas not adopted").
-  - Whether v5 keeps the presolve chain is the maintainer's open decision ("Runs",
-    v4_nopresolve_test holds the plain arm's settings and result; `todo.md`). The plain
-    program needs no second compile; logZ_box is comparable only within one arm.
+  - The chemistry program: every draw is solved once, at rtol 0.05 within 5000
+    accepted steps with photolysis every step, and only its VULCAN certificate keeps
+    it; the presolve chain is removed (the maintainer decided). On the v4 target the
+    plain program ("Runs", v4_nopresolve_test) moved every median by under 0.1 sigma,
+    ran 19.8 h against 23.8 h and rejected 2.56% of in-window draws against 1.60%,
+    with logZ_box 0.064 lower. It needs no second compile. logZ_box is comparable only
+    at matched programs, so v5's is not set against v4's.
 - v5 model options (0.28.0): the chemistry block is `[lnZ, c_o, lnKzz, <chem_extras>]`
   with `s_o` (`infer_s_o`) and `kzz_slope` (`kzz_mode="powerlaw"`) in the engine's
   `CHEM_EXTRAS` order, read through `pipe.n_chem`; the warm references and the anchors
@@ -674,7 +681,8 @@ HPC
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,
   `logZ_box`, `n_eff`, `n_like`, `logZ_err` null, the warm/cold start mode, the
   rejection tally as fractions of the in-window draws, the chemistry settings (`rtol`
-  from the summary's `chem_rtol`, `chem_retry`, `count_max`, ...) and plain-English
+  from the summary's `chem_rtol`, `count_max`, ...; a presolve-chain run's `chem_retry`
+  block is copied as its summary recorded it) and plain-English
   caveats. No pass/fail verdict and no gates: a dirty tree, code moved since the run
   and a manifest that does not hash to the digest are caveats, not refusals; there is
   no prior-rail check (an 84% / 99% quantile against a prior edge was planned and not
@@ -814,8 +822,23 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1
   nat; replaced in production by the presolve chain (cdcffd1). The retry-only mode
   (`chem_retry` without `chem_presolve`: its second pass, the retry width buckets,
-  the cold retry evaluator) was then removed; `validate_config` refuses the pair
-  unless both are set. baseline_v2's override file is at tag `w39b-baseline-v2`.
+  the cold retry evaluator) was then removed. baseline_v2's override file is at tag
+  `w39b-baseline-v2`.
+- The presolve chain (cdcffd1 to `0a2dbf3`; baseline_v3_presolve and baseline_v4): a
+  chemistry-only presolve at rtol 0.2 within 3000 steps as the start, then every
+  in-window draw solved and certified at rtol 0.05 within 5000 ("Low-Kzz hole").
+  Replaced in v5 by one program at rtol 0.05 ("Design records", the chemistry
+  program). Removed: the Config fields `chem_presolve`, `chem_retry`,
+  `chem_retry_rtol` and `chem_retry_count_max`, `config_schema.retry_profile`, the
+  retry program and its `_Statics` check (`statics_diff`) in `retrieval_forward`,
+  `pipeline._make_presolve_eval` and the retry evaluator, the two-pass branch of
+  `run_nautilus.make_loglike` (the `retry_*` / `presolve_*` tally keys, the batch
+  log's `presolve` / `retry` entries, the anchors' `rtol`), the manifest's switched
+  keys, the certificate's retry fractions, the forward check's retry pass and
+  `tests/test_chem_retry.py`. A chain-off manifest's config block is byte-identical
+  before and after [M]. A v4 config.json still loads (unknown keys are dropped), so
+  `validation/posterior_forward_check.py` refuses a chain run: check v4's draws at
+  `0a2dbf3`.
 - 62 chemistry layers in production: bistable at low Kzz, up to 0.45 sigma resolution
   error; v4 and v5 use 100 (the schema default is still 62).
 - RT anchored at 7 bar with fixed g (90302 and earlier): the model's GM was e^(2 lnR0)

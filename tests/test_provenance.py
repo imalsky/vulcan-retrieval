@@ -5,7 +5,7 @@ and nothing that churns, and the data identity says why when it cannot resolve.
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -35,50 +35,28 @@ def test_data_identity_never_reports_null_opacity_without_saying_why(
 
 # --- target identity: what a checkpoint's numbers belong to --------------------
 
-CHAIN = dict(chem_retry=True, chem_presolve=True)
-
-
-@pytest.mark.parametrize("base_kw, field, value, moves", [
-    ({}, "yconv_cri", 0.001, True),            # convergence tolerance
-    ({}, "molecules", ("H2O",), True),         # opacity list
-    ({}, "nz", 80, True),                      # chemistry grid
-    ({}, "art_ptop_bar", 1e-8, True),          # pressure domain
-    ({}, "prior_lnZ", (-1.0, 1.0), True),      # prior definition
-    ({}, "seed", 999, True),                   # RNG identity (bit-identical resume)
-    ({}, "count_max", 4000, True),             # solver-defined support
-    ({}, "walltime_seconds", 3600.0, False),   # per-JOB governor
-    ({}, "smc_rt_chunk", 24, False),           # batch split, numerically identical
-    ({}, "out_dir", Path("/tmp/elsewhere"), False),
-    # a switched key binds only while its switch is on
-    ({}, "chem_retry", True, True),
-    ({}, "chem_presolve", True, True),
-    ({}, "chem_retry_rtol", 0.01, False),
-    ({}, "chem_retry_count_max", 9000, False),
-    (CHAIN, "chem_retry_rtol", 0.1, True),
-    (CHAIN, "chem_retry_count_max", 8000, True),
+@pytest.mark.parametrize("field, value, moves", [
+    ("yconv_cri", 0.001, True),            # convergence tolerance
+    ("molecules", ("H2O",), True),         # opacity list
+    ("nz", 80, True),                      # chemistry grid
+    ("art_ptop_bar", 1e-8, True),          # pressure domain
+    ("prior_lnZ", (-1.0, 1.0), True),      # prior definition
+    ("seed", 999, True),                   # RNG identity (bit-identical resume)
+    ("count_max", 4000, True),             # solver-defined support
+    ("walltime_seconds", 3600.0, False),   # per-JOB governor
+    ("smc_rt_chunk", 24, False),           # batch split, numerically identical
+    ("out_dir", Path("/tmp/elsewhere"), False),
 ])
-def test_target_digest_moves_with_every_bound_class(base_kw, field, value, moves,
-                                                    digest_pipe):
+def test_target_digest_moves_with_every_bound_class(field, value, moves, digest_pipe):
     """Each manifest class must change the digest, or a resume could carry
     numbers from a different density. A chained RESUME job legitimately changes
     the per-job settings; binding them would refuse the documented NAS chaining
     workflow."""
-    base = C.Config(molecules=("H2O", "CO2"), **base_kw)
+    base = C.Config(molecules=("H2O", "CO2"))
     assert getattr(base, field) != value, f"{field} probe equals the default"
     changed = replace(base, **{field: value})
     assert (provenance.target_digest(base, digest_pipe)
             != provenance.target_digest(changed, digest_pipe)) is moves
-
-
-def test_switches_off_leave_the_manifest_as_before(digest_pipe):
-    """Off, the switched keys stay out of the manifest: it is exactly the
-    manifest of a Config that never had them, so every earlier run keeps its
-    digest."""
-    switched = {k for keys in provenance.SWITCHED_KEYS.values() for k in keys}
-    base = C.Config(molecules=("H2O",))
-    assert provenance.target_manifest(base, digest_pipe)["config"] == {
-        k: v for k, v in asdict(base).items()
-        if k not in provenance.TARGET_FREE_KEYS and k not in switched}
 
 
 @pytest.mark.parametrize("var, value", [

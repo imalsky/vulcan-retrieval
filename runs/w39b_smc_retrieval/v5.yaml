@@ -57,19 +57,13 @@ config:
   dt_max: 1.0e+11                      # s: caps meaningless large-dt Ros2 oscillations; not a convergence criterion
   # Passed to the vulcan3 config. Rp: the chemistry puts Rp at the layer nearest 1 bar;
   # 1.21 R_Jup keeps its scale heights on the RT's (whose 1.279 R_Jup sits at 1 mbar).
-  # rtol 0.2 is the presolve's step tolerance. Photolysis every step in both programs
-  # (W39b.yaml's 5/5 started every low-Kzz reject cascade on a photolysis tick).
+  # rtol 0.05 is the step tolerance. Photolysis every step (W39b.yaml's 5/5 started
+  # every low-Kzz reject cascade on a photolysis tick).
   # queue_compact: lane-queue tail compaction 528 -> 396 -> 264 -> 132.
-  cfg_overrides: {Rp: 8650532000.0, rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
-  # The presolve chain (the two switches go together): every draw is presolved at the
-  # base rtol within count_max accepted steps (a start only, no RT, never kept), then
-  # solved and certified at chem_retry_rtol within chem_retry_count_max, warm from that
-  # column; only the second solve's VULCAN certificate keeps it (notes "Low-Kzz hole").
-  count_max: 3000
-  chem_presolve: true
-  chem_retry: true
-  chem_retry_rtol: 0.05
-  chem_retry_count_max: 5000
+  cfg_overrides: {Rp: 8650532000.0, rtol: 0.05, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  # One program: every draw is solved at rtol 0.05 within count_max accepted steps and
+  # only its VULCAN certificate keeps it (notes "Design records", the chemistry program).
+  count_max: 5000
 
   # ---- planet (RT geometry) -----------------------------------------------------
   rp_cm: 9143826800.0                  # 1.279 R_Jup (7.1492e9 cm): the W39b.yaml transit radius

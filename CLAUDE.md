@@ -131,13 +131,11 @@ adopted".
   nearest certified column under the cold `count_max`, so the likelihood and the
   rejected set depend on evaluation order and a warm run's evidence is approximate. An
   evidence claim uses `warm_starts: false`.
-- The chemistry policy is the spec's. Set
-  `chem_retry` and `chem_presolve` together (the only two-program mode): the presolve,
-  at the base `rtol` and `count_max`, is only a start; every in-window draw is then
-  solved at `chem_retry_rtol` within `chem_retry_count_max`, and only that solve's
-  VULCAN certificate keeps it (notes "Low-Kzz hole").
-- The certifying cap is `chem_retry_count_max` under the presolve chain, else
-  `count_max`. A draw that does not certify within it is rejected
+- The chemistry policy is the spec's: one program per draw, at the spec's `rtol`
+  (`cfg_overrides`) within `count_max` accepted steps, and only its VULCAN certificate
+  keeps a draw. Do not bring back a second program (the presolve chain) without a
+  full-run A/B (notes "Design records", the chemistry program).
+- The certifying cap is `count_max`. A draw that does not certify within it is rejected
   (log L = -inf), never extended. Do not raise the cap without a measured reason.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver
   env choices (`VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start

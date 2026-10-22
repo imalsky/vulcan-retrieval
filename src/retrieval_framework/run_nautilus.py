@@ -61,23 +61,10 @@ spread_batch), which carried the same 1.0.6 version string.
 Every likelihood chunk appends one line to ``batches.jsonl``: its wall time,
 start mode and the accepted step count of each column.
 
-The presolve chain (``cfg.chem_retry`` with ``cfg.chem_presolve``, off by
-default; make_loglike): the first pass is a chemistry-only PRESOLVE at the base
-rtol (no RT, never a likelihood) and EVERY in-window draw is then solved, and
-certified, by the second compiled program (``chem_retry_rtol``, capped at
-``chem_retry_count_max``) on one fixed width of n_batch rows, warm from its
-presolve column (from its original start where the presolve did not certify).
-The rejection classes describe each draw's second solve; the tally adds
-``retried``, ``retry_*``, ``presolve_certified`` and ``presolve_wall_s``, a
-chunk's batches.jsonl line adds ``presolve`` and ``retry`` (its rows, width,
-step counts and wall time; ``t`` is both passes, ``acc`` the first), and every
-anchor carries the retry ``rtol``. Off, every path below is the stock one.
-
 Padding and out-of-window draws cost no solve: a chunk shorter than n_batch
-and the second pass's unused rows are filled with copies of their last row,
-and the evaluator masks those and every T-P-invalid row (``active``): their
-lanes take no chemistry step and no RT. The RT runs only on the rows whose
-log L can be kept (T-P in window, certified).
+is filled with copies of its last row, and the evaluator masks those and every
+T-P-invalid row (``active``): their lanes take no chemistry step and no RT. The
+RT runs only on the rows whose log L can be kept (T-P in window, certified).
 
 Lanes: ``cfg.cold_lanes`` (one SM per lane in the gpu preset), times
 FFI_BLOCKS_PER_SM under the ffi solver, whose one-buffer kernels keep that many
@@ -147,18 +134,13 @@ class Anchors:
         self.z = np.concatenate([self.z, z])
         self.refs = np.concatenate([self.refs, refs])
 
-    def add(self, z, Y, refs, rtol=None):
-        """Append certified columns as one new file. ``rtol`` (presolve-chain runs):
-        per column, the step tolerance of the solve that certified it, stored
-        as the file's ``rtol`` (a reload reads z / Y / refs only)."""
+    def add(self, z, Y, refs):
+        """Append certified columns as one new file."""
         if len(z):
             f = self.folder / f"anchors_{len(self.parts):05d}.npz"
             tmp = f.with_name(f".{f.name}.part")
             with open(tmp, "wb") as fh:
-                if rtol is None:
-                    np.savez(fh, z=z, Y=Y, refs=refs)
-                else:
-                    np.savez(fh, z=z, Y=Y, refs=refs, rtol=np.asarray(rtol, np.float64))
+                np.savez(fh, z=z, Y=Y, refs=refs)
             os.replace(tmp, f)
             self._append(z, Y, refs)
 
@@ -247,18 +229,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     accepted step counts there. With ``rejects`` (a directory), each chunk
     writes its rejected rows as one npz (``z`` unit-cube points, ``cls`` the
     class, ``acc`` accepted steps, ``warm`` the start mode), so the rejected
-    fraction can be mapped over the posterior afterwards.
-
-    With ``pipe.chem_retry`` (the presolve chain) the first pass is the
-    chemistry-only presolve (``pipe._make_presolve_eval``: no RT, every L -inf)
-    and the second pass, on the retry program, takes EVERY in-window row at the
-    fixed width n_batch (rows first, masked copies after), warm from the
-    presolve's exit column at the row's own references where the presolve
-    certified, else from the row's original start (warm chunk:
-    its anchor column; cold chunk: the presolve's exit column, the baseline
-    column if non-finite). A row keeps its second solve, judged at the retry
-    cap: certified -> kept (and an anchor), else rejected in the class of that
-    solve."""
+    fraction can be mapped over the posterior afterwards."""
     import jax
     import jax.numpy as jnp
 
@@ -272,44 +243,11 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     if rejects is not None:
         rejects.mkdir(parents=True, exist_ok=True)
         n_rej = [len(list(rejects.glob("rejected_*.npz")))]
-    retry = getattr(pipe, "chem_retry", None)
     # every evaluator masks padded rows (active) and RTs only the rows it can
     # keep; each compiles at its first call
-    if retry is None:
-        fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
-        if anchors is not None:
-            fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
-    else:
-        # the presolve chain: the first pass is the chemistry-only presolve (a
-        # start generator) and every in-window row is solved again, and
-        # certified, by the retry program at the fixed width n_batch, warm from
-        # its presolve column
-        fns = {"pre_cold": jax.jit(pipe._make_presolve_eval("cold")),
-               "pre_warm": jax.jit(pipe._make_presolve_eval("warm")),
-               "retry_warm": jax.jit(pipe._make_batch_eval("warm", retry=True))}
-        count_max_retry = int(retry.count_max)
-        rtol_first = np.nan if retry.rtol_first is None else float(retry.rtol_first)
-        rtol_retry = float(retry.rtol)
-        y_base = np.asarray(Y0[0], np.float64)
-
-    def second_pass(rows, Uj, Ys, rs):
-        """The retry solve of chunk rows ``rows`` from the starts ``Ys`` /
-        ``rs`` at the fixed width n_batch: host (L, Y, refs, acc, conv) of those
-        rows, the padded width, wall s."""
-        w = n_batch
-        sel = np.concatenate([rows, np.repeat(rows[-1:], w - len(rows))])
-        act = jnp.asarray(np.arange(w) < len(rows))
-        t1 = time.perf_counter()
-        L2, Y2, r2, st2 = fns["retry_warm"](Uj[sel], jnp.asarray(Ys[sel], pipe.dtype),
-                                            jnp.asarray(rs[sel], pipe.dtype), act)
-        acc2, conv2 = st2.acc, st2.conv_ok
-        n = len(rows)
-        out2 = (np.asarray(jax.device_get(L2), np.float64)[:n],
-                np.array(jax.device_get(Y2), np.float64)[:n],
-                np.array(jax.device_get(r2), np.float64)[:n],
-                np.asarray(jax.device_get(acc2), np.int64)[:n],
-                np.asarray(jax.device_get(conv2), bool)[:n])
-        return out2 + (w, time.perf_counter() - t1)
+    fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
+    if anchors is not None:
+        fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
 
     def loglike(Z):
         Z = np.atleast_2d(np.asarray(Z, np.float64))
@@ -330,83 +268,28 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 prof.batch_begin()
             t0 = time.perf_counter()
             warm = anchors is not None and len(anchors) > 0
-            Yw = rw = None
             if warm:
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
-                if retry is not None:     # a start only: no likelihood from this pass
-                    Ynew, rnew, acc, conv = fns["pre_warm"](Uj, jnp.asarray(Yw, pipe.dtype),
-                                                            jnp.asarray(rw, pipe.dtype), act)
-                    L = np.full(n_batch, -np.inf)
-                else:
-                    L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype),
-                                                    jnp.asarray(rw, pipe.dtype), act)
-                    acc, conv = st.acc, st.conv_ok
+                L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype),
+                                                jnp.asarray(rw, pipe.dtype), act)
             else:
-                if retry is not None:
-                    Ynew, rnew, acc, conv = fns["pre_cold"](Uj, Y0, refs0, act)
-                    L = np.full(n_batch, -np.inf)
-                else:
-                    L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
-                    acc, conv = st.acc, st.conv_ok
+                L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
             L = np.asarray(jax.device_get(L), np.float64)[:m]
-            acc = np.asarray(jax.device_get(acc), np.int64)[:m]
-            conv = np.asarray(jax.device_get(conv), bool)[:m]
-            if batch_log is not None and retry is None:
+            acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
+            conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
+            if batch_log is not None:
                 with open(batch_log, "a") as fh:
                     fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
                                          "mode": "warm" if warm else "cold",
                                          "acc": acc.tolist()}) + "\n")
-            t_first = time.perf_counter() - t0
             tp_out = ~tp_in[:m]
-            cap = count_max
-            if retry is not None:
-                # second pass: every in-window row, warm from its presolve column
-                # where the presolve certified; else from its original start (the
-                # anchor column), or on a cold chunk from the presolve's exit
-                # column (the baseline column if non-finite)
-                acc_first = acc
-                L, acc, conv = L.copy(), acc.copy(), conv.copy()
-                Yh = np.array(jax.device_get(Ynew), np.float64)[:m]
-                rh = np.array(jax.device_get(rnew), np.float64)[:m]
-                retried = np.zeros(m, bool)
-                rows = np.flatnonzero(~tp_out)
-                fin = np.all(np.isfinite(Yh), axis=tuple(range(1, Yh.ndim)))
-                ok_pre = conv & fin
-                if warm:
-                    Ys = np.where(ok_pre[:, None, None], Yh, np.asarray(Yw, np.float64)[:m])
-                    rs = np.where(ok_pre[:, None], rh, np.asarray(rw, np.float64)[:m])
-                else:
-                    Ys = np.where(fin[:, None, None], Yh, y_base[None])
-                    rs = np.where(fin[:, None], rh, 0.0)
-                pre = {"certified": int((ok_pre & ~tp_out).sum()), "rtol": rtol_first,
-                       "count_max": count_max}
-                w, t2, acc2, conv2 = 0, 0.0, np.empty(0, np.int64), np.empty(0, bool)
-                if rows.size:
-                    L2, Y2, r2, acc2, conv2, w, t2 = second_pass(rows, Uj, Ys, rs)
-                    L[rows], Yh[rows], rh[rows], acc[rows], conv[rows] = L2, Y2, r2, acc2, conv2
-                    retried[rows] = True
-                cap = np.where(retried, count_max_retry, count_max)
-                if batch_log is not None:
-                    with open(batch_log, "a") as fh:
-                        fh.write(json.dumps({
-                            "t": round(t_first + t2, 2), "t_first": round(t_first, 2),
-                            "mode": "warm" if warm else "cold", "acc": acc_first.tolist(),
-                            "presolve": pre,
-                            "retry": {"t": round(t2, 2), "width": int(w),
-                                      "rows": rows.tolist(), "acc": acc2.tolist(),
-                                      "conv": conv2.tolist(), "rtol": rtol_retry,
-                                      "count_max": count_max_retry}}) + "\n")
-                tally["presolve_certified"] = (tally.get("presolve_certified", 0)
-                                               + pre["certified"])
-                tally["presolve_wall_s"] = round(tally.get("presolve_wall_s", 0.0)
-                                                 + float(t_first), 2)
             # solver state first: the warm evaluator already floors L on a
             # stalled or exhausted exit, which is not a non-finite forward. The
             # solver's verdict decides: a solve certified at cap or cap + 1 is
             # kept (the runner stops on accept_count > count_max, convergence
             # first)
-            exhausted = ~tp_out & ~conv & (acc >= cap)
+            exhausted = ~tp_out & ~conv & (acc >= count_max)
             stalled = ~tp_out & ~exhausted & ~conv
             nonfinite = (~tp_out & ~exhausted & conv
                          & (~np.isfinite(L) | (L <= P.REJECT_BELOW)))
@@ -428,32 +311,14 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                            (f"n_{mode}", m), (f"{mode}_certified", (~dead).sum()),
                            (f"{mode}_steps_certified", acc[~dead].sum())):
                 tally[key] = tally.get(key, 0) + int(v)
-            if retry is not None:
-                # the final classes above already count each retried row once,
-                # by its second solve; these break the second pass out
-                kept = retried & ~dead
-                for key, v in (("retried", retried.sum()), ("retry_certified", kept.sum()),
-                               ("retry_exhausted", (retried & exhausted).sum()),
-                               ("retry_stalled", (retried & stalled).sum()),
-                               ("retry_nonfinite", (retried & nonfinite).sum()),
-                               ("retry_steps_certified", acc[kept].sum()),
-                               ("retry_width_sum", w),
-                               (f"{mode}_retried", retried.sum()),
-                               (f"{mode}_retry_certified", kept.sum())):
-                    tally[key] = tally.get(key, 0) + int(v)
-                tally["retry_wall_s"] = round(tally.get("retry_wall_s", 0.0) + float(t2), 2)
             if warm:
                 tally["warm_anchor_dist_sum"] = (tally.get("warm_anchor_dist_sum", 0.0)
                                                  + float(dist[:m].sum()))
             if anchors is not None:
                 alive = ~dead
-                if retry is None:
-                    anchors.add(Zc[:m][alive][:, :k],
-                                np.asarray(jax.device_get(Ynew), np.float64)[:m][alive],
-                                np.asarray(jax.device_get(rnew), np.float64)[:m][alive])
-                else:
-                    anchors.add(Zc[:m][alive][:, :k], Yh[alive], rh[alive],
-                                rtol=np.where(retried, rtol_retry, rtol_first)[alive])
+                anchors.add(Zc[:m][alive][:, :k],
+                            np.asarray(jax.device_get(Ynew), np.float64)[:m][alive],
+                            np.asarray(jax.device_get(rnew), np.float64)[:m][alive])
         return out
 
     return loglike
@@ -521,12 +386,6 @@ def main(argv=None) -> None:
     pipe = P.build_pipeline(cfg)
     log.info(f"Built pipeline in {time.perf_counter() - t0:.1f}s | n_dim={pipe.n_dim}: {pipe.names}")
     obs_save = set_observations(cfg, pipe, P)
-    if pipe.chem_retry is not None:
-        r = pipe.chem_retry
-        log.info(f"nautilus: chem_presolve ON: every draw is presolved at rtol {r.rtol_first} "
-                 f"within {r.count_max_first} accepted steps (chemistry only, a start, never "
-                 f"kept), then solved and certified at rtol {r.rtol} within {r.count_max} "
-                 f"warm from the presolve column, on {n_batch} rows; uncertified -> rejected")
 
     # resume identity before anything in the run directory is written; the
     # start policy, the batch width (the lane queue's composition) and the
@@ -609,7 +468,6 @@ def main(argv=None) -> None:
         "starts": "anchored warm (growing)" if warm else "cold",
         "rejections_and_starts": tally, "spec": spec.name, "seed": int(cfg.seed),
         "chem_rtol": pipe.fwd.chem_rtol,
-        **({"chem_retry": vars(pipe.chem_retry)} if pipe.chem_retry is not None else {}),
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
                          + ("; APPROXIMATE: warm starts move the likelihood and which draws "
                             "are rejected (warm_starts: false for an evidence claim)"
