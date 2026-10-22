@@ -24,23 +24,17 @@ L = log-likelihood.
   `397d8bb`, "Superseded designs"), warm starts from a growing anchor set, solver `ffi`
   pinned by `run_nas_w39b.pbs`, and from the override file the chemistry presolve
   chain, per-instrument noise inflation and log10gamma down to -3: 15 parameters (the
-  gpu preset alone is 13-D). Last finished run: baseline_v2 (job 93269).
-- Running: baseline v4 at uniform 100 layers, job 94946 (started 2026-10-20, 48 h wall;
-  "Runs", baseline_v4), from `overrides/w39b_baseline_v4_nz100.json` (presolve chain,
-  528 lanes, per-instrument noise, log10gamma down to -3; case.py's Tint prior 50-600 K;
-  stock nautilus 1.0.6), submitted from `runs/w39b_smc_retrieval` on cghfe01 with
-  `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`.
-  ~20-26 h [E]; the governor stops at 46 h of the 48 h wall and RESUME=1 with the same
-  overrides file, out dir and `VULCAN3_CHEM_RHS` continues. After it: its numbers in
-  "Runs" and `nautilus_report` on `data/w39b_baseline_v4_nz100_nautilus` before any
-  number is reported. 660 lanes compiled (~79 GiB) but were never timed.
+  gpu preset alone is 13-D). Last finished run: baseline_v4 (job 94946, finished
+  2026-10-21 after 23.82 h, exit 0; "Runs", baseline_v4). Before any v4 number is
+  reported: the warm-vs-cold re-solve and the list in "Physics assumptions and
+  limitations" (todo).
 - The 2026-10-17 TestPyPI releases (vulcan3 0.18.0, vulcan-forward 0.29.0, this repo
   0.27.0, jwst-transit-authority 0.72.0) and their tags are confirmed by the maintainer.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws `plots/corner.png`,
   `plots/tp_posterior.png` and, for N > 0 (default 32), `plots/spectrum_fit.png` from N
-  weighted draws re-solved cold. Not yet run on a real run's output [I]. Design:
+  weighted draws re-solved cold. First run on a real run's output: baseline_v4. Design:
   "Design records", run certificate.
 - Tests: the normal tier (plain `pytest tests`; CI runs it serially on Python
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
@@ -103,9 +97,14 @@ L = log-likelihood.
   reaches -3); lnZ +0.73 old sigma; logZ -0.48 (Occam penalty of the wider prior ~-0.36);
   the fixedmass lnKzz dip at -1.3..-1.1 is gone.
 
-### baseline_v4 (job 94946, running)
+### baseline_v4 (job 94946)
 - Code: VULCAN-JAX a420570, vulcan-forward acdf63e, vulcan-retrieval d850ce4 (the
-  `requirements-hpc.txt` pins). Launch and resume: "Current state".
+  `requirements-hpc.txt` pins). Uniform 100 layers, from
+  `overrides/w39b_baseline_v4_nz100.json` (presolve chain, 528 lanes, per-instrument
+  noise, log10gamma down to -3; case.py's Tint prior 50-600 K; stock nautilus 1.0.6),
+  submitted from `runs/w39b_smc_retrieval` on cghfe01 with
+  `qsub -l walltime=48:00:00 -v SMC_RETRIEVAL_OVERRIDES_FILE=overrides/w39b_baseline_v4_nz100.json,SMC_RETRIEVAL_OUT_DIR=data/w39b_baseline_v4_nz100,NAUTILUS_N_EFF=5000,VULCAN3_CHEM_RHS=grouped,PROFILE_BATCH=3 run_nas_w39b.pbs`.
+  660 lanes compiled (~79 GiB) but were never timed.
 - Gates on the same tree [M]: bootstrap 94874, `validate_env` PASS;
   `tools/gpu_kernel_test.pbs` 94875, `tests/test_solver_fast.py` 53 passed / 21 skipped
   plain and again under XLA_CMDBUF=2's flags (the CUDA cases ran), vulcan-forward
@@ -113,6 +112,33 @@ L = log-likelihood.
   library current (same stamp; nvcc 12.6 V12.6.85, sm_90), so it runs the tested build.
 - Batches 1-7 [M]: cold 1568 s, then warm 729-872 s. Batch 3 was profiled: "Pipeline
   speed", v4 batch profile.
+- 2026-10-20 12:29 to 2026-10-21 12:20, nautilus 23.82 h (job wall 24.1 h), exit 0: 131
+  batches, 207,504 calls, n_eff 6873, logZ_box 1159.098, max log L 1195.95 [M].
+  Certificate [M]: T-P out of window 3.5% of calls; of in-window draws 1.60% rejected
+  (1.597% exhausted, 5 stalled, 0 non-finite); 99.2% of calls warm; 63.7% of the 1584
+  cold draws certified; the retry pass certified 98.4% of the rows it re-solved.
+- Posterior as run, median [16%, 84%]: lnZ 0.306 [0.073, 0.660] (13.6 [10.8, 19.4] x
+  solar); c_o -0.350 [-0.736, 0.009] (C/O 0.39 [0.26, 0.55]); lnKzz -0.233
+  [-1.631, 2.354]; Tirr 974 [923, 1053] K; log10kappa -0.022 [-0.363, 0.228];
+  log10gamma -2.187 [-2.621, -1.704]; Tint 159 [86, 241] K; lnR0 0.0300 [0.0283,
+  0.0312]; log10kappa_cloud -3.031 [-3.412, -2.768]; cloud_alpha 1.583 [1.164, 2.212];
+  offsets NRS1 110.8 [88.1, 133.7], NRS2 68.6 [23.9, 114.5] ppm; noise inflation NIRISS
+  1.245, NRS1 0.923, NRS2 1.266.
+- Tails and prior edges [M]: the 99% quantile sits within 1% of the prior range of the
+  upper edge for c_o (0.227 vs 0.24) and log10kappa (0.460 vs 0.5), the 1% quantile
+  within 1% of the lower edge for lnKzz (-2.261, the x0.1 floor) and Tint (52 vs 50 K).
+  Kzz factor: 16.7% of the mass below x0.2, 9.0% below x0.15, 16.2% above x10. Tint:
+  5.2% above 297 K, 2.1% above 358 K. 3.1% of the mass above 54.5x solar.
+- vs baseline_v2 as run: every median within 0.16 v2 sigma except Tint (-0.35 sigma,
+  181 -> 159 K); logZ_box -0.022 [M].
+- Not quotable yet: the posterior and logZ_box are as run; the warm-vs-cold re-solve of
+  posterior rows ("Physics assumptions and limitations") is not done.
+- The profile's nsys-jax post-processing failed after the run (FileNotFoundError on a
+  `protos` file under `$VULCAN_SCRATCH/tmp`); `logs/nsys_94946/pipeline_gh200_jax_profile.zip`
+  was written, the job exited 0 and the retrieval output is unaffected [M].
+- Report [M]: `nautilus_report --spectra 128` (125 of 128 weighted draws certified cold)
+  rewrote the certificate and drew `plots/` next to the run; the further figures there
+  come from `plots/make_extra_figures.py`.
 
 ## Low-Kzz hole
 
