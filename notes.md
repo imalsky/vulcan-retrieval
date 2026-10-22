@@ -380,6 +380,18 @@ unless stated.
   <the spec's molecules>` (`module load python3`, `VULCAN_FORWARD_DATA` and `PYTHONPATH` set
   to the repo data and vulcan-forward/src); scp from home ran at 140 KB/s. Other files:
   `scp -r` through the sfe proxy. `unset https_proxy http_proxy` for git on the front end.
+- The v5 code on NAS (vulcan-retrieval `2606bb7`, VULCAN3 `da54541`, vulcan-forward
+  `c5770a4`) [M]: bootstrap 96220 and `validate_env` PASS (front end and node);
+  `tools/gpu_kernel_test.pbs` 96221, `tests/test_solver_fast.py` 33 passed / 13 skipped,
+  vulcan-forward `tests/test_ckd.py` 7 passed. The CUDA solve-guard A/B is in VULCAN3
+  notes "Efficiency program".
+- Pinning a node (`-l select=...:host=<node>`): take one with no `queue` attribute in
+  `pbsnodes`; a node assigned to another queue (`queue = app_test`) leaves the job
+  "Can Never Run". A node that fails every start (exit -16, "job held, too many failed
+  attempts to run" after 21 tries; cgh11n04) holds the job: `qdel` and resubmit pinned.
+- cghfe01 can lose its route to the internet (no route to api.anthropic.com or
+  downloads.claude.ai) while cghfe02 keeps it; both share the home folder, so tools
+  installed in `~/.local` from cghfe02 serve both.
 - Env `pyt2_8_gh`, caches under `/nobackup/$USER/.vulcan`; jobs are read-only on the env
   (a per-job `pip install --user -e` raced across concurrent jobs, 64961). The bootstrap
   installs `exogibbs==0.6.0` with `--no-deps` (its `pyfastchem` does not build on aarch64).

@@ -19,10 +19,11 @@ remains is the runs, the checks and one decision.
 Evidence: notes "Design records" (the decisions and the options), "Current state" (the
 launch recipe). Before launch: the full tier here (`-m "slow or not slow"`; it includes
 `tests/test_v5_options.py`, every option on the real smoke pipeline), vulcan-forward's
-full tier, `tools/gpu_kernel_test.pbs` on the GPU, and the new launch path end-to-end on
-the CPU: `smoke.yaml` through `run_nautilus` with a short governor, then `--resume`
+full tier, and the new launch path end-to-end on the CPU: `smoke.yaml` through
+`run_nautilus` with a short governor, then `--resume`
 (CLAUDE.md: a new job path runs on the CPU first; the submit wrapper's `-o <dir>/` and
-`afterany` chaining are confirmed on the first live submit). The run: `v5` (final, 17
+`afterany` chaining are confirmed on the first live submit). The NAS environment and the
+GPU kernel test pass on the v5 code (notes "HPC (NAS GH200) and daw"). The run: `v5` (final, 17
 parameters). When it finishes: `nautilus_report` (the certificate's `derived` block
 holds the quoted quantities), the warm-vs-cold check (item 1), and the "Physics
 assumptions and limitations" list beside the posterior; Kzz as an upper limit if the
