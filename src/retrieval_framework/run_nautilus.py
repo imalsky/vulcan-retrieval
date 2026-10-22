@@ -40,12 +40,9 @@ unfinished; resubmit with RESUME=1.
     python -m retrieval_framework.run_nautilus <run_dir>
 Env: NAUTILUS_N_LIVE (default N_LIVE; n_update follows at half of it),
 NAUTILUS_N_EFF (default N_EFF), NAUTILUS_N_BATCH (default BATCH_PER_LANE x the
-lane count, so a lane whose column certifies refills from the same batch; with
-cold_lanes = 0, one lockstep batch of config_schema.device_lane_count() columns),
-NAUTILUS_WARM (default 1), NAUTILUS_PRECOMPILE (default 1: compile the warm
-evaluators at n_batch on a host thread while the cold first batch runs;
-0 compiles each one at its first use), and the profiling hook (BatchProfiler, off unless
-VULCAN_PROFILE_BATCH is set): VULCAN_PROFILE_BATCH, VULCAN_NVTX_LIB.
+lane count, so a lane whose column certifies refills from the same batch),
+NAUTILUS_WARM (default 1), and VULCAN_PROFILE_BATCH (BatchProfiler, off unless
+set). Each evaluator is a plain jax.jit program, compiled at its first call.
 
 Sampler settings (the constants below, built by make_sampler): STOCK
 nautilus-sampler 1.0.6 from PyPI with its default networks (N_NETWORKS ReLU MLPs),
@@ -115,68 +112,6 @@ BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 FFI_BLOCKS_PER_SM = 3
 
 
-class _Programs:
-    """The likelihood evaluators, compiled once per (name, width) and called as
-    compiled executables, (U, Y, refs, active) -> outputs. ``start(keys)``
-    compiles ``keys`` on one host thread (the GPU keeps running the batch in
-    flight); ``call`` waits for a compile in progress, takes a queued one
-    out of the queue and compiles it on the spot (it never waits behind
-    others), and falls back to compiling in the caller's thread if the
-    background compile failed."""
-
-    def __init__(self, fns: dict, n_dim, y_shape: tuple, dtype):
-        self.fns, self.n_dim, self.y_shape, self.dtype = fns, n_dim, tuple(y_shape), dtype
-        self.exe, self.pending, self.pool = {}, {}, None
-
-    def _avals(self, w):
-        import jax
-        s = jax.ShapeDtypeStruct
-        return (s((w, int(self.n_dim)), self.dtype), s((w,) + self.y_shape, self.dtype),
-                s((w, 2), self.dtype), s((w,), bool))
-
-    def _compile(self, key, avals):
-        t0 = time.perf_counter()
-        exe = self.fns[key[0]].lower(*avals).compile()
-        log.info(f"nautilus: compiled the {key[0]} evaluator at width {key[1]} in "
-                 f"{time.perf_counter() - t0:.0f} s")
-        return exe
-
-    def start(self, keys):
-        from concurrent.futures import ThreadPoolExecutor
-        keys = [k for k in keys if k not in self.exe and k not in self.pending]
-        if not keys:
-            return
-        if self.pool is None:
-            self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="precompile")
-        log.info(f"nautilus: precompiling {keys} on a host thread")
-        for k in keys:
-            self.pending[k] = self.pool.submit(self._compile, k, self._avals(k[1]))
-
-    def call(self, name, w, *args):
-        import jax
-        key = (name, int(w))
-        exe = self.exe.get(key)
-        if exe is None:
-            avals = tuple(jax.ShapeDtypeStruct(a.shape, a.dtype) for a in args)
-            fut = self.pending.pop(key, None)
-            if fut is not None and fut.cancel():    # still queued: compile it here
-                fut = None
-            t0 = time.perf_counter()
-            try:
-                exe = fut.result() if fut is not None else self._compile(key, avals)
-                if fut is not None and time.perf_counter() - t0 > 1.0:
-                    log.info(f"nautilus: waited {time.perf_counter() - t0:.0f} s for the "
-                             f"background compile of {key}")
-            except Exception as e:  # noqa: BLE001  a failed background compile
-                if fut is None:
-                    raise
-                log.warning(f"nautilus: background compile of {key} failed ({e!r}); "
-                            "compiling it now")
-                exe = self._compile(key, avals)
-            self.exe[key] = exe
-        return exe(*args)
-
-
 class Anchors:
     """Certified columns so far: unit-cube chemistry + T-P coordinates ``z``,
     the column ``Y`` and its reference (lnZ, c_o). One npz per added batch in
@@ -243,42 +178,17 @@ class BatchProfiler:
     run) and cudaProfilerStop when batch k+1 starts (or at exit): the window
     holds batch k and the nautilus update after it. Meant for nsys / nsys-jax
     --capture-range=cudaProfilerApi --capture-range-end=stop, so the run goes on
-    unprofiled after the window.
-    VULCAN_NVTX_LIB: a shared library exporting vp_push(const char*) / vp_pop()
-    (an NVTX3 shim) for the phase ranges; without it, or with the `nvtx` package
-    absent, no ranges (the window still works). Ranges, every batch:
-    batch<k>/anchors (host nearest-anchor lookup), batch<k>/evaluator (ONE XLA
-    program: the chemistry lane queue, then the RT; under nsys XLA's own NVTX
-    thunk ranges split it by op), batch<k>/retry (the presolve chain only: the
-    certifying second pass, inside batch k's window),
-    batch<k>/post (rejection classes, anchors), nautilus/update (the sampler's
-    work between two batches)."""
+    unprofiled after the window."""
 
     def __init__(self):
         self.k = int(os.environ.get("VULCAN_PROFILE_BATCH", "0") or 0)
         self.n = 0
         self.active = False
-        self.t_batch = None
-        self._push = self._pop = None
-        self._open = []
         if self.k <= 0:
             return
         self._rt = self._cudart()
         atexit.register(self.stop)
-        lib = os.environ.get("VULCAN_NVTX_LIB", "").strip()
-        try:
-            if lib:
-                nv = ctypes.CDLL(lib)
-                nv.vp_push.argtypes = [ctypes.c_char_p]
-                self._push = lambda s: nv.vp_push(s.encode())
-                self._pop = nv.vp_pop
-            else:
-                import nvtx  # optional package
-                self._push, self._pop = nvtx.push_range, nvtx.pop_range
-        except (OSError, ImportError, AttributeError) as e:
-            log.warning(f"profile: no NVTX ranges ({e})")
-        log.info(f"profile: capture batch {self.k} (cudaProfilerStart/Stop), "
-                 f"NVTX {'on' if self._push else 'off'}")
+        log.info(f"profile: capture batch {self.k} (cudaProfilerStart/Stop)")
 
     @staticmethod
     def _cudart():
@@ -295,16 +205,6 @@ class BatchProfiler:
                 continue
         raise OSError("VULCAN_PROFILE_BATCH: no libcudart to call cudaProfilerStart from")
 
-    def push(self, name):
-        if self._push is not None:
-            self._push(name)
-            self._open.append(name)
-
-    def pop(self):
-        if self._pop is not None and self._open:
-            self._pop()
-            self._open.pop()
-
     def stop(self):
         if self.active:
             rc = int(self._rt.cudaProfilerStop())
@@ -314,12 +214,6 @@ class BatchProfiler:
     def batch_begin(self):
         """Called before every evaluator call; device work of the previous batch
         is complete here (its results were fetched to the host)."""
-        self.pop()                                  # nautilus/update, if open
-        now = time.perf_counter()
-        if self.t_batch is not None and self.k:
-            log.info(f"profile: batch {self.n} period {now - self.t_batch:.2f} s "
-                     "(evaluator + host + nautilus update)")
-        self.t_batch = now
         self.n += 1
         if self.k and self.n == self.k + 1:
             self.stop()
@@ -330,16 +224,12 @@ class BatchProfiler:
 
 
 def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
-                 batch_log: Path | None = None, prof: BatchProfiler | None = None,
-                 precompile: bool = False):
+                 batch_log: Path | None = None, prof: BatchProfiler | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
-    every rejection class. Calls a compiled evaluator at one fixed width
+    every rejection class. Calls a jitted evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with masked copies of its last
     row; those and the T-P-invalid rows take no chemistry step and no RT) and
-    adds this call's counts to ``tally``. ``precompile``: from the first chunk
-    on, compile the warm evaluators at n_batch on a host thread while the
-    first (cold) chunk runs.
-    With ``anchors``, a chunk starts
+    adds this call's counts to ``tally``. With ``anchors``, a chunk starts
     from the nearest certified column (warm, cold count_max) once one exists,
     and every certified column it returns becomes an anchor. With
     ``batch_log``, each chunk appends its wall time, mode and per-column
@@ -354,7 +244,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     its anchor column; cold chunk: the presolve's exit column, the baseline
     column if non-finite). A row keeps its second solve, judged at the retry
     cap: certified -> kept (and an anchor), else rejected in the class of that
-    solve. Precompile then queues the retry program and the warm presolve."""
+    solve."""
     import jax
     import jax.numpy as jnp
 
@@ -365,27 +255,24 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
     retry = getattr(pipe, "chem_retry", None)
-    # every evaluator masks padded rows (active) and RTs only the rows it can keep
-    fns = {"cold": jax.jit(pipe._make_batch_eval("cold", diag=True))}
-    if anchors is not None:
-        fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
-    if retry is not None:
+    # every evaluator masks padded rows (active) and RTs only the rows it can
+    # keep; each compiles at its first call
+    if retry is None:
+        fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
+        if anchors is not None:
+            fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
+    else:
         # the presolve chain: the first pass is the chemistry-only presolve (a
         # start generator) and every in-window row is solved again, and
         # certified, by the retry program at the fixed width n_batch, warm from
         # its presolve column
-        fns["pre_cold"] = jax.jit(pipe._make_presolve_eval("cold"))
-        fns["pre_warm"] = jax.jit(pipe._make_presolve_eval("warm"))
-        fns["retry_warm"] = jax.jit(pipe._make_batch_eval("warm", retry=True))
+        fns = {"pre_cold": jax.jit(pipe._make_presolve_eval("cold")),
+               "pre_warm": jax.jit(pipe._make_presolve_eval("warm")),
+               "retry_warm": jax.jit(pipe._make_batch_eval("warm", retry=True))}
         count_max_retry = int(retry.count_max)
         rtol_first = np.nan if retry.rtol_first is None else float(retry.rtol_first)
         rtol_retry = float(retry.rtol)
         y_base = np.asarray(Y0[0], np.float64)
-    progs = _Programs(fns, getattr(pipe, "n_dim", None), Y0.shape[1:], pipe.dtype)
-    ahead = []
-    if precompile and anchors is not None:
-        ahead = ([("retry_warm", n_batch), ("pre_warm", n_batch)] if retry is not None
-                 else [("warm", n_batch)])
 
     def second_pass(rows, Uj, Ys, rs):
         """The retry solve of chunk rows ``rows`` from the starts ``Ys`` /
@@ -395,9 +282,8 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
         sel = np.concatenate([rows, np.repeat(rows[-1:], w - len(rows))])
         act = jnp.asarray(np.arange(w) < len(rows))
         t1 = time.perf_counter()
-        L2, Y2, r2, st2 = progs.call("retry_warm", w, Uj[sel],
-                                     jnp.asarray(Ys[sel], pipe.dtype),
-                                     jnp.asarray(rs[sel], pipe.dtype), act)
+        L2, Y2, r2, st2 = fns["retry_warm"](Uj[sel], jnp.asarray(Ys[sel], pipe.dtype),
+                                            jnp.asarray(rs[sel], pipe.dtype), act)
         acc2, conv2 = st2.acc, st2.conv_ok
         n = len(rows)
         out2 = (np.asarray(jax.device_get(L2), np.float64)[:n],
@@ -422,50 +308,32 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             # shift the shared refresh cadence.
             tp_in = np.asarray(jax.device_get(tp_ok(Uj)), bool)
             act = jnp.asarray((np.arange(n_batch) < m) & tp_in)
-            if ahead:
-                # compile the warm programs on a host thread from the first chunk
-                # on: an evaluator call returns only when its queue loop has
-                # finished (the loop's predicate is read on the host each tick)
-                progs.start(ahead)
-                ahead.clear()
             if prof is not None:
                 prof.batch_begin()
-                prof.push(f"batch{prof.n}/anchors")
             t0 = time.perf_counter()
             warm = anchors is not None and len(anchors) > 0
             Yw = rw = None
             if warm:
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
-                if prof is not None:
-                    prof.pop()
-                    prof.push(f"batch{prof.n}/evaluator")
                 if retry is not None:     # a start only: no likelihood from this pass
-                    Ynew, rnew, acc, conv = progs.call("pre_warm", n_batch, Uj,
-                                                       jnp.asarray(Yw, pipe.dtype),
-                                                       jnp.asarray(rw, pipe.dtype), act)
+                    Ynew, rnew, acc, conv = fns["pre_warm"](Uj, jnp.asarray(Yw, pipe.dtype),
+                                                            jnp.asarray(rw, pipe.dtype), act)
                     L = np.full(n_batch, -np.inf)
                 else:
-                    L, Ynew, rnew, st = progs.call("warm", n_batch, Uj,
-                                                   jnp.asarray(Yw, pipe.dtype),
-                                                   jnp.asarray(rw, pipe.dtype), act)
+                    L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype),
+                                                    jnp.asarray(rw, pipe.dtype), act)
                     acc, conv = st.acc, st.conv_ok
             else:
-                if prof is not None:
-                    prof.pop()
-                    prof.push(f"batch{prof.n}/evaluator")
                 if retry is not None:
-                    Ynew, rnew, acc, conv = progs.call("pre_cold", n_batch, Uj, Y0, refs0, act)
+                    Ynew, rnew, acc, conv = fns["pre_cold"](Uj, Y0, refs0, act)
                     L = np.full(n_batch, -np.inf)
                 else:
-                    L, Ynew, rnew, cd = progs.call("cold", n_batch, Uj, Y0, refs0, act)
-                    acc, conv = cd.accept_count, cd.conv_normal
+                    L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
+                    acc, conv = st.acc, st.conv_ok
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(conv), bool)[:m]
-            if prof is not None:
-                prof.pop()
-                prof.push(f"batch{prof.n}/post")
             if batch_log is not None and retry is None:
                 with open(batch_log, "a") as fh:
                     fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
@@ -497,13 +365,7 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                        "count_max": count_max}
                 w, t2, acc2, conv2 = 0, 0.0, np.empty(0, np.int64), np.empty(0, bool)
                 if rows.size:
-                    if prof is not None:     # the second pass gets its own range
-                        prof.pop()
-                        prof.push(f"batch{prof.n}/retry")
                     L2, Y2, r2, acc2, conv2, w, t2 = second_pass(rows, Uj, Ys, rs)
-                    if prof is not None:
-                        prof.pop()
-                        prof.push(f"batch{prof.n}/post")
                     L[rows], Yh[rows], rh[rows], acc[rows], conv[rows] = L2, Y2, r2, acc2, conv2
                     retried[rows] = True
                 cap = np.where(retried, count_max_retry, count_max)
@@ -565,11 +427,8 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                 else:
                     anchors.add(Zc[:m][alive][:, :k], Yh[alive], rh[alive],
                                 rtol=np.where(retried, rtol_retry, rtol_first)[alive])
-            if prof is not None:
-                prof.pop()
         return out
 
-    loglike.programs = progs    # the compiled evaluators (tests, diagnostics)
     return loglike
 
 
@@ -604,9 +463,7 @@ def main() -> None:
     n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
     n_update = n_live // 2
     n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
-    n_batch = int(os.environ.get(
-        "NAUTILUS_N_BATCH",
-        str(BATCH_PER_LANE * lanes if lanes > 0 else C.device_lane_count())))
+    n_batch = int(os.environ.get("NAUTILUS_N_BATCH", str(BATCH_PER_LANE * lanes)))
     warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
     log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_update={n_update} n_eff={n_eff} "
@@ -667,17 +524,14 @@ def main() -> None:
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
-    prof = BatchProfiler()
-    precompile = os.environ.get("NAUTILUS_PRECOMPILE", "1").strip() != "0"
-    like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl", prof,
-                        precompile=precompile)
+    like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl",
+                        BatchProfiler())
 
     def loglike_saved(Z):
         L = like(Z)
         tmp = tally_path.with_name(f".{tally_path.name}.part")
         tmp.write_text(json.dumps(tally, indent=2) + "\n")
         os.replace(tmp, tally_path)
-        prof.push("nautilus/update")    # closed when the next batch begins
         return L
 
     sampler = make_sampler(loglike_saved, pipe.n_dim, n_live, n_batch, int(cfg.seed),
@@ -721,7 +575,6 @@ def main() -> None:
                          + ("; APPROXIMATE: warm starts move the likelihood and which draws "
                             "are rejected (NAUTILUS_WARM=0 for an evidence claim)"
                             if warm else ""),
-        "medians": {n: float(np.median(theta_eq[:, i])) for i, n in enumerate(pipe.names)},
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     log.info(f"wrote {out / 'nautilus_posterior.npz'} and nautilus_summary.json")

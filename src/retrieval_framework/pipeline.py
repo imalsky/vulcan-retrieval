@@ -1,9 +1,9 @@
 """Pipeline: the theta-space forward as a bounded-prior u-space posterior, and
 its batched likelihood evaluators.
 
-Each evaluator runs the chemistry of a whole batch in one call (the lane queue
-with cfg.cold_lanes > 0), the cold two-stage map from the baseline or a warm
-continuation from a given column, then the RT, ``lax.map``-chunked. Offsets
+Each evaluator runs the chemistry of a whole batch in one call on the lane
+queue, the cold two-stage map from the baseline or a warm continuation from a
+given column, then the RT, ``lax.map``-chunked. Offsets
 and noise inflation (one b, or one per instrument group: make_noise_model) are
 analytic. run_nautilus calls them through ``pipe._make_batch_eval`` and
 ``pipe._make_presolve_eval``.
@@ -55,7 +55,7 @@ def save_npz(path: Path, **arrays: Any) -> None:
 
 
 class EvalStats(NamedTuple):
-    """Per-row solver state of the warm evaluator's exit (device arrays).
+    """Per-row solver state of a batch evaluator's exit (device arrays).
 
     acc      (N,) int32 accept_count at exit
     conv_ok  (N,) bool  canonical-certification bit at exit
@@ -100,34 +100,27 @@ def make_uspace(specs, dtype):
     return theta_from_u, sample_prior_u
 
 
-def make_noise_model(names, kinds, groups, group_per_bin, sigma0, dtype):
-    """The likelihood's per-bin sigma for the run's noise mode (the parameters
-    of kind "noise"):
+def make_noise_model(names, group_per_bin, sigma0, dtype):
+    """The likelihood's per-bin sigma for the run's noise mode, through the one
+    map the predictive band also uses (``observations.noise_map``):
 
       none                         sigma = sigma0
       scalar  noise_inflation      sigma = sigma0 * b                 (every bin)
       group   noise_inflation_<g>  sigma_i = sigma0_i * b_{g(i)}      (one per group,
-                                   in ``groups`` order, contiguous in theta)
+                                   contiguous in theta)
 
     ``sigma0`` is a zero-argument callable returning the observed sigma (read at
     trace time: set_observations fills it after the build). Returns
     ``sigma_for(theta) -> (n_bin,)``. Module-level so it is unit-tested without
     the forward stack (tests/test_group_noise.py)."""
-    names, kinds = list(names), list(kinds)
-    idx = [i for i, k in enumerate(kinds) if k == "noise"]
-    if not idx:
+    m = OBS.noise_map(names, group_per_bin)
+    if m is None:
         return lambda theta: sigma0()
-    if [names[i] for i in idx] == [OBS.NOISE_PREFIX]:
-        i_b = idx[0]
-        return lambda theta: sigma0() * theta[i_b]
-    want = [f"{OBS.NOISE_PREFIX}_{g}" for g in groups]
-    lo, n = idx[0], len(idx)
-    if [names[i] for i in idx] != want or idx != list(range(lo, lo + n)):
-        raise RuntimeError(
-            f"noise parameters {[names[i] for i in idx]} at {idx} are neither the scalar "
-            f"{OBS.NOISE_PREFIX!r} nor one contiguous block {want} in group order")
-    N = jnp.asarray(OBS.build_group_design({"groups": list(groups),
-                                            "group": group_per_bin}), dtype)
+    lo, N = m
+    if N is None:
+        return lambda theta: sigma0() * theta[lo]
+    n = N.shape[1]
+    N = jnp.asarray(N, dtype)
     return lambda theta: sigma0() * (N @ theta[lo:lo + n])
 
 
@@ -230,12 +223,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return jnp.all(jnp.isfinite(T_art) & (T_art >= tp_T_min) & (T_art <= tp_T_max))
 
     # ---- observations + linear operators (binning, offsets) ----
-    obs, real_bins = OBS.get_observation_grid(cfg, fwd.wl_um)
-    keep, B = OBS.build_binning_matrix(fwd.wl_um, obs)
-    # apply keep to the observed arrays so obs bins line up with B's rows
-    for k in ("wl", "wl_lo", "wl_hi", "depth", "sigma", "group"):
-        obs[k] = np.asarray(obs[k])[keep]
-    obs["groups"] = list(dict.fromkeys(np.asarray(obs["group"]).tolist()))
+    obs, real_bins = OBS.get_observation_grid(cfg, fwd.wl_um)   # bins inside the model band
+    B = OBS.build_binning_matrix(fwd.wl_um, obs)
     O_np = OBS.build_offset_design(obs)
     groups = list(obs["groups"])
     n_bin = int(B.shape[0])
@@ -253,22 +242,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     kinds = [s.kind for s in specs]
     labels = [s.label for s in specs]
     n_dim = len(specs)
+    # theta[0:3] = [lnZ, c_o, lnKzz], then the T-P entries (specs_from_config)
     n_chem_tp = 3 + fwd.n_tp
-    # The chem+T-P prefix is unpacked by fixed position (theta[0:3]=chem,
-    # theta[3:3+n_tp]=T-P). Assert the layout EXACTLY, not just "chem/tp appear in
-    # the prefix": dropping a chem toggle shortens the block, and a subset
-    # check passes when all nuisances are also off, silently truncating the
-    # vector. config_schema.validate_config refuses that config at the boundary;
-    # this is the backstop for any path that builds specs without it.
-    if (names[:3] != ["lnZ", "c_o", "lnKzz"]
-            or kinds[:3] != ["chem", "chem", "chem"]
-            or kinds[3:n_chem_tp] != ["tp"] * fwd.n_tp
-            or n_dim < n_chem_tp):
-        raise RuntimeError(
-            "parameter layout error: the vector must start with [lnZ, c_o, lnKzz] "
-            f"+ {fwd.n_tp} T-P dims; got names={names[:n_chem_tp]} "
-            f"kinds={kinds[:n_chem_tp]} (n_dim={n_dim}). The chem block is "
-            "positional -- do not drop infer_lnZ/c_o/lnKzz.")
     # lnR0 and both cloud parameters are always present (specs_from_config)
     lnR0_idx = names.index("lnR0")
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
@@ -344,19 +319,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                                                 _cloud_from(theta))
         return _mu_from_depth(native, theta), ok > 0.5
 
-    def observed_depth_model(theta):
-        """Binned model depth, UNGATED: a plotting/diagnostic interface (posterior
-        predictive). Every likelihood entry point rejects an uncertified column,
-        and the synthetic truth spectrum is certified (binned_ok_jit)."""
-        return _binned_ok(theta)[0]
-
-    observed_depth_model_jit = jax.jit(observed_depth_model)
     binned_ok_jit = jax.jit(_binned_ok)
 
     # ---- likelihood in u-space (Gaussian, per-bin sigma, finite-guarded) ----
     # sigma_eff for the run's noise mode (scalar b, one b per group, or none)
-    _sigma_for = make_noise_model(
-        names, kinds, groups, obs["group"], lambda: pipe.obs_sigma_jax, dtype)
+    _sigma_for = make_noise_model(names, obs["group"], lambda: pipe.obs_sigma_jax, dtype)
 
     def _gauss_loglik(mu, theta):
         """The (finite-branch) Gaussian log-likelihood formula of the batched
@@ -384,9 +351,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         return jnp.where(finite, val, _REJECT)
 
     def _mu_from_column(args):
-        """Per-particle binned model depth from a converged column: the RT half of
-        observed_depth_model, with no chemistry solve. UNGATED like it: a
-        plotting interface (nautilus_report's model spectra)."""
+        """Per-particle binned model depth from a converged column, with no
+        chemistry solve. UNGATED: a plotting interface (nautilus_report's model
+        spectra)."""
         y, theta = args
         aux = fwd.aux_from_y(y, theta[:n_chem_tp])
         return _mu_from_depth(
@@ -395,10 +362,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     observed_depth_from_y_jit = jax.jit(
         lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
 
-    def _make_batch_eval(mode: str, diag: bool = False, retry: bool = False):
-        """Build eval(U, Y, refs, active=None) -> (L, Y_new, refs_new, stats) (``stats``
-        an EvalStats), or (L, Y_new, refs_new, per-particle ConvDiag) when diag;
-        all (N,)-batched.
+    def _make_batch_eval(mode: str, retry: bool = False):
+        """Build eval(U, Y, refs, active) -> (L, Y_new, refs_new, EvalStats), all
+        (N,)-batched.
 
         mode="warm": each particle's chemistry re-converges by continuation from its
         carried column Y with incremental (lnZ - refs[0], c_o - refs[1]) scaling,
@@ -406,25 +372,20 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         mode="cold": the published solve-from-baseline (two-stage) map; Y/refs are
         still updated from the converged result so cold evals can seed warm ones.
 
-        ``diag`` (mode="cold" only) threads each particle's ConvDiag through
-        (final-stage accept_count / longdy / conv_normal), so the caller can
-        detect a count_max-exhausted OR stall-certified (not-actually-converged)
-        cold solve instead of silently carrying it into L.
+        The EvalStats (final-stage accept_count, VULCAN's certificate) let the
+        caller tell a count_max-exhausted from a stall-certified rejection.
 
         ``retry=True`` (mode="warm" only; the presolve chain's certifying pass):
         the same evaluator on the chem_retry program (the retry rtol, capped at
         the retry count_max).
 
-        ``active`` (an optional (N,) bool): a False row is padding. On the lane
-        queue its chemistry takes no step; it is never ``usable`` (L is the
-        reject sentinel, Y the baseline) and is never RT'd. None is the
-        program without the mask. The RT runs only on the rows whose L can
-        survive: T-P in window, certified and active
+        ``active`` ((N,) bool): a False row is padding. On the lane queue its
+        chemistry takes no step; it is never ``usable`` (L is the reject
+        sentinel, Y the baseline) and is never RT'd. The RT runs only on the
+        rows whose L can survive: T-P in window, certified and active
         (``_map_chunks_rows``); the others get the reject sentinel without an
-        RT, so the ``diag`` path's L is gated like the other path's."""
+        RT."""
         warm = (mode == "warm")
-        if diag and warm:
-            raise ValueError("diag is cold only")
         if retry and fwd.chem_retry is None:
             raise ValueError("retry evaluator requested but cfg.chem_retry is off")
         if retry and not warm:
@@ -435,59 +396,42 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         if retry:
             warm_solve = fwd.chem_solve_warm_diag_full_batch_retry
 
-        # ``diag`` keeps an uncertified row's state (the caller reads the
-        # ConvDiag); its L is gated by the RT mask. The diag rides the primal carry.
-        def _chem_primal(C_, Y, refs, active=None):
+        def _chem_primal(C_, Y, refs, active):
             """Chemistry for the whole particle batch -> (AUX, Y_new, ConvDiag):
             one batched call (the cold two-stage map, or the warm continuation
             under the cold count_max). Lanes freeze at their own exits;
             agreement with the per-lane map is at the convergence scale.
-            ``active`` masks padded rows."""
-            kw = {} if active is None else {"active": active}
+            ``active`` masks padded rows. The ConvDiag rides the primal carry."""
             if warm:
-                Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], **kw)
+                Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], active=active)
             else:
-                Y_new, CD = cold_solve(C_, **kw)
+                Y_new, CD = cold_solve(C_, active=active)
             return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
         def _rt_vals(AUX, Theta, CD, valid, active):
             """The RT log L of the rows that can be kept: in-window, certified,
             active."""
-            need = valid & (CD.conv_normal > 0.5)
-            if active is not None:
-                need = need & active
+            need = valid & (CD.conv_normal > 0.5) & active
             return _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk,
                                     need, _REJECT)
 
-        def eval_batch(U, Y, refs, active=None):
-            if active is not None:
-                active = jnp.asarray(active, bool)
+        def eval_batch(U, Y, refs, active):
+            active = jnp.asarray(active, bool)
             U = jnp.asarray(U, dtype)
             Theta = jax.vmap(theta_from_u)(U)                        # (N, n_dim)
             C_ = Theta[:, :n_chem_tp]
             # per-particle T-P window mask (no clip): an out-of-window draw is
             # rejected (L = REJECT_LOGL, state pinned to baseline)
             valid = jax.vmap(tp_valid)(Theta)
-            usable = valid   # narrowed to (valid & certified) except on the diag path
-            if diag:
-                AUX, Ynew, CDIAG = _chem_primal(C_, Y, refs, active)
-                vals = _rt_vals(AUX, Theta, CDIAG, valid, active)
-                if active is not None:
-                    # a padded row's state is pinned to the baseline below
-                    # like a rejected one
-                    usable = valid & active
-            else:
-                AUX, Ynew, CDL = _chem_primal(C_, Y, refs, active)
-                vals = _rt_vals(AUX, Theta, CDL, valid, active)
-                ACC = CDL.accept_count.astype(jnp.int32)
-                conv_ok = CDL.conv_normal > 0.5
-                if active is not None:
-                    valid = valid & active      # a padded row is never usable
-                # the solver's verdict alone: the runner stops on accept_count >
-                # count_max with convergence first, so a certified solve can exit
-                # at cap or cap + 1, and conv_normal is False on every cap exit
-                usable = valid & conv_ok
-                stats = EvalStats(acc=ACC, conv_ok=conv_ok)
+            AUX, Ynew, CD = _chem_primal(C_, Y, refs, active)
+            vals = _rt_vals(AUX, Theta, CD, valid, active)
+            ACC = CD.accept_count.astype(jnp.int32)
+            conv_ok = CD.conv_normal > 0.5
+            # the solver's verdict alone: the runner stops on accept_count >
+            # count_max with convergence first, so a certified solve can exit
+            # at cap or cap + 1, and conv_normal is False on every cap exit; a
+            # padded row is never usable
+            usable = valid & active & conv_ok
             L = jnp.where(jnp.isfinite(vals) & usable, vals, _REJECT)
             # a rejected solve -- non-finite forward, an out-of-window T-P, OR an
             # uncertified one -- must not poison the carried state
@@ -495,9 +439,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             ok = jnp.all(jnp.isfinite(Ynew), axis=(1, 2)) & usable
             Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])
             refs_new = jnp.where(ok[:, None], C_[:, :2], jnp.zeros_like(C_[:, :2]))
-            if diag:
-                return L, Ynew, refs_new, CDIAG
-            return L, Ynew, refs_new, stats
+            return L, Ynew, refs_new, EvalStats(acc=ACC, conv_ok=conv_ok)
 
         return eval_batch
 
@@ -542,7 +484,6 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         theta_from_u=theta_from_u, sample_prior_u=sample_prior_u_valid,
         tp_valid=tp_valid,
         theta_truth=theta_truth,
-        observed_depth_model_jit=observed_depth_model_jit,
         observed_depth_from_y_jit=observed_depth_from_y_jit,
         # (binned model depth, certificate bit): the synthetic truth spectrum
         binned_ok_jit=binned_ok_jit,

@@ -137,8 +137,9 @@ def _synthetic_bin_grid(wl_lo: float, wl_hi: float, R: int = SYNTH_R,
 
 def restrict_to_model_band(obs: Dict[str, np.ndarray], wl_model_um: np.ndarray
                            ) -> Dict[str, np.ndarray]:
-    """Keep only observed bins whose [lo,hi] sits strictly inside the model wavelength
-    span (the binning operator is undefined outside it)."""
+    """Keep only observed bins whose [lo,hi] sits inside the model wavelength
+    span (the binning operator is undefined outside it): the one band filter,
+    applied by get_observation_grid to real and synthetic bins alike."""
     wl = np.asarray(wl_model_um, float)
     wmin, wmax = float(wl.min()), float(wl.max())
     lo, hi = np.asarray(obs["wl_lo"], float), np.asarray(obs["wl_hi"], float)
@@ -152,10 +153,11 @@ def restrict_to_model_band(obs: Dict[str, np.ndarray], wl_model_um: np.ndarray
 
 
 def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, np.ndarray], bool]:
-    """Return (obs, real_bins). Real product bins are used when a source is configured
-    and overlaps the model band; a synthetic grid (real_bins=False) is built ONLY for
-    a synthetic run (generate_synthetic_data=True). A real-data run that finds no
-    usable bin RAISES rather than silently fabricating a synthetic grid to fit."""
+    """Return (obs, real_bins), every bin inside the model band. Real product bins
+    are used when a source is configured and overlaps the model band; a synthetic
+    grid (real_bins=False) is built ONLY for a synthetic run
+    (generate_synthetic_data=True). A real-data run that finds no usable bin
+    RAISES rather than silently fabricating a synthetic grid to fit."""
     wl = np.asarray(wl_model_um, float)
     synthetic = bool(cfg.generate_synthetic_data)
     have_source = bool(cfg.obs_dir) and bool(cfg.obs_products)
@@ -181,7 +183,7 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, n
     # synthetic run: build a grid across the model span to inject onto
     pad = SYNTH_BAND_PAD_FRAC
     grid = _synthetic_bin_grid(float(wl.min()) * (1 + pad), float(wl.max()) * (1 - pad))
-    return grid, False
+    return restrict_to_model_band(grid, wl), False
 
 
 # The model band resolution is set by the k-tables (ExoMolOP R1000). A cell
@@ -214,8 +216,9 @@ def _refuse_unresolved_products(wl_model_um: np.ndarray, obs: Dict[str, np.ndarr
 
 
 def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
-                         ) -> Tuple[np.ndarray, np.ndarray]:
-    """Linear bin-averaging matrix. Returns (keep_mask (n_bin,), B (n_keep, n_native)).
+                         ) -> np.ndarray:
+    """Linear bin-averaging matrix B (n_bin, n_native) for bins already inside the
+    model span (restrict_to_model_band); a bin outside it raises.
 
     B[b] are the native-grid weights whose dot with the native depth equals the
     d(lambda)-weighted trapezoidal bin average -- exact, so the
@@ -235,13 +238,15 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     lo_all = np.asarray(obs["wl_lo"], float)
     hi_all = np.asarray(obs["wl_hi"], float)
     nb = lo_all.size
+    out = ~((wl_s[0] <= lo_all) & (lo_all < hi_all) & (hi_all <= wl_s[-1]))
+    if out.any():
+        raise ValueError(
+            f"{int(out.sum())} bin(s) at wl_lo {lo_all[out].tolist()} um are not inside the "
+            f"model span [{wl_s[0]:g}, {wl_s[-1]:g}] um: restrict_to_model_band first")
 
-    keep = np.zeros(nb, dtype=bool)
     rows = []
     for b in range(nb):
         lo, hi = lo_all[b], hi_all[b]
-        if not (wl_s[0] <= lo < hi <= wl_s[-1]):
-            continue
         inside = np.where((wl_s > lo) & (wl_s < hi))[0]
         x = np.concatenate([[lo], wl_s[inside], [hi]])
         dx = np.diff(x)
@@ -261,9 +266,7 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
             row[order[jj - 1]] += wend * (1.0 - t)
             row[order[jj]] += wend * t
         rows.append(row)
-        keep[b] = True
-    B = np.asarray(rows) if rows else np.zeros((0, n_native))
-    return keep, B
+    return np.asarray(rows) if rows else np.zeros((0, n_native))
 
 
 def build_offset_design(obs: Dict[str, np.ndarray]) -> np.ndarray:
@@ -292,25 +295,43 @@ def build_group_design(obs: Dict[str, np.ndarray]) -> np.ndarray:
     return N
 
 
+def noise_map(names, group_per_bin):
+    """Where theta's noise inflation sits and which bins each entry scales, by
+    parameter name: the one map the likelihood (pipeline.make_noise_model) and
+    the predictive band (noise_scale_per_bin) apply.
+
+    Returns None when ``names`` holds no noise parameter (multiplier 1);
+    ``(i, None)`` for the scalar ``noise_inflation`` at theta[i] (every bin);
+    ``(lo, N)`` for one ``noise_inflation_<g>`` per group, contiguous from
+    theta[lo], with N (n_bin, G) the bins' group indicator in that order
+    (build_group_design), so the multiplier is N @ theta[lo:lo + G]. A bin
+    whose group has no parameter raises."""
+    names = list(names)
+    if NOISE_PREFIX in names:
+        return names.index(NOISE_PREFIX), None
+    per = [(i, n[len(NOISE_PREFIX) + 1:]) for i, n in enumerate(names)
+           if n.startswith(NOISE_PREFIX + "_")]
+    if not per:
+        return None
+    idx = [i for i, _ in per]
+    if idx != list(range(idx[0], idx[0] + len(idx))):
+        raise ValueError(f"per-group noise parameters {[names[i] for i in idx]} at {idx} "
+                         "are not contiguous in theta")
+    return idx[0], build_group_design({"groups": [g for _, g in per],
+                                       "group": group_per_bin})
+
+
 def noise_scale_per_bin(theta, names, group_per_bin) -> np.ndarray:
-    """The likelihood's per-bin sigma multiplier for parameter vector(s)
-    ``theta`` (..., n_dim) with parameter ``names``: the scalar
-    ``noise_inflation`` scales every bin, ``noise_inflation_<g>`` the bins of
-    group g, and with neither it is 1. Returns (..., n_bin). numpy only: the
-    posterior predictive and the analysis scripts use it, so they follow
+    """The likelihood's per-bin sigma multiplier (noise_map) for parameter
+    vector(s) ``theta`` (..., n_dim) with parameter ``names``. Returns
+    (..., n_bin). numpy only: the posterior predictive uses it, so it follows
     either noise mode by name."""
     theta = np.asarray(theta, dtype=float)
-    names = list(names)
-    gpb = np.asarray(group_per_bin).astype(str)
-    out = np.ones(theta.shape[:-1] + (gpb.size,))
-    if NOISE_PREFIX in names:
-        return out * theta[..., names.index(NOISE_PREFIX), None]
-    per = {n[len(NOISE_PREFIX) + 1:]: i for i, n in enumerate(names)
-           if n.startswith(NOISE_PREFIX + "_")}
-    if per:
-        missing = sorted(set(gpb) - set(per))
-        if missing:
-            raise ValueError(f"per-group noise inflation has no parameter for groups {missing}")
-        for g, i in per.items():
-            out[..., gpb == g] = theta[..., i, None]
-    return out
+    out = np.ones(theta.shape[:-1] + (np.asarray(group_per_bin).size,))
+    m = noise_map(names, group_per_bin)
+    if m is None:
+        return out
+    lo, N = m
+    if N is None:
+        return out * theta[..., lo, None]
+    return theta[..., lo + N.argmax(axis=1)]          # each bin's own group entry

@@ -61,7 +61,7 @@ class Config:
     # ---- forward-model fidelity (the "profile" dict consumed by vulcan_chem /
     #      exojax_rt; the photo-on requirement: forward/config.py) ----------------
     nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
-    use_photo: bool = True             # REQUIRED for a correct forward-mode tangent (and for SO2)
+    use_photo: bool = True             # photochemistry (SO2 is photochemical)
     # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
     # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
     # overridden: they inherit the vulcan_cfg_name config (vulcan3/configs/W39b.yaml).
@@ -144,10 +144,7 @@ class Config:
     prior_cloud_alpha: Tuple[float, float] = (0.0, 6.0)         # 0=gray, 4~Rayleigh haze
     truth_cloud_alpha: float = 1.0
 
-    # ---- inference toggles ----------------------------------------------------
-    infer_lnZ: bool = True
-    infer_c_o: bool = True
-    infer_lnKzz: bool = True
+    # ---- inference toggles (the chemistry block is always inferred) -----------
     infer_offsets: bool = True         # one flat depth offset per instrument group beyond the reference
 
     # ---- priors (all bounded; uniform unless noted). Truth = synthetic-injection
@@ -207,16 +204,15 @@ class Config:
     allow_condense_inference: bool = False
     # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
     smc_rt_chunk: int = 16
-    # Lanes the chemistry batches run on. 0 = every draw in one lockstep batch,
-    # where the call waits for the slowest draw; k > 0 runs min(k, draws) lanes
-    # and refills a lane that certifies with the next draw inside the same
-    # while loop (vulcan_forward.converged_y_queue), so wall time follows total
-    # work / k. The gpu preset sets it to `device_lane_count()`, one kernel wave
-    # of the card (run_nautilus multiplies it by FFI_BLOCKS_PER_SM under the
-    # ffi solver). The schema default is the off-GPU width.
+    # Lanes the chemistry batches run on (> 0): min(k, draws) lanes, and a lane
+    # that certifies is refilled with the next draw inside the same while loop
+    # (vulcan_forward.converged_y_queue), so wall time follows total work / k.
+    # The gpu preset sets it to `device_lane_count()`, one kernel wave of the
+    # card (run_nautilus multiplies it by FFI_BLOCKS_PER_SM under the ffi
+    # solver). The schema default is the off-GPU width.
     cold_lanes: int = OFF_GPU_LANES
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
-    # lanes; it is capped at cold_lanes and only applies when cold_lanes > 0.
+    # lanes; it is capped at cold_lanes.
     cold_refill_chunk: int = 8
     # ---- the presolve chain (run_nautilus only; off by default) ----------------
     # chem_retry and chem_presolve are set together. chem_retry builds the
@@ -320,13 +316,11 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
             raise ValueError(f"log10_uniform prior needs positive bounds for {name}")
         specs.append(ParamSpec(name, label, prior_type, float(lo), float(hi), float(truth), kind))
 
-    # --- chemistry (order matters: converged_y expects [lnZ, c_o, lnKzz, <tp...>]) ---
-    if cfg.infer_lnZ:
-        add("lnZ", r"$\ln Z$", *cfg.prior_lnZ, cfg.truth_lnZ, "chem")
-    if cfg.infer_c_o:
-        add("c_o", r"$\Delta\ln(\mathrm{C/O})$", *cfg.prior_c_o, cfg.truth_c_o, "chem")
-    if cfg.infer_lnKzz:
-        add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
+    # --- chemistry, always inferred: converged_y and the pipeline unpack
+    # [lnZ, c_o, lnKzz, <tp...>] by position ---
+    add("lnZ", r"$\ln Z$", *cfg.prior_lnZ, cfg.truth_lnZ, "chem")
+    add("c_o", r"$\Delta\ln(\mathrm{C/O})$", *cfg.prior_c_o, cfg.truth_c_o, "chem")
+    add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
 
     # --- T-P (ExoJax Guillot) ---
     add("Tirr", r"$T_{\rm irr}$ (K)", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
@@ -385,17 +379,11 @@ def device_lane_count(fallback: int = OFF_GPU_LANES) -> int:
     return int(n)
 
 
-# CUDA compute capabilities whose FP64 runs at half the FP32 rate (P100, V100,
-# A100/A30, H100/GH200, B200). Every other CUDA card runs FP64 at 1/32 to 1/64,
-# and the chemistry is f64 by rule.
-_FULL_RATE_FP64 = ("6.0", "7.0", "8.0", "9.0", "10.0")
-
-
 def hardware_profile() -> dict:
     """The hardware this process runs on, read from JAX and the OS: backend,
     device kind, host cores and RAM, and on a CUDA device its SM count,
-    compute capability, memory and FP64 class. run_nautilus logs it and
-    records it in config.json."""
+    compute capability and memory. run_nautilus logs it and records it in
+    config.json."""
     import jax
 
     dev = jax.devices()[0]
@@ -413,8 +401,7 @@ def hardware_profile() -> dict:
         cc = str(getattr(dev, "compute_capability", ""))
         stats = dev.memory_stats() or {}
         prof.update(sm_count=getattr(dev, "core_count", None), compute_capability=cc,
-                    device_mem_gib=round(stats.get("bytes_limit", 0) / 2**30, 1),
-                    fp64_full_rate=cc in _FULL_RATE_FP64)
+                    device_mem_gib=round(stats.get("bytes_limit", 0) / 2**30, 1))
     return prof
 
 
@@ -451,27 +438,6 @@ def choose_solver() -> str:
     return f"fast ({why})"
 
 
-def hardware_warnings(prof: dict) -> list:
-    """Loud warnings about hardware the retrieval runs poorly on."""
-    out = []
-    if prof["backend"] == "cpu":
-        out.append(
-            "running on CPU: the batched pipeline uses about 2 cores regardless of "
-            "lane count. Use the GPU for production "
-            "runs.")
-    elif not prof.get("fp64_full_rate", True):
-        out.append(
-            f"{prof['device_kind']} (compute capability "
-            f"{prof.get('compute_capability')}) runs FP64 at 1/32-1/64 of FP32 and "
-            "the chemistry is f64; use a full-rate FP64 card (A100, H100, GH200).")
-    if (prof["backend"] in ("gpu", "cuda")
-            and "xla_gpu_enable_command_buffer" not in prof["xla_flags"]):
-        out.append(
-            "XLA_FLAGS carries no --xla_gpu_enable_command_buffer; "
-            "run_nas_w39b.pbs sets FUSION,CUBLAS,CUSTOM_CALL,WHILE.")
-    return out
-
-
 def retry_profile(cfg: Config) -> Dict[str, Any]:
     """The chemistry profile of the ``chem_retry`` (certifying) program: ``cfg.profile()``
     with ``cfg_overrides["rtol"] = chem_retry_rtol`` and ``count_max =
@@ -488,9 +454,9 @@ def validate_config(cfg: Config) -> None:
     # The RT chunk size is a batch split where 0 means "one batch".
     if int(cfg.smc_rt_chunk) < 0:
         raise ValueError(f"smc_rt_chunk must be >= 0 (0 = no chunking), got {cfg.smc_rt_chunk!r}")
-    if int(cfg.cold_lanes) < 0:
-        raise ValueError("cold_lanes must be >= 0 (0 = the whole cold batch in "
-                         f"one lockstep call), got {cfg.cold_lanes!r}")
+    if int(cfg.cold_lanes) < 1:
+        raise ValueError("cold_lanes must be > 0 (the lane count of the chemistry "
+                         f"queue every batch runs on), got {cfg.cold_lanes!r}")
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
     # Every pipeline evaluates a likelihood, so condensation ON is refused here
@@ -524,19 +490,6 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
                          "(it splits the inferred inflation by group; alone it would "
                          "silently infer none)")
-    # [lnZ, c_o, lnKzz] is unpacked by fixed position (theta[0:3] chem,
-    # theta[3:3+n_tp] T-P); dropping one shifts every later index, so all three
-    # must be inferred.
-    if not (cfg.infer_lnZ and cfg.infer_c_o and cfg.infer_lnKzz):
-        off = [n for n, on in (("infer_lnZ", cfg.infer_lnZ),
-                               ("infer_c_o", cfg.infer_c_o),
-                               ("infer_lnKzz", cfg.infer_lnKzz)) if not on]
-        raise ValueError(
-            f"{', '.join(off)}=False is not supported: the chemistry block "
-            "[lnZ, c_o, lnKzz] is unpacked by fixed position downstream, so "
-            "disabling one shifts the T-P and nuisance indices and silently "
-            "reinterprets the parameter vector. Keep all three inferred (use a "
-            "tight prior range if you want one effectively fixed).")
     # Planet identity must be set by the case preset.
     if not str(cfg.vulcan_cfg_name).strip():
         raise ValueError("vulcan_cfg_name is unset: the case must name its VULCAN "
@@ -544,11 +497,6 @@ def validate_config(cfg: Config) -> None:
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): "
                          "the case must set both (cm)")
-    if not cfg.use_photo:
-        # not fatal, but the forward-mode tangent is only validated photo-on.
-        import warnings
-        warnings.warn("use_photo=False: the forward-mode tangent is only validated with "
-                      "photochemistry ON. Proceed with caution.")
 
 
 # Loud config banner (printed at the top of every run so nothing is a surprise)
@@ -580,8 +528,7 @@ def describe_config(cfg: Config, preset: str = "") -> str:
     dtmax = "(master default 1e17)" if cfg.dt_max is None else f"{cfg.dt_max:g}"
     data = ("SYNTHETIC (inject-and-recover at truth_*)" if cfg.generate_synthetic_data
             else "REAL observed spectrum")
-    lanes = (f"{int(cfg.cold_lanes)} lanes, refill {int(cfg.cold_refill_chunk)}"
-             if int(cfg.cold_lanes) > 0 else "one lockstep batch")
+    lanes = f"{int(cfg.cold_lanes)} lanes, refill {int(cfg.cold_refill_chunk)}"
 
     lines = [
         "", bar,
@@ -594,7 +541,7 @@ def describe_config(cfg: Config, preset: str = "") -> str:
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
         f"   co_mode={cfg.co_mode}"
-        f"   cold batch: {lanes}",
+        f"   lane queue: {lanes}",
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}",
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "

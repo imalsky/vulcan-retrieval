@@ -6,14 +6,12 @@ would silently test stale code. Fail collection loudly instead (same convention 
 VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 
 Also the real smoke pipeline builder (its capped session fixture is built
-once per session, per xdist worker), the shared ConvDiag stub and the
-target-digest stand-in.
+once per session, per xdist worker) and the target-digest stand-in.
 """
 import dataclasses
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, NamedTuple
 
 # Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
 # CUDA plugin would otherwise open every visible card in each worker.
@@ -35,14 +33,6 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
 CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays finite
-
-
-class StubConvDiag(NamedTuple):
-    """Pytree stand-in for forward.vulcan_chem.ConvDiag: the init reads only
-    .accept_count and .conv_normal (importing the real one would pull the heavy
-    VULCAN env into unit tests)."""
-    accept_count: Any
-    conv_normal: Any
 
 
 def build_smoke_pipe(**overrides):

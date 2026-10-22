@@ -84,7 +84,6 @@ def test_switches_off_leave_the_manifest_as_before(digest_pipe):
 @pytest.mark.parametrize("var, value", [
     ("VULCAN3_SOLVER", "ffi"),
     ("VULCAN3_CHEM_RHS", "grouped"),
-    ("VULCAN3_BT_FACTOR", "lu"),
     ("VULCAN3_BT_BUFFERS", "1"),
 ])
 def test_target_digest_binds_the_solver_env(var, value, digest_pipe, monkeypatch):

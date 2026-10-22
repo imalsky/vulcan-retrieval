@@ -147,7 +147,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # get negative O-carrier abundances that the runner's clip silently turns into a
     # wrong-inventory, finite-likelihood state. First-order guard: the bound is
     # computed on the baseline column (hot stage-2 columns can bind slightly tighter).
-    if cfg.infer_c_o and str(profile["co_mode"]) == "fixed_O":
+    if str(profile["co_mode"]) == "fixed_O":
         bound = float(chem.co_bz_bound)
         hi = float(cfg.prior_c_o[1])
         if hi >= bound:
@@ -207,68 +207,55 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         reject a non-converged cold proposal as a warm one is rejected."""
         return chem_stage2_diag(chem_theta, chem_stage1(chem_theta))
 
-    def _route_for(ch):
-        def _chem_batch_route(C, **kw):
-            """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
-            point for every batched solve, cold stage or warm continuation (the
-            knob keeps its ``cold_lanes`` name; ``kw`` carries ``warm_y`` /
-            ``lnZ_ref`` / ``c_o_ref``). ONE route per config:
-            ``cfg.cold_lanes > 0`` ALWAYS takes the lane queue, at
-            ``min(cold_lanes, draws)`` lanes -- with the lane count at or above the
-            draw count ``run_queue`` refills nothing and runs the plain batch's
-            ticks. A narrow call (a padded last chunk, a few model spectra)
-            therefore takes the same route as the production run instead of
-            silently switching to the lockstep batch.
-            ``cold_lanes = 0`` is the lockstep batch, call for call. ``ch`` is the
-            main chemistry, or the chem_retry program on the retry route.
+    lanes = int(cfg.cold_lanes)
+    refill_chunk = int(cfg.cold_refill_chunk)
 
-            ``active`` (optional (N,) bool, run_nautilus's padded rows): on the
-            lane queue a False row is a placeholder whose lane starts done and
-            takes no step (vulcan_forward ``converged_y_queue(active=)``); the
-            lockstep batch has no mask and solves every row. Either way the
-            caller discards those rows. None is the program without a mask."""
-            active = kw.pop("active", None)
-            lanes = int(cfg.cold_lanes)
-            if lanes > 0:
-                if active is not None:
-                    kw["active"] = active
-                return ch.converged_y_queue(C, min(lanes, int(C.shape[0])),
-                                            chunk=int(cfg.cold_refill_chunk), **kw)
-            return ch.converged_y_batch(C, return_conv_diag=True, **kw)
-        return _chem_batch_route
+    def _chem_batch_route(ch, C, active, **kw):
+        """One batched chemistry stage -> ``(y, ConvDiag)``: the single routing
+        point for every batched solve, cold stage or warm continuation, on
+        ``ch`` (the main chemistry, or the chem_retry program). Every call runs
+        the lane queue (``ch.converged_y_queue``) at ``min(cold_lanes, draws)``
+        lanes; with the lane count at or above the draw count ``run_queue``
+        refills nothing and runs the plain batch's ticks, so a narrow call (a
+        padded last chunk, a few model spectra) takes the production route.
+        ``kw`` carries ``warm_y`` / ``lnZ_ref`` / ``c_o_ref``.
 
-    _main_route = _route_for(chem)
+        ``active`` ((N,) bool, run_nautilus's padded and out-of-window rows): a
+        False row is a placeholder whose lane starts done and takes no step;
+        the caller discards it. None is the program without the mask."""
+        return ch.converged_y_queue(C, min(lanes, int(C.shape[0])),
+                                    chunk=refill_chunk, active=active, **kw)
 
     def chem_solve_cold_diag_batch(C, active=None):
         """``chem_solve_cold_diag`` for a STACK of chem_thetas ``C`` (N, n_chem_tp):
         ``(y, ConvDiag)`` with a leading particle axis on every field.
 
-        Same map, on the lane queue (``chem.converged_y_queue``) when
-        ``cfg.cold_lanes > 0``, else the lockstep batched runner
-        (``chem.converged_y_batch``). The while loop sits above the lane vmap,
-        so photolysis and the geometry refresh fire once per cadence for the
-        whole batch instead of on every lane every iteration. A lane is NOT
-        bit-identical to its solo solve: the cadence rides the loop's iteration
-        tick, and on the lane queue a refilled draw starts at the tick its lane
-        was freed at (agreement at the convergence scale). Stage 1 is not gated
-        (it carries no certificate); stage 2's ConvDiag certifies each draw.
-        ``active`` masks padded rows in both stages (``_chem_batch_route``)."""
-        Y1, _cd = _main_route(C.at[:, 0].set(0.0).at[:, 1].set(0.0), active=active)
-        return _main_route(C, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, active=active)
+        Same map, on the lane queue (``_chem_batch_route``). The while loop sits
+        above the lane vmap, so photolysis and the geometry refresh fire once
+        per cadence for the whole batch instead of on every lane every
+        iteration. A lane is NOT bit-identical to its solo solve: the cadence
+        rides the loop's iteration tick, and a refilled draw starts at the tick
+        its lane was freed at (agreement at the convergence scale). Stage 1 is
+        not gated (it carries no certificate); stage 2's ConvDiag certifies each
+        draw. ``active`` masks padded rows in both stages."""
+        Y1, _cd = _chem_batch_route(chem, C.at[:, 0].set(0.0).at[:, 1].set(0.0), active)
+        return _chem_batch_route(chem, C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
 
-    def _warm_for(route):
-        def warm(C, Y, lnZ_ref, c_o_ref, active=None):
-            """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
-            ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
-            ``c_o_ref`` ((N,) arrays), under the route's count_max: run_nautilus's
-            anchored warm starts, and the presolve chain's certifying pass on the
-            chem_retry program. ``active`` masks padded rows."""
-            return route(C, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, active=active)
-        return warm
+    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, active=None):
+        """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
+        ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
+        ``c_o_ref`` ((N,) arrays), under the cold count_max: run_nautilus's
+        anchored warm starts. ``active`` masks padded rows."""
+        return _chem_batch_route(chem, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
+                                 c_o_ref=c_o_ref)
 
-    chem_solve_warm_diag_full_batch = _warm_for(_main_route)
-    chem_solve_warm_diag_full_batch_retry = (
-        None if chem_retry is None else _warm_for(_route_for(chem_retry)))
+    chem_solve_warm_diag_full_batch_retry = None
+    if chem_retry is not None:
+        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, active=None):
+            """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
+            presolve chain's certifying pass, under the retry count_max."""
+            return _chem_batch_route(chem_retry, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
+                                     c_o_ref=c_o_ref)
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)

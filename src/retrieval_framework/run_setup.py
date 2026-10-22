@@ -114,11 +114,8 @@ def setup_logging(log_file: Path | None = None, mode: str = "a") -> None:
 
 
 def log_hardware() -> None:
-    """Log the hardware profile and its warnings."""
-    hw = C.hardware_profile()
-    log.info(f"hardware: {hw}")
-    for w in C.hardware_warnings(hw):
-        log.warning(w)
+    """Log the hardware profile."""
+    log.info(f"hardware: {C.hardware_profile()}")
 
 
 def write_run_identity(cfg: C.Config, pipe, preset: str, obs_save: dict) -> None:

@@ -8,8 +8,7 @@
 #PBS -m abe
 # ~10 min GH200 check of VULCAN-JAX's CUDA block-Thomas kernel: refresh the three
 # editable installs (a version bump leaves validate_env stale until pip re-runs),
-# build the kernel with nvcc, run tests/test_solver_fast.py on the GPU twice (plain,
-# then under run_nas_w39b.pbs's XLA_CMDBUF=2 command-buffer flags), and
+# build the kernel with nvcc, run tests/test_solver_fast.py on the GPU, and
 # vulcan-forward's fold test on the GPU.
 # Resubmit after every change to the kernel. From the production tree's
 # vulcan-retrieval root (or its tools/ dir):
@@ -96,10 +95,6 @@ cd "${PROJECT_ROOT}/VULCAN-JAX"
 # -rA: a passing test's captured output too, so the matrix-free check's per-case
 # primal and tangent readings reach the log (the bars are set from them).
 VULCAN3_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
-# Again under XLA_CMDBUF=2's flags: the kernels are marked command-buffer
-# compatible, so capture must meet them here first, not inside a bench.
-XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" \
-  VULCAN3_ALLOW_MISSING_FIXTURES=1 python -m pytest tests/test_solver_fast.py -q -p no:cacheprovider -rA
 # --- vulcan-forward's correlated-k fold on the GPU: the lax.scan fold must stay
 # the unrolled loop's op sequence (bitwise on CPU; this is where the GPU says).
 # Last, so a GPU-only difference cannot stop the steps above.

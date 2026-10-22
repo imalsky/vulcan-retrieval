@@ -83,7 +83,7 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
 
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), 1)
     Y0, refs0 = P._blank_state(pipe, 1)
-    logl = float(jax.jit(pipe._make_batch_eval("cold", diag=True))(U, Y0, refs0)[0][0])
+    logl = float(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(1, bool))[0][0])
     assert np.isfinite(logl) and logl > P.REJECT_BELOW, f"non-finite/rejected likelihood: {logl}"
 
     # The opacity leave-one-out screen selects its states from this same pipe;

@@ -10,9 +10,7 @@ original start); a row is kept only if that solve certifies, and the tally,
 the batch log and the anchors' rtol record the second pass. Off, none of that
 appears. Padding and T-P-invalid rows are masked: a short chunk's filler rows,
 its out-of-window rows and the second pass's unused rows reach the evaluator as
-``active`` False, and the warm evaluators
-can be compiled ahead on a host thread. Last, every config
-refusal of validate_config."""
+``active`` False. Last, every config refusal of validate_config."""
 import json
 import math
 from types import SimpleNamespace
@@ -27,7 +25,6 @@ from scipy.special import ndtr
 
 jax.config.update("jax_enable_x64", True)
 
-from conftest import StubConvDiag
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
 from retrieval_framework.run_nautilus import (DISCARD_EXPLORATION, F_LIVE, N_NETWORKS,
@@ -70,7 +67,7 @@ def _stub_pipe(seen=None):
     def cold(U, Y, refs, active):  # the column is a code of the point's own chemistry
         th, L, acc, conv = common(U)
         L, acc, conv = _masked("cold", seen, active, L, acc, conv)
-        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], StubConvDiag(acc, conv)
+        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], _Stats(acc, conv)
 
     def warm(U, Y, refs, active):  # hands back the column it started from; like the
         _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
@@ -78,8 +75,7 @@ def _stub_pipe(seen=None):
         L = jnp.where(conv, L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
-    def make(mode, diag=False):
-        assert diag == (mode == "cold")
+    def make(mode):
         return cold if mode == "cold" else warm
 
     return SimpleNamespace(_make_batch_eval=make, n_dim=D,
@@ -167,10 +163,10 @@ def _presolve_stub_pipe(seen=None):
 
     first = base._make_batch_eval
 
-    def make(mode, diag=False, retry=False):
+    def make(mode, retry=False):
         if not retry:
-            return first(mode, diag)
-        assert mode == "warm" and not diag
+            return first(mode)
+        assert mode == "warm"
         return warm2
 
     def make_pre(mode):
@@ -274,36 +270,13 @@ def test_presolve_solves_every_in_window_row_from_its_presolve_column(tmp_path):
                                  "count_max": COUNT_MAX}
 
 
-def test_presolve_precompiles_only_the_n_batch_programs(tmp_path):
-    """precompile with the presolve: the retry program and the warm presolve at
-    n_batch, no retry bucket; the results equal those compiled at first use."""
-    rng = np.random.default_rng(11)
-    z1, z2 = rng.uniform(0.02, 0.98, (16, D)), rng.uniform(0.02, 0.98, (16, D))
-    out = {}
-    for pre in (False, True):
-        tally, anchors = {}, Anchors(tmp_path / f"p{int(pre)}", 2)
-        like = make_loglike(_presolve_stub_pipe(), 16, tally, anchors, precompile=pre)
-        L1 = like(z1)
-        progs = like.programs
-        if pre:
-            assert set(progs.pending) | set(progs.exe) >= {("retry_warm", 16), ("pre_warm", 16)}
-            for f in list(progs.pending.values()):
-                f.result()
-        L2 = like(z2)
-        assert all(w == 16 for _, w in progs.exe)       # nothing at a bucket width
-        assert not any(name in ("warm", "cold") for name, _ in progs.exe)
-        out[pre] = (L1, L2, {k: v for k, v in tally.items() if not k.endswith("wall_s")})
-    for a, b in zip(out[False][:2], out[True][:2]):
-        assert np.array_equal(a, b)
-    assert out[False][2] == out[True][2]
-
-
 VALID = dict(vulcan_cfg_name="W39b", rp_cm=1.0, rstar_cm=10.0)
 CHAIN = dict(chem_retry=True, chem_presolve=True)
 
 
 @pytest.mark.parametrize("over, msg", [
-    (dict(cold_lanes=-1), "cold_lanes"),      # 0 is the single lockstep batch
+    (dict(cold_lanes=0), "cold_lanes"),       # every batch runs on the lane queue
+    (dict(cold_lanes=-1), "cold_lanes"),
     (dict(cold_refill_chunk=0), "cold_refill_chunk"),
     (dict(chem_retry=1, chem_presolve=True), "chem_retry must be"),   # a JSON 1, not true
     (dict(CHAIN, chem_retry_rtol=0.0), "chem_retry_rtol"),

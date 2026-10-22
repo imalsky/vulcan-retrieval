@@ -25,8 +25,9 @@ def test_every_entry_point_rejects_uncertified_finite_spectrum(capped_smoke_pipe
     assert np.all(np.isfinite(np.asarray(mu))) and not bool(ok)
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 2)
     Y0, refs0 = P._blank_state(pipe, 2)
-    ev = jax.jit(pipe._make_batch_eval("cold", diag=True))
-    L = ev(U, Y0, refs0)[0]
+    ev = jax.jit(pipe._make_batch_eval("cold"))
+    L, _, _, st = ev(U, Y0, refs0, np.ones(2, bool))
+    assert not np.any(np.asarray(st.conv_ok))
     assert np.all(np.asarray(L) <= P.REJECT_BELOW)
     # the truth is refused before set_observations would be called a second time
     with pytest.raises(RuntimeError, match="truth chemistry does not certify"):

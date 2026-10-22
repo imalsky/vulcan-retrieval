@@ -46,14 +46,18 @@ def test_binning_matrix_matches_trapezoid_reference():
     hi = np.array([2.1, 2.10, 2.9, 3.31, 3.309, 4.4, 5.19, 5.40])
     obs = dict(wl=0.5 * (lo + hi), wl_lo=lo, wl_hi=hi)
 
-    keep, B = OBS.build_binning_matrix(wl_model, obs)
-    # bins crossing the model edge must be dropped
-    assert not keep[0] and not keep[-1] and keep[1:-1].all()
+    # bins crossing the model edge are dropped by the band filter, and refused
+    # by the binning operator
+    with pytest.raises(ValueError, match="restrict_to_model_band"):
+        OBS.build_binning_matrix(wl_model, obs)
+    inband = OBS.restrict_to_model_band(obs, wl_model)
+    assert np.array_equal(inband["wl_lo"], lo[1:-1])
+    B = OBS.build_binning_matrix(wl_model, inband)
 
     for y in specs:
         ref = _reference_bin(wl_model, y, lo, hi)
         got = B @ y
-        assert np.allclose(got, ref[keep], rtol=BIN_RTOL, atol=BIN_ATOL)
+        assert np.allclose(got, ref[1:-1], rtol=BIN_RTOL, atol=BIN_ATOL)
 
 
 def test_binning_matrix_refuses_duplicate_model_coordinates():
@@ -72,16 +76,16 @@ def test_binning_matrix_on_real_cm24_bins():
         obs_products={"NIRISS": ("NIRISS_O1_R100.csv", "NIRISS_O2_R100.csv"),
                       "G395H": ("G395H_NRS1_R100.csv", "G395H_NRS2_R100.csv")},
         combo=("NIRISS", "G395H"), obs_wl_lo=2.02, obs_wl_hi=5.24)
-    obs = OBS.load_real_observations(cfg)
     wl_model = np.linspace(2.0, 5.26, 6000)
+    obs = OBS.restrict_to_model_band(OBS.load_real_observations(cfg), wl_model)
     y = 0.021 + 1e-3 * np.sin(4.0 * wl_model)
-    keep, B = OBS.build_binning_matrix(wl_model, obs)
+    B = OBS.build_binning_matrix(wl_model, obs)
     # both instrument groups must survive the band cut (29 NIRISS + 59 G395H bins):
     # NIRISS is the reference group and G395H carries the inter-instrument offset
-    g = np.asarray(obs["group"])[keep]
+    g = np.asarray(obs["group"])
     assert (g == "NIRISS").sum() >= 20 and (g == "G395H").sum() >= 50
     ref = _reference_bin(wl_model, y, np.asarray(obs["wl_lo"]), np.asarray(obs["wl_hi"]))
-    assert np.allclose(B @ y, ref[keep], rtol=BIN_RTOL, atol=BIN_ATOL)
+    assert np.allclose(B @ y, ref, rtol=BIN_RTOL, atol=BIN_ATOL)
     # row weights of a bin average must sum to 1
     assert np.allclose(B.sum(axis=1), 1.0, atol=ROW_SUM_ATOL)
 

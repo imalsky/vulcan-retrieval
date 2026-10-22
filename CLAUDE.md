@@ -78,8 +78,8 @@ adopted".
   planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a
   real-data run with no overlapping bins, RESUME with no checkpoint.
 - The chemistry block `[lnZ, c_o, lnKzz]` is positional (`theta[0:3]`, then the T-P
-  entries): keep all three inferred, never add a drop path (`validate_config` and
-  `pipeline` both refuse).
+  entries) and always inferred, by construction (`specs_from_config` has no switch for
+  it): never add a drop path.
 - `set_observations` validates at the API boundary (`pipeline.validate_observations`):
   mask invalid bins before injection.
 
@@ -101,9 +101,9 @@ adopted".
   `gpu_config`'s `count_max`. A draw that does not certify within it is rejected
   (log L = -inf), never extended. Do not raise the cap without a measured reason.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver
-  env choices (`VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_FACTOR`,
-  `VULCAN3_BT_BUFFERS`), the start policy and the nautilus settings. Changing any needs
-  a fresh `SMC_RETRIEVAL_OUT_DIR`; `run_nautilus` refuses a resume across it.
+  env choices (`VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start
+  policy and the nautilus settings. Changing any needs a fresh `SMC_RETRIEVAL_OUT_DIR`;
+  `run_nautilus` refuses a resume across it.
 - After a config or physics change, synthetic observations, `data/*.npz` caches and
   every checkpoint are stale: regenerate, never resume.
 - Kept names, do not rename: `SMC_RETRIEVAL_*` / `SMC_RESUME`, the
@@ -122,9 +122,9 @@ adopted".
   accept-count clause (a solve can certify at cap or cap + 1; every cap exit is
   uncertified). Every batched evaluator rejects on it; a new sampler adapter goes
   through one of them; `generate_observations` refuses an uncertified synthetic truth
-  (`native_depth_aux`'s bit, `pipe.binned_ok_jit`). `observed_depth_model_jit` and
-  `observed_depth_from_y_jit` are the only ungated spectra (plots, diagnostics). Pinned
-  by `tests/test_cold_reject.py` and `tests/test_run_nautilus.py`.
+  (`native_depth_aux`'s bit, `pipe.binned_ok_jit`). `observed_depth_from_y_jit` is the
+  only ungated spectrum (plots, diagnostics). Pinned by `tests/test_cold_reject.py` and
+  `tests/test_run_nautilus.py`.
 - A new rejection rule (e.g. aborting doomed lanes) is the maintainer's decision (notes
   "Ideas not adopted").
 - Cold solves start from the network's Gibbs equilibrium at the proposal's own T-P and
@@ -143,11 +143,10 @@ adopted".
 
 ### Lanes and batching
 
-- `cold_lanes > 0` runs every chemistry batch on the lane queue; under `ffi`,
-  `run_nautilus` runs `cold_lanes` x `FFI_BLOCKS_PER_SM` lanes.
-- One route per config: every batch, cold or warm, goes through
-  `retrieval_forward._chem_batch_route` (never a per-row `vmap` of solves), and a narrow
-  call (a padded last chunk, a few model spectra) must not switch to the lockstep batch.
+- Every chemistry batch runs on the lane queue at `cold_lanes` lanes (`validate_config`
+  refuses 0); under `ffi`, `run_nautilus` runs `cold_lanes` x `FFI_BLOCKS_PER_SM` lanes.
+- One route: every batch, cold or warm, goes through
+  `retrieval_forward._chem_batch_route` (never a per-row `vmap` of solves).
 - A refilled draw moves at the convergence scale, so a lane-count change is a target
   change: regenerate, never resume.
 - Off the PBS, `make_config` calls `config_schema.choose_solver`: an explicit
@@ -189,8 +188,8 @@ adopted".
 - Report a finished run from `nautilus_certificate.json` (written when a run finishes;
   a run stopped by the governor has none yet) and `nautilus_report`'s figures. The
   certificate has no pass/fail verdict: read its caveats.
-- Quote posterior numbers from the weighted points in `nautilus_posterior.npz`, never
-  `nautilus_summary.json`'s medians (equal-weight draws).
+- Quote posterior numbers from the weighted points (`theta`, `log_w`) in
+  `nautilus_posterior.npz`, never from its equal-weight `samples`.
 - Before publishing a number, read notes "Physics assumptions and limitations" and
   report beside the posterior what it lists. A finished GPU run's numbers go into
   notes "Runs" before any of them is reported.

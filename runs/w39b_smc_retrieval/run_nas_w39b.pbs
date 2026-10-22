@@ -47,9 +47,6 @@
 #   RESUME=1                continue a killed run from its checkpoint (HDF5 file)
 #   XLA_CMDBUF=0            command buffers OFF (the empty flag). ON by default;
 #                           the commas stay inside the script
-#   XLA_CMDBUF=2            XLA's default command set PLUS WHILE and CONDITIONAL, and a
-#                           one-command minimum graph size: the arm that shows whether
-#                           the whole step loop is captured as one graph
 #   VULCAN_SCRATCH          cache root                 (default /nobackup/$USER/.vulcan)
 #   PROFILE_BATCH=<k>       nautilus only: run under nsys-jax and capture ONE batch, the
 #                           k-th likelihood batch of this job (3 = the first steady warm
@@ -112,10 +109,6 @@ echo "Live log: tail -f ${LOG_FILE}"
 echo "Job ${PBS_JOBID:-?} started $(date) on $(hostname) ($(uname -m))"
 echo "PROJECT_ROOT=${PROJECT_ROOT}"
 
-# --- NAS proxy (only for a download; validate_env requires the data on disk) --
-export http_proxy="${HTTPS_PROXY:-${http_proxy:-http://proxy.nas.nasa.gov:3128}}"
-export https_proxy="${http_proxy}" HTTP_PROXY="${http_proxy}" HTTPS_PROXY="${http_proxy}"
-
 # --- caches off $HOME (scratch-rooted, shared with the bootstrap) -------------
 : "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
 export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
@@ -155,14 +148,12 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 XLA_BASE_FLAGS="${XLA_FLAGS:---xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0}"
 # Command buffers are ON by default; XLA_CMDBUF=0 turns them off for an A/B.
 # Off needs the EMPTY value: with no flag at all XLA keeps its own default set.
-# The list in 1 REPLACES XLA's default set; the "+" form in 2 adds to it, and a
-# while loop becomes one graph only if every op in its body is capturable.
+# The list in 1 REPLACES XLA's default set.
 set_xla_flags() {
   case "${XLA_CMDBUF:-1}" in
     0) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=" ;;
     1) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE" ;;
-    2) export XLA_FLAGS="${XLA_BASE_FLAGS} --xla_gpu_enable_command_buffer=+WHILE,+CONDITIONAL --xla_gpu_graph_min_graph_size=1" ;;
-    *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0, 1 or 2"; return 1 ;;
+    *) echo "ERROR: XLA_CMDBUF=${XLA_CMDBUF}: expected 0 or 1"; return 1 ;;
   esac
 }
 set_xla_flags || exit 1
@@ -282,14 +273,6 @@ if [ -n "${PROFILE_BATCH:-}" ]; then
   # nsys-jax sets -1 (whole tracebacks in the HLO metadata) only when unset; JAX's
   # default keeps the programs, and their cache entries, the production ones
   export JAX_TRACEBACK_IN_LOCATIONS_LIMIT="${JAX_TRACEBACK_IN_LOCATIONS_LIMIT:-10}"
-  # NVTX3 is header-only: a 3-function shim gives the batch-phase ranges
-  printf '%s\n' '#include <nvtx3/nvToolsExt.h>' \
-    'int vp_push(const char* s) { return nvtxRangePushA(s); }' \
-    'int vp_pop(void) { return nvtxRangePop(); }' > "${PROFILE_DIR}/nvtx_shim.c"
-  if gcc -O2 -shared -fPIC -I/usr/local/cuda-12.6/include "${PROFILE_DIR}/nvtx_shim.c" \
-       -o "${PROFILE_DIR}/libnvtxshim.so" -ldl; then
-    export VULCAN_NVTX_LIB="${PROFILE_DIR}/libnvtxshim.so"
-  fi
   export VULCAN_PROFILE_BATCH="${PROFILE_BATCH}"
   NAUT_CMD=("${NSYS_JAX}" --trace=cuda,nvtx,osrt --sample=cpu --cpuctxsw=process-tree
             --capture-range=cudaProfilerApi --capture-range-end=stop -f

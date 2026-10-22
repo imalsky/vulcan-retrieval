@@ -7,7 +7,8 @@ Stack-free:
   infer_noise_inflation;
 * observations.build_group_design / noise_scale_per_bin in all three modes;
 * pipeline.make_noise_model, the likelihood's sigma, is sigma0 times
-  noise_scale_per_bin, the inflation the predictive band uses, in every mode;
+  noise_scale_per_bin, the inflation the predictive band uses, in every mode
+  (both apply observations.noise_map);
 * nautilus_report.predictive_replicates with one b and with a per-group
   inflation.
 
@@ -90,6 +91,8 @@ def test_group_design_and_scale_per_bin():
                                   np.ones(5))
     with pytest.raises(ValueError, match="G395H_NRS2"):
         OBS.noise_scale_per_bin(th[0, :3], names[:3], gpb)
+    with pytest.raises(ValueError, match="contiguous"):
+        OBS.noise_map([names[1], "x", names[2], names[3]], gpb)
 
 
 def _toy(n_bin=40, seed=0):
@@ -104,15 +107,15 @@ def test_likelihood_sigma_is_the_predictive_inflation(per_group):
     """The likelihood's sigma_eff (make_noise_model) and the predictive band's
     inflation (observations.noise_scale_per_bin) are one map, in both modes."""
     gpb, sig0 = _toy()
-    specs, names, kinds = _layout(_cfg(noise_inflation_per_group=per_group))
-    sigma_for = P.make_noise_model(names, kinds, GROUPS, gpb, lambda: sig0, jnp.float64)
+    specs, names, _ = _layout(_cfg(noise_inflation_per_group=per_group))
+    sigma_for = P.make_noise_model(names, gpb, lambda: sig0, jnp.float64)
     theta_from_u, _ = P.make_uspace(specs, jnp.float64)
     theta = theta_from_u(jnp.asarray(np.random.default_rng(1).normal(size=len(specs))))
     np.testing.assert_allclose(
         np.asarray(sigma_for(theta)),
         np.asarray(sig0) * OBS.noise_scale_per_bin(np.asarray(theta), names, gpb),
         rtol=1e-15)
-    s = P.make_noise_model(["x"], ["chem"], GROUPS, gpb, lambda: sig0, jnp.float64)
+    s = P.make_noise_model(["x"], gpb, lambda: sig0, jnp.float64)
     assert s(theta) is sig0                                    # no noise parameter
 
 

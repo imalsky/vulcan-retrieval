@@ -256,8 +256,9 @@ L = log-likelihood.
   RT 24.6% [I], retry chemistry 24.1%, retry compiles 3.5%, host/nautilus 5.6%.
   Chemistry lane time: useful 35%, capped or uncertified 38%, idle lanes 27% [I].
 - speed2 (all bitwise): retry width buckets compiled ahead (removed with the
-  retry-only mode), masked padding rows, RT only on kept rows (764ccb8;
-  NAUTILUS_PRECOMPILE), plus VULCAN3 a5b1215 / eeb4873 and vulcan-forward 5e8d43a /
+  retry-only mode), masked padding rows, RT only on kept rows, the warm programs
+  compiled on a host thread during the cold batch (764ccb8; that precompile is removed:
+  "Superseded designs"), plus VULCAN3 a5b1215 / eeb4873 and vulcan-forward 5e8d43a /
   39c2c45. Pass-1 batch 344.0 -> 287.3 s; full batch ~892 -> 628 s excluding compiles;
   RT pass 256 -> 60 s.
 - Whole run [E]: ~11 h at 62 layers (~3.4x the fixedmass run's 37.2 h), with the fork
@@ -374,9 +375,9 @@ Sampler and policy
   exceptions; `run_nautilus` refuses a resume across a digest or setting change): no
   measurement. The manifest (`manifest_version` 4; the version also moves when the
   evaluators' keep/reject logic changes at a fixed config) also binds the solver choices
-  `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_FACTOR` and `VULCAN3_BT_BUFFERS`,
-  so a resume cannot switch them (design; not every one moves results).
-- Quote from the weighted points: `nautilus_summary.json`'s medians come from
+  `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS` and `VULCAN3_BT_BUFFERS`, so a resume cannot
+  switch them (design; not every one moves results).
+- Quote from the weighted points: `nautilus_posterior.npz`'s `samples` come from
   `sampler.posterior(equal_weight=True)` (`run_nautilus.main`), which draws about
   sum(w)/max(w) samples (256 for 90302) [M].
 - Report from the certificate and quote the seed spread: nautilus 1.0.6 gives no logZ
@@ -484,8 +485,8 @@ HPC
   everything, and P0 (longdy < yconv_min at exit) is a no-op for the failing class.
   `native_depth_aux` returns the certificate bit; the synthetic injection refuses an
   uncertified truth spectrum on it (before, the truth was checked for finiteness
-  only). `observed_depth_model_jit` and `observed_depth_from_y_jit` are the only
-  ungated spectra (plots, diagnostics).
+  only). `observed_depth_from_y_jit` is the only ungated spectrum (plots,
+  diagnostics).
   No accept-count clause, from baseline v4 (the maintainer's choice; manifest_version
   4): the runner stops on `accept_count > count_max` with convergence first, so a lane
   can certify at cap or cap + 1, and `conv_normal` is False on every cap exit. The
@@ -496,10 +497,10 @@ HPC
   the proposal's own T(P) and elemental ratios, the engine's only cold start; zero
   tangent, lnZ / c_o tangents enter through the elemental projection.
   `chem_solve_cold_diag` returns stage 2's ConvDiag.
-- Lane queue: `cold_lanes > 0` runs every chemistry batch on
-  `vulcan_forward.converged_y_queue` at `min(lanes, draws)` lanes, refilling a certified
-  lane in the same while loop (`retrieval_forward._chem_batch_route`); 0 is the lockstep
-  reference. The gpu preset sets `device_lane_count()` (132 on the GH200); the
+- Lane queue: every chemistry batch runs on `vulcan_forward.converged_y_queue` at
+  `min(cold_lanes, draws)` lanes, refilling a certified lane in the same while loop
+  (`retrieval_forward._chem_batch_route`); `validate_config` refuses `cold_lanes` 0. The
+  gpu preset sets `device_lane_count()` (132 on the GH200); the
   production overrides set 264 (v2) and 176 (v4), times FFI_BLOCKS_PER_SM 3 = 792 /
   528 lanes. One chemistry call per batch; only the RT is chunked.
 - Growing anchors (`run_nautilus.Anchors`): each certified column is an anchor keyed by
@@ -626,6 +627,20 @@ data with AD gradients: no precedent found (searches 2026-07 and 2026-09, not ex
   90302 and 93269): retired at 83b2980 (spreading biases logZ ~0.02 low and overstates
   n_eff; SiLU = ReLU). Its branches are tags `archive/vulcan-multishell-2026-10-19` and
   `archive/per-network-kwargs-silu-2026-10-19`; the GitHub repo is archived.
+- Unused paths removed 2026-10-21 (no preset, override or production run set them;
+  a CPU smoke A/B of the old and new code, presolve chain and plain path, cold then
+  warm chunk, gave bitwise-equal L, anchors and tally [M]; not compared on the GPU):
+  the lockstep chemistry batch (`cold_lanes = 0`),
+  the host-thread warm-program precompile (`NAUTILUS_PRECOMPILE`; the warm programs
+  now compile at their first batch), the profiling hook's NVTX phase ranges
+  (`VULCAN_NVTX_LIB` and the PBS's gcc shim; the cudaProfilerApi window stays), the
+  `infer_lnZ` / `infer_c_o` / `infer_lnKzz` switches (one legal value; an old
+  config.json still loads, `nautilus_report._config_from_json` drops unknown keys), the
+  cold evaluator's `diag` return convention, the equal-weight `medians` in
+  `nautilus_summary.json`, `observed_depth_model_jit`, `config_schema.hardware_warnings`,
+  the `XLA_CMDBUF=2` arm and the second command-buffer pass of
+  `tools/gpu_kernel_test.pbs`, and the manifest's `VULCAN3_BT_FACTOR` binding (the
+  factor variant is leaving VULCAN3).
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1
   nat; replaced in production by the presolve chain (cdcffd1). The retry-only mode
   (`chem_retry` without `chem_presolve`: its second pass, the retry width buckets,
