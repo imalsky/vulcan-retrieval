@@ -26,8 +26,8 @@ def test_repo_version_parses_version_file(tmp_path: Path):
     assert V._repo_version(tmp_path, "otherpkg") is None
 
 
-# the real list is resolved from the case (V.production_molecules); this
-# fixture only needs A list, so the check is exercised without a case dir
+# the real list is resolved from the run spec (V.production_molecules); this
+# fixture only needs A list, so the check is exercised without a spec
 PROD = ("H2O", "CO2", "SO2")
 
 

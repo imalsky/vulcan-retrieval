@@ -48,12 +48,7 @@ DATA_DIR = REPO_DIR / "data"      # INPUTS: observed spectra + opacity caches
 # rebuilding them here, or the two copies drift and this one wins silently.
 _fwd_paths.set_data_root(DATA_DIR)
 
-# WASP-39b geometry (cm): the Rp and r_star of vulcan3/configs/W39b.yaml.
-R_SUN_CM = 6.957e10        # = vulcan3.phy_const.r_sun (not imported: import-light)
+# WASP-39b radius (cm), the Rp of vulcan3/configs/W39b.yaml. The run specs carry the
+# RT geometry (rp_cm, rstar_cm, tp_gravity_cgs) as numbers with their derivation.
 R_JUP_CM = 7.1492e9        # upstream VULCAN phy_const.r_jup
-# The literature radius and the gravity there, G*Mp/Rp^2 with the cfg's Mp.
-# They apply at the config's p_ref_bar; the retrieval's free lnR0 scales the
-# radius there at fixed planet mass (see transmission_depth_r).
 RP_CM = 1.279 * R_JUP_CM   # planet radius (cm) at p_ref_bar
-GS_CGS = 422.0             # gravity (cm/s^2) at RP_CM
-RSTAR_CM = 0.932 * R_SUN_CM

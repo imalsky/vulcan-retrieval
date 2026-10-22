@@ -4,7 +4,7 @@
 Jobs are READ-ONLY on the environment: all installs happen once in
 tools/bootstrap_nas_env.pbs (NAS) or a local editable install, and every PBS
 job runs this module first instead of pip. It aggregates check failures into one
-report (exit 1) that names the remedy; an exception while loading the case's
+report (exit 1) that names the remedy; an exception while loading the spec's
 molecule list ends the run with a traceback instead.
 
 Checks, in import-order-safe sequence (vulcan3 / retrieval_framework BEFORE
@@ -192,13 +192,13 @@ def _check_exojax() -> None:
         _ok(f"exojax {exojax.__version__}")
 
 
-def production_molecules(root: Path) -> tuple[str, ...]:
-    """The case's own molecule list, read from case.py, never a copy."""
-    import os
-    from retrieval_framework import run_setup as _R
-    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
-    cfg, _ = _R.make_config(root / "vulcan-retrieval" / "runs" / "w39b_smc_retrieval")
-    return tuple(cfg.molecules)
+PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/v5.yaml")   # relative to the retrieval repo
+
+
+def production_molecules(root: Path, spec: Path | None = None) -> tuple[str, ...]:
+    """The molecule list of the run specification, read from the file, never a copy."""
+    from retrieval_framework.run_setup import load_spec
+    return tuple(load_spec(spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).cfg.molecules)
 
 
 def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
@@ -294,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path)
     parser.add_argument("--require-gpu", action="store_true")
+    parser.add_argument("--spec", type=Path, default=None,
+                        help=f"the run specification whose data to check (default {PRODUCTION_SPEC})")
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
 
@@ -317,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         _check_cross_repo_pin()
         _check_exojax()
-        _check_data_tree(root, production_molecules(root))
+        _check_data_tree(root, production_molecules(root, args.spec))
         _check_exogibbs()
         _check_nautilus()
 

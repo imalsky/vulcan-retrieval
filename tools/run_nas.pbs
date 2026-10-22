@@ -1,0 +1,195 @@
+#!/bin/bash
+#PBS -j oe
+#PBS -m abe
+#
+# =============================================================================
+# One nautilus retrieval run on a NASA NAS GH200 node, from a run specification
+# (runs/<case>/<name>.yaml). Submit through tools/submit.py, not qsub by hand:
+#
+#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml [--resume] [--dry-run]
+#
+# submit.py validates the spec, puts its job block (queue, group, select line,
+# walltime), the run name and the log directory on the qsub command line (qsub
+# options override #PBS directives, so nothing run-specific lives up here) and
+# passes three comma-free values:
+#   VR_SPEC    the spec file (absolute)
+#   VR_OUT     the run's output directory, output/<case>/<name>_nautilus (absolute)
+#   VR_RESUME  0 fresh run, 1 continue the checkpoint in VR_OUT
+# The spec's runtime block (VULCAN3_SOLVER, VULCAN3_CHEM_RHS, VULCAN3_BT_BUFFERS,
+# XLA_PYTHON_CLIENT_MEM_FRACTION, XLA_FLAGS) is exported below through
+# retrieval_framework.run_setup, so the kernel build, the preflight and the run see
+# one environment. This job is read-only on that environment: installs live in
+# tools/bootstrap_nas_env.pbs; the preflight only validates
+# (retrieval_framework.validate_env) and fails with a pointer to the bootstrap.
+#
+# Layout on /nobackup (PBS_O_WORKDIR is this repo's root: submit.py runs qsub there):
+#   ${PROJECT_ROOT}/VULCAN-JAX/   ${PROJECT_ROOT}/vulcan-forward/   ${PROJECT_ROOT}/vulcan-retrieval/
+#
+# Infrastructure knobs, passed through by submit.py when set in its shell:
+#   CONDA_ENV        interpreter env (default pyt2_8_gh)
+#   VULCAN_SCRATCH   cache root (default /nobackup/$USER/.vulcan)
+#   PROFILE_BATCH=k  run under nsys-jax and capture ONE batch, the k-th likelihood
+#                    batch of this job (3 = the first steady warm batch of a fresh
+#                    run) plus the nautilus update after it (run_nautilus.BatchProfiler,
+#                    cudaProfilerApi window; the run continues unprofiled). Report:
+#                    ${VR_OUT}/jobs/nsys_<jobid>/pipeline_gh200_jax_profile.zip. NSYS_JAX
+#                    (nsys-jax executable), NSYS_BIN (nsys binary), PROFILE_HLO=1 (also
+#                    dumps the HLO protos: ~10 GB, compressed for tens of minutes at exit).
+#
+# Live log:  tail -f <out_dir>/jobs/<jobid>.log   (the PBS .OU lands beside it at job end)
+# After a finished run: python -m retrieval_framework.nautilus_report <out_dir> [--spectra N]
+# =============================================================================
+set -euo pipefail
+
+: "${VR_SPEC:?submit through tools/submit.py}"
+: "${VR_OUT:?submit through tools/submit.py}"
+: "${VR_RESUME:=0}"
+REPO_DIR="$(cd -- "${PBS_O_WORKDIR:?}" && pwd -P)"
+if [ ! -f "${REPO_DIR}/src/retrieval_framework/run_nautilus.py" ]; then
+  echo "ERROR: PBS_O_WORKDIR=${REPO_DIR} is not the vulcan-retrieval root (submit through tools/submit.py)"
+  exit 1
+fi
+PROJECT_ROOT="$(dirname "${REPO_DIR}")"
+export PROJECT_ROOT
+export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes forward/config.py portable
+
+# --- live log in the run's directory (PBS's own .OU appears only at job end) ---
+JOB_DIR="${VR_OUT}/jobs"
+mkdir -p "${JOB_DIR}"
+_jobid="${PBS_JOBID:-manual_$$}"; _jobid="${_jobid%%.*}"
+LOG_FILE="${JOB_DIR}/${_jobid}.log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+echo "Live log: tail -f ${LOG_FILE}"
+echo "Job ${PBS_JOBID:-?} started $(date) on $(hostname) ($(uname -m))"
+echo "spec=${VR_SPEC} out=${VR_OUT} resume=${VR_RESUME} PROJECT_ROOT=${PROJECT_ROOT}"
+
+# --- caches off $HOME (scratch-rooted, shared with the bootstrap) -------------
+: "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
+export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
+# Log every compile and every persistent-cache hit, so a chained job's log shows
+# whether it reused the last job's compiles (grep "Persistent compilation cache hit").
+export JAX_LOG_COMPILES="${JAX_LOG_COMPILES:-1}"
+export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
+export MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
+export TMPDIR="${VULCAN_SCRATCH}/tmp"
+mkdir -p "${PIP_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
+         "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
+
+# --- conda env (shared GH200 env; user site populated by the bootstrap) -------
+module purge 2>/dev/null || true
+module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
+module load miniconda3/gh2 2>/dev/null || true
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${CONDA_ENV:-pyt2_8_gh}"
+
+# Per-interpreter userbase (matches tools/bootstrap_nas_env.pbs): a shared
+# userbase's bin/ is not python-version-scoped.
+PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
+unset PYTHONNOUSERSITE
+
+# --- fixed process settings (the run-specific ones are the spec's runtime block) ---
+export PYTHONUNBUFFERED=1
+export JAX_ENABLE_X64=1
+unset JAX_PLATFORMS
+export JAX_PLATFORM_NAME=gpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
+# --- the spec's runtime block, exported before any vulcan3 or jax import ------
+RUNTIME_EXPORTS="$(python -m retrieval_framework.run_setup "${VR_SPEC}")" || {
+  echo "ERROR: the spec ${VR_SPEC} did not load (see above)"; exit 1; }
+eval "${RUNTIME_EXPORTS}"
+echo "runtime: VULCAN3_SOLVER=${VULCAN3_SOLVER} VULCAN3_CHEM_RHS=${VULCAN3_CHEM_RHS}" \
+     "VULCAN3_BT_BUFFERS=${VULCAN3_BT_BUFFERS:-<unset>} XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-<unset>}"
+echo "XLA_FLAGS=${XLA_FLAGS:-<unset>}"
+
+# The ffi kernel libraries (CUDA and CPU twins) are per checkout and gitignored (*.so);
+# one not built from the checkout's present sources is refused at the first solve
+# (vulcan3.solver_fast._register). Build them here when stale (a no-op when current),
+# so a pulled kernel change is built in the first minute, not failed hours into the job.
+if [ "${VULCAN3_SOLVER}" = "ffi" ]; then
+  { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan3.solver_fast \
+    && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
+         python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
+fi
+
+# --- preflight: GPU visible, JAX on it, packages + data present ---------------
+if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: no visible NVIDIA GPU in this job."; exit 1
+fi
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+# No installs here: validate only (shared with the bootstrap; runnable on a front end).
+python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu --spec "${VR_SPEC}" || {
+  echo "ERROR: environment validation failed (or retrieval_framework is not installed)."
+  echo "       One-time fix, then resubmit:"
+  echo "  cd ${REPO_DIR}"
+  echo "  qsub tools/bootstrap_nas_env.pbs"
+  exit 1
+}
+
+# --- GPU utilization monitor ---------------------------------------------------
+GPU_MON_LOG="${JOB_DIR}/gpu_monitor_${_jobid}.log"
+( while true; do
+    { echo "=== $(date '+%F %T') ==="
+      # util%, W, MHz, MiB, MiB: power and clocks tell real work from launch-bound tiny kernels
+      nvidia-smi --query-gpu=utilization.gpu,power.draw,clocks.sm,memory.used,memory.total --format=csv,noheader,nounits
+    } >> "${GPU_MON_LOG}" 2>&1
+    sleep 60
+  done ) &
+GPU_MON_PID=$!
+cleanup() { kill "${GPU_MON_PID}" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+echo "GPU monitor: ${GPU_MON_LOG}"
+
+cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
+
+rc=0
+echo "========== NAUTILUS RETRIEVAL =========="
+NAUT_CMD=(python -u -m retrieval_framework.run_nautilus "${VR_SPEC}")
+if [ "${VR_RESUME}" = "1" ]; then NAUT_CMD+=(--resume); fi
+if [ -n "${PROFILE_BATCH:-}" ]; then
+  # One-batch nsys-jax profile (off by default). nsys-jax calls `nsys` from PATH:
+  # a one-file bin dir puts the chosen binary first (cuda-12.6's nsys wrapper is
+  # not installed on the GH200 nodes). The default nsys-jax is a python3.12 venv:
+  #   python3.12 -m venv ${VULCAN_SCRATCH}/tools/nsysjax_venv && .../bin/pip install
+  #   "git+https://github.com/NVIDIA/JAX-Toolbox.git@f9d55b6#subdirectory=.github/container/nsys_jax"
+  PROFILE_DIR="${PROFILE_DIR:-${JOB_DIR}/nsys_${_jobid}}"
+  NSYS_JAX="${NSYS_JAX:-${VULCAN_SCRATCH}/tools/nsysjax_venv/bin/nsys-jax}"
+  NSYS_BIN="${NSYS_BIN:-/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys}"
+  mkdir -p "${PROFILE_DIR}/bin"
+  ln -sfn "${NSYS_BIN}" "${PROFILE_DIR}/bin/nsys"
+  export PATH="${PROFILE_DIR}/bin:${PATH}"
+  echo "profile: batch ${PROFILE_BATCH} -> ${PROFILE_DIR}; nsys $(nsys --version | awk '{print $NF}'); ${NSYS_JAX}"
+  if [ "${PROFILE_HLO:-0}" = "1" ]; then
+    export JAX_COMPILATION_CACHE_DIR="${PROFILE_DIR}/jax_cache"   # compile, so XLA dumps
+    mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
+  else
+    export XLA_FLAGS="${XLA_FLAGS:-} --xla_dump_hlo_as_proto=false"   # nsys-jax: no dump
+  fi
+  # nsys-jax sets -1 (whole tracebacks in the HLO metadata) only when unset; JAX's
+  # default keeps the programs, and their cache entries, the production ones
+  export JAX_TRACEBACK_IN_LOCATIONS_LIMIT="${JAX_TRACEBACK_IN_LOCATIONS_LIMIT:-10}"
+  export VULCAN_PROFILE_BATCH="${PROFILE_BATCH}"
+  NAUT_CMD=("${NSYS_JAX}" --trace=cuda,nvtx,osrt --sample=cpu --cpuctxsw=process-tree
+            --capture-range=cudaProfilerApi --capture-range-end=stop -f
+            --output="${PROFILE_DIR}/pipeline_gh200_jax_profile" --
+            "$(command -v python)" -u -m retrieval_framework.run_nautilus "${VR_SPEC}")
+  if [ "${VR_RESUME}" = "1" ]; then NAUT_CMD+=(--resume); fi
+fi
+"${NAUT_CMD[@]}" || rc=$?
+if [ -n "${PROFILE_BATCH:-}" ] && [ -f "${PROFILE_DIR}/pipeline_gh200_jax_profile.zip" ]; then
+  # nsys-jax exits 1 when only its source-file gathering failed (no XLA .proto
+  # files on the node); the archive is complete then. It prints "Application
+  # returned unexpected code" when the run itself failed: then rc stands.
+  echo "profile: ${PROFILE_DIR}/pipeline_gh200_jax_profile.zip written"
+  [ "${rc}" -eq 1 ] && ! grep -q "Application returned unexpected code" "${LOG_FILE}" && rc=0
+fi
+echo "job finished rc=${rc} at $(date)"
+if [ "${rc}" -ne 0 ]; then
+  echo "NOT A CERTIFIED PRODUCTION RUN: see the errors above. Artifacts on disk are forensic."
+fi
+exit "${rc}"

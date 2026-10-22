@@ -60,6 +60,17 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert cert["result"] == {"logZ_box": -12.3, "logZ_err": None, "n_eff": 1234.0,
                               "n_like": 990}
     assert cert["starts"]["mode"] == "warm" and cert["chemistry"]["rtol"] == 0.2
+    # the derived quantities: weighted 16/50/84% of what the paper quotes
+    der = cert["derived"]
+    z_o = der["metallicity_O_H_solar"]
+    assert len(z_o) == 3 and z_o[0] < z_o[1] < z_o[2]
+    assert abs(z_o[1] - 10.0 * np.exp(MEAN[0])) < 0.5          # the baseline is 10x solar
+    assert der["metallicity_total_solar"][1] < z_o[1]           # C/O below solar lowers total metals
+    assert der["S_to_O_solar"] is None                          # sulfur was not freed in this run
+    assert der["truncated_kzz_le_x10"]["weight"] == pytest.approx(
+        1.0 - der["kzz_weight_above_x10"])
+    assert der["kzz_weight_below_x0.15"] <= der["kzz_weight_below_x0.2"]
+    assert der["T_deep_p_bar"] == 1.0 and len(der["T_deep_K"]) == 3 == len(der["Tint_K"])
     text = " ".join(cert["caveats"])
     for phrase in ("5.0% of the draws", "no logZ error", "Warm starts", "Lane queue",
                    "counted twice"):

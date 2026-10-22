@@ -6,11 +6,35 @@ on the NAS GH200s, tests and small runs on daw. A leaf of vulcan3 <- vulcan-forw
 {vulcan-retrieval, jwst-transit-authority}: solver and engine live upstream; this repo
 holds the likelihood, the sampler driver, the cases and the job scripts.
 
+## Maintainer rules (all repos)
+
+These four rules are identical in the project-root CLAUDE.md and every repo's; change
+them together.
+
+- **Layout.** Keep code, data and generated files apart. Shipped code, tests, inputs,
+  fixtures and validation assets stay where the repo's CLAUDE.md puts them. Work asked
+  for outside the product (analysis, one-off scripts and checks, their figures and
+  results) goes to `scratch/<topic>/`, one folder per question; run results go to
+  `output/`, and vulcan3's own figures to `plot/`. Keep these three top-level folders
+  gitignored and never commit their contents; never put such work in `src/`, `tests/`,
+  `tools/`, `validation/`, `data/` or the repo root. A durable conclusion goes to
+  notes.md; a reusable check becomes a tracked test or validation script.
+- **Figures.** An ad hoc plot request gets 1 to 3 figures, more only when asked, from one
+  script in `scratch/<topic>/`: no helper module, style layer or extra variants.
+- **Branches.** Work in the existing checkout on `main`. Create no branch, worktree or
+  copy of the repo, and switch no branch, unless the maintainer asks.
+- **Behind main.** At the start of work in a checkout, `git fetch origin`, then
+  `git rev-list --count HEAD..origin/main`. If the count is above 0, tell the
+  maintainer at once; if the fetch fails, say the state is unknown. This alerts and does
+  not block; never pull, rebase or reset unasked. Check again before a commit, a push or
+  a job on daw or NAS.
+
 ## Docs
 
-`README.md` is the maintainer's: never edit it unasked. `notes.md` is what is true and
-why, by section; the measured reason behind each rule below is in notes "Evidence behind
-the rules" unless another section is named. `todo.md` is open work: read it first and
+`README.md` is the maintainer's: never edit it unasked. `notes.md` is the results of past
+experiments and the ideas tried, by section, never a dated history; the measured reason
+behind each rule below is in notes "Evidence behind the rules" unless another section is
+named. `todo.md` is open work: read it first and
 open or close items in the same pass. This file holds directions only. The project-root
 `CLAUDE.md` doc, no-bloat and test-tier policy applies: the three are tracked and public
 (no personal names except cited authors, no emails, IDs, accounts or keys, no chat
@@ -28,12 +52,22 @@ adopted".
   `validate_env` fails on stale metadata.
 - Import order is guard-enforced: `vulcan_forward.vulcan_chem` raises if exojax was
   imported first.
-- Data is not in git: inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the
-  directory holding this repo). An `overrides/prod_*.json` file is local-only.
+- Inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the directory holding this
+  repo); only the observed spectra (`data/cm24_wasp39b/`) are tracked.
+- `runs/<case>/` holds a case's inputs only: one YAML run specification per run
+  (`v5.yaml`, `smoke.yaml` and any `base: v5.yaml` variant) and nothing else. A spec is
+  the whole run: `job` (PBS), `runtime` (the engine's environment), `sampler`
+  (nautilus) and `config` (every `Config` field it sets); its stem is the run name and
+  every output goes under `output/<case>/<name>_nautilus/` (`run_setup.load_spec`,
+  `output_base`). A new run is a new file; a variant restates only the keys it changes
+  (one level, whole values). Never set a run through the environment or the command
+  line.
 - Run from the repo root: `python -m retrieval_framework.run_nautilus
-  runs/w39b_smc_retrieval` (output in `<out_dir>_nautilus`), then `python -m
-  retrieval_framework.nautilus_report <that dir> [--spectra N]` for the certificate and
-  figures (`--spectra 0` skips the forward model). The PBS does not run the report.
+  runs/w39b_smc_retrieval/<name>.yaml [--resume] [--dry-run]` (`--dry-run` prints the
+  resolved settings without jax), then `python -m retrieval_framework.nautilus_report
+  <out dir> [--spectra N]` for the certificate and figures (`--spectra 0` skips the
+  forward model). The PBS does not run the report. The report's three figures are a run's only figures; draw nothing else
+  beside a run unless asked (notes "Design records", run figures).
 - Tests, two tiers. Normal (everyday and CI): `python -m pytest tests -n 8` (`-n` needs
   pytest-xdist, in the root env; conftest defaults `JAX_PLATFORMS=cpu`; pyproject's
   addopts deselect `slow`). Full, before a production run or after a change to the
@@ -46,10 +80,9 @@ adopted".
 - Lint every changed file with `ruff check .` before a merge. After a push, check CI:
   `gh run list --repo imalsky/vulcan-retrieval --limit 1`.
 - On daw: tests and single chemistry runs on CPU. A batched run uses the one GPU with
-  the `fast` solver, so the lanes are `cold_lanes` as given: the production override
-  file plus `SMC_RETRIEVAL_OVERRIDES='{"cold_lanes": 284}'`,
-  `XLA_PYTHON_CLIENT_PREALLOCATE=true XLA_PYTHON_CLIENT_MEM_FRACTION=0.90` and a fresh
-  `SMC_RETRIEVAL_OUT_DIR` (notes "HPC (NAS GH200) and daw").
+  the `fast` solver, so the lanes are `cold_lanes` as given: a variant spec with
+  `runtime: {solver: fast, xla_flags: null}` and `config: {cold_lanes: 284}`, with
+  `XLA_PYTHON_CLIENT_PREALLOCATE=true` in the shell (notes "HPC (NAS GH200) and daw").
 
 ### On NAS
 
@@ -61,10 +94,14 @@ adopted".
 - Production jobs never install anything; `validate_env` runs in every preflight.
   Chain dependent jobs on `afterany` and let `validate_env` refuse. Run a new job path
   end-to-end on the CPU before submitting it (notes "Do not retry").
-- `run_nas_w39b.pbs` pins `VULCAN3_SOLVER=ffi` and builds a stale kernel at job start,
-  failing loudly if the build fails.
-- Command buffers are on by default (`XLA_CMDBUF=1`); off is `XLA_CMDBUF=0` (the empty
-  flag). Never pass a comma list through `qsub -v`.
+- Submit with `python tools/submit.py runs/<case>/<name>.yaml [--resume] [--dry-run]`
+  from the activated env: it validates the spec, builds the qsub line from its `job`
+  block and records the submission under `<out dir>/jobs/`. `tools/run_nas.pbs` is
+  generic: it exports the spec's `runtime` block through `run_setup`, builds a stale
+  ffi kernel (failing loudly), runs the preflight, then the run. Never `qsub` the job
+  script by hand and never pass a run setting through `qsub -v`.
+- Command buffers and every other XLA flag are the spec's `runtime.xla_flags` (off is
+  the empty `--xla_gpu_enable_command_buffer=`, not an absent flag).
 - Never `module load cuda` in a JAX process on the node.
 - Never resume a checkpoint on changed physics or a changed target.
 - Recipes (queues, login, k-table fetch, env, profiling): notes "HPC (NAS GH200) and
@@ -77,38 +114,39 @@ adopted".
 - No behavior-changing fallback paths. Keep the refusals: missing H2-He CIA, an unset
   planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a
   real-data run with no overlapping bins, RESUME with no checkpoint.
-- The chemistry block `[lnZ, c_o, lnKzz]` is positional (`theta[0:3]`, then the T-P
-  entries) and always inferred, by construction (`specs_from_config` has no switch for
-  it): never add a drop path.
+- The chemistry block `[lnZ, c_o, lnKzz, <extras>]` is positional (`theta[0:n_chem]`,
+  then the T-P entries; the extras are `config_schema.chem_extras`: `s_o` with
+  `infer_s_o`, `kzz_slope` with `kzz_mode="powerlaw"`, in that order) and the first
+  three are always inferred, by construction (`specs_from_config` has no switch for
+  them): never add a drop path. Read the block through `pipe.n_chem` / `pipe.n_chem_tp`,
+  never a literal 3.
 - `set_observations` validates at the API boundary (`pipeline.validate_observations`):
   mask invalid bins before injection.
 
 ### Sampler and policy
 
 - `run_nautilus` on the stock nautilus-sampler pinned in pyproject is the only sampler.
-  `validate_env` refuses the former fork; `run_nas_w39b.pbs` refuses any other
-  `SAMPLER` and the removed `PROBE_MEMORY` / `CALIBRATE_*` knobs.
-- Warm starts are the default (`NAUTILUS_WARM=1`): each solve continues from the nearest
-  certified column under the cold `count_max`, so the likelihood and the rejected set
-  depend on evaluation order and a warm run's evidence is approximate. An evidence
-  claim uses `NAUTILUS_WARM=0`.
-- The chemistry policy comes from the override file, not the gpu preset. Set
+  `validate_env` refuses the former fork.
+- Warm starts are the default (`sampler.warm_starts`): each solve continues from the
+  nearest certified column under the cold `count_max`, so the likelihood and the
+  rejected set depend on evaluation order and a warm run's evidence is approximate. An
+  evidence claim uses `warm_starts: false`.
+- The chemistry policy is the spec's. Set
   `chem_retry` and `chem_presolve` together (the only two-program mode): the presolve,
   at the base `rtol` and `count_max`, is only a start; every in-window draw is then
   solved at `chem_retry_rtol` within `chem_retry_count_max`, and only that solve's
   VULCAN certificate keeps it (notes "Low-Kzz hole").
 - The certifying cap is `chem_retry_count_max` under the presolve chain, else
-  `gpu_config`'s `count_max`. A draw that does not certify within it is rejected
+  `count_max`. A draw that does not certify within it is rejected
   (log L = -inf), never extended. Do not raise the cap without a measured reason.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver
   env choices (`VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start
-  policy and the nautilus settings. Changing any needs a fresh `SMC_RETRIEVAL_OUT_DIR`;
-  `run_nautilus` refuses a resume across it.
+  policy and the nautilus settings. Changing any needs a new spec file (a new run
+  name); `run_nautilus` refuses a resume across it.
 - After a config or physics change, synthetic observations, `data/*.npz` caches and
   every checkpoint are stale: regenerate, never resume.
-- Kept names, do not rename: `SMC_RETRIEVAL_*` / `SMC_RESUME`, the
-  `runs/w39b_smc_retrieval` directory and `smc_rt_chunk` (the NAS launch command and
-  archived runs' `config.json` use them).
+- Kept names, do not rename: the `runs/w39b_smc_retrieval` directory and
+  `smc_rt_chunk` (the NAS tree and archived runs' `config.json` use them).
 
 ### Convergence and the chemistry map
 
@@ -116,7 +154,7 @@ adopted".
   `yconv_min`, `flux_cri` and `conv_step` from vulcan3's `W39b.yaml`. Never relax the
   gate (pressure masks, cap-exit acceptance, error-norm masks). Quote the realised
   longdy, not the criterion.
-- Keep `dt_max` as `case.py` sets it. Ros2 conditioning grows with dt, so measure any
+- Keep `dt_max` as the spec sets it. Ros2 conditioning grows with dt, so measure any
   "accuracy-neutral" solver claim near the cap, not at small dt.
 - One certificate for every likelihood entry point: the solver's `conv_normal`, with no
   accept-count clause (a solve can certify at cap or cap + 1; every cap exit is
@@ -149,10 +187,12 @@ adopted".
   `retrieval_forward._chem_batch_route` (never a per-row `vmap` of solves).
 - A refilled draw moves at the convergence scale, so a lane-count change is a target
   change: regenerate, never resume.
-- Off the PBS, `make_config` calls `config_schema.choose_solver`: an explicit
-  `VULCAN3_SOLVER` wins, else `ffi` on compute capability 9.0 with the CUDA library
-  built, else `fast`. Name the metric before claiming a GPU speed-up (notes "Design
-  records").
+- A run's solver is its spec's `runtime.solver` (`run_setup.export_runtime`, before
+  the first jax import; an environment value that disagrees is refused). The analysis
+  tools (`nautilus_report`, the forward checks) call `config_schema.choose_solver`
+  instead: an explicit `VULCAN3_SOLVER` wins, else `ffi` on compute capability 9.0 with
+  the CUDA library built, else `fast`. Name the metric before claiming a GPU speed-up
+  (notes "Design records").
 
 ### Opacity and the RT
 
@@ -187,7 +227,12 @@ adopted".
 
 - Report a finished run from `nautilus_certificate.json` (written when a run finishes;
   a run stopped by the governor has none yet) and `nautilus_report`'s figures. The
-  certificate has no pass/fail verdict: read its caveats.
+  certificate has no pass/fail verdict: read its caveats. Quote the paper's quantities
+  from its `derived` block (metallicity as O/H and as total metals, C/O, S/O, the Kzz
+  factor with the floor weight and the x10 truncation, T at the deep level), never
+  re-derived by hand; a T1bar run is reported against its accepted joint prior (notes
+  "Physics assumptions and limitations"). Forward checks at a run's draws:
+  `validation/posterior_forward_check.py`.
 - Quote posterior numbers from the weighted points (`theta`, `log_w`) in
   `nautilus_posterior.npz`, never from its equal-weight `samples`.
 - Before publishing a number, read notes "Physics assumptions and limitations" and
@@ -206,10 +251,11 @@ adopted".
 
 ## Where things live
 
-- A case is `runs/<case>/case.py` (presets, priors). `runs/w39b_smc_retrieval/` holds
-  the WASP-39b case, its `overrides/` and the NAS job. Override resolution:
-  `run_setup.make_config`.
-- `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `pipeline`
+- A run is `runs/<case>/<name>.yaml` (`run_setup.load_spec`; the format is that
+  module's docstring and `v5.yaml`'s comments). `runs/w39b_smc_retrieval/` holds the
+  WASP-39b specs; `tools/submit.py` and `tools/run_nas.pbs` are the NAS launch.
+- `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup`
+  (`load_spec`, `export_runtime`), `pipeline`
   (evaluators, T-P window), `retrieval_forward` (chemistry + RT, lane route),
   `run_nautilus` (sampler, anchors, resume refusal), `provenance` (target digest),
   `nautilus_report` (certificate, figures), `validate_env`.

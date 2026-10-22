@@ -141,16 +141,13 @@ def test_replicates_carry_the_likelihood_sigma(names, b, want_b):
 
 @pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",
                     reason="opt-in: builds the exact production forward")
-def test_production_case_gets_one_inflation_per_group(monkeypatch):
-    from dataclasses import replace
-
+def test_production_case_gets_one_inflation_per_group():
     from conftest import RUN_DIR
     from retrieval_framework import run_setup as R
-    monkeypatch.setenv("SMC_RETRIEVAL_PRESET", "gpu")
-    cfg, _ = R.make_config(RUN_DIR)
-    pipe = P.build_pipeline(replace(cfg, noise_inflation_per_group=True))
+    cfg = R.load_spec(RUN_DIR / "v5.yaml").cfg      # per-group noise inflation is v5's
+    pipe = P.build_pipeline(cfg)
     P.load_real_into_pipe(pipe)
     assert list(pipe.groups) == GROUPS
     idx = [i for i, k in enumerate(pipe.kinds) if k == "noise"]
     assert [pipe.names[i] for i in idx] == [f"noise_inflation_{g}" for g in GROUPS]
-    assert pipe.n_dim == 15
+    assert pipe.n_dim == 17

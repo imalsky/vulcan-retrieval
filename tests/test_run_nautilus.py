@@ -64,10 +64,13 @@ def _stub_pipe(seen=None):
         acc = jnp.where((th[:, 0] > 0.6) | (conv & (th[:, 0] > 0.55)), COUNT_MAX, 10)
         return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L), acc, conv   # T-P window
 
+    def refs_of(th):   # (lnZ, c_o, s_o): the pipeline's three-wide references
+        return jnp.concatenate([th[:, :2], jnp.zeros((th.shape[0], 1))], axis=1)
+
     def cold(U, Y, refs, active):  # the column is a code of the point's own chemistry
         th, L, acc, conv = common(U)
         L, acc, conv = _masked("cold", seen, active, L, acc, conv)
-        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], th[:, :2], _Stats(acc, conv)
+        return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], refs_of(th), _Stats(acc, conv)
 
     def warm(U, Y, refs, active):  # hands back the column it started from; like the
         _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
@@ -78,21 +81,28 @@ def _stub_pipe(seen=None):
     def make(mode):
         return cold if mode == "cold" else warm
 
-    return SimpleNamespace(_make_batch_eval=make, n_dim=D,
+    return SimpleNamespace(_make_batch_eval=make, n_dim=D, refs_of=refs_of,
                            theta_from_u=theta_from_u, tp_valid=lambda th: th[2] <= 0.7,
                            dtype=jnp.float64, n_chem_tp=2, y_baseline=jnp.zeros((1, 1)),
                            fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX)))
 
 
-def test_rejection_classes():
+def test_rejection_classes(tmp_path):
     tally = {}
-    like = make_loglike(_stub_pipe(), 64, tally)
+    like = make_loglike(_stub_pipe(), 64, tally, rejects=tmp_path / "rejected")
     z = np.array([[0.5, 0.5, 0.5], [0.65, 0.5, 0.5], [0.5, 0.3, 0.5], [0.5, 0.5, 0.75],
                   [0.58, 0.5, 0.5]])             # the last certifies at the cap
     L = like(z)                                  # 5 rows through one padded chunk of 64
     assert np.all(np.isfinite(L[[0, 4]])) and np.all(np.isneginf(L[1:4]))
     assert {k: tally[k] for k in ("n_eval", "tp_out", "exhausted", "stalled", "nonfinite")} == {
         "n_eval": 5, "tp_out": 1, "exhausted": 1, "stalled": 1, "nonfinite": 0}
+    # the rejected draws are kept with their class: exhausted, stalled, T-P out (a
+    # T-P-out row is masked, so its lane took no step)
+    with np.load(tmp_path / "rejected" / "rejected_00000.npz") as d:
+        assert np.array_equal(d["z"], z[1:4]) and d["cls"].tolist() == [1, 2, 0]
+        assert d["acc"].tolist() == [COUNT_MAX, 10, 0] and int(d["warm"]) == 0
+    like(z[:1])                                  # a chunk with nothing rejected writes nothing
+    assert sorted(p.name for p in (tmp_path / "rejected").iterdir()) == ["rejected_00000.npz"]
 
 
 def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
@@ -178,7 +188,7 @@ def _presolve_stub_pipe(seen=None):
             conv = (th[:, 1] >= 0.35) & (th[:, 0] <= 0.6)
             _, acc, conv = _masked(name, seen, active, jnp.zeros(th.shape[0]), acc, conv)
             code = (th[:, 0] + 1000 * th[:, 1] + PRE_CODE)[:, None, None]
-            return code, th[:, :2], acc, conv
+            return code, base.refs_of(th), acc, conv
         return ev
 
     base._make_batch_eval = make
@@ -288,11 +298,19 @@ CHAIN = dict(chem_retry=True, chem_presolve=True)
     (dict(chem_retry=True, chem_presolve=1), "chem_presolve must be"),
     (dict(noise_inflation_per_group=True), "infer_noise_inflation"),
     (dict(cfg_overrides={"use_condense": True}), "use_condense"),
+    (dict(tp_deep_param="T_1bar", tp_infer_Tint=True), "tp_deep_param"),
+    (dict(tp_deep_param="T1bar"), "tp_infer_Tint"),       # a fixed Tint would ignore it
+    (dict(tp_deep_p_bar=0.0, tp_infer_Tint=True), "tp_deep_p_bar"),
+    (dict(kzz_mode="const"), "kzz_mode"),
+    (dict(cloud_model="patchy"), "cloud_model"),
+    (dict(infer_lnM=True, prior_lnM_sigma=0.0), "prior_lnM_sigma"),
     # accepted: the retry settings are inert while it is off, the presolve
-    # chain, and condensation with its explicit opt-in
+    # chain, condensation with its explicit opt-in, and the v5 model choices
     (dict(chem_retry_rtol=0.0, chem_retry_count_max=0), None),
     (CHAIN, None),
     (dict(cfg_overrides={"use_condense": True}, allow_condense_inference=True), None),
+    (dict(tp_infer_Tint=True, tp_deep_param="T1bar", tp_adiabat=True, infer_s_o=True,
+          kzz_mode="powerlaw", infer_lnM=True, cloud_model="deck"), None),
 ])
 def test_validate_config_refusals(over, msg):
     """Every refusal a case preset or an override file can hit (msg None:

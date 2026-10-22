@@ -8,13 +8,13 @@ evidence is therefore a ZERO-FILLED box evidence, ``logZ_box``: the integral of
 prior x likelihood over the box with every rejected region at zero, so it
 depends on the solver settings (count_max, rtol) through what is rejected.
 
-Warm starts (default; NAUTILUS_WARM=0 disables them): every certified column
+Warm starts (``sampler.warm_starts``, on by default): every certified column
 becomes an anchor keyed by its unit-cube chemistry + T-P coordinates, and each
 later solve continues from its nearest anchor (the warm map at the cold
 count_max); batches before the first certified column run cold. The certified
 state and which draws are rejected then depend on the evaluation order at the
 convergence tolerance, so the posterior and evidence are approximate. An
-evidence claim uses NAUTILUS_WARM=0, the cold primal map on the lane queue (a
+evidence claim uses ``warm_starts: false``, the cold primal map on the lane queue (a
 draw's column depends on its batch at the convergence scale).
 
 Anchors are written inside the likelihood call, before nautilus checkpoints
@@ -26,23 +26,27 @@ nautilus samples the unit cube; z -> u = logit(z) is the retrieval's own
 u-space (pipeline.make_uspace), so theta = theta_from_u(u) follows the box
 prior exactly and the posterior is stored in theta.
 
-Output directory: ``<out_dir>_nautilus`` (default runs/<case>/data/<preset>_nautilus;
-gpu_nautilus under the PBS):
+Output directory: output/<case>/<name>_nautilus for the spec runs/<case>/<name>.yaml
+(run_setup.load_spec):
 nautilus_checkpoint.hdf5 (rewritten every iteration), anchors/ (one npz of
-certified columns per batch, reloaded on resume), nautilus_tally.json
+certified columns per batch, reloaded on resume), rejected/ (one npz per chunk
+of the rejected draws: unit-cube point ``z``, class ``cls`` 0 T-P out, 1
+exhausted, 2 stalled, 3 non-finite, accepted steps ``acc`` and the chunk's
+start mode ``warm``; the conditioning map's input), nautilus_tally.json
 (rejection and warm-start counts, summed over jobs), and when the run finishes
 nautilus_posterior.npz, nautilus_summary.json and nautilus_certificate.json
-(nautilus_report; its CLI also draws the figures). ``SMC_RESUME=1`` (the PBS's
-RESUME=1) continues the checkpoint; without it an existing checkpoint raises.
-The run stops at ``cfg.walltime_seconds`` (the preset's governor) and exits 0
-unfinished; resubmit with RESUME=1.
+(nautilus_report; its CLI also draws the figures). ``--resume`` continues the
+checkpoint; without it an existing checkpoint raises. The run stops at
+``cfg.walltime_seconds`` (the spec's governor) and exits 0 unfinished; resubmit
+with ``--resume`` (on NAS: tools/submit.py --resume).
 
-    python -m retrieval_framework.run_nautilus <run_dir>
-Env: NAUTILUS_N_LIVE (default N_LIVE; n_update follows at half of it),
-NAUTILUS_N_EFF (default N_EFF), NAUTILUS_N_BATCH (default BATCH_PER_LANE x the
-lane count, so a lane whose column certifies refills from the same batch),
-NAUTILUS_WARM (default 1), and VULCAN_PROFILE_BATCH (BatchProfiler, off unless
-set). Each evaluator is a plain jax.jit program, compiled at its first call.
+    python -m retrieval_framework.run_nautilus runs/<case>/<name>.yaml [--resume] [--dry-run]
+The sampler settings are the spec's ``sampler`` block (n_live, with n_update at
+half of it; n_eff; n_batch, default BATCH_PER_LANE x the lane count, so a lane
+whose column certifies refills from the same batch; warm_starts); the engine's
+environment is its ``runtime`` block, exported before the first jax import.
+VULCAN_PROFILE_BATCH (BatchProfiler, off unless set) comes from the job script.
+Each evaluator is a plain jax.jit program, compiled at its first call.
 
 Sampler settings (the constants below, built by make_sampler): STOCK
 nautilus-sampler 1.0.6 from PyPI with its default networks (N_NETWORKS ReLU MLPs),
@@ -87,6 +91,7 @@ import ctypes
 import json
 import logging
 import os
+import shutil
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -95,12 +100,11 @@ import numpy as np
 
 from retrieval_framework import config_schema as C
 from retrieval_framework.run_setup import (
-    log_hardware, make_config, set_observations, setup_logging, write_run_identity)
+    export_runtime, load_spec, log_hardware, set_observations, setup_logging,
+    write_run_identity)
 
 log = logging.getLogger("retrieval")
 
-N_LIVE = 1000       # live points
-N_EFF = 10_000      # effective posterior samples at which nautilus stops
 F_LIVE = 0.03       # exploration ends when the live set holds this evidence share
 ENLARGE_PER_DIM = 1.3
 N_NETWORKS = 4      # nautilus's default ReLU networks (hidden layers 100-50-20)
@@ -114,14 +118,17 @@ FFI_BLOCKS_PER_SM = 3
 
 class Anchors:
     """Certified columns so far: unit-cube chemistry + T-P coordinates ``z``,
-    the column ``Y`` and its reference (lnZ, c_o). One npz per added batch in
-    ``folder``; an existing folder is reloaded (resume)."""
+    the column ``Y`` and its reference composition (lnZ, c_o, s_o). One npz per
+    added batch in ``folder``; an existing folder is reloaded (resume; a file
+    with two-wide references from before the sulfur knob reads as s_o = 0)."""
+
+    N_REF = 3
 
     def __init__(self, folder: Path, n_key: int):
         self.folder = folder
         folder.mkdir(parents=True, exist_ok=True)
         self.z = np.empty((0, n_key))
-        self.refs = np.empty((0, 2))
+        self.refs = np.empty((0, self.N_REF))
         self.parts, self.part, self.row = [], np.empty(0, int), np.empty(0, int)
         for f in sorted(folder.glob("anchors_*.npz")):
             with np.load(f) as d:
@@ -131,6 +138,9 @@ class Anchors:
         return len(self.z)
 
     def _append(self, z, Y, refs):
+        refs = np.asarray(refs, np.float64)
+        if refs.shape[1] < self.N_REF:
+            refs = np.pad(refs, ((0, 0), (0, self.N_REF - refs.shape[1])))
         self.part = np.concatenate([self.part, np.full(len(z), len(self.parts))])
         self.row = np.concatenate([self.row, np.arange(len(z))])
         self.parts.append(np.asarray(Y))
@@ -224,7 +234,8 @@ class BatchProfiler:
 
 
 def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
-                 batch_log: Path | None = None, prof: BatchProfiler | None = None):
+                 batch_log: Path | None = None, prof: BatchProfiler | None = None,
+                 rejects: Path | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a jitted evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with masked copies of its last
@@ -233,7 +244,10 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     from the nearest certified column (warm, cold count_max) once one exists,
     and every certified column it returns becomes an anchor. With
     ``batch_log``, each chunk appends its wall time, mode and per-column
-    accepted step counts there.
+    accepted step counts there. With ``rejects`` (a directory), each chunk
+    writes its rejected rows as one npz (``z`` unit-cube points, ``cls`` the
+    class, ``acc`` accepted steps, ``warm`` the start mode), so the rejected
+    fraction can be mapped over the posterior afterwards.
 
     With ``pipe.chem_retry`` (the presolve chain) the first pass is the
     chemistry-only presolve (``pipe._make_presolve_eval``: no RT, every L -inf)
@@ -254,6 +268,10 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
+    n_rej = None
+    if rejects is not None:
+        rejects.mkdir(parents=True, exist_ok=True)
+        n_rej = [len(list(rejects.glob("rejected_*.npz")))]
     retry = getattr(pipe, "chem_retry", None)
     # every evaluator masks padded rows (active) and RTs only the rows it can
     # keep; each compiles at its first call
@@ -394,6 +412,15 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                          & (~np.isfinite(L) | (L <= P.REJECT_BELOW)))
             dead = tp_out | exhausted | stalled | nonfinite
             out[i:i + m] = np.where(dead, -np.inf, L)
+            if n_rej is not None and dead.any():
+                cls = np.where(tp_out, 0, np.where(exhausted, 1, np.where(stalled, 2, 3)))
+                f = rejects / f"rejected_{n_rej[0]:05d}.npz"
+                tmp = f.with_name(f".{f.name}.part")
+                with open(tmp, "wb") as fh:
+                    np.savez(fh, z=Zc[:m][dead], cls=cls[dead].astype(np.int8),
+                             acc=acc[dead].astype(np.int64), warm=np.int8(warm))
+                os.replace(tmp, f)
+                n_rej[0] += 1
             mode = "warm" if warm else "cold"
             for key, v in (("n_eval", m), ("tp_out", tp_out.sum()),
                            ("exhausted", exhausted.sum()), ("stalled", stalled.sum()),
@@ -444,34 +471,43 @@ def make_sampler(loglike, n_dim: int, n_live: int, n_batch: int, seed: int,
                             pass_dict=False, seed=seed, filepath=filepath, resume=resume)
 
 
-def main() -> None:
+def main(argv=None) -> None:
     t_start = time.time()
-    ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", nargs="?", default=".",
-                    help="retrieval case directory containing case.py (default: cwd)")
-    args = ap.parse_args()
+    ap = argparse.ArgumentParser(description="nautilus nested sampling of one run specification")
+    ap.add_argument("spec", help="the run specification, runs/<case>/<name>.yaml")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue the checkpoint in the run's output directory")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the resolved settings and exit without importing jax")
+    args = ap.parse_args(argv)
 
-    cfg, preset = make_config(Path(args.run_dir))
+    spec = load_spec(args.spec)
+    cfg = spec.cfg
+    if args.dry_run:
+        print(C.describe_config(cfg, spec.name))
+        print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\njob: {spec.job}\n"
+              f"out_dir: {cfg.out_dir}")
+        return
+    export_runtime(spec.runtime)       # before the first jax / vulcan3 import
     lanes = int(cfg.cold_lanes)
-    if os.environ.get("VULCAN3_SOLVER") == "ffi":   # set by make_config
+    if spec.runtime.solver == "ffi":
         lanes *= FFI_BLOCKS_PER_SM
-    cfg = replace(cfg, cold_lanes=lanes,
-                  out_dir=cfg.out_dir.parent / f"{cfg.out_dir.name}_nautilus")
+    cfg = replace(cfg, cold_lanes=lanes)
     out = cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
-    n_live = int(os.environ.get("NAUTILUS_N_LIVE", str(N_LIVE)))
+    n_live = int(spec.sampler.n_live)
     n_update = n_live // 2
-    n_eff = int(os.environ.get("NAUTILUS_N_EFF", str(N_EFF)))
-    n_batch = int(os.environ.get("NAUTILUS_N_BATCH", str(BATCH_PER_LANE * lanes)))
-    warm = os.environ.get("NAUTILUS_WARM", "1").strip() != "0"
-    log.info(f"run_dir={Path(args.run_dir).resolve()} preset={preset} out_dir={out}")
+    n_eff = int(spec.sampler.n_eff)
+    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * lanes)
+    warm = bool(spec.sampler.warm_starts)
+    log.info(f"spec={spec.path} out_dir={out}")
     log.info(f"nautilus: n_live={n_live} n_update={n_update} n_eff={n_eff} "
              f"n_batch={n_batch} (cold_lanes={lanes}) f_live={F_LIVE} "
              f"enlarge_per_dim={ENLARGE_PER_DIM} networks={N_NETWORKS}x relu (nautilus default) "
              f"discard_exploration={DISCARD_EXPLORATION} "
              f"seed={cfg.seed} starts={'anchored warm (growing)' if warm else 'cold'}")
-    log.info(C.describe_config(cfg, preset))
+    log.info(C.describe_config(cfg, spec.name))
 
     import jax
     import nautilus
@@ -502,10 +538,10 @@ def main() -> None:
     want = (f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
             f"|n_batch={n_batch}|n_live={n_live}|n_update={n_update}|f_live={F_LIVE}"
             f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock")
-    resume = os.environ.get("SMC_RESUME", "").strip().lower() in ("1", "true", "yes")
+    resume = bool(args.resume)
     if resume:
         if not ckpt.exists():
-            raise FileNotFoundError(f"SMC_RESUME=1 but no checkpoint at {ckpt}; unset RESUME "
+            raise FileNotFoundError(f"--resume but no checkpoint at {ckpt}; drop --resume "
                                     "to start a fresh run.")
         have = digest_path.read_text().strip() if digest_path.exists() else ""
         if have != want:
@@ -515,9 +551,12 @@ def main() -> None:
                                "directory.")
     elif ckpt.exists() or any((out / "anchors").glob("anchors_*.npz")):
         raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
-                              "set RESUME=1 to continue it, or point SMC_RETRIEVAL_OUT_DIR "
-                              "at a fresh directory.")
-    write_run_identity(cfg, pipe, preset, obs_save)
+                              "pass --resume to continue it, or copy the spec to a new file "
+                              "name for a fresh run.")
+    write_run_identity(cfg, pipe, spec, obs_save)
+    shutil.copy(spec.path, out / "spec.yaml")       # the run's own record of its spec
+    if spec.base is not None:
+        shutil.copy(spec.base, out / "spec_base.yaml")
     digest_path.write_text(want + "\n")
 
     tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
@@ -525,7 +564,7 @@ def main() -> None:
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
     like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl",
-                        BatchProfiler())
+                        BatchProfiler(), rejects=out / "rejected")
 
     def loglike_saved(Z):
         L = like(Z)
@@ -546,7 +585,7 @@ def main() -> None:
              f"{(time.perf_counter() - t0) / 3600:.2f} h | n_like={sampler.n_like} "
              f"| log_z={sampler.log_z:.3f} | n_eff={sampler.n_eff:.0f} | tally={tally}")
     if not done:
-        log.warning("nautilus did not finish: resubmit with RESUME=1 (the checkpoint is "
+        log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is "
                     f"{ckpt}).")
         return
 
@@ -568,12 +607,12 @@ def main() -> None:
         "discard_exploration": DISCARD_EXPLORATION,
         "nautilus": f"{nautilus.__version__} (stock)",
         "starts": "anchored warm (growing)" if warm else "cold",
-        "rejections_and_starts": tally, "preset": preset, "seed": int(cfg.seed),
+        "rejections_and_starts": tally, "spec": spec.name, "seed": int(cfg.seed),
         "chem_rtol": pipe.fwd.chem_rtol,
         **({"chem_retry": vars(pipe.chem_retry)} if pipe.chem_retry is not None else {}),
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
                          + ("; APPROXIMATE: warm starts move the likelihood and which draws "
-                            "are rejected (NAUTILUS_WARM=0 for an evidence claim)"
+                            "are rejected (warm_starts: false for an evidence claim)"
                             if warm else ""),
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")

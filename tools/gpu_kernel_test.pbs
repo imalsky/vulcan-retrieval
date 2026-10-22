@@ -77,7 +77,7 @@ python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
   python -m vulcan3.solver_fast --cuda
   ls -la "${PROJECT_ROOT}"/VULCAN-JAX/src/vulcan3/csrc/libblock_thomas_*
 )
-# --- the GPU test, in the production job's JAX environment (run_nas_w39b.pbs) ----
+# --- the GPU test, in the production job's JAX environment (tools/run_nas.pbs) ----
 # Set, not unset: both repos' tests/conftest.py default an unset JAX_PLATFORMS
 # to cpu, which would skip every CUDA test and run the ckd fold on the CPU.
 export JAX_PLATFORMS=cuda,cpu

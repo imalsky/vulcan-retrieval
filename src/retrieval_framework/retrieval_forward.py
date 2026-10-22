@@ -6,10 +6,12 @@ spectrum, composing the *live* VULCAN-JAX chemistry with the ExoJax RT.
         T_art = Guillot(chem_theta[3:]),                        # same T-P on the ART grid
         lnR0 )                                                  # reference-radius nuisance
 
-``chem_theta = [lnZ, dln(C/O), lnKzz, <T-P params>]`` is what the (tp_eval-hooked)
-``vulcan_chem.converged_y`` consumes; the T-P sub-vector ``chem_theta[3:3+n_tp]`` is
-evaluated by the SAME ExoJax profile on both the VULCAN pressure grid (inside the
-chemistry) and the ART grid (here, for the RT), so one self-consistent T(P) drives both.
+``chem_theta = [lnZ, dln(C/O), lnKzz, <chem extras>, <T-P params>]`` is what the
+(tp_eval-hooked) ``vulcan_chem.converged_y`` consumes (the extras, ``s_o`` and
+``kzz_slope``, are the Config's ``config_schema.chem_extras``); the T-P sub-vector
+``chem_theta[n_chem:n_chem+n_tp]`` is evaluated by the SAME ExoJax profile on both
+the VULCAN pressure grid (inside the chemistry) and the ART grid (here, for the
+RT), so one self-consistent T(P) drives both.
 
 Everything is pure JAX and supports forward-mode ``jvp`` end-to-end (the VULCAN runner's
 ``lax.while_loop`` supports jvp but not vjp -- forward-mode is the only route for a
@@ -30,6 +32,7 @@ logger = logging.getLogger("retrieval")
 
 # import order matters: vulcan_chem (env + jax x64) before anything exojax
 from retrieval_framework.forward import config  # noqa: F401  (hands the engine its data root)
+from retrieval_framework import config_schema as C   # light (no jax, no exojax)
 from vulcan_forward import constants
 from vulcan_forward import vulcan_chem   # sets env + jax x64; MUST precede exojax imports
 import jax
@@ -111,8 +114,15 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     # column re-converges under the retrieved T-P.
     tpm = tp_profile.build_tp_model(cfg)
     n_tp = tpm.n_params
+    # the optional chemistry entries (s_o, kzz_slope) and where the composition
+    # knobs sit in the chemistry block: stage 1 zeroes them, the warm references
+    # carry them
+    extras = C.chem_extras(cfg)
+    n_chem = 3 + len(extras)
+    comp_idx = (0, 1) + ((3 + extras.index("s_o"),) if "s_o" in extras else ())
 
-    chem = vulcan_chem.build_chem_model(profile, tp_eval=tpm.eval, n_tp_params=n_tp)
+    chem = vulcan_chem.build_chem_model(profile, tp_eval=tpm.eval, n_tp_params=n_tp,
+                                        chem_extras=extras)
 
     # Condensation is an engine (forward-model) capability only; refuse it here on
     # the RESOLVED config (closes the base-config bypass of the early
@@ -128,7 +138,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     if bool(getattr(cfg, "chem_retry", False)):
         from retrieval_framework.config_schema import retry_profile
         chem_retry = vulcan_chem.build_chem_model(retry_profile(cfg),
-                                                  tp_eval=tpm.eval, n_tp_params=n_tp)
+                                                  tp_eval=tpm.eval, n_tp_params=n_tp,
+                                                  chem_extras=extras)
         st_main = getattr(getattr(chem, "_integ", None), "_statics", None)
         st_retry = getattr(getattr(chem_retry, "_integ", None), "_statics", None)
         if st_main is not None and st_retry is not None:
@@ -177,19 +188,26 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     gas_mask = jnp.asarray(_gas)
     p_art_bar_j = jnp.asarray(rt.p_art_bar)
 
+    def _baseline_composition(C_, axis):
+        """``C_`` with the composition knobs (lnZ, c_o and s_o when inferred)
+        set to 0 along ``axis`` (0: one chem_theta; 1: a stack)."""
+        for i in comp_idx:
+            C_ = C_.at[i].set(0.0) if axis == 0 else C_.at[:, i].set(0.0)
+        return C_
+
     def chem_stage1(chem_theta):
         """Stage 1 of the cold two-stage map: the converged column at the
-        retrieved (lnKzz, T-P) with baseline composition. A function of
-        chem_theta[2:] only (theta[0:2] are overwritten with 0), so two proposals
-        sharing theta[2:] share this subproblem bit for bit. No ConvDiag: stage 1
-        is not gated."""
-        return chem.converged_y(chem_theta.at[0].set(0.0).at[1].set(0.0))
+        retrieved (lnKzz, T-P) with baseline composition. A function of the
+        non-composition entries only (lnZ, c_o, s_o are overwritten with 0), so
+        two proposals sharing them share this subproblem bit for bit. No
+        ConvDiag: stage 1 is not gated."""
+        return chem.converged_y(_baseline_composition(chem_theta, 0))
 
     def chem_stage2_diag(chem_theta, y_relaxed):
         """Stage 2: warm re-convergence of y_relaxed at the proposal's own
-        (lnZ, c_o); returns (y, ConvDiag), the ConvDiag that certifies the draw."""
+        (lnZ, c_o, s_o); returns (y, ConvDiag), the ConvDiag that certifies the draw."""
         return chem.converged_y(chem_theta, warm_y=y_relaxed, lnZ_ref=0.0,
-                                c_o_ref=0.0, return_conv_diag=True)
+                                c_o_ref=0.0, s_o_ref=0.0, return_conv_diag=True)
 
     def chem_solve_cold_diag(chem_theta):
         """Converged absolute column y (nz, ni) and its ``ConvDiag``, in two
@@ -238,24 +256,35 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         its lane was freed at (agreement at the convergence scale). Stage 1 is
         not gated (it carries no certificate); stage 2's ConvDiag certifies each
         draw. ``active`` masks padded rows in both stages."""
-        Y1, _cd = _chem_batch_route(chem, C.at[:, 0].set(0.0).at[:, 1].set(0.0), active)
-        return _chem_batch_route(chem, C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0)
+        Y1, _cd = _chem_batch_route(chem, _baseline_composition(C, 1), active)
+        return _chem_batch_route(chem, C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0,
+                                 s_o_ref=0.0)
 
-    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, active=None):
+    def chem_solve_warm_diag_full_batch(C, Y, lnZ_ref, c_o_ref, s_o_ref, active=None):
         """Every row's carried column ``Y`` (N, nz, ni) re-converged at its own
         ``C`` (N, n_chem_tp) from its own reference composition ``lnZ_ref`` /
-        ``c_o_ref`` ((N,) arrays), under the cold count_max: run_nautilus's
-        anchored warm starts. ``active`` masks padded rows."""
+        ``c_o_ref`` / ``s_o_ref`` ((N,) arrays), under the cold count_max:
+        run_nautilus's anchored warm starts. ``active`` masks padded rows."""
         return _chem_batch_route(chem, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
-                                 c_o_ref=c_o_ref)
+                                 c_o_ref=c_o_ref, s_o_ref=s_o_ref)
 
     chem_solve_warm_diag_full_batch_retry = None
     if chem_retry is not None:
-        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, active=None):
+        def chem_solve_warm_diag_full_batch_retry(C, Y, lnZ_ref, c_o_ref, s_o_ref,
+                                                  active=None):
             """``chem_solve_warm_diag_full_batch`` on the chem_retry program: the
             presolve chain's certifying pass, under the retry count_max."""
             return _chem_batch_route(chem_retry, C, active, warm_y=Y, lnZ_ref=lnZ_ref,
-                                     c_o_ref=c_o_ref)
+                                     c_o_ref=c_o_ref, s_o_ref=s_o_ref)
+
+    def _rt_kwargs(cloud, lnM):
+        """The RT's cloud and mass keywords for this Config's cloud model."""
+        kw = {"lnM": jnp.asarray(lnM)}
+        if str(cfg.cloud_model) == "deck":
+            kw["deck"] = None if cloud is None else jnp.asarray(cloud)[0]
+        else:
+            kw["cloud"] = cloud
+        return kw
 
     def aux_from_y(y, chem_theta):
         """ART-grid primal profiles aux = (vmr dict, vmr_h2, vmr_he, T_art, mmw_art)
@@ -263,7 +292,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         T-P eval + log-P interpolation); the RT consumes exactly this tuple."""
         y_gas = y * gas_mask[None, :]
         ymix = y_gas / jnp.sum(y_gas, axis=1, keepdims=True)
-        T_art = tpm.eval(chem_theta[3:3 + n_tp], p_art_bar_j)      # (nlayer,)
+        T_art = tpm.eval(chem_theta[n_chem:n_chem + n_tp], p_art_bar_j)   # (nlayer,)
         mmw_v = ymix @ species_masses                              # (nz,)
         mmw_art = to_art(mmw_v)
         vmr = {key: to_art(ymix[:, col]) for key, col in mol_cols.items()}
@@ -271,11 +300,11 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         vmr_he = to_art(ymix[:, he_col])
         return (vmr, vmr_h2, vmr_he, T_art, mmw_art)
 
-    def native_depth_aux(chem_theta, lnR0, cloud=None):
+    def native_depth_aux(chem_theta, lnR0, cloud=None, lnM=0.0):
         """Full chain -> (native depth, aux, ok) where aux = (vmr, vmr_h2, vmr_he,
         T_art, mmw_art) are the ART-grid primal profiles. The aux lets a caller take
-        an RT-ONLY jvp (e.g. d/dlnR0 or the cloud parameters, which do not touch the
-        chemistry) without re-running or re-differentiating the VULCAN while_loop.
+        an RT-ONLY jvp (e.g. d/dlnR0, lnM or the cloud parameters, which do not touch
+        the chemistry) without re-running or re-differentiating the VULCAN while_loop.
 
         ``ok`` (float 0/1, stop_gradient'ed) is the cold certificate: the runner's
         canonical convergence bit, the predicate the staged batch evaluators
@@ -286,23 +315,25 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         (pipeline.generate_observations). Reading the diag is free: every
         field rides the primal carry.
 
-        ``cloud`` is None (off) or a (2,) array [log10 kappac0, alphac] for the
-        ExoJax powerlaw_clouds term (see exojax_rt /
-        vulcan_forward.constants.CLOUD_NUC0)."""
+        ``cloud`` is None (off) or the Config's cloud block: a (2,) array
+        [log10 kappac0, alphac] for the ExoJax powerlaw_clouds term (see
+        exojax_rt / vulcan_forward.constants.CLOUD_NUC0), or (1,) [log10 P_deck]
+        with cloud_model="deck". ``lnM`` is the RT-only mass nuisance (0 off)."""
         chem_theta = jnp.asarray(chem_theta)
         y, cd = chem_solve_cold_diag(chem_theta)                   # (nz, ni) absolute
         ok = (jnp.asarray(cd.conv_normal) > 0.5).astype(y.dtype)
         aux = aux_from_y(y, chem_theta)                            # ART-grid profiles
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         depth = rt.transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0),
-                                        vmr_he=vmr_he, cloud=cloud)
+                                        vmr_he=vmr_he, **_rt_kwargs(cloud, lnM))
         return depth, aux, jax.lax.stop_gradient(ok)
 
-    def rt_depth(aux, lnR0, cloud=None):
-        """RT-only depth at frozen chemistry/T-P profiles (for the cheap lnR0/cloud jvps)."""
+    def rt_depth(aux, lnR0, cloud=None, lnM=0.0):
+        """RT-only depth at frozen chemistry/T-P profiles (for the cheap
+        lnR0/lnM/cloud jvps)."""
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         return rt.transmission_depth_r(vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0),
-                                       vmr_he=vmr_he, cloud=cloud)
+                                       vmr_he=vmr_he, **_rt_kwargs(cloud, lnM))
 
     return SimpleNamespace(
         native_depth_aux=native_depth_aux,
@@ -320,7 +351,10 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         y_baseline=np.asarray(chem.y0, dtype=np.float64),
         wl_um=np.asarray(rt.wl_um, dtype=np.float64),
         n_tp=int(n_tp),
+        n_chem=int(n_chem),            # entries of the chemistry block before the T-P
+        chem_extras=extras,
         tp_model=tpm,
         chem=chem, rt=rt,
         p_art_bar=np.asarray(rt.p_art_bar, dtype=np.float64),
+        p_chem_bar=np.asarray(chem.p_bar, dtype=np.float64),   # the T-P window is checked here too
     )

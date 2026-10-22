@@ -1,0 +1,133 @@
+# WASP-39b v5: the final configuration after the external science review.
+# This file is the whole run. Its stem is the run name; the output goes to
+# output/w39b_smc_retrieval/v5_nautilus/ (derived, never a key here).
+#
+#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --dry-run   # the qsub line
+#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml             # submit on NAS
+#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --resume    # continue its checkpoint
+#   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/v5.yaml --dry-run
+#                                                                       # the resolved settings
+# A variant is a file beside this one with `base: v5.yaml` and the keys it changes
+# (a key replaces the base's value whole, dicts and lists included). Every key under
+# config: is a field of config_schema.Config; a key not listed keeps the schema default.
+# Every config key but walltime_seconds, and the runtime block, enters the target
+# manifest: a change means a new file, never a resume. YAML reads 1e11 as text: write
+# floats with an exponent as 1.0e+11.
+#
+# 17 parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar, lnR0, lnM,
+# log10kappa_cloud, cloud_alpha, 2 offsets, 3 noise inflations.
+
+job:                                   # the PBS job (tools/submit.py puts these on the qsub line)
+  queue: gpu_long
+  group_list: s2458
+  select: "1:ncpus=72:ngpus=1:mem=400gb:model=gh200"
+  walltime: "48:00:00"                 # config.walltime_seconds must end >= 1 h before this
+
+runtime:                               # the environment the engine is imported under
+  solver: ffi                          # VULCAN3_SOLVER: the CUDA block-Thomas kernel (GH200 only); fast elsewhere
+  chem_rhs: grouped                    # VULCAN3_CHEM_RHS: bitwise with codegen on the ffi path, faster
+  bt_buffers: null                     # VULCAN3_BT_BUFFERS: null = the kernel chooses per call
+  gpu_memory_fraction: 0.90            # XLA_PYTHON_CLIENT_MEM_FRACTION; the 528-lane probe ran at 0.90
+  # XLA_FLAGS. The command-buffer list replaces XLA's default set; an A/B with command
+  # buffers off ends in --xla_gpu_enable_command_buffer= (empty, not absent).
+  xla_flags: "--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
+
+sampler:                               # stock nautilus-sampler 1.0.6; n_update = n_live / 2
+  n_live: 1000
+  n_eff: 5000                          # effective posterior samples at which nautilus stops
+  n_batch: null                        # null = 3 points per lane (3 x 528 = 1584)
+  warm_starts: true                    # anchored warm starts; false for an order-independent evidence
+
+config:
+  # ---- identity ---------------------------------------------------------------
+  run_label: WASP-39b
+  seed: 20260704                       # nautilus and the synthetic injection; one file per seed
+  vulcan_cfg_name: W39b                # chemistry baseline: vulcan3/configs/W39b.yaml (network, 10x solar, Kzz profile)
+
+  # ---- forward model ------------------------------------------------------------
+  nz: 100                              # chemistry layers, log-uniform over 1e-9..7.6 bar (10.1 per decade)
+  # 12 absorbers with ExoMolOP k-tables: the five main ones, HCN/C2H2/H2S (C/O
+  # discriminators, the reduced-sulfur reservoir) and NH3/OCS/SH/SO (each above the
+  # min(5 ppm, 0.1 sigma) leave-one-out gate). Omit one only with a recorded bound
+  # below the gate (validation/opacity_leave_one_out.py).
+  molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO]
+  nu_min: 1900.0                       # cm^-1 (5.26 um)
+  nu_max: 9900.0                       # cm^-1 (1.01 um, inside the H2-H2 CIA table)
+  art_nlayer: 67                       # RT layers (ladder-converged)
+  dt_max: 1.0e+11                      # s: caps meaningless large-dt Ros2 oscillations; not a convergence criterion
+  # Passed to the vulcan3 config. Rp: the chemistry puts Rp at the layer nearest 1 bar;
+  # 1.21 R_Jup keeps its scale heights on the RT's (whose 1.279 R_Jup sits at 1 mbar).
+  # rtol 0.2 is the presolve's step tolerance. Photolysis every step in both programs
+  # (W39b.yaml's 5/5 started every low-Kzz reject cascade on a photolysis tick).
+  # queue_compact: lane-queue tail compaction 528 -> 396 -> 264 -> 132.
+  cfg_overrides: {Rp: 8650532000.0, rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  # The presolve chain (the two switches go together): every draw is presolved at the
+  # base rtol within count_max accepted steps (a start only, no RT, never kept), then
+  # solved and certified at chem_retry_rtol within chem_retry_count_max, warm from that
+  # column; only the second solve's VULCAN certificate keeps it (notes "Low-Kzz hole").
+  count_max: 3000
+  chem_presolve: true
+  chem_retry: true
+  chem_retry_rtol: 0.05
+  chem_retry_count_max: 5000
+
+  # ---- planet (RT geometry) -----------------------------------------------------
+  rp_cm: 9143826800.0                  # 1.279 R_Jup (7.1492e9 cm): the W39b.yaml transit radius
+  rstar_cm: 64839240000.0              # 0.932 R_Sun (6.957e10 cm)
+  tp_gravity_cgs: 422.0                # g at rp_cm; the planet mass stays fixed under lnR0
+  p_ref_bar: 1.0e-3                    # rp_cm and g apply at 1 mbar, near the transmission photosphere
+
+  # ---- data: Carter & May (2024) fixed-limb-darkening products ------------------
+  obs_dir: data/cm24_wasp39b           # relative to the repo root
+  obs_products:                        # group -> CSV files; combo picks the groups to fit
+    PRISM: [PRISM_native.csv]
+    NIRISS: [NIRISS_O1_R100.csv, NIRISS_O2_R100.csv]
+    G395H: [G395H_NRS1_R100.csv, G395H_NRS2_R100.csv]
+    G395H_NRS1: [G395H_NRS1_R100.csv]
+    G395H_NRS2: [G395H_NRS2_R100.csv]
+    NIRCam: [NIRCam_R100.csv]
+  # NRS1 and NRS2 as separate groups: Sarkar+2024 (arXiv:2405.06737) find a 40-50 ppm
+  # offset between the detectors of this visit, and it sits between the H2O (NRS1) and
+  # the CO2/SO2/CO (NRS2) bands. The offset reference is the shortest-wavelength group
+  # (NIRISS); two offsets are inferred.
+  combo: [NIRISS, G395H_NRS1, G395H_NRS2]
+  obs_wl_lo: 1.02                      # um, strictly inside the model band (1.01-5.26)
+  obs_wl_hi: 5.24
+  obs_max_bin_R: 200.0                 # drops two masked-gap remnants (R 252 and 464) of the R100 products
+  generate_synthetic_data: false       # true: inject the truth_* values and recover them
+
+  # ---- T-P: Guillot profile, f = 1/4 ---------------------------------------------
+  tp_infer_Tint: true                  # the deep parameter is free ...
+  tp_deep_param: T1bar                 # ... as T at 1 bar (tp_deep_p_bar); Tint follows in closed form
+  prior_T1bar: [320.0, 2980.0]         # K, the opacity window; a draw with no Guillot solution is rejected
+  # Tirr: Teq 1100-1166 K, published limbs 889 / 1068 K (Espinoza+2024); 700 K keeps the
+  # cool ridge's tail. An out-of-window profile is rejected, never clipped.
+  prior_Tirr: [700.0, 2200.0]
+  # gamma down to 1e-3 (the deep temperature saturates at ~(3/16 / (gamma sqrt 3))^(1/4)
+  # Tirr); up to 2 lets the data prefer a weak inversion.
+  prior_log10gamma: [-3.0, 0.3010299956639812]
+  prior_Tint: [50.0, 600.0]            # K; the deep prior of a variant with tp_deep_param: Tint
+
+  # ---- composition and mixing (lnZ, c_o and lnKzz are always inferred) ----------
+  prior_lnZ: [-2.302585092994046, 2.302585092994046]   # 1x-100x solar about the baseline
+  baseline_metallicity_solar: 10.0                      # W39b.yaml <X>_H = 10x Lodders 2020
+  # dln(C/O) about the 0.549 baseline: C/O 0.10-0.70 (Rustamkulov+2023 upper limit 0.7);
+  # the upper edge stays below the fixed-O positivity bound (~0.566).
+  prior_c_o: [-1.70, 0.24]
+  # Kzz as one factor on the Tsai+2023 profile (3.4e9 cm^2/s at 1 mbar): x0.1 (below it
+  # most columns do not certify within the cap: a stated prior cut) to x30 (x10 is the
+  # GCM's full H w_rms).
+  prior_lnKzz: [-2.302585092994046, 3.4011973816621555]
+  infer_s_o: true                      # sulfur free: s_o = ln of the S/O multiple of the baseline
+  prior_s_o: [-2.302585092994046, 2.302585092994046]   # a factor of 10 each way
+  prior_lnR0: [-0.05, 0.15]            # ln(R(1 mbar) / rp_cm); the continuum sits ~3% above the literature radius
+  infer_lnM: true                      # lnM = ln(M / 0.2785 MJ) ~ N(0, sigma), RT-only; the chemistry keeps M0
+  prior_lnM_sigma: 0.11                # the literature mass error
+
+  # ---- clouds and noise (schema defaults: power-law cloud, offsets +-800 ppm) ----
+  infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform on (0.5, 3)
+  noise_inflation_per_group: true      # one per group: NIRISS, G395H_NRS1, G395H_NRS2
+
+  # ---- lanes and wall ------------------------------------------------------------
+  cold_lanes: 176                      # x FFI_BLOCKS_PER_SM (3) = 528 lanes under ffi; 64.4 GiB peak at nz 100
+  walltime_seconds: 165600             # the governor, 46 h: the run checkpoints and exits 0 here

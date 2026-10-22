@@ -12,7 +12,7 @@
 # after cloning/seeding (and again only when validate_env says so -- i.e. when
 # packaging metadata changed: versions, dependencies, entry points).
 #
-# Production jobs (run_nas_w39b.pbs) are read-only on the environment: they
+# Production jobs (tools/run_nas.pbs) are read-only on the environment: they
 # activate, run `python -m retrieval_framework.validate_env`, and hard-fail
 # with a pointer here if anything is missing or stale.
 #

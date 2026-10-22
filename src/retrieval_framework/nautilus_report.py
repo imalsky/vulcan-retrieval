@@ -8,9 +8,14 @@ nautilus_tally.json, nautilus_posterior.npz) and writes
 
     nautilus_certificate.json   provenance, sampler settings, logZ_box and n_eff,
                                 the rejection tally as fractions, the start mode,
-                                the chemistry settings and plain-English caveats
+                                the chemistry settings, plain-English caveats and
+                                the derived quantities (metallicity as O/H and as
+                                total metals, C/O, S/O, the Kzz factor with the
+                                weight at its floor and above x10 and the
+                                posterior truncated at x10, T at the deep level
+                                and Tint), weighted 16/50/84% quantiles
     plots/corner.png            corner plot of the weighted posterior
-    plots/tp_posterior.png      Guillot T-P 5-95% band from weighted draws
+    plots/tp_posterior.png      T-P 5-95% band from weighted draws
     plots/spectrum_fit.png      data, model and posterior-predictive 5-95% bands
                                 and the median model (with --spectra N > 0)
 
@@ -56,6 +61,8 @@ _BAR_TO_CGS = 1.0e6          # dyn cm^-2 per bar
 TP_PLOT_LOG10_P_TOP = -8
 TP_PLOT_N_P = 120
 TP_PLOT_DRAWS = 300
+# corner contour levels: 0.5 to 3 sigma in 0.5-sigma steps (corner's own default stops at 2)
+CORNER_SIGMAS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
 
 # Figure style: serif, ticks in on all four sides, no grid, frameless legend,
 # square panels; Okabe-Ito blue for the model, charcoal for data.
@@ -87,6 +94,115 @@ def _read(out: Path, name: str):
 def _weights(log_w) -> np.ndarray:
     w = np.exp(np.asarray(log_w, np.float64) - np.max(log_w))
     return w / w.sum()
+
+
+def _wquant(x, w, qs=(0.16, 0.5, 0.84)) -> list:
+    """Weighted quantiles of ``x`` (interpolated on the cumulative weight)."""
+    o = np.argsort(x)
+    cw = np.cumsum(w[o])
+    cw = (cw - 0.5 * w[o]) / cw[-1]
+    return np.interp(qs, cw, np.asarray(x, np.float64)[o]).tolist()
+
+
+# Lodders (2020) present-day photospheric log eps (the vulcan3 .dat header
+# cites its Table 8); the total-metals factor weighs C and S by their knobs.
+LODDERS2020_LOG_EPS = {"C": 8.47, "N": 7.85, "O": 8.73, "S": 7.15}
+KZZ_FLOOR_X, KZZ_LOW_X, KZZ_TRUNCATE_X = 0.15, 0.2, 10.0
+
+
+def _tp_params(t, names, cfgj):
+    """(Tirr, kappa, gamma, Tint) of one posterior row; Tint reconstructed from
+    the deep temperature when that is the retrieved deep parameter."""
+    g = float(cfgj["tp_gravity_cgs"])
+    Tirr = float(t[names.index("Tirr")])
+    kappa = 10.0 ** float(t[names.index("log10kappa")])
+    gamma = (10.0 ** float(t[names.index("log10gamma")]) if "log10gamma" in names
+             else float(cfgj["tp_gamma_fixed"]))
+    if "T1bar" in names:
+        from retrieval_framework.tp_profile import tint_from_deep
+        T_inv, p_inv = float(t[names.index("T1bar")]), float(cfgj.get("tp_deep_p_bar", 1.0))
+        if "log10P_rcb" in names:
+            # the deep level may sit on the adiabat (tp_profile._phys)
+            p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
+            T_inv = T_inv * (min(p_rcb, p_inv) / p_inv) ** float(cfgj.get("tp_nabla_ad", 0.29))
+            p_inv = min(p_rcb, p_inv)
+        Tint = float(np.asarray(tint_from_deep(T_inv, Tirr, kappa, gamma, g, C.GUILLOT_F,
+                                               p_inv)))
+    elif "Tint" in names:
+        Tint = float(t[names.index("Tint")])
+    else:
+        Tint = float(cfgj["tp_Tint_K"])
+    return Tirr, kappa, gamma, Tint
+
+
+def tp_curve(t, names, cfgj, p_bar):
+    """T(p_bar) of one posterior row: the Guillot profile, with the adiabat
+    below the retrieved boundary pressure when the run had one."""
+    g = float(cfgj["tp_gravity_cgs"])
+    Tirr, kappa, gamma, Tint = _tp_params(t, names, cfgj)
+    T = guillot_T(p_bar, g, kappa, gamma, Tint, Tirr, C.GUILLOT_F)
+    if "log10P_rcb" in names:
+        p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
+        T_rcb = guillot_T(p_rcb, g, kappa, gamma, Tint, Tirr, C.GUILLOT_F)
+        nabla = float(cfgj.get("tp_nabla_ad", 0.29))
+        T = np.where(np.asarray(p_bar) > p_rcb, T_rcb * (np.asarray(p_bar) / p_rcb) ** nabla, T)
+    return T
+
+
+def derived_quantities(out_dir) -> dict | None:
+    """Weighted 16/50/84% quantiles of the quantities the paper quotes, from
+    nautilus_posterior.npz (None before the run finishes): metallicity as
+    O/H and as total metals (C and S at their own knobs), C/O, S/O, the Kzz
+    factor with the weight below x0.2, at the x0.1 floor (below x0.15) and
+    above x10, the posterior truncated at Kzz <= x10, T at the deep level and
+    Tint (reconstructed when T1bar is the parameter)."""
+    out = Path(out_dir).resolve()
+    if not (out / "nautilus_posterior.npz").exists():
+        return None
+    cfgj = _read(out, "config.json")
+    post = np.load(out / "nautilus_posterior.npz")
+    names = [str(s) for s in post["param_names"]]
+    theta = np.asarray(post["theta"], np.float64)
+    w = _weights(post["log_w"])
+
+    def col(n):
+        return theta[:, names.index(n)]
+
+    base = float(cfgj.get("baseline_metallicity_solar", 10.0))
+    eps = {k: 10.0 ** (v - 12.0) for k, v in LODDERS2020_LOG_EPS.items()}
+    lnZ, c_o = col("lnZ"), col("c_o")
+    s_o = col("s_o") if "s_o" in names else np.zeros_like(lnZ)
+    z_o = base * np.exp(lnZ)
+    tot = eps["O"] + eps["N"] + eps["S"] * np.exp(s_o) + eps["C"] * np.exp(c_o)
+    kzz = np.exp(col("lnKzz"))
+    d = {
+        "quantiles": [0.16, 0.5, 0.84],
+        "metallicity_O_H_solar": _wquant(z_o, w),
+        "metallicity_total_solar": _wquant(z_o * tot / sum(eps.values()), w),
+        "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o), w),
+        "S_to_O_solar": _wquant(np.exp(s_o), w) if "s_o" in names else None,
+        "kzz_factor": _wquant(kzz, w),
+        "kzz_weight_below_x0.2": float(w[kzz < KZZ_LOW_X].sum()),
+        "kzz_weight_below_x0.15": float(w[kzz < KZZ_FLOOR_X].sum()),
+        "kzz_weight_above_x10": float(w[kzz > KZZ_TRUNCATE_X].sum()),
+    }
+    keep = kzz <= KZZ_TRUNCATE_X
+    if keep.any():
+        wt = w[keep] / w[keep].sum()
+        d["truncated_kzz_le_x10"] = {
+            "weight": float(w[keep].sum()),
+            "metallicity_O_H_solar": _wquant(z_o[keep], wt),
+            "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o[keep]), wt),
+            "kzz_factor": _wquant(kzz[keep], wt)}
+    if "Tirr" in names:
+        p_deep = np.array([float(cfgj.get("tp_deep_p_bar", 1.0))])
+        # the full profile (adiabat included) at the deep level, and the Tint
+        # behind it
+        T_deep = np.asarray([tp_curve(t, names, cfgj, p_deep)[0] for t in theta])
+        Tint = np.asarray([_tp_params(t, names, cfgj)[3] for t in theta])
+        d.update(T_deep_p_bar=float(p_deep[0]), T_deep_K=_wquant(T_deep, w),
+                 Tint_K=_wquant(Tint, w))
+    return d
 
 
 def certificate(out_dir) -> dict:
@@ -137,7 +253,7 @@ def certificate(out_dir) -> dict:
             "Warm starts: each solve continued from the nearest certified column, so the "
             "likelihood and which draws were rejected depend on the evaluation order. The "
             "posterior and logZ_box are approximate; an evidence claim needs a cold run "
-            "(NAUTILUS_WARM=0).")
+            "(warm_starts: false in the spec).")
     if int(cfg.get("cold_lanes") or 0) > 0:
         caveats.append(
             "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
@@ -181,7 +297,7 @@ def certificate(out_dir) -> dict:
         },
         "sampler": {k: summ.get(k) for k in (
             "nautilus", "n_live", "n_update", "n_batch", "f_live", "enlarge_per_dim",
-            "networks", "discard_exploration", "seed", "preset")},
+            "networks", "discard_exploration", "seed", "spec")},
         "result": {"logZ_box": summ["logZ_box"], "logZ_err": None,
                    "n_eff": summ["n_eff"], "n_like": summ["n_like"]},
         "starts": {"mode": "warm" if warm else "cold",
@@ -190,6 +306,7 @@ def certificate(out_dir) -> dict:
         "chemistry": {"rtol": summ.get("chem_rtol"), "chem_retry": retry,
                       **{k: cfg.get(k) for k in ("count_max", "yconv_cri", "dt_max", "nz",
                                                  "cold_lanes", "cfg_overrides")}},
+        "derived": derived_quantities(out),
         "caveats": caveats,
     }
 
@@ -298,6 +415,7 @@ def plot(out_dir, spectra=None) -> list:
         # the points carry weights: an unweighted scatter of them would show
         # the low-weight shells as if they were posterior mass
         theta, weights=w, plot_datapoints=False, color=INK,
+        levels=[1.0 - np.exp(-0.5 * s * s) for s in CORNER_SIGMAS],
         labels=list(cfgj["inferred_param_labels"]), quantiles=[0.16, 0.5, 0.84],
         truths=(truth if show_truth else None), truth_color=TRUTH)
     fig.savefig(plots / "corner.png", dpi=DPI)
@@ -307,17 +425,10 @@ def plot(out_dir, spectra=None) -> list:
     # ---------------- T-P posterior ----------------
     rng = np.random.default_rng(3)
     sel = theta[rng.choice(len(theta), size=TP_PLOT_DRAWS, p=w)]
-    g_cgs, Tint = float(cfgj["tp_gravity_cgs"]), float(cfgj["tp_Tint_K"])
-    gam_fix = float(cfgj["tp_gamma_fixed"])
-    iT, ik = names.index("Tirr"), names.index("log10kappa")
-    ig = names.index("log10gamma") if "log10gamma" in names else None
-    iti = names.index("Tint") if "Tint" in names else None
     p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(ART_PBTM_BAR), TP_PLOT_N_P)
 
     def T_of(t):
-        return guillot_T(p_bar, g_cgs, 10.0 ** t[ik],
-                         (10.0 ** t[ig] if ig is not None else gam_fix),
-                         (t[iti] if iti is not None else Tint), t[iT], C.GUILLOT_F)
+        return tp_curve(t, names, cfgj, p_bar)
 
     qs = np.nanpercentile(np.stack([T_of(t) for t in sel]), [5, 50, 95], axis=0)
     fig, ax = plt.subplots(figsize=(6.5, 6.5))

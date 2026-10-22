@@ -3,8 +3,9 @@ R-binning, and the JSON result artifact that the two production-fidelity ladders
 (`resolution_ladder.py`: art_nlayer; `top_pressure_ladder.py`: the model top)
 and `opacity_leave_one_out.py` emit.
 
-Each script's `emit()` writes a JSON artifact under `validation/results/` with
-the code and data provenance that ties the number to one state.
+Each script's `emit()` writes a JSON artifact under
+`output/w39b_smc_retrieval/validation/` (the ignored output tree, beside the
+run outputs) with the code and data provenance that ties the number to one state.
 
 Nothing here imports jax, exojax, or the chemistry stack, so it stays cheap and
 cannot perturb the measurement.
@@ -33,19 +34,13 @@ logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
 
 
-def production_config():
-    """The Config the PRODUCTION case actually runs (gpu preset).
+PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "v5.yaml"
 
-    jax/chemistry are imported lazily so this module stays cheap at import.
-    """
-    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "gpu")
-    from retrieval_framework import run_setup as _R
-    cfg, preset = _R.make_config(REPO / "runs" / "w39b_smc_retrieval")
-    if preset != "gpu":
-        raise RuntimeError(
-            f"production_config needs the gpu preset, got {preset!r}; "
-            "unset SMC_RETRIEVAL_PRESET or set it to 'gpu'")
-    return cfg
+
+def production_config():
+    """The Config of the PRODUCTION run (PRODUCTION_SPEC); no jax import."""
+    from retrieval_framework.run_setup import load_spec
+    return load_spec(PRODUCTION_SPEC).cfg
 
 
 def production_profile(**overrides):
@@ -60,7 +55,9 @@ def production_profile(**overrides):
     prof = production_config().profile()
     prof.update(overrides)
     return prof
-RESULTS = REPO / "validation" / "results"
+
+
+RESULTS = REPO / "output" / "w39b_smc_retrieval" / "validation"
 
 
 def make_r_bins(wl_lo, wl_hi, R):

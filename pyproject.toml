@@ -35,10 +35,11 @@ dependencies = [
     "jax>=0.6.2",
     "numpy>=1.26",
     "scipy>=1.12",
+    "PyYAML>=6",        # the run specification files (run_setup.load_spec)
     # The forward-model engine (chemistry + ExoJAX RT) owns the exojax pin.
     # Floor: exojax 2.6.0 (validate_env's pin) and the equilibrium seed as the
     # only cold start, which this package assumes.
-    "vulcan-forward>=0.28.0",
+    "vulcan-forward>=0.30.0",
     # Floor: conv_normal and validate_overrides (vulcan-forward's own floor).
     "vulcan3>=0.18.0",
 ]

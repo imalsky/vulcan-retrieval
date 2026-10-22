@@ -33,10 +33,14 @@ data/*.npz
 build/
 dist/
 
-# Local scratch output
-output/
+# Generated artifacts: run outputs, logs and validation results, output/<case>/...
+# (run_setup.output_base). The legacy runs/**/data|logs|plots and
+# validation/results rules above and below keep old local trees ignored.
+/output/
 validation/results/
 
-# Local production-ladder overrides stay out of the repo; calibration overrides are
-# tracked so a pull brings the chain's inputs.
-runs/w39b_smc_retrieval/overrides/prod_*.json
+# One-off scripts, tests and figures made on top of the code: never tracked.
+/scratch/
+
+# vulcan3 figures (plot_dir): never tracked.
+/plot/

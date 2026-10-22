@@ -1,0 +1,59 @@
+# Offline smoke test on the CPU: the real chemistry + RT pipeline in minutes (the slow
+# tests build it; tests/conftest.py loads this file). CO-only opacity (the one cached
+# k-table), a coarse column, a synthetic injection on the real G395H bin grid.
+# 8 parameters: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud. No job block: it is
+# not submitted. The priors are the W39b case's, by value, so a change to v5 never
+# moves what the test suite builds.
+#
+#   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/smoke.yaml
+
+runtime:
+  solver: fast                         # VULCAN3_SOLVER
+  chem_rhs: codegen                    # VULCAN3_CHEM_RHS
+  bt_buffers: null
+  gpu_memory_fraction: null            # null: the variable must be unset
+  xla_flags: null
+
+sampler:
+  n_live: 1000
+  n_eff: 10000
+  n_batch: null
+  warm_starts: true
+
+config:
+  run_label: WASP-39b
+  vulcan_cfg_name: W39b
+  nz: 30
+  molecules: [CO]
+  nu_min: 4280.0                       # cm^-1: the CO 2-0 band only
+  nu_max: 4360.0
+  art_nlayer: 20
+  dt_max: 1.0e+11
+  cfg_overrides: {Rp: 8650532000.0}    # 1.21 R_Jup, the chemistry's 1-bar radius
+  rp_cm: 9143826800.0                  # 1.279 R_Jup
+  rstar_cm: 64839240000.0              # 0.932 R_Sun
+  tp_gravity_cgs: 422.0
+  p_ref_bar: 1.0e-3
+  obs_dir: data/cm24_wasp39b
+  obs_products:
+    PRISM: [PRISM_native.csv]
+    NIRISS: [NIRISS_O1_R100.csv, NIRISS_O2_R100.csv]
+    G395H: [G395H_NRS1_R100.csv, G395H_NRS2_R100.csv]
+    G395H_NRS1: [G395H_NRS1_R100.csv]
+    G395H_NRS2: [G395H_NRS2_R100.csv]
+    NIRCam: [NIRCam_R100.csv]
+  combo: [G395H]                       # one group: no offsets
+  infer_offsets: false
+  obs_wl_lo: 2.28                      # um, overlapping the cached CO band
+  obs_wl_hi: 2.36
+  obs_max_bin_R: 200.0
+  tp_infer_gamma: false
+  generate_synthetic_data: true
+  prior_lnZ: [-2.302585092994046, 2.302585092994046]
+  baseline_metallicity_solar: 10.0
+  prior_c_o: [-1.70, 0.24]
+  prior_lnKzz: [-2.3025850929940455, 6.907755278982137]
+  prior_Tirr: [700.0, 2200.0]
+  prior_log10gamma: [-2.0, 0.3010299956639812]
+  prior_Tint: [50.0, 600.0]
+  prior_lnR0: [-0.05, 0.15]

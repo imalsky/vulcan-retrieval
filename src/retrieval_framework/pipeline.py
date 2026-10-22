@@ -66,19 +66,24 @@ class EvalStats(NamedTuple):
 
 
 def make_uspace(specs, dtype):
-    """Bounded-box prior <-> unconstrained u-space (the SWAMPE transform).
+    """Prior <-> unconstrained u-space (the SWAMPE transform).
 
     z = sigmoid(u) in (0,1); "uniform" -> lo + (hi-lo) z, "log10_uniform" ->
-    10**(log lo + (log hi - log lo) z), so u = logit(z) of a uniform z draws
-    theta exactly (log-)uniform on the box.
+    10**(log lo + (log hi - log lo) z), "gaussian" -> lo + hi * Phi^-1(z) (lo
+    the mean, hi the sigma), so u = logit(z) of a uniform z draws theta exactly
+    from its prior.
 
     Returns (theta_from_u, sample_prior_u). Module-level so it can be
     unit-tested without the VULCAN/ExoJax stack.
     """
+    from jax.scipy.special import ndtri
+
     n_dim = len(specs)
     prior_lo = jnp.asarray([s.lo for s in specs], dtype=dtype)
     prior_hi = jnp.asarray([s.hi for s in specs], dtype=dtype)
     is_log10 = jnp.asarray([1.0 if s.prior_type == "log10_uniform" else 0.0 for s in specs],
+                           dtype=dtype)
+    is_gauss = jnp.asarray([1.0 if s.prior_type == "gaussian" else 0.0 for s in specs],
                            dtype=dtype)
     lo_lin, span_lin = prior_lo, prior_hi - prior_lo
     lo_log = jnp.log10(jnp.clip(prior_lo, C.UNDERFLOW_DENOM, None))
@@ -89,7 +94,9 @@ def make_uspace(specs, dtype):
         z = jax.nn.sigmoid(u)
         theta_lin = lo_lin + span_lin * z
         theta_log = 10.0 ** (lo_log + span_log * z)
-        return jnp.where(is_log10 > 0.5, theta_log, theta_lin)
+        theta_gau = prior_lo + prior_hi * ndtri(z)
+        return jnp.where(is_gauss > 0.5, theta_gau,
+                         jnp.where(is_log10 > 0.5, theta_log, theta_lin))
 
     def sample_prior_u(rng_key, n_particles):
         eps = jnp.asarray(_PRIOR_Z_EPS, dtype=dtype)
@@ -206,21 +213,28 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     # ---- T-P validity window (NO clipping) ----------------------------------
     # The Guillot profile is drawn raw (tp_profile does not clip). A draw whose T-P
-    # leaves the modelable window [tp_model.T_min, tp_model.T_max] on the ART pressure
-    # grid (inside the chemistry grid; make_to_art enforces it) is REJECTED, not bent
-    # into range: rejection-sampled away at the prior and given the REJECT_LOGL
-    # likelihood by every evaluator. The chem+T-P block of theta is [lnZ, c_o, lnKzz,
-    # <n_tp T-P params>], so the T-P sub-vector is theta[3:3+n_tp].
+    # leaves the modelable window [tp_model.T_min, tp_model.T_max] anywhere on the
+    # ART pressure grid OR the chemistry grid (which reaches below the RT bottom:
+    # 7.6 against 7 bar on W39b) is REJECTED, not bent into range:
+    # rejection-sampled away at the prior and given the REJECT_LOGL likelihood by
+    # every evaluator. A NaN profile (a T1bar draw with no Guillot solution) is
+    # rejected the same way. The chem+T-P block of theta is [lnZ, c_o, lnKzz,
+    # <chem extras>, <n_tp T-P params>], so the T-P sub-vector is
+    # theta[n_chem:n_chem+n_tp].
     n_tp = int(fwd.n_tp)
-    p_art_j = jnp.asarray(fwd.p_art_bar, dtype=dtype)
+    n_chem = int(fwd.n_chem)
+    p_check_j = jnp.asarray(np.concatenate([np.asarray(fwd.p_art_bar, np.float64),
+                                            np.asarray(fwd.p_chem_bar, np.float64)]),
+                            dtype=dtype)
     tp_eval = fwd.tp_model.eval
     tp_T_min = jnp.asarray(fwd.tp_model.T_min, dtype)
     tp_T_max = jnp.asarray(fwd.tp_model.T_max, dtype)
 
     def tp_valid(theta):
-        """True iff the drawn T-P lies entirely inside [T_min, T_max] on the ART grid."""
-        T_art = tp_eval(jnp.asarray(theta)[3:3 + n_tp], p_art_j)
-        return jnp.all(jnp.isfinite(T_art) & (T_art >= tp_T_min) & (T_art <= tp_T_max))
+        """True iff the drawn T-P lies entirely inside [T_min, T_max] on the ART
+        grid and the chemistry grid."""
+        T_all = tp_eval(jnp.asarray(theta)[n_chem:n_chem + n_tp], p_check_j)
+        return jnp.all(jnp.isfinite(T_all) & (T_all >= tp_T_min) & (T_all <= tp_T_max))
 
     # ---- observations + linear operators (binning, offsets) ----
     obs, real_bins = OBS.get_observation_grid(cfg, fwd.wl_um)   # bins inside the model band
@@ -242,10 +256,14 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     kinds = [s.kind for s in specs]
     labels = [s.label for s in specs]
     n_dim = len(specs)
-    # theta[0:3] = [lnZ, c_o, lnKzz], then the T-P entries (specs_from_config)
-    n_chem_tp = 3 + fwd.n_tp
-    # lnR0 and both cloud parameters are always present (specs_from_config)
+    # theta[0:n_chem] = [lnZ, c_o, lnKzz, <extras>], then the T-P entries
+    # (specs_from_config and the engine's layout agree: retrieval_forward)
+    n_chem_tp = n_chem + fwd.n_tp
+    # lnR0 and the cloud parameters are always present (specs_from_config);
+    # lnM and s_o only when inferred
     lnR0_idx = names.index("lnR0")
+    lnM_idx = names.index("lnM") if "lnM" in names else None
+    s_o_idx = names.index("s_o") if "s_o" in names else None
     cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
     off_idx = [i for i, k in enumerate(kinds) if k == "offset"]
     off_lo = off_idx[0] if off_idx else None
@@ -287,7 +305,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
                     f"{drawn} candidates (accept frac {have / max(drawn, 1):.1%}). The "
                     "T-P prior puts most of its mass outside the modelable window "
                     f"[{float(tp_T_min):.0f}, {float(tp_T_max):.0f}] K -- tighten "
-                    "prior_Tirr / prior_log10gamma in case.py so realistic W39b profiles "
+                    "prior_Tirr / prior_log10gamma in the run spec so realistic W39b profiles "
                     "dominate instead of being redrawn away.")
         U = np.concatenate(kept, axis=0)[:n_particles]
         n_cand = drawn
@@ -303,6 +321,15 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _cloud_from(theta):
         return theta[cloud_lo:cloud_lo + n_cloud]
 
+    def _lnM_from(theta):
+        return theta[lnM_idx] if lnM_idx is not None else jnp.asarray(0.0, dtype)
+
+    def _comp_refs(C_):
+        """(N, 3) composition references (lnZ, c_o, s_o) of a chemistry block;
+        s_o is 0 when not inferred."""
+        s = C_[:, s_o_idx] if s_o_idx is not None else jnp.zeros(C_.shape[0], dtype)
+        return jnp.stack([C_[:, 0], C_[:, 1], s], axis=1)
+
     def _mu_from_depth(depth, theta):
         """Binned model depth: B @ native depth + O @ offsets."""
         mu = B_jax @ depth
@@ -316,7 +343,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         generate_observations refuses a truth spectrum without it."""
         theta = jnp.asarray(theta, dtype=dtype)
         native, _aux, ok = fwd.native_depth_aux(theta[:n_chem_tp], theta[lnR0_idx],
-                                                _cloud_from(theta))
+                                                _cloud_from(theta), _lnM_from(theta))
         return _mu_from_depth(native, theta), ok > 0.5
 
     binned_ok_jit = jax.jit(_binned_ok)
@@ -344,7 +371,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     def _rt_val(args):
         """Per-particle RT stage, primal only: aux profiles -> loglik value."""
         aux, theta = args
-        depth = fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta))
+        depth = fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta))
         mu = _mu_from_depth(depth, theta)
         val = _gauss_loglik(mu, theta)
         finite = jnp.all(jnp.isfinite(depth))
@@ -357,7 +384,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         y, theta = args
         aux = fwd.aux_from_y(y, theta[:n_chem_tp])
         return _mu_from_depth(
-            fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta)), theta)
+            fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta)), theta)
 
     observed_depth_from_y_jit = jax.jit(
         lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
@@ -367,8 +394,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         (N,)-batched.
 
         mode="warm": each particle's chemistry re-converges by continuation from its
-        carried column Y with incremental (lnZ - refs[0], c_o - refs[1]) scaling,
-        under the cold count_max.
+        carried column Y with incremental (lnZ - refs[0], c_o - refs[1], s_o -
+        refs[2]) scaling, under the cold count_max.
         mode="cold": the published solve-from-baseline (two-stage) map; Y/refs are
         still updated from the converged result so cold evals can seed warm ones.
 
@@ -403,7 +430,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             agreement with the per-lane map is at the convergence scale.
             ``active`` masks padded rows. The ConvDiag rides the primal carry."""
             if warm:
-                Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], active=active)
+                Y_new, CD = warm_solve(C_, Y, refs[:, 0], refs[:, 1], refs[:, 2],
+                                       active=active)
             else:
                 Y_new, CD = cold_solve(C_, active=active)
             return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
@@ -438,7 +466,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             # arithmetic: pin it to the baseline column.
             ok = jnp.all(jnp.isfinite(Ynew), axis=(1, 2)) & usable
             Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])
-            refs_new = jnp.where(ok[:, None], C_[:, :2], jnp.zeros_like(C_[:, :2]))
+            comp = _comp_refs(C_)
+            refs_new = jnp.where(ok[:, None], comp, jnp.zeros_like(comp))
             return L, Ynew, refs_new, EvalStats(acc=ACC, conv_ok=conv_ok)
 
         return eval_batch
@@ -449,8 +478,8 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         generator, eval(U, Y, refs, active) ->
         (Y_new, refs_new, accept_count, conv_normal). Chemistry only: no RT, no
         gating and no pinning -- Y_new is every row's raw exit column and
-        refs_new its own (lnZ, c_o); the caller decides which columns to use.
-        ``active`` masks padded rows (no step) as in the batch evaluators."""
+        refs_new its own (lnZ, c_o, s_o); the caller decides which columns to
+        use. ``active`` masks padded rows (no step) as in the batch evaluators."""
         if fwd.chem_retry is None or not bool(getattr(cfg, "chem_presolve", False)):
             raise ValueError("presolve evaluator requested but cfg.chem_presolve is off")
         warm = (mode == "warm")
@@ -460,10 +489,11 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             C_ = jax.vmap(theta_from_u)(U)[:, :n_chem_tp]
             kw = {} if active is None else {"active": jnp.asarray(active, bool)}
             if warm:
-                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(C_, Y, refs[:, 0], refs[:, 1], **kw)
+                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(
+                    C_, Y, refs[:, 0], refs[:, 1], refs[:, 2], **kw)
             else:
                 Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, **kw)
-            return (Y_new, C_[:, :2], CD.accept_count.astype(jnp.int32),
+            return (Y_new, _comp_refs(C_), CD.accept_count.astype(jnp.int32),
                     CD.conv_normal > 0.5)
 
         return eval_presolve
@@ -474,7 +504,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         fwd=fwd, obs=obs, real_bins=real_bins, groups=groups,
         B=B, n_bin=n_bin,
         names=names, kinds=kinds, labels=labels, n_dim=n_dim,
-        n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx,
+        n_chem=n_chem, n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx, lnM_idx=lnM_idx,
         cloud_idx=cloud_idx, n_cloud=n_cloud,
         param_prior_lo=np.asarray([s.lo for s in specs], npdtype),
         param_prior_hi=np.asarray([s.hi for s in specs], npdtype),
@@ -588,8 +618,8 @@ def generate_observations(pipe: Pipeline, seed: int) -> Dict[str, np.ndarray]:
 
 def _blank_state(pipe: Pipeline, N: int):
     """(Y0, refs0) placeholders for a fresh batch: the baked baseline column
-    (matching refs (lnZ, c_o) = (0, 0))."""
+    (matching refs (lnZ, c_o, s_o) = (0, 0, 0))."""
     dtype = pipe.dtype
     Y0 = jnp.broadcast_to(pipe.y_baseline[None],
                           (N,) + tuple(pipe.y_baseline.shape)).astype(dtype)
-    return Y0, jnp.zeros((N, 2), dtype)
+    return Y0, jnp.zeros((N, 3), dtype)

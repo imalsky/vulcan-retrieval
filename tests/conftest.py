@@ -48,11 +48,8 @@ def build_smoke_pipe(**overrides):
     from retrieval_framework import run_setup as R
     jax.config.update("jax_enable_x64", True)
 
-    os.environ.setdefault("SMC_RETRIEVAL_PRESET", "smoke")
     try:
-        cfg, preset = R.make_config(RUN_DIR)
-        if preset != "smoke":
-            pytest.skip(f"preset resolved to {preset!r}, not smoke")
+        cfg = R.load_spec(RUN_DIR / "smoke.yaml").cfg
         pipe = P.build_pipeline(dataclasses.replace(cfg, **overrides))
     # Skip ONLY on a missing-data or missing-dependency environment; a broader
     # handler reports a real forward-model break as a green skip.
@@ -66,6 +63,26 @@ def build_smoke_pipe(**overrides):
 def capped_smoke_pipe():
     """The smoke pipeline at count_max=50: no solve can certify at this cap."""
     return build_smoke_pipe(count_max=CAPPED_COLD_CMAX)
+
+
+# Every v5 model option at once (tests/test_v5_options.py): sulfur free, the
+# Kzz power law, T at 1 bar as the deep parameter with the adiabat below a free
+# boundary, the Gaussian mass nuisance, the grey deck.
+V5_SMOKE = dict(infer_s_o=True, kzz_mode="powerlaw", tp_infer_Tint=True,
+                tp_deep_param="T1bar", prior_T1bar=(600.0, 2500.0), tp_adiabat=True,
+                infer_lnM=True, cloud_model="deck")
+
+
+@pytest.fixture(scope="session")
+def smoke_pipe():
+    """The smoke pipeline as the case defines it."""
+    return build_smoke_pipe()
+
+
+@pytest.fixture(scope="session")
+def v5_smoke_pipe():
+    """The smoke pipeline with every v5 option on (V5_SMOKE)."""
+    return build_smoke_pipe(**V5_SMOKE)
 
 
 @pytest.fixture

@@ -1,106 +1,301 @@
-"""run_setup.py -- case-directory setup shared by the retrieval entry points.
+"""run_setup.py -- the run specification and a run's identity files.
 
-The planet lives in the case directory's ``case.py`` (PRESETS dict of Config
-factories); this module resolves the case + preset + env overrides into a
-Config, sets up logging, loads real (or generates synthetic) observations into
-a built pipeline, and writes the run's identity files (config.json,
-observations.npz, target_manifest.json).
+One YAML file describes a nautilus run, ``runs/<case>/<name>.yaml``:
 
-Presets / overrides (env vars)
-------------------------------
-- ``SMC_RETRIEVAL_PRESET``        : key into the case's PRESETS dict (default: the
-                                    case's DEFAULT_PRESET, else "smoke").
-- ``SMC_RETRIEVAL_OVERRIDES``     : JSON object of Config field overrides,
-                                    e.g. '{"nz": 50, "cold_lanes": 32}'.
-- ``SMC_RETRIEVAL_OVERRIDES_FILE``: JSON file of Config field overrides (relative
-                                    paths resolve against the run dir).
-- ``SMC_RETRIEVAL_OUT_DIR``       : output directory (default <run_dir>/data/<preset>).
+    base:     optional, one file beside it whose sections it refines
+    job:      the PBS job (queue, group_list, select, walltime); tools/submit.py reads it
+    runtime:  the environment the engine is imported under (Runtime below)
+    sampler:  the nautilus settings (Sampler below)
+    config:   fields of config_schema.Config, flat; a key not listed keeps the default
+
+The run's name is the file stem and its output directory is
+``<repo>/output/<case>/<name>_nautilus`` (never a key). A variant names one ``base``
+and restates the keys it changes: within each section a key's value replaces the
+base's value whole, lists and dicts included; a base has no base of its own.
+Loading is pure (no environment write, no jax import); ``export_runtime`` writes
+the runtime block into the environment before the engine is imported and refuses
+an inherited value that disagrees with the file.
+
+    python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/v5.yaml [--resume] [--dry-run]
+    python -m retrieval_framework.run_setup runs/w39b_smc_retrieval/v5.yaml   # the runtime as `export` lines
 """
 from __future__ import annotations
 
-import importlib.util
+import argparse
 import json
 import logging
 import os
+import shlex
 import sys
-from dataclasses import asdict, replace
+import typing
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional
 
 import numpy as np
+import yaml
 
 from retrieval_framework import config_schema as C  # light import (no jax)
 
 log = logging.getLogger("retrieval")
 
+SECTIONS = ("base", "job", "runtime", "sampler", "config")
+JOB_HEADROOM_S = 3600.0     # the governor ends at least this long before the PBS wall
 
-def load_case(run_dir: Path):
-    """Import <run_dir>/case.py as a module. It must define PRESETS (dict preset-name
-    -> zero-arg Config factory) and may define DEFAULT_PRESET."""
+
+@dataclass(frozen=True)
+class Runtime:
+    """Import-frozen engine settings; one environment variable each. ``None``
+    means the variable must be unset."""
+    solver: str = "fast"                       # VULCAN3_SOLVER: fast | ffi | reference
+    chem_rhs: str = "codegen"                  # VULCAN3_CHEM_RHS: codegen | grouped
+    bt_buffers: Optional[int] = None           # VULCAN3_BT_BUFFERS: 1 | 2 | None (per call)
+    gpu_memory_fraction: Optional[float] = None   # XLA_PYTHON_CLIENT_MEM_FRACTION
+    xla_flags: Optional[str] = None            # XLA_FLAGS
+
+    def env(self) -> Dict[str, Optional[str]]:
+        return {"VULCAN3_SOLVER": self.solver,
+                "VULCAN3_CHEM_RHS": self.chem_rhs,
+                "VULCAN3_BT_BUFFERS": None if self.bt_buffers is None else str(self.bt_buffers),
+                "XLA_PYTHON_CLIENT_MEM_FRACTION": (None if self.gpu_memory_fraction is None
+                                                   else repr(float(self.gpu_memory_fraction))),
+                "XLA_FLAGS": self.xla_flags}
+
+
+@dataclass(frozen=True)
+class Sampler:
+    n_live: int = 1000
+    n_eff: int = 10_000          # effective posterior samples at which nautilus stops
+    n_batch: Optional[int] = None    # None: run_nautilus.BATCH_PER_LANE x the lanes
+    warm_starts: bool = True
+
+
+@dataclass(frozen=True)
+class Job:
+    queue: str
+    group_list: str
+    select: str
+    walltime: str                # HH:MM:SS
+
+    def seconds(self) -> float:
+        h, m, s = (int(x) for x in self.walltime.split(":"))
+        return 3600.0 * h + 60.0 * m + s
+
+
+@dataclass(frozen=True)
+class Spec:
+    path: Path
+    base: Optional[Path]
+    name: str
+    cfg: C.Config
+    sampler: Sampler
+    runtime: Runtime
+    job: Optional[Job]
+
+
+class _Loader(yaml.SafeLoader):
+    pass
+
+
+def _no_duplicates(loader, node):
+    seen = set()
+    for k, _ in node.value:
+        key = loader.construct_object(k)
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r} at {node.start_mark}")
+        seen.add(key)
+    return loader.construct_mapping(node)
+
+
+_Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
+
+
+def _read(path: Path) -> Dict[str, Any]:
+    doc = yaml.load(path.read_text(), Loader=_Loader)
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: the document must be a mapping")
+    bad = set(doc) - set(SECTIONS)
+    if bad:
+        raise ValueError(f"{path}: unknown top-level key(s) {sorted(bad)}; allowed: {SECTIONS}")
+    for s in SECTIONS[1:]:
+        if s in doc and not isinstance(doc[s], dict):
+            raise ValueError(f"{path}: `{s}:` must be a mapping")
+    return doc
+
+
+def _tuples(v):
+    if isinstance(v, list):
+        return tuple(_tuples(x) for x in v)
+    if isinstance(v, dict):
+        return {k: _tuples(x) for k, x in v.items()}
+    return v
+
+
+_ORIGIN = {tuple: (tuple,), dict: (dict,)}
+
+
+def _check(where: str, key: str, value, hint) -> None:
+    """``value`` against the field annotation ``hint`` (int, float, bool, str, Path,
+    Tuple[...], Dict[...], Optional[...]). A str where a number is expected names
+    the YAML exponent trap."""
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Union:                       # Optional[X]
+        if value is None and type(None) in args:
+            return
+        return _check(where, key, value, [a for a in args if a is not type(None)][0])
+    if hint is Any or hint is object:
+        return
+    if origin in (tuple, dict):
+        if not isinstance(value, origin):
+            raise TypeError(f"{where}: `{key}` must be a {origin.__name__}, got {value!r}")
+        if origin is tuple and args:
+            elem = args[0] if (len(args) == 2 and args[1] is Ellipsis) else None
+            for i, x in enumerate(value):
+                _check(where, f"{key}[{i}]", x, elem if elem is not None else args[i] if i < len(args) else args[-1])
+        return
+    if hint is bool:
+        if not isinstance(value, bool):
+            raise TypeError(f"{where}: `{key}` must be true or false, got {value!r}")
+        return
+    if hint in (int, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            extra = (" (YAML reads 1e11 as text: write 1.0e+11)" if isinstance(value, str)
+                     else "")
+            raise TypeError(f"{where}: `{key}` must be a number, got {value!r}{extra}")
+        if hint is int and not isinstance(value, int):
+            raise TypeError(f"{where}: `{key}` must be an integer, got {value!r}")
+        return
+    if hint is str:
+        if not isinstance(value, str):
+            raise TypeError(f"{where}: `{key}` must be text, got {value!r}")
+        return
+    if hint is Path:
+        if not isinstance(value, (str, Path)):
+            raise TypeError(f"{where}: `{key}` must be a path, got {value!r}")
+        return
+    if is_dataclass(hint):
+        return
+
+
+def _build(cls, mapping: Dict[str, Any], where: str, required: bool = False):
+    """A frozen dataclass from a YAML mapping: unknown keys refused, every value
+    type-checked against the field annotation."""
+    hints = typing.get_type_hints(cls)
+    names = [f.name for f in fields(cls)]
+    bad = set(mapping) - set(names)
+    if bad:
+        raise ValueError(f"{where}: unknown key(s) {sorted(bad)}; the fields are {names}")
+    for k, v in mapping.items():
+        _check(where, k, v, hints[k])
+    if required:
+        missing = [n for n in names if n not in mapping]
+        if missing:
+            raise ValueError(f"{where}: missing key(s) {missing}")
+    return cls(**mapping)
+
+
+def output_base(run_dir: Path) -> Path:
+    """Where a case's generated artifacts go: ``<repo>/output/<case>/`` for a case
+    under ``<repo>/runs/``, else ``<run_dir>/output``. Inputs (the spec files, the
+    job scripts) stay in the run dir; outputs never do."""
     run_dir = Path(run_dir).resolve()
-    case_py = run_dir / "case.py"
-    if not case_py.is_file():
-        raise FileNotFoundError(
-            f"{case_py} not found -- a retrieval run dir must contain case.py "
-            "(see runs/w39b_smc_retrieval/case.py for the template)")
-    spec = importlib.util.spec_from_file_location(f"retrieval_case_{run_dir.name}", case_py)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    if not hasattr(mod, "PRESETS"):
-        raise AttributeError(f"{case_py} defines no PRESETS dict")
-    return mod
+    if run_dir.parent.name == "runs":
+        return run_dir.parents[1] / "output" / run_dir.name
+    return run_dir / "output"
 
 
-def resolve_preset(case_mod) -> str:
-    preset = os.environ.get("SMC_RETRIEVAL_PRESET", "").strip().lower()
-    if not preset:
-        preset = str(getattr(case_mod, "DEFAULT_PRESET", "smoke")).lower()
-    if preset not in case_mod.PRESETS:
-        raise ValueError(f"Unknown SMC_RETRIEVAL_PRESET={preset!r} "
-                         f"(this case has: {sorted(case_mod.PRESETS)})")
-    return preset
+def load_spec(path: str | Path) -> Spec:
+    """The run specification at ``path`` (module docstring), resolved against its
+    ``base`` and validated. Pure: writes no environment variable, imports no jax."""
+    path = Path(path).resolve()
+    if path.suffix not in (".yaml", ".yml"):
+        raise ValueError(f"{path}: a run specification is a .yaml file")
+    doc = _read(path)
+    base_path = None
+    sections: Dict[str, Dict[str, Any]] = {s: {} for s in SECTIONS[1:]}
+    if "base" in doc:
+        base_path = (path.parent / str(doc["base"])).resolve()
+        base = _read(base_path)
+        if "base" in base:
+            raise ValueError(f"{path}: its base {base_path.name} has a base of its own; "
+                             "a spec resolves from at most two files")
+        for s in sections:
+            sections[s].update(base.get(s) or {})
+    for s in sections:
+        sections[s].update(doc.get(s) or {})       # the variant's value wins, whole
+
+    job = _build(Job, sections["job"], f"{path.name} job", required=True) if sections["job"] else None
+    runtime = _build(Runtime, sections["runtime"], f"{path.name} runtime")
+    sampler = _build(Sampler, sections["sampler"], f"{path.name} sampler")
+    if runtime.solver not in ("fast", "ffi", "reference"):
+        raise ValueError(f"{path.name} runtime: solver {runtime.solver!r} is not fast, ffi or reference")
+    if runtime.chem_rhs not in ("codegen", "grouped"):
+        raise ValueError(f"{path.name} runtime: chem_rhs {runtime.chem_rhs!r} is not codegen or grouped")
+    if runtime.bt_buffers not in (None, 1, 2):
+        raise ValueError(f"{path.name} runtime: bt_buffers {runtime.bt_buffers!r} is not 1, 2 or null")
+    if sampler.n_live < 2 or sampler.n_eff < 1 or (sampler.n_batch is not None and sampler.n_batch < 1):
+        raise ValueError(f"{path.name} sampler: n_live, n_eff and n_batch must be positive")
+
+    # lists become tuples (the Config annotations), except inside cfg_overrides, which
+    # vulcan3 reads as its own YAML would give it
+    cfgd = {k: (v if k == "cfg_overrides" else _tuples(v)) for k, v in sections["config"].items()}
+    where = f"{path.name} config"
+    if "out_dir" in cfgd:
+        raise ValueError(f"{where}: `out_dir` is derived from the file name, never a key")
+    names = {f.name for f in fields(C.Config)}
+    bad = set(cfgd) - names
+    if bad:
+        raise ValueError(f"{where}: unknown key(s) {sorted(bad)}: not fields of config_schema.Config")
+    hints = typing.get_type_hints(C.Config)
+    for k, v in cfgd.items():
+        _check(where, k, v, hints[k])
+    if cfgd.get("obs_dir") is not None:
+        od = Path(cfgd["obs_dir"])
+        if not od.is_absolute():
+            from retrieval_framework.forward import config as fwd_config   # the repo root (no jax)
+            od = fwd_config.REPO_DIR / od
+        cfgd["obs_dir"] = od
+    name = path.stem
+    cfg = C.Config(**cfgd, out_dir=output_base(path.parent) / f"{name}_nautilus")
+    C.validate_config(cfg)
+    if job is not None:
+        if not cfg.walltime_seconds > 0:
+            raise ValueError(f"{where}: walltime_seconds must be set (> 0) when a job block "
+                             "is present: the run must checkpoint and exit before the wall")
+        if cfg.walltime_seconds > job.seconds() - JOB_HEADROOM_S:
+            raise ValueError(f"{where}: walltime_seconds {cfg.walltime_seconds:g} must end at "
+                             f"least {JOB_HEADROOM_S:g} s before the job walltime {job.walltime} "
+                             f"({job.seconds():g} s)")
+    return Spec(path=path, base=base_path, name=name, cfg=cfg, sampler=sampler,
+                runtime=runtime, job=job)
 
 
-def make_config(run_dir: Path) -> Tuple[C.Config, str]:
-    """Resolve (case, preset, env overrides) -> (Config, preset_name). Relative
-    override-file paths and out_dir resolve against the RUN DIR, not the cwd."""
-    run_dir = Path(run_dir).resolve()
-    case_mod = load_case(run_dir)
-    preset = resolve_preset(case_mod)
-    cfg = case_mod.PRESETS[preset]()
+def runtime_env_updates(rt: Runtime, environ) -> Dict[str, Optional[str]]:
+    """The runtime block as environment values, checked against ``environ``: a
+    variable already set to a different value is refused (the file is the single
+    source), and a value of None requires the variable to be unset or empty."""
+    for var, want in rt.env().items():
+        have = environ.get(var)
+        if want is None and have:
+            raise RuntimeError(f"{var}={have!r} is set in the environment but the spec's "
+                               "runtime block leaves it unset: unset it, or set it in the spec")
+        if want is not None and have is not None and have != want:
+            raise RuntimeError(f"{var}={have!r} in the environment disagrees with the spec's "
+                               f"runtime block ({want!r}): unset it, the spec decides")
+    return rt.env()
 
-    overrides: Dict[str, Any] = {}
-    ov_file = os.environ.get("SMC_RETRIEVAL_OVERRIDES_FILE", "").strip()
-    if ov_file:
-        ov_path = Path(ov_file)
-        if not ov_path.is_absolute():
-            ov_path = run_dir / ov_path
-        overrides.update(json.loads(ov_path.read_text()))
-    ov = os.environ.get("SMC_RETRIEVAL_OVERRIDES", "").strip()
-    if ov:
-        overrides.update(json.loads(ov))
-    overrides = {k: v for k, v in overrides.items() if not k.startswith("_")}
 
-    out_env = os.environ.get("SMC_RETRIEVAL_OUT_DIR", "").strip()
-    if out_env:
-        overrides["out_dir"] = out_env
-    if "out_dir" in overrides:
-        od = Path(overrides["out_dir"])
-        overrides["out_dir"] = od if od.is_absolute() else (run_dir / od).resolve()
-    elif cfg.out_dir is None:
-        cfg = replace(cfg, out_dir=run_dir / "data" / preset)
-
-    # tuples in the dataclass may arrive as JSON lists
-    for k, v in list(overrides.items()):
-        if isinstance(v, list):
-            overrides[k] = tuple(v)
-    if overrides:
-        cfg = replace(cfg, **overrides)
-    # VULCAN3_SOLVER is import-frozen: choose it before anything imports
-    # vulcan3 (every entry point resolves its config here first). Printed, not
-    # logged: the callers set up logging after this.
-    print(f"[retrieval] solver: {C.choose_solver()}", file=sys.stderr, flush=True)
-    return cfg, preset
+def export_runtime(rt: Runtime) -> None:
+    """Write the runtime block into the environment, before the engine is imported."""
+    for mod in ("vulcan3", "jax"):
+        if mod in sys.modules:
+            raise RuntimeError(f"export_runtime: {mod} is already imported; the runtime block "
+                               "must be exported first")
+    for var, want in runtime_env_updates(rt, os.environ).items():
+        if want is None:
+            os.environ.pop(var, None)
+        else:
+            os.environ[var] = want
 
 
 def setup_logging(log_file: Path | None = None, mode: str = "a") -> None:
@@ -118,12 +313,12 @@ def log_hardware() -> None:
     log.info(f"hardware: {C.hardware_profile()}")
 
 
-def write_run_identity(cfg: C.Config, pipe, preset: str, obs_save: dict) -> None:
+def write_run_identity(cfg: C.Config, pipe, spec: Spec, obs_save: dict) -> None:
     """Write config.json, observations.npz and the canonical target manifest
     into ``cfg.out_dir``. Call only after the resume-identity check."""
     from retrieval_framework import pipeline as P
     from retrieval_framework import provenance
-    write_config_json(cfg, pipe, preset)
+    write_config_json(cfg, pipe, spec)
     P.save_npz(cfg.out_dir / "observations.npz", **obs_save)
     # The canonical manifest, not only its hash: a refused resume names the
     # differing class only if the two manifests can be diffed. The digest that
@@ -134,10 +329,14 @@ def write_run_identity(cfg: C.Config, pipe, preset: str, obs_save: dict) -> None
         default=str) + "\n")
 
 
-def write_config_json(cfg: C.Config, pipe, preset: str) -> None:
+def write_config_json(cfg: C.Config, pipe, spec: Spec) -> None:
     d = asdict(cfg)
     d.update(dict(
-        preset=preset,
+        spec=spec.name,
+        spec_file=str(spec.path),
+        sampler=asdict(spec.sampler),
+        runtime=asdict(spec.runtime),
+        job=None if spec.job is None else asdict(spec.job),
         inferred_param_names=pipe.names,
         inferred_param_labels=pipe.labels,
         inferred_param_kinds=pipe.kinds,
@@ -187,3 +386,18 @@ def output_truth(cfg: C.Config, pipe) -> np.ndarray:
     if cfg.generate_synthetic_data:
         return np.asarray(pipe.param_truth, dtype=np.float64)
     return np.full(pipe.n_dim, np.nan, dtype=np.float64)
+
+
+def main(argv=None) -> None:
+    """Print the spec's runtime block as shell ``export`` / ``unset`` lines, so a job
+    script can put the kernel build and the preflight under the same environment
+    as the run: ``eval "$(python -m retrieval_framework.run_setup <spec>)"``."""
+    ap = argparse.ArgumentParser(description=main.__doc__)
+    ap.add_argument("spec", help="runs/<case>/<name>.yaml")
+    args = ap.parse_args(argv)
+    for var, val in load_spec(args.spec).runtime.env().items():
+        print(f"unset {var}" if val is None else f"export {var}={shlex.quote(val)}")
+
+
+if __name__ == "__main__":
+    main()
