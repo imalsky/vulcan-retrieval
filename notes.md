@@ -28,8 +28,9 @@ sigma = posterior standard deviation, L = log-likelihood.
   0.05 within 5000 accepted steps; v4 ran the presolve chain, "Superseded designs"),
   per-instrument noise inflation and log10gamma down to -3: 15 parameters in v4 (13
   before its override file's additions), 17 in v5 (s_o and lnM added, T1bar in place of
-  Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), quotable
-  only after its warm-vs-cold re-solve. The only planned run is v5,
+  Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), never
+  quotable: its outputs were deleted before a warm-vs-cold re-solve (the maintainer
+  decided). The only planned run is v5,
   `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`; the
   external-review configuration; "Design records"); launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
@@ -379,9 +380,8 @@ unless stated.
   (editable installs); a version, dependency or entry-point change needs the bootstrap
   (`tools/bootstrap_nas_env.pbs`).
   A new run writes to `vulcan-retrieval/output/w39b_smc_retrieval/<name>_nautilus/` with
-  its logs in `output/w39b_smc_retrieval/logs/`; v4 and earlier are under
-  `vulcan-retrieval/runs/w39b_smc_retrieval/data/` and `logs/` (the old convention;
-  "Design records", storage convention). Copy a run home with rsync, excluding
+  its logs in `output/w39b_smc_retrieval/logs/`; the v4-era outputs (the old
+  convention, `runs/w39b_smc_retrieval/data/` and `logs/`) are deleted. Copy a run home with rsync, excluding
   `anchors/` (gigabytes) and, unless the conditioning map needs it, the checkpoint.
 - Queues: the GH200 queues (`gpu_long` 120 h, `gpu_normal` 24 h, `gpu_devel` 2 h) are
   served by `pbs05a` and take jobs only from `cghfe01`/`cghfe02`; `cfe` answers `Unknown
@@ -623,9 +623,9 @@ HPC
   `cases/` (the kept-names rule: the NAS launch commands and archived config.json
   files name `runs/w39b_smc_retrieval`) and moving the observed spectra out of the
   engine's data root (no separation gained; `forward/config.py` uses them as the tracked
-  marker). The old convention put outputs in `runs/<case>/data/` and `logs/`: v4 and
-  every earlier run sit there on NAS and in the archived paths; the legacy ignore rules
-  stay for them.
+  marker). The old convention put outputs in `runs/<case>/data/` and `logs/`; those
+  outputs are deleted (the maintainer decided) except a copy of the wide run's results
+  on daw, so the legacy ignore rules stay.
 - Two-stage solve. With a moving T-P the hydrostatic density rebuild makes the fixed
   point forget the initial inventory (dL/dlnZ ~ 1e-20, FD agreeing). Stage 1 converges
   at (T(theta), Kzz(theta)) with baseline composition; stage 2 scales metals and C/O on
@@ -742,8 +742,7 @@ HPC
   (arXiv:1811.11859 Table 1); the posterior truncated at Kzz <= x10 and the weight at the
   x0.1 floor (a solver limit); Tint's marginal against 297 K (arXiv:2410.04470) and
   358 K; the 84% and 99% quantiles against each prior edge (the certificate has no
-  prior-rail check). v4 is quotable only after a warm-vs-cold re-solve of its posterior
-  rows (the postrun_93269 method).
+  prior-rail check). v4 is not quotable (its outputs are deleted, never re-solved cold).
 - Beside the v5 posterior, report: the accepted joint prior of T1bar (the irradiation
   term and the window reshape the uniform prior); the certificate's `derived` block
   (metallicity as O/H and as total metals, C/O, S/O, the Kzz factor with the weight at
@@ -855,8 +854,7 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
   keys, the certificate's retry fractions, the forward check's retry pass and
   `tests/test_chem_retry.py`. A chain-off manifest's config block is byte-identical
   before and after [M]. A v4 config.json still loads (unknown keys are dropped), so
-  `validation/posterior_forward_check.py` refuses a chain run: check v4's draws at
-  `0a2dbf3`.
+  `validation/posterior_forward_check.py` refuses a chain run.
 - 62 chemistry layers in production: bistable at low Kzz, up to 0.45 sigma resolution
   error; v4 and v5 use 100 (the schema default is still 62).
 - RT anchored at 7 bar with fixed g (90302 and earlier): the model's GM was e^(2 lnR0)
