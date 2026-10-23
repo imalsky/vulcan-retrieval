@@ -10,7 +10,7 @@ the paper plan, where those tests are designed together.
 Model
 
 1. [owed] The end-to-end check of the production stack: `validation/e2e_check.py`'s ladder (`tools/check_nas.pbs -v CHECK=e2e`; the CPU rungs on daw) and the CLI against VULCAN 2; a disagreement is localised before a production run.
-2. [decision] Integrate the 2 offsets and 3 noise inflations out of the likelihood so nautilus samples 12 parameters (notes "Sampler", the stand-in study); decided before the v5 launch.
+2. [decision] The sampler for v5: nautilus, or a gradient-capable sampler (SMC with scheduled MALA moves); settled by a NAS measurement on the real likelihood (notes "Sampler").
 
 Paper: WASP-39b results (after the paper plan)
 
@@ -33,18 +33,15 @@ over a gate is localised (the rung names the change; replay the draw with its qu
 neighbours) before a production run. Done when every comparison and the VULCAN 2
 envelope are numbers in notes "Design records".
 
-## 2. Nuisance integral
+## 2. Sampler choice
 
-Evidence: notes "Sampler" (the 17-D stand-in: 12-D nautilus recovered the evidence and
-a weak mode that 17-D nautilus missed in every seed, with 24% fewer calls). Each
-instrument group's likelihood depends on its own offset (uniform +-800 ppm; none for
-NIRISS, the reference) and inflation (log10-uniform 0.5-3), so the offset integral is
-closed-form (erf) and the inflation one a 1-D quadrature per group; their posteriors are
-drawn afterwards, conditional on each row. Before adopting it: the quadrature against
-a brute-force integral of the 17-D likelihood at a few draws, the normalisation, and the
-report and replay tools (`nautilus_report`, `e2e_check.py --posterior`, the forward
-checks) on the 12-D layout. A new spec and a new run name. Done when decided (notes
-"Design records") and, if adopted, those checks pass before v5.
+Evidence: notes "Sampler" (the stand-in studies: 17-D nautilus missed a narrow mode
+that 12-D nautilus found; MALA-SMC recovered it once it mixed, at ~10-30x nautilus's
+calls). The stand-in assumes the costs the real problem sets: a forward-mode gradient
+at production lane counts, a small move warm-started from a particle's own column, and
+the real posterior's geometry. The NAS job that measures them is being designed (an
+outside review); the maintainer decides from its numbers. Done when the choice and its
+numbers are in notes "Sampler".
 
 ## 3. The v5 run
 

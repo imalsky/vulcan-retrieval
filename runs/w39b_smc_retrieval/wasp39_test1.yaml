@@ -16,8 +16,9 @@
 # manifest: a change means a new file, never a resume. YAML reads 1e11 as text: write
 # floats with an exponent as 1.0e+11.
 #
-# 17 parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar, lnR0, lnM,
-# log10kappa_cloud, cloud_alpha, 2 offsets, 3 noise inflations.
+# 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar,
+# lnR0, lnM, log10kappa_cloud, cloud_alpha. The 2 offsets and 3 noise inflations are
+# integrated out of the likelihood (integrate_nuisance) and drawn after the run.
 
 runtime:                               # the environment the engine is imported under
   solver: ffi                          # VULCAN3_SOLVER: the CUDA block-Thomas kernel (GH200 only); fast elsewhere
@@ -117,6 +118,10 @@ config:
   # ---- clouds and noise (schema defaults: power-law cloud, offsets +-800 ppm) ----
   infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform on (0.5, 3)
   noise_inflation_per_group: true      # one per group: NIRISS, G395H_NRS1, G395H_NRS2
+  # Offsets and inflations integrated out (closed form in the offset, 2049 nodes in
+  # log10 b; same priors, same evidence): nautilus samples only the 12 physical
+  # parameters. Their posteriors come from the statistics the run logs (nuisance/).
+  integrate_nuisance: true
 
   # ---- lanes and wall ------------------------------------------------------------
   cold_lanes: 176                      # x FFI_BLOCKS_PER_SM (3) = 528 lanes under ffi; 64.4 GiB peak at nz 100

@@ -5,7 +5,9 @@ Each evaluator runs the chemistry of a whole batch in one call on the lane
 queue, the cold two-stage map from the baseline or a warm continuation from a
 given column, then the RT, ``lax.map``-chunked. Offsets
 and noise inflation (one b, or one per instrument group: make_noise_model) are
-analytic. run_nautilus calls them through ``pipe._make_batch_eval``.
+analytic, sampled as parameters or integrated out of the likelihood
+(cfg.integrate_nuisance: make_nuisance_marginal). run_nautilus calls them
+through ``pipe._make_batch_eval``.
 """
 from __future__ import annotations
 
@@ -58,10 +60,13 @@ class EvalStats(NamedTuple):
 
     acc      (N,) int32 accept_count at exit
     conv_ok  (N,) bool  canonical-certification bit at exit
+    nuis     (N, 2 G) the integrated nuisances' group statistics [R, S] from the
+             RT that gave log L (make_nuisance_marginal), or None when sampled
     """
 
     acc: jnp.ndarray
     conv_ok: jnp.ndarray
+    nuis: Any = None
 
 
 def make_uspace(specs, dtype):
@@ -130,6 +135,130 @@ def make_noise_model(names, group_per_bin, sigma0, dtype):
     return lambda theta: sigma0() * (N @ theta[lo:lo + n])
 
 
+# Trapezoid nodes in log10 b for an integrated noise inflation. On the real v5 bins
+# the error against brute force falls as h^2: 3.6e-3 nats at 513 nodes in the worst
+# case tried (b piled at its floor), <= 5e-5 on realistic spectra (notes "Design
+# records", the integrated nuisances).
+NUISANCE_NODES = 2049
+_LOG2PI = math.log(2.0 * math.pi)
+
+
+def _log_phi_diff(a, c, xp, log_ndtr):
+    """log(Phi(a) - Phi(c)) for a > c, stable in both tails."""
+    flip = c > 0                                  # both in the upper tail: 1 - Phi
+    hi = xp.where(flip, -c, a)
+    lo = xp.where(flip, -a, c)
+    lh, ll = log_ndtr(hi), log_ndtr(lo)
+    return lh + xp.log1p(-xp.exp(ll - lh))
+
+
+def make_nuisance_marginal(cfg, groups, group_per_bin):
+    """The Gaussian likelihood with the offsets and the noise inflation(s)
+    integrated out over their priors (cfg.integrate_nuisance). Group g's bins see
+    the offset o_g (uniform on prior_offset_ppm; none for groups[0], the
+    reference, or with infer_offsets off) and sigma0 * b (b log10-uniform on
+    prior_noise_inflation: one per group, one for every bin, or b = 1). From the
+    group statistics R_g = sum r / s0^2 and S_g = sum r^2 / s0^2 of the residual
+    r = depth - mu, the o integral is closed form and the b integral a normalized
+    trapezoid over NUISANCE_NODES nodes in log10 b; the groups multiply.
+
+    Returns a namespace: ``names`` (the integrated parameters as the sampled
+    layout names them: offsets, then inflations), ``stats(mu, depth, sigma0) ->
+    (2 G,)``, ``log_marginal(stats, sigma0)`` (jax), ``draw(stats, sigma0, rng)
+    -> (n, len(names))`` (numpy: each row's b on the node grid from its
+    conditional, then o_g from its truncated normal given b; offsets in ppm) and
+    ``apply(mu, nuis) -> (mu with the offsets, the sigma multiplier per bin)``.
+    Module-level so it is unit-tested without the forward stack."""
+    from jax.scipy.special import log_ndtr as jlog_ndtr, logsumexp as jlse
+
+    groups = list(groups)
+    G = len(groups)
+    Nm = OBS.build_group_design({"groups": groups, "group": group_per_bin})
+    has_off = np.array([bool(cfg.infer_offsets) and k > 0 for k in range(G)])
+    a_lo, a_hi = (float(v) * OBS.PPM for v in cfg.prior_offset_ppm)
+    infl = bool(cfg.infer_noise_inflation)
+    per_group = infl and bool(cfg.noise_inflation_per_group)
+    if infl:
+        t = np.linspace(*np.log10(cfg.prior_noise_inflation), NUISANCE_NODES)
+        w = np.full(NUISANCE_NODES, 1.0 / (NUISANCE_NODES - 1))
+        w[[0, -1]] *= 0.5
+    else:
+        t, w = np.zeros(1), np.ones(1)
+    b, logw = 10.0 ** t, np.log(w)
+    names = [f"offset_{g}" for g, h in zip(groups, has_off) if h]
+    names += ([f"noise_inflation_{g}" for g in groups] if per_group
+              else ["noise_inflation"] if infl else [])
+    n_off = int(has_off.sum())
+
+    def _consts(sigma0, xp):
+        s0 = xp.asarray(sigma0)
+        N = xp.asarray(Nm)
+        return N.T @ (1.0 / s0 ** 2), N.sum(axis=0), N.T @ xp.log(s0)
+
+    def _terms(R, S, consts, xp, log_ndtr):
+        """(..., G, K): log of group g's likelihood at node b_k, integrated over
+        its offset when it has one."""
+        W, n, slog = (c[:, None] for c in consts)
+        bb = xp.asarray(b)
+        R, S = R[..., None], S[..., None]
+        base = -slog - 0.5 * n * _LOG2PI - n * xp.log(bb)
+        oh = R / W
+        sd = bb / xp.sqrt(W)
+        off = (base - 0.5 * (S - R * oh) / bb ** 2 + 0.5 * _LOG2PI + xp.log(sd)
+               + _log_phi_diff((a_hi - oh) / sd, (a_lo - oh) / sd, xp, log_ndtr)
+               - math.log(a_hi - a_lo))
+        return xp.where(xp.asarray(has_off)[:, None], off, base - 0.5 * S / bb ** 2)
+
+    def stats(mu, depth, sigma0):
+        N = jnp.asarray(Nm)
+        r = (depth - mu) / sigma0 ** 2
+        return jnp.concatenate([N.T @ r, N.T @ (r * (depth - mu))])
+
+    def log_marginal(st, sigma0):
+        T = _terms(st[:G], st[G:], _consts(sigma0, jnp), jnp, jlog_ndtr)      # (G, K)
+        lw = jnp.asarray(logw)
+        if per_group or not infl:              # without an inflation K = 1
+            return jnp.sum(jlse(T + lw, axis=-1))
+        return jlse(jnp.sum(T, axis=0) + lw)   # one b: the groups multiply at each node
+
+    def draw(st, sigma0, rng, chunk=1024):
+        from scipy.special import log_ndtr, logsumexp
+        from scipy.stats import truncnorm
+        st = np.asarray(st, np.float64)
+        consts = _consts(np.asarray(sigma0, np.float64), np)
+        out = np.empty((len(st), len(names)))
+        for i in range(0, len(st), chunk):
+            R, S = st[i:i + chunk, :G], st[i:i + chunk, G:]
+            T = _terms(R, S, consts, np, log_ndtr)                   # (n, G, K)
+            if not per_group:                  # one b: its conditional is the product's
+                T = np.broadcast_to(T.sum(axis=1, keepdims=True), T.shape)
+            T = T + logw
+            P = np.exp(T - logsumexp(T, axis=-1, keepdims=True)).cumsum(axis=-1)
+            k = (P < rng.random(P.shape[:-1] + (1,))).sum(axis=-1).clip(0, len(b) - 1)
+            if not per_group:
+                k = np.broadcast_to(k[:, :1], k.shape)
+            bk = b[k]                                                   # (n, G)
+            cols = []
+            for g in np.flatnonzero(has_off):
+                oh, sd = R[:, g] / consts[0][g], bk[:, g] / np.sqrt(consts[0][g])
+                cols.append(truncnorm.rvs((a_lo - oh) / sd, (a_hi - oh) / sd, loc=oh,
+                                          scale=sd, random_state=rng) / OBS.PPM)
+            cols += list(bk.T) if per_group else [bk[:, 0]] if infl else []
+            out[i:i + chunk] = np.stack(cols, axis=1)
+        return out
+
+    def apply(mu, nuis):
+        nuis = np.asarray(nuis, np.float64)
+        mu = np.asarray(mu, np.float64) + (nuis[:, :n_off] * OBS.PPM) @ Nm[:, has_off].T
+        mult = (nuis[:, n_off:] @ Nm.T if per_group
+                else nuis[:, n_off:n_off + 1] * np.ones(Nm.shape[0]) if infl
+                else np.ones_like(mu))
+        return mu, mult
+
+    return SimpleNamespace(names=names, groups=groups, stats=stats,
+                           log_marginal=log_marginal, draw=draw, apply=apply)
+
+
 def _map_chunks(fn, args, chunk):
     """Apply a BATCH function ``fn`` -- one that takes the whole stacked pytree
     ``args``, here ``jax.vmap`` of a per-particle RT stage -- to padded chunks of
@@ -159,12 +288,14 @@ def _map_chunks_rows(fn, args, chunk, need, fill):
     chunk)`` chunks only, so a row nobody reads costs no RT. Its body is
     ``lax.map``'s (one chunk sliced out of the stack, the result written back
     into the stacked output), so each chunk is the same computation on the
-    same shapes. ``fn`` must return one (chunk,) leaf. ``chunk<=0`` (or >= n)
+    same shapes. ``fn`` must return one (chunk, ...) leaf; ``fill`` fills every
+    entry of a row nobody reads. ``chunk<=0`` (or >= n)
     is ONE call on the whole batch, as in ``_map_chunks``, masked afterwards."""
     leaves = jax.tree_util.tree_leaves(args)
     n = int(leaves[0].shape[0])
     if chunk <= 0 or chunk >= n:
-        return jnp.where(need, fn(args), fill)
+        y = fn(args)
+        return jnp.where(need.reshape(need.shape + (1,) * (y.ndim - 1)), y, fill)
     n_pad = (-n) % chunk
     # needed rows first, each group in row order (a stable sort of ~need)
     order = jnp.argsort(jnp.logical_not(need).astype(jnp.int32), stable=True).astype(jnp.int32)
@@ -176,6 +307,7 @@ def _map_chunks_rows(fn, args, chunk, need, fill):
     n_need = jnp.sum(need.astype(jnp.int32))
     n_run = (n_need + chunk - 1) // chunk
     fill = jnp.asarray(fill)
+    trail = jax.eval_shape(fn, jax.tree_util.tree_map(lambda a: a[0], xs)).shape[1:]
 
     def body(c):
         k, ys = c
@@ -183,12 +315,13 @@ def _map_chunks_rows(fn, args, chunk, need, fill):
             lambda a: jax.lax.dynamic_index_in_dim(a, k, 0, keepdims=False), xs)
         return k + 1, jax.lax.dynamic_update_index_in_dim(ys, fn(x), k, 0)
 
-    ys0 = jnp.full((n_chunks, chunk), fill, dtype=fill.dtype)
+    ys0 = jnp.full((n_chunks, chunk) + trail, fill, dtype=fill.dtype)
     _, ys = jax.lax.while_loop(lambda c: c[0] < n_run, body, (jnp.int32(0), ys0))
     # stacked position p holds row order[p]; the first n_need are the needed rows
     pos = jnp.arange(n + n_pad, dtype=jnp.int32)
     dst = jnp.where(pos < n_need, order, jnp.int32(n))
-    return jnp.full((n,), fill, dtype=fill.dtype).at[dst].set(ys.reshape(-1), mode="drop")
+    return jnp.full((n,) + trail, fill, dtype=fill.dtype).at[dst].set(
+        ys.reshape((-1,) + trail), mode="drop")
 
 
 def build_pipeline(cfg: C.Config) -> Pipeline:
@@ -248,6 +381,10 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
 
     B_jax = jnp.asarray(B, dtype=dtype)
     O_jax = jnp.asarray(O_np, dtype=dtype)
+
+    # the integrated nuisances (cfg.integrate_nuisance), or None when sampled
+    nuisance = (make_nuisance_marginal(cfg, groups, obs["group"])
+                if cfg.integrate_nuisance else None)
 
     # ---- parameter layout ----
     specs = C.specs_from_config(cfg, groups=groups)
@@ -368,13 +505,18 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
     y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)          # (nz, ni)
 
     def _rt_val(args):
-        """Per-particle RT stage, primal only: aux profiles -> loglik value."""
+        """Per-particle RT stage, primal only: aux profiles -> loglik value; with
+        integrated nuisances [loglik, R, S], the statistics their posterior is
+        drawn from."""
         aux, theta = args
         depth = fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta))
         mu = _mu_from_depth(depth, theta)
-        val = _gauss_loglik(mu, theta)
         finite = jnp.all(jnp.isfinite(depth))
-        return jnp.where(finite, val, _REJECT)
+        if nuisance is None:
+            return jnp.where(finite, _gauss_loglik(mu, theta), _REJECT)
+        st = nuisance.stats(mu, pipe.obs_depth_jax, pipe.obs_sigma_jax)
+        val = jnp.where(finite, nuisance.log_marginal(st, pipe.obs_sigma_jax), _REJECT)
+        return jnp.concatenate([val[None], st])
 
     def _mu_from_column(args):
         """Per-particle binned model depth from a converged column, with no
@@ -439,6 +581,9 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             valid = jax.vmap(tp_valid)(Theta)
             AUX, Ynew, CD = _chem_primal(C_, Y, refs, active)
             vals = _rt_vals(AUX, Theta, CD, valid, active)
+            nuis = None
+            if nuisance is not None:
+                vals, nuis = vals[:, 0], vals[:, 1:]
             ACC = CD.accept_count.astype(jnp.int32)
             conv_ok = CD.conv_normal > 0.5
             # the solver's verdict alone: the runner stops on accept_count >
@@ -454,7 +599,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
             Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])
             comp = _comp_refs(C_)
             refs_new = jnp.where(ok[:, None], comp, jnp.zeros_like(comp))
-            return L, Ynew, refs_new, EvalStats(acc=ACC, conv_ok=conv_ok)
+            return L, Ynew, refs_new, EvalStats(acc=ACC, conv_ok=conv_ok, nuis=nuis)
 
         return eval_batch
 
@@ -465,7 +610,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         B=B, n_bin=n_bin,
         names=names, kinds=kinds, labels=labels, n_dim=n_dim,
         n_chem=n_chem, n_chem_tp=n_chem_tp, lnR0_idx=lnR0_idx, lnM_idx=lnM_idx,
-        cloud_idx=cloud_idx, n_cloud=n_cloud,
+        cloud_idx=cloud_idx, n_cloud=n_cloud, nuisance=nuisance,
         param_prior_lo=np.asarray([s.lo for s in specs], npdtype),
         param_prior_hi=np.asarray([s.hi for s in specs], npdtype),
         param_truth=param_truth, prior_types=prior_types,
@@ -550,6 +695,10 @@ def generate_observations(pipe: Pipeline, seed: int) -> Dict[str, np.ndarray]:
     sigma = np.asarray(pipe.obs["sigma"], pipe.npdtype)
     mu, ok = pipe.binned_ok_jit(pipe.theta_truth)
     mu_true = np.asarray(mu, pipe.npdtype)
+    if pipe.nuisance is not None and pipe.cfg.infer_offsets:
+        # the sampled layout's truth offsets ride theta_truth; here they are added
+        off = OBS.build_offset_design(pipe.obs)
+        mu_true = mu_true + off @ np.full(off.shape[1], pipe.cfg.truth_offset_ppm * OBS.PPM)
     if not bool(ok):
         raise RuntimeError(
             "the truth chemistry does not certify (VULCAN's certificate under "

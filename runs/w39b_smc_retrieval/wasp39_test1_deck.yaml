@@ -1,5 +1,5 @@
 # Sensitivity run beside wasp39_test1: an opaque grey cloud deck below a free pressure
-# in place of the power-law cloud (two cloud parameters become one). 16 parameters.
+# in place of the power-law cloud (two cloud parameters become one). 11 sampled parameters.
 base: wasp39_test1.yaml
 
 config:

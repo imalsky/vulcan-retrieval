@@ -32,7 +32,10 @@ nautilus_checkpoint.hdf5 (rewritten every iteration), anchors/ (one npz of
 certified columns per batch, reloaded on resume), rejected/ (one npz per chunk
 of the rejected draws: unit-cube point ``z``, class ``cls`` 0 T-P out, 1
 exhausted, 2 stalled, 3 non-finite, accepted steps ``acc`` and the chunk's
-start mode ``warm``; the conditioning map's input), nautilus_tally.json
+start mode ``warm``; the conditioning map's input), with integrated nuisances
+nuisance/ (one npz per chunk of the certified rows: ``z``, the ``log_l`` returned
+to nautilus and the group ``stats`` their posterior is drawn from;
+nuisance_posterior), nautilus_tally.json
 (rejection and warm-start counts, summed over jobs), and when the run finishes
 nautilus_posterior.npz, nautilus_summary.json and nautilus_certificate.json
 (nautilus_report; its CLI also draws the figures). ``--resume`` continues the
@@ -217,7 +220,7 @@ class BatchProfiler:
 
 def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
                  batch_log: Path | None = None, prof: BatchProfiler | None = None,
-                 rejects: Path | None = None):
+                 rejects: Path | None = None, nuisance: Path | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a jitted evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with masked copies of its last
@@ -229,7 +232,9 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     accepted step counts there. With ``rejects`` (a directory), each chunk
     writes its rejected rows as one npz (``z`` unit-cube points, ``cls`` the
     class, ``acc`` accepted steps, ``warm`` the start mode), so the rejected
-    fraction can be mapped over the posterior afterwards."""
+    fraction can be mapped over the posterior afterwards. With ``nuisance`` (a
+    directory; integrated nuisances), each chunk writes its certified rows' ``z``,
+    returned ``log_l`` and group ``stats`` before nautilus sees them."""
     import jax
     import jax.numpy as jnp
 
@@ -239,10 +244,13 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
-    n_rej = None
+    n_rej = n_nui = None
     if rejects is not None:
         rejects.mkdir(parents=True, exist_ok=True)
         n_rej = [len(list(rejects.glob("rejected_*.npz")))]
+    if nuisance is not None:
+        nuisance.mkdir(parents=True, exist_ok=True)
+        n_nui = [len(list(nuisance.glob("nuisance_*.npz")))]
     # every evaluator masks padded rows (active) and RTs only the rows it can
     # keep; each compiles at its first call
     fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
@@ -304,6 +312,15 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                              acc=acc[dead].astype(np.int64), warm=np.int8(warm))
                 os.replace(tmp, f)
                 n_rej[0] += 1
+            if n_nui is not None and not dead.all():
+                stats = np.asarray(jax.device_get(st.nuis), np.float64)[:m]
+                f = nuisance / f"nuisance_{n_nui[0]:05d}.npz"
+                tmp = f.with_name(f".{f.name}.part")
+                with open(tmp, "wb") as fh:
+                    np.savez(fh, z=Zc[:m][~dead], log_l=out[i:i + m][~dead],
+                             stats=stats[~dead])
+                os.replace(tmp, f)
+                n_nui[0] += 1
             mode = "warm" if warm else "cold"
             for key, v in (("n_eval", m), ("tp_out", tp_out.sum()),
                            ("exhausted", exhausted.sum()), ("stalled", stalled.sum()),
@@ -322,6 +339,38 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
         return out
 
     return loglike
+
+
+def nuisance_posterior(pipe, folder: Path, queries, rng) -> list:
+    """The integrated nuisances' posterior, one conditional draw per row of each
+    query ``(z, log_l)`` (pipeline.make_nuisance_marginal's ``draw``), from the
+    group statistics logged with the evaluation that gave the point its log L;
+    NaN on a rejected row (zero weight). A point logged twice (a batch redrawn
+    after a resume) is matched by its log L too; a finite row with no match
+    raises."""
+    table = {}
+    for f in sorted(folder.glob("nuisance_*.npz")):
+        with np.load(f) as d:
+            for zz, ll, ss in zip(d["z"], d["log_l"], d["stats"]):
+                table.setdefault(zz.tobytes(), []).append((float(ll), ss))
+    res = []
+    for zq, lq in queries:
+        zq = np.asarray(zq, np.float64)
+        st = np.full((len(zq), 2 * len(pipe.nuisance.groups)), np.nan)
+        for i, (zz, ll) in enumerate(zip(zq, np.asarray(lq, np.float64))):
+            if not np.isfinite(ll):
+                continue
+            hit = [s for lg, s in table.get(zz.tobytes(), []) if lg == ll]
+            if not hit:
+                raise RuntimeError(f"posterior row {i} (log L {ll}) has no logged "
+                                   f"nuisance statistics in {folder}")
+            st[i] = hit[0]
+        nu = np.full((len(zq), len(pipe.nuisance.names)), np.nan)
+        ok = np.isfinite(st[:, 0])
+        if ok.any():
+            nu[ok] = pipe.nuisance.draw(st[ok], pipe.obs_sigma, rng)
+        res.append(nu)
+    return res
 
 
 def make_sampler(loglike, n_dim: int, n_live: int, n_batch: int, seed: int,
@@ -422,7 +471,8 @@ def main(argv=None) -> None:
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
     like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl",
-                        BatchProfiler(), rejects=out / "rejected")
+                        BatchProfiler(), rejects=out / "rejected",
+                        nuisance=out / "nuisance" if pipe.nuisance is not None else None)
 
     def loglike_saved(Z):
         L = like(Z)
@@ -448,7 +498,13 @@ def main(argv=None) -> None:
         return
 
     z, log_w, log_l = sampler.posterior()
-    z_eq, _, _ = sampler.posterior(equal_weight=True)
+    z_eq, _, log_l_eq = sampler.posterior(equal_weight=True)
+    extra = {}
+    if pipe.nuisance is not None:
+        nu, nu_eq = nuisance_posterior(pipe, out / "nuisance", [(z, log_l), (z_eq, log_l_eq)],
+                                       np.random.default_rng(int(cfg.seed) + 2))
+        extra = dict(nuisance_names=np.asarray(pipe.nuisance.names, dtype="<U64"),
+                     nuisance=nu, samples_nuisance=nu_eq)
     to_theta = jax.jit(jax.vmap(pipe.theta_from_u))
     theta = np.asarray(to_theta(np.log(z) - np.log1p(-z)), np.float64)
     theta_eq = np.asarray(to_theta(np.log(z_eq) - np.log1p(-z_eq)), np.float64)
@@ -457,7 +513,8 @@ def main(argv=None) -> None:
                target_digest=np.asarray(want),
                theta=theta, log_w=log_w, log_l=log_l, samples=theta_eq,
                u=np.log(z) - np.log1p(-z),     # the rows in u-space: an evaluator's input
-               logZ_box=np.asarray(sampler.log_z), n_like=np.asarray(sampler.n_like))
+               logZ_box=np.asarray(sampler.log_z), n_like=np.asarray(sampler.n_like),
+               **extra)
     summary = {
         "logZ_box": float(sampler.log_z), "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff), "n_live": n_live, "n_batch": n_batch,

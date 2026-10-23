@@ -148,6 +148,7 @@ def test_production_case_gets_one_inflation_per_group():
     pipe = P.build_pipeline(cfg)
     P.load_real_into_pipe(pipe)
     assert list(pipe.groups) == GROUPS
-    idx = [i for i, k in enumerate(pipe.kinds) if k == "noise"]
-    assert [pipe.names[i] for i in idx] == [f"noise_inflation_{g}" for g in GROUPS]
-    assert pipe.n_dim == 17
+    # v5 integrates the offsets and the inflations out: 12 sampled parameters
+    assert pipe.nuisance.names == ([f"offset_{g}" for g in GROUPS[1:]]
+                                   + [f"noise_inflation_{g}" for g in GROUPS])
+    assert not any(k in ("noise", "offset") for k in pipe.kinds) and pipe.n_dim == 12

@@ -238,6 +238,14 @@ class Config:
     # noise_inflation_<group>, in the pipeline's group order, after the
     # offsets. Needs infer_noise_inflation=True; off keeps the scalar b.
     noise_inflation_per_group: bool = False
+    # Integrate the offsets and the noise inflation(s) out of the likelihood
+    # instead of sampling them: per group the offset integral is closed form and
+    # the inflation one a trapezoid over NUISANCE_NODES nodes in log10 b
+    # (pipeline.make_nuisance_marginal), at the same priors, so the posterior of
+    # the other parameters and the evidence are unchanged. Their posteriors are
+    # drawn after the run from statistics the run logs per certified draw
+    # (run_nautilus). Needs infer_offsets or infer_noise_inflation.
+    integrate_nuisance: bool = False
 
     # ---- data source ----------------------------------------------------------
     # False : fit the real observed spectrum (obs_dir/obs_products above).
@@ -403,6 +411,10 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
         add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha,
             cfg.truth_cloud_alpha, "cloud")
 
+    # the integrated nuisances are not parameters (pipeline.make_nuisance_marginal)
+    if cfg.integrate_nuisance:
+        return specs
+
     # --- inter-instrument offsets (ppm), one per group beyond the reference ---
     if cfg.infer_offsets and groups is not None and len(groups) > 1:
         for g in groups[1:]:
@@ -506,6 +518,16 @@ def validate_config(cfg: Config) -> None:
             "of condensing columns are untested). Run a condensation forward model "
             "through vulcan_forward.vulcan_chem.build_chem_model, or set "
             "allow_condense_inference=True after validating it on your case.")
+    if cfg.integrate_nuisance:
+        if not (cfg.infer_offsets or cfg.infer_noise_inflation):
+            raise ValueError("integrate_nuisance=True needs infer_offsets or "
+                             "infer_noise_inflation: there is nothing to integrate")
+        lo, hi = cfg.prior_offset_ppm
+        if not lo < hi:
+            raise ValueError(f"prior_offset_ppm: lo={lo} !< hi={hi}")
+        lo, hi = cfg.prior_noise_inflation
+        if not 0 < lo < hi:
+            raise ValueError(f"prior_noise_inflation needs 0 < lo < hi, got {(lo, hi)}")
     if cfg.noise_inflation_per_group and not cfg.infer_noise_inflation:
         raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
                          "(it splits the inferred inflation by group; alone it would "

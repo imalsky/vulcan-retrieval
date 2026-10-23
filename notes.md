@@ -27,8 +27,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   solver `ffi` (the spec's `runtime` block), one chemistry program per draw (v5: rtol
   0.05 within 5000 accepted steps; v4 ran the presolve chain, "Superseded designs"),
   per-instrument noise inflation and log10gamma down to -3: 15 parameters in v4 (13
-  before its override file's additions), 17 in v5 (s_o and lnM added, T1bar in place of
-  Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), never
+  before its override file's additions); v5 samples 12 (s_o and lnM added, T1bar in
+  place of Tint, the 2 offsets and 3 inflations integrated out: `integrate_nuisance`). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), never
   quotable: its outputs were deleted before a warm-vs-cold re-solve (the maintainer
   decided). The headline run is v5,
   `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`; the
@@ -264,9 +264,14 @@ unless stated.
   - the 2 offset and 3 noise dims integrated out (12-D nautilus): lnZ +0.003 +/- 0.004,
     the mode in 4 of 4, posterior means within 0.03 sd; 121k calls.
   - adaptive-tempered SMC (RWM, MALA every step or every 5th, RT-only moves,
-    waste-free): none within +-0.1 in lnZ at 1.5-6x the calls. MALA every step found
-    the mode at ~4x cost (lnZ +0.32); RT-only moves halved the lnZ scatter for +30%.
-    A MALA kernel started on exact draws kept them (moments within 0.04 sd).
+    waste-free) at 10 moves per stage: none within +-0.1 in lnZ at 1.5-6x the calls;
+    MALA every step found the mode (lnZ +0.32). With more moves the bias goes: MALA
+    every step, 60 moves, lnZ -0.033 +/- 0.072, the mode at 0.097, means within 0.12
+    sd, 3.84M calls (~30x 12-D nautilus); MALA every 5th + 5 RT-only moves, 30 moves,
+    +0.013 +/- 0.115, mode 0.087, 1.29M; RWM 60 moves +0.019 +/- 0.121, mode 0.048,
+    1.12M. A MALA kernel started on exact draws kept them (moments within 0.04 sd).
+    The SMC was untuned (fixed move counts, ESS 0.5); an outside review calls the
+    family untested, not beaten.
   Gradient moves on a schedule (every k-th step, or late stages only) are exact; a
   warm start inside an MCMC move is not (the likelihood depends on the path).
 
@@ -598,7 +603,7 @@ HPC
   - Four sensitivity runs the external review asked for, each a `base:
     wasp39_test1.yaml` variant at the base's solver settings, in priority order (an
     outside review's ranking by referee risk): `wasp39_test1_kzz1000` (the Kzz prior to
-    x1000, 17 parameters), `wasp39_test1_deck` (a grey deck at a free pressure in place
+    x1000, 12 sampled parameters), `wasp39_test1_deck` (a grey deck at a free pressure in place
     of the power-law cloud, 16), `wasp39_test1_kzz_powerlaw` (Kzz as a power law in
     pressure, 18; compare Kzz at stated pressures, not the amplitude) and
     `wasp39_test1_adiabat` (an adiabat below a free boundary, 18). Each is compared
@@ -612,6 +617,21 @@ HPC
     ran 19.8 h against 23.8 h and rejected 2.56% of in-window draws against 1.60%,
     with logZ_box 0.064 lower. It needs no second compile. logZ_box is comparable only
     at matched programs, so v5's is not set against v4's.
+- Integrated nuisances (`integrate_nuisance`, v5; the maintainer decided, with an
+  outside design review): per instrument group the offset integral is closed form and
+  the inflation one a trapezoid over 2049 nodes in log10 b (`pipeline.make_nuisance_marginal`),
+  at the sampled model's priors, so the evidence and the physical posterior are the
+  sampled model's and nautilus samples 12 dimensions. Go/no-go on the real v5 bins
+  (NIRISS 91, NRS1 30, NRS2 29) against brute force [M]: <= 5e-5 nats on realistic
+  spectra at 257 nodes; the worst case (b on its floor) 3.6e-3 at 513, falling as h^2;
+  an offset past its prior edge exact (4.6e-7 once the brute-force grid is refined);
+  the jax version 1.4e-7 at 2049. The run logs each certified row's group statistics
+  (R, S) with the log L nautilus sees (`nuisance/`), and the posterior file gets one
+  conditional draw per row (`nuisance`, `samples_nuisance`; b on the node grid, then
+  the offset's truncated normal), joined by (z, log L) so a replayed row matches; the
+  report's spectrum and predictive band use those draws. Chosen over drawing them from
+  the report's re-solved rows (32 cold rows of a warm run: noisy and not the run's
+  conditional). `tests/test_nuisance_integral.py` pins it.
 - Work order (the maintainer decided): checks and changes that make the model right in
   general come first; everything about WASP-39b's results (the v5 run's checks,
   sensitivity runs, how a number is quoted) waits for the paper plan, where those tests

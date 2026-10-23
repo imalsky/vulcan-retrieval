@@ -1,5 +1,5 @@
 # Sensitivity run beside wasp39_test1: the Kzz prior to x1000 (the headline stops at
-# x30; v4 ran to x1000). 17 parameters, as the base.
+# x30; v4 ran to x1000). 12 sampled parameters, as the base.
 base: wasp39_test1.yaml
 
 config:

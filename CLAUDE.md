@@ -236,7 +236,10 @@ adopted".
   "Physics assumptions and limitations"). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`.
 - Quote posterior numbers from the weighted points (`theta`, `log_w`) in
-  `nautilus_posterior.npz`, never from its equal-weight `samples`.
+  `nautilus_posterior.npz`, never from its equal-weight `samples`. With
+  `integrate_nuisance` the offsets and inflations are not in `theta`: they are the
+  file's `nuisance` arrays (one conditional draw per row; the certificate's `derived`
+  block quotes them).
 - Before publishing a number, read notes "Physics assumptions and limitations" and
   report beside the posterior what it lists. A finished GPU run's numbers go into
   notes "Runs" before any of them is reported.

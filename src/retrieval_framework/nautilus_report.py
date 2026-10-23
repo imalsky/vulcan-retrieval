@@ -13,8 +13,9 @@ nautilus_tally.json, nautilus_posterior.npz) and writes
                                 total metals, C/O, S/O, the Kzz factor with the
                                 weight at its floor and above x10 and the
                                 posterior truncated at x10, T at the deep level
-                                and Tint), weighted 16/50/84% quantiles, and the
-                                conditioning map (where the rejected draws sit)
+                                and Tint; integrated offsets and noise
+                                inflations), weighted 16/50/84% quantiles, and
+                                the conditioning map (where the rejected draws sit)
     plots/corner.png            corner plot of the weighted posterior
     plots/tp_posterior.png      T-P 5-95% band from weighted draws
     plots/spectrum_fit.png      data, model and posterior-predictive 5-95% bands
@@ -204,6 +205,13 @@ def derived_quantities(out_dir) -> dict | None:
         Tint = np.asarray([_tp_params(t, names, cfgj)[3] for t in theta])
         d.update(T_deep_p_bar=float(p_deep[0]), T_deep_K=_wquant(T_deep, w),
                  Tint_K=_wquant(Tint, w))
+    if "nuisance" in post.files:
+        # integrated offsets (ppm) and inflations: one conditional draw per row,
+        # NaN on a rejected (zero-weight) row
+        nu = np.asarray(post["nuisance"], np.float64)
+        ok = np.isfinite(nu).all(axis=1)
+        d["nuisance"] = {str(n): _wquant(nu[ok, j], w[ok] / w[ok].sum())
+                         for j, n in enumerate(post["nuisance_names"])}
     return d
 
 
@@ -308,6 +316,12 @@ def certificate(out_dir) -> dict:
             f"{cond['rejected_of_in_window']:.1%} overall; that bin holds "
             f"{k['posterior_weight'][0]:.3f} of the posterior weight (evaluated proposals; "
             f"{cond['rejected_in_log']} in the rejected log against {rejected} in the tally).")
+    if cfg.get("integrate_nuisance"):
+        caveats.append(
+            "The offsets and noise inflations were integrated out of the likelihood "
+            "(the evidence and the other parameters' posterior are those of the sampled "
+            "model); their posteriors are one conditional draw per row from the statistics "
+            "the run logged, on the log10-b quadrature grid.")
     if int(cfg.get("cold_lanes") or 0) > 0:
         caveats.append(
             "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
@@ -407,8 +421,11 @@ def _config_from_json(path: Path) -> C.Config:
 
 
 def model_spectra(out_dir, n: int):
-    """(theta (n, n_dim), binned model depth (n, n_bin), certified (n,)) for n
-    weighted posterior draws, re-solved cold (module docstring)."""
+    """(theta (n, n_dim), binned model depth (n, n_bin), certified (n,), sigma
+    multiplier (n, n_bin) or None) for n weighted posterior draws, re-solved cold
+    (module docstring). With integrated nuisances the depth carries each row's
+    drawn offsets and the multiplier its drawn inflations; otherwise theta holds
+    both (the multiplier is None)."""
     import jax
     import jax.numpy as jnp
 
@@ -418,7 +435,8 @@ def model_spectra(out_dir, n: int):
     post = np.load(out / "nautilus_posterior.npz")
     rng = np.random.default_rng(int(cfg.seed) + 1)
     theta = np.asarray(post["theta"], np.float64)
-    theta = theta[rng.choice(len(theta), size=int(n), p=_weights(post["log_w"]))]
+    idx = rng.choice(len(theta), size=int(n), p=_weights(post["log_w"]))
+    theta = theta[idx]
     log.info(f"solver: {C.choose_solver()}")     # before vulcan3 is imported
     pipe = P.build_pipeline(cfg)
     if list(pipe.names) != [str(s) for s in post["param_names"]]:
@@ -432,8 +450,12 @@ def model_spectra(out_dir, n: int):
     ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
     log.info(f"model spectra: {int(ok.sum())}/{len(ok)} draws certified cold in "
              f"{time.perf_counter() - t0:.0f} s")
-    P.save_npz(out / "nautilus_spectra.npz", theta=theta, model=mu, certified=ok)
-    return theta, mu, ok
+    mult = None
+    if pipe.nuisance is not None:
+        mu, mult = pipe.nuisance.apply(mu, np.asarray(post["nuisance"], np.float64)[idx])
+    P.save_npz(out / "nautilus_spectra.npz", theta=theta, model=mu, certified=ok,
+               **({} if mult is None else {"sigma_multiplier": mult}))
+    return theta, mu, ok, mult
 
 
 def plot(out_dir, spectra=None) -> list:
@@ -501,7 +523,7 @@ def plot(out_dir, spectra=None) -> list:
 
     # ---------------- spectrum fit ----------------
     if spectra is not None:
-        th_s, mu, ok = spectra
+        th_s, mu, ok, mult = spectra if len(spectra) == 4 else (*spectra, None)
         if not np.any(ok):
             raise RuntimeError("no model-spectrum draw certified cold: nothing to plot")
         log.info(f"spectrum fit: {int(ok.sum())}/{len(ok)} draws certified cold")
@@ -509,9 +531,9 @@ def plot(out_dir, spectra=None) -> list:
         wl = np.asarray(obs["wl"], np.float64)
         sigma = np.asarray(obs["sigma"], np.float64)
         group = np.asarray(obs["group"]).astype(str)
-        y_rep, _ = predictive_replicates(mu[ok], sigma,
-                                         OBS.noise_scale_per_bin(th_s[ok], names, group),
-                                         np.random.default_rng(4))
+        infl = (OBS.noise_scale_per_bin(th_s[ok], names, group) if mult is None
+                else mult[ok])
+        y_rep, _ = predictive_replicates(mu[ok], sigma, infl, np.random.default_rng(4))
         o = np.argsort(wl)
         fig, ax = plt.subplots(figsize=(6.5, 6.5))
         pred = _TO_PPM * np.percentile(y_rep, [5, 95], axis=0)[:, o]
