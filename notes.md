@@ -272,8 +272,19 @@ unless stated.
     1.12M. A MALA kernel started on exact draws kept them (moments within 0.04 sd).
     The SMC was untuned (fixed move counts, ESS 0.5); an outside review calls the
     family untested, not beaten.
+  - 4 independent populations (the 4-GPU recipe: Z averaged), N 500 each, MALA every
+    5th + RT-only moves, 30 moves/stage, 16 populations in fours [M]: 17-D combined
+    lnZ +0.023 / +0.061 / -0.015 / +0.004; 12-D +0.000 / +0.183 / +0.050 / +0.157;
+    268-319k call-equivalents and 390-470 sequential sweeps per population.
   Gradient moves on a schedule (every k-th step, or late stages only) are exact; a
   warm start inside an MCMC move is not (the likelihood depends on the path).
+- Sampler choice (the maintainer decided, with two independent outside surveys):
+  nautilus stays; no gradient sampler. At 12-D one SMC population already costs ~240k
+  calls before gradients, twice 12-D nautilus's whole run, and an evidence-grade SMC
+  needs ~400-500 sequential sweeps, while a GH200 runs ~330 primal or ~100 gradient
+  sweeps a day whatever the population size (a sweep is one lane wave). Width (4 GPUs)
+  does not buy depth. A gradient sampler would pay above ~25-30 dimensions, on a
+  posterior nautilus fails, or without the evidence.
 
 ## Priors and the T-P profile
 
@@ -635,7 +646,8 @@ HPC
 - Work order (the maintainer decided): checks and changes that make the model right in
   general come first; everything about WASP-39b's results (the v5 run's checks,
   sensitivity runs, how a number is quoted) waits for the paper plan, where those tests
-  are designed together. todo.md keeps the two parts.
+  are designed together. todo.md keeps the two parts. v5 launches on 12-D nautilus
+  once the end-to-end check passes (the maintainer decided).
 - v5 model options (0.28.0): the chemistry block is `[lnZ, c_o, lnKzz, <chem_extras>]`
   with `s_o` (`infer_s_o`) and `kzz_slope` (`kzz_mode="powerlaw"`) in the engine's
   `CHEM_EXTRAS` order, read through `pipe.n_chem`; the warm references and the anchors
@@ -945,6 +957,18 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
   [E], up to 1.22x) and a multi-GPU batch split (MPI across nodes, 150-200 lines [E]):
   declined by the maintainer as not simple enough ("Pipeline speed", v5 queue replay).
 - AD warm-start polish (-8 to -16% wall [E]).
+- Gradient samplers for the 12-D v5 problem (the outside surveys' top picks, none
+  tested): flow-assisted MCMC (flowMC) with bridge-sampling evidence, persistent
+  sampling with scheduled MALA, gradient-guided nested sampling (its own scaling puts
+  the crossover with region nested sampling near 32-D), parallel tempering + stepping
+  stones. A learned-harmonic-mean evidence (arXiv:2405.05969) from nautilus's
+  posterior as a free second lnZ, with the flow's mass in the rejected regions
+  measured and removed. A batched cold gradient evaluator (one jvp of the lane-queue
+  chemistry over the chemistry directions + an RT vjp per row; smoke CPU: log L equal
+  to the production evaluator to 1e-13, RT-only directions 1e-7 against central FD,
+  chemistry 2e-4..4e-2 where above the FD noise) was built and removed with the study;
+  a kept row with a non-finite gradient keeps its log L (rejecting it changes the
+  support).
 - nautilus (nautilus_improve, upside-only): bootstrap logZ error within shells plus
   per-shell diagnostics; parallel network fits (`pool=(None, Pool(4))`, -10 to -18 min
   per run); n_live 700-800 / f_live 0.05-0.1 after a surrogate test; allocation from
