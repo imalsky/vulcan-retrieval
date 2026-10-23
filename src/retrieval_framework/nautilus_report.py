@@ -13,7 +13,8 @@ nautilus_tally.json, nautilus_posterior.npz) and writes
                                 total metals, C/O, S/O, the Kzz factor with the
                                 weight at its floor and above x10 and the
                                 posterior truncated at x10, T at the deep level
-                                and Tint), weighted 16/50/84% quantiles
+                                and Tint), weighted 16/50/84% quantiles, and the
+                                conditioning map (where the rejected draws sit)
     plots/corner.png            corner plot of the weighted posterior
     plots/tp_posterior.png      T-P 5-95% band from weighted draws
     plots/spectrum_fit.png      data, model and posterior-predictive 5-95% bands
@@ -107,6 +108,8 @@ def _wquant(x, w, qs=(0.16, 0.5, 0.84)) -> list:
 # cites its Table 8); the total-metals factor weighs C and S by their knobs.
 LODDERS2020_LOG_EPS = {"C": 8.47, "N": 7.85, "O": 8.73, "S": 7.15}
 KZZ_FLOOR_X, KZZ_LOW_X, KZZ_TRUNCATE_X = 0.15, 0.2, 10.0
+COND_BINS = 10                           # equal bins over each prior box in the map
+COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
 
 
 def _tp_params(t, names, cfgj):
@@ -204,6 +207,50 @@ def derived_quantities(out_dir) -> dict | None:
     return d
 
 
+def conditioning_map(out_dir) -> dict | None:
+    """Where the rejections sit: for lnKzz, the deep T-P parameter and lnZ (one at a
+    time), COND_BINS equal bins over the prior box, each with the in-window proposals
+    evaluated (the certified columns in anchors/ and the in-window rejections in
+    rejected/), the rejected fraction of them and the posterior weight. Counts of
+    evaluated proposals: a batch redrawn after a resume counts twice. None without
+    anchors/ (a cold run keeps no certified points) or without rejected/."""
+    out = Path(out_dir).resolve()
+    afiles = sorted((out / "anchors").glob("anchors_*.npz"))
+    if not (afiles and (out / "rejected").is_dir() and (out / "nautilus_posterior.npz").exists()):
+        return None
+    cfgj = _read(out, "config.json")
+    post = np.load(out / "nautilus_posterior.npz")
+    names = [str(s) for s in post["param_names"]]
+    theta, w = np.asarray(post["theta"], np.float64), _weights(post["log_w"])
+
+    def z_of(files, keep):
+        zs = []
+        for f in files:
+            with np.load(f) as d:
+                zs.append(d["z"][keep(d)])
+        return zs
+
+    ok = z_of(afiles, lambda d: slice(None))
+    bad = z_of(sorted((out / "rejected").glob("rejected_*.npz")), lambda d: d["cls"] > 0)
+    edges_z = np.linspace(0.0, 1.0, COND_BINS + 1)
+    n_ok, n_bad = sum(len(z) for z in ok), sum(len(z) for z in bad)
+    m = {"rejected_of_in_window": n_bad / (n_ok + n_bad) if n_ok + n_bad else None,
+         "rejected_in_log": n_bad}
+    for name in COND_PARAMS:
+        if name not in names:
+            continue
+        j = names.index(name)          # the anchors keep the chemistry block, which holds j
+        lo, hi = cfgj[f"prior_{name}"]
+        c_ok = sum(np.histogram(z[:, j], edges_z)[0] for z in ok)
+        c_bad = sum((np.histogram(z[:, j], edges_z)[0] for z in bad), np.zeros(COND_BINS, int))
+        edges = lo + (hi - lo) * edges_z
+        n = c_ok + c_bad
+        m[name] = {"edges": edges.tolist(), "n_in_window": n.tolist(),
+                   "rejected_frac": [float(b / t) if t else None for b, t in zip(c_bad, n)],
+                   "posterior_weight": np.histogram(theta[:, j], edges, weights=w)[0].tolist()}
+    return m
+
+
 def certificate(out_dir) -> dict:
     """The certificate of the finished run in ``out_dir``."""
     out = Path(out_dir).resolve()
@@ -248,6 +295,19 @@ def certificate(out_dir) -> dict:
             "likelihood and which draws were rejected depend on the evaluation order. The "
             "posterior and logZ_box are approximate; an evidence claim needs a cold run "
             "(warm_starts: false in the spec).")
+    cond = conditioning_map(out)
+    if cond is None:
+        caveats.append("No conditioning map: the run kept no anchors/ or no rejected/ log.")
+    elif "lnKzz" in cond:
+        k = cond["lnKzz"]
+        f0 = k["rejected_frac"][0]
+        caveats.append(
+            f"Rejections by Kzz: {'no' if f0 is None else f'{f0:.1%} of the'} in-window "
+            f"draws in the lowest bin (lnKzz {k['edges'][0]:.2f} to {k['edges'][1]:.2f}) "
+            f"{'were evaluated' if f0 is None else 'were rejected'}, against "
+            f"{cond['rejected_of_in_window']:.1%} overall; that bin holds "
+            f"{k['posterior_weight'][0]:.3f} of the posterior weight (evaluated proposals; "
+            f"{cond['rejected_in_log']} in the rejected log against {rejected} in the tally).")
     if int(cfg.get("cold_lanes") or 0) > 0:
         caveats.append(
             "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
@@ -299,6 +359,7 @@ def certificate(out_dir) -> dict:
                       **{k: cfg.get(k) for k in ("count_max", "yconv_cri", "dt_max", "nz",
                                                  "cold_lanes", "cfg_overrides")}},
         "derived": derived_quantities(out),
+        "conditioning": cond,
         "caveats": caveats,
     }
 

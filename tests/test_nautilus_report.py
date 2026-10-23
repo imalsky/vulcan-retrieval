@@ -38,6 +38,18 @@ def _run_dir(out):
     log_w = rng.normal(size=400)
     np.savez(out / "nautilus_posterior.npz", param_names=np.asarray(NAMES), theta=theta,
              log_w=log_w - np.log(np.exp(log_w).sum()))
+    # the conditioning map's inputs: 90 certified columns, 9 per lnKzz bin (the anchors
+    # keep the first 6 dims), and 10 in-window rejections in the lowest bin beside 5
+    # T-P-out rows (class 0, not in the map)
+    (out / "anchors").mkdir()
+    za = np.full((90, 6), 0.5)
+    za[:, 2] = (np.arange(90) % 10 + 0.5) / 10
+    np.savez(out / "anchors" / "anchors_00000.npz", z=za, Y=np.zeros((90, 1)), refs=np.zeros((90, 3)))
+    (out / "rejected").mkdir()
+    zr = np.full((15, len(NAMES)), 0.5)
+    zr[:10, 2], zr[10:, 2] = 0.05, 0.95
+    np.savez(out / "rejected" / "rejected_00000.npz", z=zr, cls=np.r_[[1] * 10, [0] * 5],
+             acc=np.zeros(15, int), warm=np.int8(1))
     wl = np.linspace(3.0, 5.0, 20)
     np.savez(out / "observations.npz", wl=wl, depth=0.02 + 1e-4 * np.sin(wl),
              sigma=np.full(20, 1e-4), group=np.asarray(["NIRISS"] * 8 + ["G395H"] * 12))
@@ -71,9 +83,16 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
         1.0 - der["kzz_weight_above_x10"])
     assert der["kzz_weight_below_x0.15"] <= der["kzz_weight_below_x0.2"]
     assert der["T_deep_p_bar"] == 1.0 and len(der["T_deep_K"]) == 3 == len(der["Tint_K"])
+    cond = cert["conditioning"]
+    assert cond["rejected_of_in_window"] == pytest.approx(10 / 100)
+    kzz = cond["lnKzz"]
+    assert kzz["n_in_window"] == [19] + [9] * 9
+    assert kzz["rejected_frac"] == pytest.approx([10 / 19] + [0.0] * 9)
+    assert sum(kzz["posterior_weight"]) == pytest.approx(1.0)
+    assert "lnZ" in cond and "Tint" not in cond                # Tint is not inferred here
     text = " ".join(cert["caveats"])
     for phrase in ("5.0% of the draws", "no logZ error", "Warm starts", "Lane queue",
-                   "counted twice"):
+                   "counted twice", "52.6% of the in-window draws in the lowest bin"):
         assert phrase in text, phrase
     assert "different run" not in text                 # the manifest hashes to the digest
     (tmp_path / "target_digest.txt").write_text("0" * 64 + "|warm\n")

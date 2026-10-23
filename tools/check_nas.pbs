@@ -1,0 +1,83 @@
+#!/bin/bash
+#PBS -N VR_CHECK
+#PBS -q gpu_long
+#PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -m abe
+#
+# The GPU checks of the production stack on a NAS GH200, in the production job's
+# environment (tools/run_nas.pbs: read-only, the ffi kernel built when stale).
+# From the vulcan-retrieval root, charged to the allocation in $PBS_GROUP:
+#
+#   qsub -W "group_list=${PBS_GROUP:?}" -v CHECK=e2e tools/check_nas.pbs
+#   qsub -W "group_list=${PBS_GROUP:?}" -v CHECK=e2e,RUNGS=production:shuffled tools/check_nas.pbs
+#
+# CHECK=e2e: validation/e2e_check.py's GPU rungs on VR_SPEC (default the production
+#   spec), RUNGS colon-separated (default every batch rung, then solo_gpu on the first
+#   128 draws); then the W39b and HD189 configs through the vulcan3 CLI under ffi +
+#   grouped, the .vul files for VULCAN-JAX/tools/compare_vul.py against VULCAN 2.
+#   The job only solves: the comparisons (e2e_check.py compare, compare_vul.py) run
+#   after it and exit 1 over a gate, so a clean job exit is not a pass.
+# Results: output/w39b_smc_retrieval/validation/; the log beside them.
+set -euo pipefail
+
+: "${CHECK:?-v CHECK=e2e}"
+REPO_DIR="$(cd -- "${PBS_O_WORKDIR:?}" && pwd -P)"
+[ -f "${REPO_DIR}/validation/e2e_check.py" ] || { echo "ERROR: submit from the vulcan-retrieval root"; exit 1; }
+PROJECT_ROOT="$(dirname "${REPO_DIR}")"
+export PROJECT_ROOT VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"
+VR_SPEC="${VR_SPEC:-${REPO_DIR}/runs/w39b_smc_retrieval/wasp39_test1.yaml}"
+RES="${REPO_DIR}/output/w39b_smc_retrieval/validation"
+mkdir -p "${RES}"
+_jobid="${PBS_JOBID:-manual_$$}"; _jobid="${_jobid%%.*}"
+exec > >(tee -a "${RES}/check_${CHECK}_${_jobid}.log") 2>&1
+echo "Job ${PBS_JOBID:-?} CHECK=${CHECK} spec=${VR_SPEC} started $(date) on $(hostname)"
+
+: "${VULCAN_SCRATCH:=/nobackup/${USER}/.vulcan}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}/cache/jax}"
+export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg" MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
+export TMPDIR="${VULCAN_SCRATCH}/tmp"
+mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
+module purge 2>/dev/null || true
+module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
+module load miniconda3/gh2 2>/dev/null || true
+# shellcheck disable=SC1091
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "${CONDA_ENV:-pyt2_8_gh}"
+PYVER="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+export PYTHONUSERBASE="${VULCAN_SCRATCH}/userbase-py${PYVER}"
+unset PYTHONNOUSERSITE JAX_PLATFORMS
+export PYTHONUNBUFFERED=1 JAX_ENABLE_X64=1 JAX_PLATFORM_NAME=gpu XLA_PYTHON_CLIENT_PREALLOCATE=true
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+for d in VULCAN-JAX vulcan-forward vulcan-retrieval; do
+  echo "${d}: $(git -C "${PROJECT_ROOT}/${d}" log --oneline -1)"
+done
+{ env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan3.solver_fast \
+  && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
+       python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
+python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu --spec "${VR_SPEC}"
+cd -P "${REPO_DIR}"
+
+rc=0
+step() { echo "== $* ($(date))"; "$@" || { rc=$?; echo "!! failed rc=${rc}: $*"; }; }
+if [ "${CHECK}" = "e2e" ]; then
+  RUNGS="${RUNGS:-production:shuffled:cmdbuf_off:no_xla_flags:codegen:fast:solo_gpu}"
+  for r in ${RUNGS//:/ }; do
+    if [ "${r}" = "solo_gpu" ]; then
+      step python validation/e2e_check.py solve "${VR_SPEC}" --rung solo_gpu --rows 0:128
+    else
+      step python validation/e2e_check.py solve "${VR_SPEC}" --rung "${r}"
+    fi
+  done
+  for cfgname in W39b HD189; do                  # the CLI writes ./output/<name>.vul
+    D="${RES}/vul_ffi_grouped_${cfgname}"; mkdir -p "${D}"; cd "${D}"
+    step env VULCAN3_SOLVER=ffi VULCAN3_CHEM_RHS=grouped XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+      python -m vulcan3.cli --config "${cfgname}"
+    cd -P "${REPO_DIR}"
+  done
+else
+  echo "ERROR: CHECK=${CHECK} is not e2e"; exit 1
+fi
+echo "job finished rc=${rc} at $(date)"
+exit "${rc}"

@@ -256,6 +256,19 @@ unless stated.
   (break-even per GPU-second); gradient memory caps it at ~300 lanes; projections SMC +
   MALA ~29 h, RWM > 100 h vs nautilus ~16 h. Chemistry convergence, not the kernel,
   drives the cost (36-45% of warm mutation solves hit the cap).
+- sampler_options (17-D stand-in of v5 on daw CPU: 8 chemistry + 9 RT-only dims, a 9%
+  narrow second mode, mass piled on the Kzz-like floor, a -inf hole, a banana; exact
+  truth; 4 seeds; cost in chemistry calls, an RT-only move 0.05, a gradient 2.9) [M]:
+  - stock nautilus (production settings): lnZ -0.093 +/- 0.003, the missed mode's
+    share; the mode found in 0 of 4 seeds, so the seed spread hid it; 158k calls.
+  - the 2 offset and 3 noise dims integrated out (12-D nautilus): lnZ +0.003 +/- 0.004,
+    the mode in 4 of 4, posterior means within 0.03 sd; 121k calls.
+  - adaptive-tempered SMC (RWM, MALA every step or every 5th, RT-only moves,
+    waste-free): none within +-0.1 in lnZ at 1.5-6x the calls. MALA every step found
+    the mode at ~4x cost (lnZ +0.32); RT-only moves halved the lnZ scatter for +30%.
+    A MALA kernel started on exact draws kept them (moments within 0.04 sd).
+  Gradient moves on a schedule (every k-th step, or late stages only) are exact; a
+  warm start inside an MCMC move is not (the likelihood depends on the path).
 
 ## Priors and the T-P profile
 
@@ -590,8 +603,8 @@ HPC
     pressure, 18; compare Kzz at stated pressures, not the amplitude) and
     `wasp39_test1_adiabat` (an adiabat below a free boundary, 18). Each is compared
     with v5 on O/H and total metals, C/O, S/O, Kzz and SO2; their warm evidences are
-    approximate and compared only at matched programs. The maintainer decided to run
-    all four.
+    approximate and compared only at matched programs. They wait on the paper plan
+    (the maintainer decided).
   - The chemistry program: every draw is solved once, at rtol 0.05 within 5000
     accepted steps with photolysis every step, and only its VULCAN certificate keeps
     it; the presolve chain is removed (the maintainer decided). On the v4 target the
@@ -599,6 +612,10 @@ HPC
     ran 19.8 h against 23.8 h and rejected 2.56% of in-window draws against 1.60%,
     with logZ_box 0.064 lower. It needs no second compile. logZ_box is comparable only
     at matched programs, so v5's is not set against v4's.
+- Work order (the maintainer decided): checks and changes that make the model right in
+  general come first; everything about WASP-39b's results (the v5 run's checks,
+  sensitivity runs, how a number is quoted) waits for the paper plan, where those tests
+  are designed together. todo.md keeps the two parts.
 - v5 model options (0.28.0): the chemistry block is `[lnZ, c_o, lnKzz, <chem_extras>]`
   with `s_o` (`infer_s_o`) and `kzz_slope` (`kzz_mode="powerlaw"`) in the engine's
   `CHEM_EXTRAS` order, read through `pipe.n_chem`; the warm references and the anchors
@@ -701,6 +718,23 @@ HPC
   the run file to submit it), full explicit files per variant (the six JSON files had
   drifted), YAML anchors (one file, one run name), renaming the case directory (the
   archived paths).
+- End-to-end check of the production stack (`validation/e2e_check.py`, GPU rungs by
+  `tools/check_nas.pbs`; the maintainer asked for whole-pipeline checks against another
+  route's final results, with an outside review): the same 1584 seeded draws (in-window
+  prior draws, the first rows designed corners; or weighted posterior rows) through a
+  ladder one change apart: production (ffi, grouped RHS, the spec's XLA flags, 528
+  lanes, the production cold evaluator), shuffled (the noise floor), command buffers
+  off, no XLA flags, codegen RHS, fast solver, one draw at a time on the GPU, the same on
+  the CPU, the reference solver on the CPU. Compared per draw: the certificate, the
+  binned depth in data sigma (worst bin, D = the quadrature sum), photosphere
+  (1e-5..1 bar) log-VMR of H2O, CO, CO2, CH4, SO2, H2S and log L. Provisional gates:
+  worst bin 0.1 sigma, D 0.5, 0.03 dex p95 and 0.1 dex worst, |d log L| 0.5 within 50
+  nats of the best draw, no certificate mismatch; an exceedance is a disagreement to
+  explain, not a verdict. Against VULCAN 2: the W39b and HD189 configs through the
+  CLI under ffi + grouped, compared by `VULCAN-JAX/tools/compare_vul.py`; the CPU
+  port's W39b column is within 0.003 dex of VULCAN 2 on those six species (CH4 worst;
+  VULCAN-JAX `output/W39b.vul` against the stored VULCAN 2 columns) [M]. The same
+  script's `warmcold` is the warm-vs-cold check (todo).
 - Run certificate (`nautilus_report.certificate`, version 1): provenance (the run's
   target digest and manifest, code commits, dirty flags and `src_diff`, versions,
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,

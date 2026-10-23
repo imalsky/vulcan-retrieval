@@ -456,6 +456,7 @@ def main(argv=None) -> None:
                param_names=np.asarray(pipe.names, dtype="<U64"),
                target_digest=np.asarray(want),
                theta=theta, log_w=log_w, log_l=log_l, samples=theta_eq,
+               u=np.log(z) - np.log1p(-z),     # the rows in u-space: an evaluator's input
                logZ_box=np.asarray(sampler.log_z), n_like=np.asarray(sampler.n_like))
     summary = {
         "logZ_box": float(sampler.log_z), "n_like": int(sampler.n_like),
