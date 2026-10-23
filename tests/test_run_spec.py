@@ -1,7 +1,9 @@
 """The run specification (run_setup.load_spec): every shipped spec loads to the
 parameter count it is documented with and to its derived output directory; a variant
 replaces its base's values one level deep, whole; a malformed file is refused by name;
-the runtime block is exported only when the environment does not contradict it."""
+the runtime block is exported only when the environment does not contradict it;
+tools/submit.py charges $PBS_GROUP and sets the wall from the spec's governor."""
+import runpy
 from pathlib import Path
 
 import pytest
@@ -26,7 +28,6 @@ def test_shipped_spec_loads_to_its_parameter_count(name, n_dim):
     groups = list(OBS.load_real_observations(spec.cfg)["groups"])
     assert len(C.specs_from_config(spec.cfg, groups=groups)) == n_dim
     assert spec.cfg.out_dir == R.output_base(RUN_DIR) / f"{name}_nautilus"
-    assert (spec.job is not None) == name.startswith("v5")
 
 
 def test_variant_replaces_a_base_value_whole(tmp_path):
@@ -48,9 +49,7 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
     ({"config": dict(MINIMAL, nz=2.5)}, "must be an integer"),
     ({"sampler": {"n_live": 0}, "config": MINIMAL}, "positive"),
     ({"runtime": {"solver": "cuda"}, "config": MINIMAL}, "fast, ffi or reference"),
-    ({"extra": {}, "config": MINIMAL}, "unknown top-level"),
-    ({"job": {"queue": "q", "group_list": "g", "select": "s", "walltime": "48:00:00"},
-      "config": dict(MINIMAL, walltime_seconds=172800.0)}, "must end at least"),
+    ({"job": {}, "config": MINIMAL}, "unknown top-level"),    # the PBS job is submit.py's
     ("config:\n  nz: 1\n  nz: 2\n", "duplicate key"),
 ])
 def test_malformed_spec_is_refused_by_name(tmp_path, doc, match):
@@ -72,3 +71,17 @@ def test_runtime_env_refuses_a_contradicting_environment():
         R.runtime_env_updates(rt, {"VULCAN3_SOLVER": "fast"})
     with pytest.raises(RuntimeError, match="leaves it unset"):
         R.runtime_env_updates(rt, {"XLA_FLAGS": "--x"})
+
+
+def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypatch, capsys):
+    main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "tools" / "submit.py"))["main"]
+    spec = str(_write(tmp_path / "s.yaml", {"config": dict(MINIMAL, walltime_seconds=165600.0)}))
+    monkeypatch.delenv("PBS_GROUP", raising=False)
+    with pytest.raises(SystemExit, match="PBS_GROUP"):
+        main([spec, "--dry-run"])
+    monkeypatch.setenv("PBS_GROUP", "g0")
+    main([spec, "--dry-run"])
+    line = capsys.readouterr().out
+    assert "walltime=48:00:00" in line and "group_list=g0" in line
+    with pytest.raises(SystemExit, match="walltime_seconds"):
+        main([str(_write(tmp_path / "t.yaml", {"config": MINIMAL})), "--dry-run"])

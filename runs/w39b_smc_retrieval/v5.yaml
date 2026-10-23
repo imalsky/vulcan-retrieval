@@ -7,6 +7,8 @@
 #   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --resume    # continue its checkpoint
 #   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/v5.yaml --dry-run
 #                                                                       # the resolved settings
+# The PBS job is not part of the run: tools/submit.py sets the queue, the node and a
+# walltime 2 h past walltime_seconds, and charges the allocation in $PBS_GROUP.
 # A variant is a file beside this one with `base: v5.yaml` and the keys it changes
 # (a key replaces the base's value whole, dicts and lists included). Every key under
 # config: is a field of config_schema.Config; a key not listed keeps the schema default.
@@ -16,12 +18,6 @@
 #
 # 17 parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar, lnR0, lnM,
 # log10kappa_cloud, cloud_alpha, 2 offsets, 3 noise inflations.
-
-job:                                   # the PBS job (tools/submit.py puts these on the qsub line)
-  queue: gpu_long
-  group_list: s2458
-  select: "1:ncpus=72:ngpus=1:mem=400gb:model=gh200"
-  walltime: "48:00:00"                 # config.walltime_seconds must end >= 1 h before this
 
 runtime:                               # the environment the engine is imported under
   solver: ffi                          # VULCAN3_SOLVER: the CUDA block-Thomas kernel (GH200 only); fast elsewhere
@@ -124,4 +120,4 @@ config:
 
   # ---- lanes and wall ------------------------------------------------------------
   cold_lanes: 176                      # x FFI_BLOCKS_PER_SM (3) = 528 lanes under ffi; 64.4 GiB peak at nz 100
-  walltime_seconds: 165600             # the governor, 46 h: the run checkpoints and exits 0 here
+  walltime_seconds: 165600             # the governor, 46 h: the run checkpoints and exits 0 here (PBS wall 48 h)

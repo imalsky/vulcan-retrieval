@@ -1,7 +1,6 @@
 #!/bin/bash
 #PBS -N VULCAN_BOOTSTRAP
 #PBS -q gpu_long
-#PBS -W group_list=s2458
 #PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:model=gh200
 #PBS -l walltime=00:30:00
 #PBS -j oe
@@ -19,9 +18,10 @@
 # Runs on a GH200 node (not the x86 front end) because the jax-GPU check needs
 # the target architecture.
 #
-# Submit (from the vulcan-retrieval repo root, tools/, or the project root):
+# Submit (from the vulcan-retrieval repo root, tools/, or the project root), charged to
+# the allocation in $PBS_GROUP:
 #   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval
-#   qsub tools/bootstrap_nas_env.pbs
+#   qsub -W "group_list=${PBS_GROUP:?}" tools/bootstrap_nas_env.pbs
 #
 # Env knobs (-v): CONDA_ENV (default pyt2_8_gh), VULCAN_SCRATCH
 # (default /nobackup/$USER/.vulcan), PROJECT_ROOT (else derived from

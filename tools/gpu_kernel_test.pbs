@@ -1,7 +1,6 @@
 #!/bin/bash
 #PBS -N VJAX_KERNEL_TEST
 #PBS -q gpu_long
-#PBS -W group_list=s2458
 #PBS -l select=1:ncpus=72:ngpus=1:mem=400gb:model=gh200
 #PBS -l walltime=00:30:00
 #PBS -j oe
@@ -11,8 +10,8 @@
 # build the kernel with nvcc, run tests/test_solver_fast.py on the GPU, and
 # vulcan-forward's fold test on the GPU.
 # Resubmit after every change to the kernel. From the production tree's
-# vulcan-retrieval root (or its tools/ dir):
-#   qsub tools/gpu_kernel_test.pbs
+# vulcan-retrieval root (or its tools/ dir), charged to the allocation in $PBS_GROUP:
+#   qsub -W "group_list=${PBS_GROUP:?}" tools/gpu_kernel_test.pbs
 # Bench jobs that need the refreshed metadata chain on it with
 # `-W depend=afterany:<jobid>` (afterok deletes them if a GPU test fails).
 set -euo pipefail

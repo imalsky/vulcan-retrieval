@@ -3,13 +3,13 @@
 One YAML file describes a nautilus run, ``runs/<case>/<name>.yaml``:
 
     base:     optional, one file beside it whose sections it refines
-    job:      the PBS job (queue, group_list, select, walltime); tools/submit.py reads it
     runtime:  the environment the engine is imported under (Runtime below)
     sampler:  the nautilus settings (Sampler below)
     config:   fields of config_schema.Config, flat; a key not listed keeps the default
 
 The run's name is the file stem and its output directory is
-``<repo>/output/<case>/<name>_nautilus`` (never a key). A variant names one ``base``
+``<repo>/output/<case>/<name>_nautilus`` (never a key). The PBS job is not part of
+the run: tools/submit.py sets it. A variant names one ``base``
 and restates the keys it changes: within each section a key's value replaces the
 base's value whole, lists and dicts included; a base has no base of its own.
 Loading is pure (no environment write, no jax import); ``export_runtime`` writes
@@ -39,8 +39,7 @@ from retrieval_framework import config_schema as C  # light import (no jax)
 
 log = logging.getLogger("retrieval")
 
-SECTIONS = ("base", "job", "runtime", "sampler", "config")
-JOB_HEADROOM_S = 3600.0     # the governor ends at least this long before the PBS wall
+SECTIONS = ("base", "runtime", "sampler", "config")
 
 
 @dataclass(frozen=True)
@@ -71,18 +70,6 @@ class Sampler:
 
 
 @dataclass(frozen=True)
-class Job:
-    queue: str
-    group_list: str
-    select: str
-    walltime: str                # HH:MM:SS
-
-    def seconds(self) -> float:
-        h, m, s = (int(x) for x in self.walltime.split(":"))
-        return 3600.0 * h + 60.0 * m + s
-
-
-@dataclass(frozen=True)
 class Spec:
     path: Path
     base: Optional[Path]
@@ -90,7 +77,6 @@ class Spec:
     cfg: C.Config
     sampler: Sampler
     runtime: Runtime
-    job: Optional[Job]
 
 
 class _Loader(yaml.SafeLoader):
@@ -177,7 +163,7 @@ def _check(where: str, key: str, value, hint) -> None:
         return
 
 
-def _build(cls, mapping: Dict[str, Any], where: str, required: bool = False):
+def _build(cls, mapping: Dict[str, Any], where: str):
     """A frozen dataclass from a YAML mapping: unknown keys refused, every value
     type-checked against the field annotation."""
     hints = typing.get_type_hints(cls)
@@ -187,10 +173,6 @@ def _build(cls, mapping: Dict[str, Any], where: str, required: bool = False):
         raise ValueError(f"{where}: unknown key(s) {sorted(bad)}; the fields are {names}")
     for k, v in mapping.items():
         _check(where, k, v, hints[k])
-    if required:
-        missing = [n for n in names if n not in mapping]
-        if missing:
-            raise ValueError(f"{where}: missing key(s) {missing}")
     return cls(**mapping)
 
 
@@ -224,7 +206,6 @@ def load_spec(path: str | Path) -> Spec:
     for s in sections:
         sections[s].update(doc.get(s) or {})       # the variant's value wins, whole
 
-    job = _build(Job, sections["job"], f"{path.name} job", required=True) if sections["job"] else None
     runtime = _build(Runtime, sections["runtime"], f"{path.name} runtime")
     sampler = _build(Sampler, sections["sampler"], f"{path.name} sampler")
     if runtime.solver not in ("fast", "ffi", "reference"):
@@ -258,16 +239,8 @@ def load_spec(path: str | Path) -> Spec:
     name = path.stem
     cfg = C.Config(**cfgd, out_dir=output_base(path.parent) / f"{name}_nautilus")
     C.validate_config(cfg)
-    if job is not None:
-        if not cfg.walltime_seconds > 0:
-            raise ValueError(f"{where}: walltime_seconds must be set (> 0) when a job block "
-                             "is present: the run must checkpoint and exit before the wall")
-        if cfg.walltime_seconds > job.seconds() - JOB_HEADROOM_S:
-            raise ValueError(f"{where}: walltime_seconds {cfg.walltime_seconds:g} must end at "
-                             f"least {JOB_HEADROOM_S:g} s before the job walltime {job.walltime} "
-                             f"({job.seconds():g} s)")
     return Spec(path=path, base=base_path, name=name, cfg=cfg, sampler=sampler,
-                runtime=runtime, job=job)
+                runtime=runtime)
 
 
 def runtime_env_updates(rt: Runtime, environ) -> Dict[str, Optional[str]]:
@@ -336,7 +309,6 @@ def write_config_json(cfg: C.Config, pipe, spec: Spec) -> None:
         spec_file=str(spec.path),
         sampler=asdict(spec.sampler),
         runtime=asdict(spec.runtime),
-        job=None if spec.job is None else asdict(spec.job),
         inferred_param_names=pipe.names,
         inferred_param_labels=pipe.labels,
         inferred_param_kinds=pipe.kinds,

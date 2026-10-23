@@ -350,8 +350,7 @@ def main(argv=None) -> None:
     cfg = spec.cfg
     if args.dry_run:
         print(C.describe_config(cfg, spec.name))
-        print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\njob: {spec.job}\n"
-              f"out_dir: {cfg.out_dir}")
+        print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
         return
     export_runtime(spec.runtime)       # before the first jax / vulcan3 import
     lanes = int(cfg.cold_lanes)

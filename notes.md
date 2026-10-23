@@ -31,8 +31,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), quotable
   only after its warm-vs-cold re-solve. The only planned run is v5,
   `runs/w39b_smc_retrieval/v5.yaml` (the external-review configuration; "Design
-  records"); launch: `python tools/submit.py runs/w39b_smc_retrieval/v5.yaml` ("Design
-  records", run specification). Forward checks at a run's draws:
+  records"); launch: `PBS_GROUP=<allocation> python tools/submit.py
+  runs/w39b_smc_retrieval/v5.yaml` ("Design records", run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
@@ -668,28 +668,31 @@ HPC
   detectors of this visit; a step between the H2O (NRS1) and CO2/SO2 (NRS2) bands lands
   on Z. The offset reference group is the wavelength-first group (NIRISS).
 - Run specification (the maintainer asked for one clear file; with an outside design
-  review): a run is one YAML file, `runs/<case>/<name>.yaml`, in four blocks. `job`:
-  the PBS queue, group, select line and walltime. `runtime`: the import-frozen engine
-  environment (solver, chemistry RHS, kernel buffers, XLA memory fraction and flags);
-  every variable is stated or required unset, and an environment value that disagrees
-  is refused, so a shell export cannot move the target. `sampler`: n_live, n_eff,
-  n_batch, warm_starts. `config`: flat `Config` fields, the dataclass as the schema
-  (unknown keys and `out_dir` refused; text where a number belongs refused with the
-  `1.0e+11` hint, since YAML reads `1e11` as text). The run name is the file stem and
-  the out dir follows from it. A variant names one `base` and replaces values one level
-  deep, whole (a deep merge cannot remove a key); a base has no base; the merge stays
-  for the daw variant ("HPC (NAS GH200) and daw"). The sampler block stays out of
-  `Config` (nautilus's settings; n_eff is a stopping rule a resume may change) and the
-  resume identity stays the target digest plus the sampler string, never a byte compare
-  of the file. `tools/submit.py` validates the spec, builds the qsub line from `job`,
-  passes three comma-free values (spec, out dir, resume flag) to the generic
+  review): a run is one YAML file, `runs/<case>/<name>.yaml`, in three blocks; the PBS
+  job is not one of them. `runtime`: the import-frozen engine environment (solver,
+  chemistry RHS, kernel buffers, XLA memory fraction and flags); every variable is
+  stated or required unset, and an environment value that disagrees is refused, so a
+  shell export cannot move the target. `sampler`: n_live, n_eff, n_batch, warm_starts.
+  `config`: flat `Config` fields, the dataclass as the schema (unknown keys and
+  `out_dir` refused; text where a number belongs refused with the `1.0e+11` hint, since
+  YAML reads `1e11` as text). The run name is the file stem and the out dir follows from
+  it. A variant names one `base` and replaces values one level deep, whole (a deep merge
+  cannot remove a key); a base has no base; the merge stays for the daw variant ("HPC
+  (NAS GH200) and daw"). The sampler block stays out of `Config` (nautilus's settings;
+  n_eff is a stopping rule a resume may change) and the resume identity stays the target
+  digest plus the sampler string, never a byte compare of the file. `tools/submit.py`
+  validates the spec, builds the qsub line (`gpu_long`, one GH200 node, the allocation
+  in `$PBS_GROUP`, the wall 2 h past the governor, so the two cannot disagree), passes
+  three comma-free values (spec, out dir, resume flag) to the generic
   `tools/run_nas.pbs`, records each submission under `<out dir>/jobs/` and chains a
   `--resume` after a still-active job. Replaced: case.py presets, JSON override files
   with `_comment` keys, the `SMC_RETRIEVAL_*` / `NAUTILUS_*` / `SMC_RESUME` environment,
   the `XLA_CMDBUF` switch and the per-run `qsub -v` lists (last tree with them:
   `8e3a21c`). Rejected: job settings in the `#PBS` header (walltime and the governor in
-  two files), full explicit files per variant (the six JSON files had drifted), YAML
-  anchors (one file, one run name), renaming the case directory (the archived paths).
+  two files), a `job` block in the spec (it named one allocation, so another user edited
+  the run file to submit it), full explicit files per variant (the six JSON files had
+  drifted), YAML anchors (one file, one run name), renaming the case directory (the
+  archived paths).
 - Run certificate (`nautilus_report.certificate`, version 1): provenance (the run's
   target digest and manifest, code commits, dirty flags and `src_diff`, versions,
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,

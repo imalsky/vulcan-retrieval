@@ -56,8 +56,8 @@ adopted".
   repo); only the observed spectra (`data/cm24_wasp39b/`) are tracked.
 - `runs/<case>/` holds a case's inputs only: one YAML run specification per run
   (`v5.yaml`, `smoke.yaml` and any `base: v5.yaml` variant) and nothing else. A spec is
-  the whole run: `job` (PBS), `runtime` (the engine's environment), `sampler`
-  (nautilus) and `config` (every `Config` field it sets); its stem is the run name and
+  the whole run: `runtime` (the engine's environment), `sampler` (nautilus) and
+  `config` (every `Config` field it sets), never the PBS job; its stem is the run name and
   every output goes under `output/<case>/<name>_nautilus/` (`run_setup.load_spec`,
   `output_base`). A new run is a new file; a variant restates only the keys it changes
   (one level, whole values). Never set a run through the environment or the command
@@ -95,8 +95,11 @@ adopted".
   Chain dependent jobs on `afterany` and let `validate_env` refuse. Run a new job path
   end-to-end on the CPU before submitting it (notes "Do not retry").
 - Submit with `python tools/submit.py runs/<case>/<name>.yaml [--resume] [--dry-run]`
-  from the activated env: it validates the spec, builds the qsub line from its `job`
-  block and records the submission under `<out dir>/jobs/`. `tools/run_nas.pbs` is
+  from the activated env: it validates the spec, builds the qsub line (`gpu_long`, one
+  GH200 node, the allocation in `$PBS_GROUP`, a walltime 2 h past the spec's governor)
+  and records the submission under `<out dir>/jobs/`. The bootstrap and the kernel test
+  go through `qsub -W "group_list=${PBS_GROUP:?}" tools/<script>.pbs`. No allocation,
+  account or user path in a spec or a tracked script. `tools/run_nas.pbs` is
   generic: it exports the spec's `runtime` block through `run_setup`, builds a stale
   ffi kernel (failing loudly), runs the preflight, then the run. Never `qsub` the job
   script by hand and never pass a run setting through `qsub -v`.

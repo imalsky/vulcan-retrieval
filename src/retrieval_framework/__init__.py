@@ -2,8 +2,8 @@
 
 Planet-agnostic machinery only. A concrete run is one YAML file in a CASE DIRECTORY
 (see ``runs/w39b_smc_retrieval/``): its ``config`` block sets config_schema.Config,
-``sampler`` the nautilus settings, ``runtime`` the engine's environment and ``job`` the
-PBS job (run_setup.load_spec). Outputs go to ``output/<case>/<name>_nautilus``; on NAS
+``sampler`` the nautilus settings and ``runtime`` the engine's environment
+(run_setup.load_spec). Outputs go to ``output/<case>/<name>_nautilus``; on NAS
 ``tools/submit.py <spec>`` submits ``tools/run_nas.pbs``.
 
 Entry points (run from anywhere):

@@ -1,9 +1,9 @@
 # Offline smoke test on the CPU: the real chemistry + RT pipeline in minutes (the slow
 # tests build it; tests/conftest.py loads this file). CO-only opacity (the one cached
 # k-table), a coarse column, a synthetic injection on the real G395H bin grid.
-# 8 parameters: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud. No job block: it is
-# not submitted. The priors are the W39b case's, by value, so a change to v5 never
-# moves what the test suite builds.
+# 8 parameters: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud. No governor
+# (walltime_seconds), so tools/submit.py refuses it. The priors are the W39b case's,
+# by value, so a change to v5 never moves what the test suite builds.
 #
 #   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/smoke.yaml
 

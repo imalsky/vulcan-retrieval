@@ -329,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
             f"validate_env: FAIL ({len(_ERRORS)} error(s), {len(_WARNINGS)} warning(s)).\n"
             "Remedy: one-time bootstrap (the editable installs), then resubmit:\n"
             f"  cd {root / 'vulcan-retrieval'}\n"
-            "  qsub tools/bootstrap_nas_env.pbs",
+            "  qsub -W group_list=$PBS_GROUP tools/bootstrap_nas_env.pbs",
             file=sys.stderr,
         )
         return 1
