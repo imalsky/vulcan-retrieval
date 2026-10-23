@@ -30,9 +30,10 @@ sigma = posterior standard deviation, L = log-likelihood.
   before its override file's additions), 17 in v5 (s_o and lnM added, T1bar in place of
   Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), never
   quotable: its outputs were deleted before a warm-vs-cold re-solve (the maintainer
-  decided). The only planned run is v5,
+  decided). The headline run is v5,
   `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`; the
-  external-review configuration; "Design records"); launch: `PBS_GROUP=<allocation>
+  external-review configuration; "Design records"), then four sensitivity variants
+  beside it; launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`.
@@ -559,7 +560,7 @@ HPC
 
 - WASP-39b v5, the maintainer's decisions after the external science review. Each
   model option is a Config switch, so the v4 target is unchanged at the defaults; v5 is
-  the only planned run and uses T1bar, `s_o` and `lnM` ("Current state").
+  the headline run and uses T1bar, `s_o` and `lnM` ("Current state").
   - The deep T-P parameter is T at 1 bar, not Tint. Guillot's constant-kappa deep
     gradient is 0.25 against the H2-He adiabat 0.28-0.29, so the deep column is set by
     Tint and kappa alone and the T-P window cut the Tint prior where it controls
@@ -581,10 +582,16 @@ HPC
     x0.1 to x1000, its override at `8e3a21c`). A longer step budget at low Kzz was
     declined ("Ideas not adopted"). Kzz is reported truncated at x10 with the weight at
     the x0.1 floor, and as an upper limit if that weight grows.
-  - The x1000 Kzz ceiling, the Kzz power law in pressure (`kzz_mode="powerlaw"`), the
-    grey deck (`cloud_model="deck"`) and the adiabat (`tp_adiabat`) are options the
-    external review asked for; they stay in the code as Config switches with no run
-    planned on them (the maintainer decided; "Ideas not adopted").
+  - Four sensitivity runs the external review asked for, each a `base:
+    wasp39_test1.yaml` variant at the base's solver settings, in priority order (an
+    outside review's ranking by referee risk): `wasp39_test1_kzz1000` (the Kzz prior to
+    x1000, 17 parameters), `wasp39_test1_deck` (a grey deck at a free pressure in place
+    of the power-law cloud, 16), `wasp39_test1_kzz_powerlaw` (Kzz as a power law in
+    pressure, 18; compare Kzz at stated pressures, not the amplitude) and
+    `wasp39_test1_adiabat` (an adiabat below a free boundary, 18). Each is compared
+    with v5 on O/H and total metals, C/O, S/O, Kzz and SO2; their warm evidences are
+    approximate and compared only at matched programs. The maintainer decided to run
+    all four.
   - The chemistry program: every draw is solved once, at rtol 0.05 within 5000
     accepted steps with photolysis every step, and only its VULCAN certificate keeps
     it; the presolve chain is removed (the maintainer decided). On the v4 target the
@@ -876,10 +883,6 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
 
 ## Ideas not adopted
 
-- Sensitivity runs beside v5 (`v5_kzz1000`, `v5_kzz_powerlaw`, `v5_deck`, `v5_adiabat`,
-  each a `base:` variant of the v5 spec, 16-18 parameters): dropped, the maintainer decided; v5 is the
-  only planned run. The options stay as Config switches ("Design records") and the
-  `base:` merge stays for the daw variant.
 - Abort doomed lanes early (dt < 1e4 s and reject fraction > 0.3 at step 801: 64/75
   caught, 1 false positive). A new rejection rule: the maintainer's call.
 - RT overlapped with the retry pass; longest-first ordering (no predictor, "Do not

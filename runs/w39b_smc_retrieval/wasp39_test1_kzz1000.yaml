@@ -1,0 +1,6 @@
+# Sensitivity run beside wasp39_test1: the Kzz prior to x1000 (the headline stops at
+# x30; v4 ran to x1000). 17 parameters, as the base.
+base: wasp39_test1.yaml
+
+config:
+  prior_lnKzz: [-2.302585092994046, 6.907755278982137]   # ln 0.1 .. ln 1000

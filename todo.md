@@ -11,6 +11,7 @@ remains is the runs and the checks.
 2. [owed] The v5 run (`runs/w39b_smc_retrieval/wasp39_test1.yaml`, `python tools/submit.py <spec>`); numbers to "Runs".
 3. [owed] Forward checks at v5's posterior draws, after v5 finishes (`validation/posterior_forward_check.py`, `validation/opacity_leave_one_out.py --from-posterior`), each a number under "Physics assumptions and limitations".
 4. [science] Conditioning map: the rejected fraction over the posterior from v5's `rejected/` log.
+5. [owed] The four sensitivity runs beside v5, after it: `wasp39_test1_kzz1000`, `_deck`, `_kzz_powerlaw`, `_adiabat` (in that order; notes "Design records").
 
 ## 2. The v5 run
 
@@ -49,3 +50,11 @@ rejected fraction over (lnKzz, T1bar, lnZ) against the posterior, and the paper 
 where the conditioning bites. v4 wrote no log and its outputs are deleted: its tally
 ("Runs") is its record. Done when the figure
 exists for v5 and the statement is in "Physics assumptions and limitations".
+
+## 5. Sensitivity runs
+
+Evidence: notes "Design records" (the four variants, their order and what each is
+compared on). The external review asked for each; the reply to the reviewer promised
+them. One submit each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`,
+after v5 so the comparison is at the same code. Done when each run's numbers are in
+"Runs" beside v5's.

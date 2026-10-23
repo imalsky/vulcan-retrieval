@@ -1,0 +1,6 @@
+# Sensitivity run beside wasp39_test1: an opaque grey cloud deck below a free pressure
+# in place of the power-law cloud (two cloud parameters become one). 16 parameters.
+base: wasp39_test1.yaml
+
+config:
+  cloud_model: deck                    # prior_log10P_deck at the schema default

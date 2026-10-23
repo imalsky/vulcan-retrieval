@@ -1,0 +1,9 @@
+# Sensitivity run beside wasp39_test1: an H2-He adiabat below a free
+# radiative-convective boundary, joined to the Guillot profile there. The join is
+# imposed (nothing in the constant-kappa model turns the column convective) and the
+# adiabat is steeper than Guillot's deep 0.25, so more draws leave the T-P window.
+# 18 parameters.
+base: wasp39_test1.yaml
+
+config:
+  tp_adiabat: true                     # prior_log10P_rcb and tp_nabla_ad at the schema defaults
