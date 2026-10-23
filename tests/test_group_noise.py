@@ -144,7 +144,7 @@ def test_replicates_carry_the_likelihood_sigma(names, b, want_b):
 def test_production_case_gets_one_inflation_per_group():
     from conftest import RUN_DIR
     from retrieval_framework import run_setup as R
-    cfg = R.load_spec(RUN_DIR / "v5.yaml").cfg      # per-group noise inflation is v5's
+    cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg      # per-group noise inflation is v5's
     pipe = P.build_pipeline(cfg)
     P.load_real_into_pipe(pipe)
     assert list(pipe.groups) == GROUPS

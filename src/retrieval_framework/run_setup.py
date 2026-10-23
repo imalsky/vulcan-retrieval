@@ -16,8 +16,8 @@ Loading is pure (no environment write, no jax import); ``export_runtime`` writes
 the runtime block into the environment before the engine is imported and refuses
 an inherited value that disagrees with the file.
 
-    python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/v5.yaml [--resume] [--dry-run]
-    python -m retrieval_framework.run_setup runs/w39b_smc_retrieval/v5.yaml   # the runtime as `export` lines
+    python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/wasp39_test1.yaml [--resume] [--dry-run]
+    python -m retrieval_framework.run_setup runs/w39b_smc_retrieval/wasp39_test1.yaml   # the runtime as `export` lines
 """
 from __future__ import annotations
 

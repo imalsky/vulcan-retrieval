@@ -6,7 +6,7 @@
 # One nautilus retrieval run on a NASA NAS GH200 node, from a run specification
 # (runs/<case>/<name>.yaml). Submit through tools/submit.py, not qsub by hand:
 #
-#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml [--resume] [--dry-run]
+#   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml [--resume] [--dry-run]
 #
 # submit.py validates the spec, puts the job (queue, the allocation in $PBS_GROUP,
 # select line, a walltime past the spec's governor), the run name and the log

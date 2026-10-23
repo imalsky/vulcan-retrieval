@@ -192,7 +192,7 @@ def _check_exojax() -> None:
         _ok(f"exojax {exojax.__version__}")
 
 
-PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/v5.yaml")   # relative to the retrieval repo
+PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")   # relative to the retrieval repo
 
 
 def production_molecules(root: Path, spec: Path | None = None) -> tuple[str, ...]:

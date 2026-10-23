@@ -55,13 +55,13 @@ adopted".
 - Inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the directory holding this
   repo); only the observed spectra (`data/cm24_wasp39b/`) are tracked.
 - `runs/<case>/` holds a case's inputs only: one YAML run specification per run
-  (`v5.yaml`, `smoke.yaml` and any `base: v5.yaml` variant) and nothing else. A spec is
-  the whole run: `runtime` (the engine's environment), `sampler` (nautilus) and
-  `config` (every `Config` field it sets), never the PBS job; its stem is the run name and
-  every output goes under `output/<case>/<name>_nautilus/` (`run_setup.load_spec`,
-  `output_base`). A new run is a new file; a variant restates only the keys it changes
-  (one level, whole values). Never set a run through the environment or the command
-  line.
+  (`wasp39_test1.yaml`, the v5 configuration; `smoke.yaml`; any `base:` variant) and
+  nothing else. A spec is the whole run: `runtime` (the engine's environment),
+  `sampler` (nautilus) and `config` (every `Config` field it sets), never the PBS job;
+  its stem is the run name and every output goes under `output/<case>/<name>_nautilus/`
+  (`run_setup.load_spec`, `output_base`). A new run is a new file; a variant restates
+  only the keys it changes (one level, whole values). Never set a run through the
+  environment or the command line.
 - Run from the repo root: `python -m retrieval_framework.run_nautilus
   runs/w39b_smc_retrieval/<name>.yaml [--resume] [--dry-run]` (`--dry-run` prints the
   resolved settings without jax), then `python -m retrieval_framework.nautilus_report
@@ -253,8 +253,8 @@ adopted".
 ## Where things live
 
 - A run is `runs/<case>/<name>.yaml` (`run_setup.load_spec`; the format is that
-  module's docstring and `v5.yaml`'s comments). `runs/w39b_smc_retrieval/` holds the
-  WASP-39b specs; `tools/submit.py` and `tools/run_nas.pbs` are the NAS launch.
+  module's docstring and `wasp39_test1.yaml`'s comments). `runs/w39b_smc_retrieval/`
+  holds the WASP-39b specs; `tools/submit.py` and `tools/run_nas.pbs` are the NAS launch.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup`
   (`load_spec`, `export_runtime`), `pipeline`
   (evaluators, T-P window), `retrieval_forward` (chemistry + RT, lane route),

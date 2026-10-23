@@ -30,9 +30,10 @@ sigma = posterior standard deviation, L = log-likelihood.
   before its override file's additions), 17 in v5 (s_o and lnM added, T1bar in place of
   Tint). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), quotable
   only after its warm-vs-cold re-solve. The only planned run is v5,
-  `runs/w39b_smc_retrieval/v5.yaml` (the external-review configuration; "Design
-  records"); launch: `PBS_GROUP=<allocation> python tools/submit.py
-  runs/w39b_smc_retrieval/v5.yaml` ("Design records", run specification). Forward checks at a run's draws:
+  `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`; the
+  external-review configuration; "Design records"); launch: `PBS_GROUP=<allocation>
+  python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
+  run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
@@ -440,7 +441,7 @@ unless stated.
   give ~559 lane-steps/s [E], about the GPU's best.
 - daw batched run: `run_nautilus` multiplies `cold_lanes` by `FFI_BLOCKS_PER_SM` only
   under `ffi`, and daw runs `fast` (no nvcc), so the lanes are `cold_lanes`. Use a
-  variant spec (`base: v5.yaml`; `runtime: {solver: fast, xla_flags: null}`; `config:
+  variant spec (`base: wasp39_test1.yaml`; `runtime: {solver: fast, xla_flags: null}`; `config:
   {cold_lanes: 284}`) with `XLA_PYTHON_CLIENT_PREALLOCATE=true` in the shell (the lane
   count is in the target, so it is its own run). At 284 lanes the v4 ladder's 264 and
   132 rungs stay active; their effect at that width is unmeasured.
@@ -576,7 +577,7 @@ HPC
     stated limitation. Through v4 the mass was fixed and the results conditional on it.
   - Sulfur is a free ln(S/O) on top of lnZ (the engine side is vulcan-forward's).
   - The certifying cap stays at 5000; the Kzz headline prior
-    is x0.1 to x30 in `v5.yaml` (x10 is the full H w_rms of the Tsai+2023 GCM; v4 ran
+    is x0.1 to x30 in `wasp39_test1.yaml` (x10 is the full H w_rms of the Tsai+2023 GCM; v4 ran
     x0.1 to x1000, its override at `8e3a21c`). A longer step budget at low Kzz was
     declined ("Ideas not adopted"). Kzz is reported truncated at x10 with the weight at
     the x0.1 floor, and as an upper limit if that weight grows.
@@ -878,7 +879,7 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
 ## Ideas not adopted
 
 - Sensitivity runs beside v5 (`v5_kzz1000`, `v5_kzz_powerlaw`, `v5_deck`, `v5_adiabat`,
-  each `base: v5.yaml`, 16-18 parameters): dropped, the maintainer decided; v5 is the
+  each a `base:` variant of the v5 spec, 16-18 parameters): dropped, the maintainer decided; v5 is the
   only planned run. The options stay as Config switches ("Design records") and the
   `base:` merge stays for the daw variant.
 - Abort doomed lanes early (dt < 1e4 s and reject fraction > 0.3 at step 801: 64/75

@@ -1,15 +1,15 @@
-# WASP-39b v5: the final configuration after the external science review.
+# WASP-39b, the v5 configuration: the final one after the external science review.
 # This file is the whole run. Its stem is the run name; the output goes to
-# output/w39b_smc_retrieval/v5_nautilus/ (derived, never a key here).
+# output/w39b_smc_retrieval/wasp39_test1_nautilus/ (derived, never a key here).
 #
-#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --dry-run   # the qsub line
-#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml             # submit on NAS
-#   python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --resume    # continue its checkpoint
-#   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/v5.yaml --dry-run
-#                                                                       # the resolved settings
+#   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --dry-run  # the qsub line
+#   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml            # submit on NAS
+#   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --resume   # continue it
+#   python -m retrieval_framework.run_nautilus runs/w39b_smc_retrieval/wasp39_test1.yaml --dry-run
+#                                                                   # the resolved settings
 # The PBS job is not part of the run: tools/submit.py sets the queue, the node and a
 # walltime 2 h past walltime_seconds, and charges the allocation in $PBS_GROUP.
-# A variant is a file beside this one with `base: v5.yaml` and the keys it changes
+# A variant is a file beside this one with `base: wasp39_test1.yaml` and the keys it changes
 # (a key replaces the base's value whole, dicts and lists included). Every key under
 # config: is a field of config_schema.Config; a key not listed keeps the schema default.
 # Every config key but walltime_seconds, and the runtime block, enters the target

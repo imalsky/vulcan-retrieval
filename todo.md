@@ -10,7 +10,7 @@ remains is the runs and the checks.
    reported apart), CPU-tested; run on v5 before any v5 number is quoted. v4 (job 94946)
    stays unquotable until the same check runs on it, at `0a2dbf3` (the last commit with
    v4's presolve chain), which waits until a v4 number is needed.
-2. [owed] The v5 run (`runs/w39b_smc_retrieval/v5.yaml`, `python tools/submit.py <spec>`); numbers to "Runs".
+2. [owed] The v5 run (`runs/w39b_smc_retrieval/wasp39_test1.yaml`, `python tools/submit.py <spec>`); numbers to "Runs".
 3. [owed] Forward checks at v5's posterior draws, after v5 finishes (`validation/posterior_forward_check.py`, `validation/opacity_leave_one_out.py --from-posterior`), each a number under "Physics assumptions and limitations".
 4. [science] Conditioning map: the rejected fraction over the posterior from v5's `rejected/` log, and whether v4's checkpoint keeps its rejected points.
 

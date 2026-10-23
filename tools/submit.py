@@ -1,8 +1,8 @@
 """Submit one run specification to PBS on NAS.
 
-    python tools/submit.py runs/w39b_smc_retrieval/v5.yaml            # a fresh run
-    python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --resume   # continue its checkpoint
-    python tools/submit.py runs/w39b_smc_retrieval/v5.yaml --dry-run  # print the qsub line only
+    python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml            # a fresh run
+    python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --resume   # continue its checkpoint
+    python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --dry-run  # print the qsub line only
 
 The spec is loaded and validated here (run_setup.load_spec, so a bad file fails before
 anything is queued). The PBS job is not part of the spec: the qsub command line asks for

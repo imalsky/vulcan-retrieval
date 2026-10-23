@@ -22,7 +22,7 @@ def _write(path: Path, doc) -> Path:
     return path
 
 
-@pytest.mark.parametrize("name,n_dim", [("v5", 17), ("smoke", 8)])
+@pytest.mark.parametrize("name,n_dim", [("wasp39_test1", 17), ("smoke", 8)])
 def test_shipped_spec_loads_to_its_parameter_count(name, n_dim):
     spec = R.load_spec(RUN_DIR / f"{name}.yaml")
     groups = list(OBS.load_real_observations(spec.cfg)["groups"])

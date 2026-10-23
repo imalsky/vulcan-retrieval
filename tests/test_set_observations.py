@@ -64,7 +64,7 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     from retrieval_framework import run_setup as R
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
-    cfg = R.load_spec(RUN_DIR / "v5.yaml").cfg
+    cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg
 
     import jax
 

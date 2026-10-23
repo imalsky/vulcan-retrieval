@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
 
 
-PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "v5.yaml"
+PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "wasp39_test1.yaml"
 
 
 def production_config():
