@@ -17,7 +17,7 @@ sigma = posterior standard deviation, L = log-likelihood.
   the adiabat; "Design records"), the rejected-draw log and the certificate's derived
   quantities. 0.27.0 removed the SMC path and added the nautilus report (the last commit
   with SMC is `397d8bb`; "Superseded designs"). pyproject floors: vulcan-forward>=0.30.0,
-  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `da54541`, vulcan-forward
+  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `490e822`, vulcan-forward
   `c5770a4` (the v5 code; v4 ran on `a420570` / `acdf63e`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
   refuses the former fork (same version string) and fails on stale metadata after a
   version bump until all three trees are reinstalled editable. TestPyPI releases, tags
@@ -333,6 +333,16 @@ unless stated.
   time), device-to-device copies 74 s (1.12 M), other XLA kernels 351 s, idle 34 s.
   Kernel rates: VULCAN3 notes "Efficiency program". Trace caveats: "HPC (NAS GH200) and
   daw". Speed ideas not built: "Ideas not adopted".
+- v5 batch profile (1 h v5 run, batch 2, 528 lanes, kernels matched to HLO source lines)
+  [M]: of 899 s chemistry GPU span, block-Thomas 41%, device copies 10% (the y ring, gone
+  since VULCAN3's deferred ring write: v5 warm batch 848 -> 768 s, results byte-identical),
+  photolysis ~20%, Jacobian 6%, RHS 4%. Factor waves step at 264 lanes, solve at 396.
+- v5 queue replay (that run's four batches, per-draw steps, GH200 ticks) [E]: perfect
+  packing would make the chemistry 1.22x faster, known-length longest-first 1.14x; capped
+  draws hold 20-37% of a warm batch's accepted steps (64% cold); rungs 66/33 1.03x;
+  n_batch 3168 1.10x per draw before its sampler cost; 792 lanes ~5% (memory unmeasured);
+  each batch split over 2 / 3 GPUs (stock nautilus `pool` splits a vectorized batch)
+  1.68x / 2.24x wall for +19% / +34% GPU-hours.
 - T-P-invalid draws take no chemistry step and no RT from baseline v4 (the maintainer's
   choice; manifest_version 4): `loglike` ANDs `tp_ok` into the `active` mask before
   the first pass. 32.4% of the box prior is out of window [M, outside review]; the
@@ -407,7 +417,11 @@ unless stated.
   sqlite` took 43 s for 14.6 M events. In that trace the RT pass shows 0.5 s of kernels
   in 37 s while the host waits on the stream (kernels inside CUDA-graph conditional
   bodies not traced per node, probably [I]), and CUPTI's device-to-device byte counts
-  are unphysical (238 MB per 66 us copy): use copy durations, not bytes.
+  are unphysical (238 MB per 66 us copy): use copy durations, not bytes. `PROFILE_HLO=1`
+  fails at start: nsys-jax adds its dump flags to `XLA_FLAGS`, which
+  `run_setup.export_runtime` refuses (the spec decides); put `--xla_dump_to=<dir> --xla_dump_hlo_as_text=true
+  --xla_dump_hlo_as_proto=false` in a throwaway spec's `runtime.xla_flags`, with a fresh
+  `JAX_COMPILATION_CACHE_DIR`. Match kernels to HLO by the sqlite's `demangledName`.
 - JAX compile cache: see VULCAN3 notes (private cache for any memory fraction != 0.90).
 - daw lane benchmark [M, GPU 0 RTX 6000 Ada; `fast` solver; the v4 config: nz 100, the
   presolve program at rtol 0.2, photolysis every step, grouped RHS; 150 accepted steps
@@ -866,7 +880,11 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
   `base:` merge stays for the daw variant.
 - Abort doomed lanes early (dt < 1e4 s and reject fraction > 0.3 at step 801: 64/75
   caught, 1 false positive). A new rejection rule: the maintainer's call.
-- RT overlapped with the retry pass; longest-first ordering; halving the host update.
+- RT overlapped with the retry pass; longest-first ordering (no predictor, "Do not
+  retry"); halving the host update.
+- Refill across batches (a nautilus subclass plus a re-entrant queue, 300-1000 lines
+  [E], up to 1.22x) and a multi-GPU batch split (MPI across nodes, 150-200 lines [E]):
+  declined by the maintainer as not simple enough ("Pipeline speed", v5 queue replay).
 - AD warm-start polish (-8 to -16% wall [E]).
 - nautilus (nautilus_improve, upside-only): bootstrap logZ error within shells plus
   per-shell diagnostics; parallel network fits (`pool=(None, Pool(4))`, -10 to -18 min
@@ -944,6 +962,7 @@ Sampling (nautilus and stand-ins)
 - Keeping nautilus's exploration phase: logZ -0.206 on the surrogates (81542: n_eff 2,843 against 1,557, log Z 1151.60 against 1151.82); discard it.
 - nautilus settings that lost on the real-posterior stand-in: 1500 live points, tanh, 8 networks, (64, 32, 16) networks, enlarge_per_dim 1.05, n_update = 2 n_live, and 500-600 live points without enlarge 1.3 (0.5-2.7 million calls).
 - A nautilus warm cap below 5000: 1 certified column in (3000, 5000], 2 in [5000, 10000), 15 never by 10,000; the refilling queue removes the wait instead.
+- Longest-first batch order by a pre-solve predictor: the anchor distance (rank correlation with the steps 0.13-0.23) and the mean steps of the 10 nearest earlier draws (0.57-0.66) both replay at 0.99x on v5 (known lengths 1.16x): a batch ends with its worst-placed long draw.
 - Seeding a new run's anchors from 90302's 213k columns: no measurable gain (0.79 s per call in exploration, 0.77 in sampling) and a different box and geometry.
 - A learned initializer (an emulator of y*(theta) as the warm start): the draw's own converged column still costs 191-1321 steps, so no start beats cold by more than 4.4x; the nearest anchor gives 2.13x, PCA+GP 2.05x; no start rescues a censored draw (record: `~/VULCAN_Project/.backup/speed_studies_2026-09/emulator_ideas/results.txt`).
 - A spectrum emulator with nested sampling and an importance correction: not pursued, the maintainer's decision (the forward model is too complicated to emulate).
