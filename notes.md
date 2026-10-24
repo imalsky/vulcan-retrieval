@@ -859,6 +859,30 @@ HPC
     CO dilutes the planet's lines, which needs line-resolved transits); the ~29x NH3
     enhancement and patchy clouds of Welbanks's fit; stellar contamination differing
     between epochs beyond a grey offset per group.
+  - Cold certification before launch [M] (`fast` solver on a laptop CPU, the joint
+    spec's settings, 4 columns per solve, 690-760 s with compile; the cloud and lnR0
+    values arbitrary): constant Kzz 10^11.6 (43x, C/O 0.55, T1bar 1100 K) certifies in
+    853 steps, CH4 5.7e-5 at 1 mbar (quenched at 2-5 bar; Sing's retrieved CH4 is 1
+    ppm), NH3 quenched at the 10 bar bottom; 10^10 (200x, T1bar 1600 K) in 3424 steps;
+    10^8.6 (12x, C/O 0.33, T1bar 1450 K) and 10^6.5 hit the cap. A profile constant
+    below 0.1 bar and rising as P^-0.5 above it (flat above 1e-6 bar) certified none of
+    10^8.6, 10^8.0, 10^7.0 or 10^12.5 (T1bar 1000 K) cold: not adopted. Warm starts do
+    not rescue rtol 0.05: from certified Welbanks-composition anchors at 10^10.5, 10^10
+    and 10^9.5 (794-899 steps cold) only 10^9.5 -> 10^9.0 certifies (3858 steps), and no
+    anchor reaches 10^8.6.
+  - Why (`converged_y` ConvDiag, the Welbanks-like column) [M]: at rtol 0.05 and 5000
+    steps the column is at t 2.9e6 s with dt 8e2 s and longdy 488, set by trace cells
+    near the atol density at the top (H2O at 1.7e-7 bar; at 10^9.0 NCO at 4e-9 bar).
+    It does converge: 13085 steps, t 8.8e8 s, longdy 0.0999 (loose branch). At rtol 0.2
+    it certifies in 3867 steps (t 8.8e9 s, longdy 0.016), and the two converged columns
+    give spectra within 0.057 sigma in every one of the 161 bins (rms 0.014, max 2.9 ppm
+    at 4.29 um; photospheric VMRs within 0.006 dex). rtol 0.1 does not certify 10^8.6
+    within 5000. At rtol 0.2 and 5000 steps: 10^9.0 certifies (2714), 10^8.0, 10^7.0 and
+    10^6.5 do not (the cells near the atol density keep moving: S2 at 4e-7 bar, CH2_1
+    and C at the top), so the reachable floor is ~10^8.3-8.6. The case runs at rtol 0.2;
+    the WASP-39b finding that rtol-0.2 columns sit 0.28-0.35 nat from rtol 0.05
+    ("Runs", baseline_v2) asks for the same re-solve of the posterior rows before a
+    number is quoted.
 
 ## Physics assumptions and limitations (read before publishing a number)
 

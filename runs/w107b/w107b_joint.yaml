@@ -4,7 +4,7 @@
 # (arXiv:2405.11027: log10 Kzz 11.6, 43x solar, Tint 460 K). Their Kzz grids do not overlap
 # (7-10 and 11-13); the prior here spans both. Each paper's data alone:
 # w107b_g395h.yaml (Sing) and w107b_welbanks.yaml (Welbanks without MIRI, which is past
-# the model band). Machinery and solver settings as the WASP-39b v5 spec.
+# the model band). Machinery as the WASP-39b v5 spec; the step tolerance is looser.
 #
 #   python tools/submit.py runs/w107b/w107b_joint.yaml [--queue gpu_normal] [--dry-run]
 #
@@ -40,7 +40,10 @@ config:
   nu_max: 9900.0                       # cm^-1 (1.01 um)
   art_nlayer: 67
   dt_max: 1.0e+11
-  cfg_overrides: {rtol: 0.05, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  # rtol 0.2 (vulcan3's default.yaml; v5 uses 0.05): at constant Kzz 10^8.6 a cold column needs
+  # 13085 steps at rtol 0.05 and 3867 at 0.2, and the two converged spectra differ by at
+  # most 0.06 sigma (notes "Design records", WASP-107b case). Photolysis every step.
+  cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
   count_max: 5000
 
   # ---- planet (RT geometry): Piaulet+2021 (arXiv:2011.13444) ------------------------

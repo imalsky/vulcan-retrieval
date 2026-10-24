@@ -108,7 +108,9 @@ runs/w107b/w107b_joint.yaml` (gpu_long, 46 h governor), `w107b_g395h.yaml` and
 finishes). Each run binds the NAS checkout's commit, so keep the checkout fixed until
 all three finish. Then `nautilus_report` on each and the Kzz marginal and the joint
 Kzz-T1bar posterior side by side, with the certificate's `conditioning` block (the
-rejected fraction per lnKzz bin; a low-Kzz cut by the solver is not evidence against
-low Kzz) and the weight above log10 Kzz 12, where the 10 bar bottom truncates the
-quench. A statement about which paper is right needs the separate-data runs to agree
+rejected fraction per lnKzz bin; columns below ~10^8.3 do not certify within 5000
+steps at rtol 0.2, a solver cut, not evidence against low Kzz) and the weight above
+log10 Kzz 12, where the 10 bar bottom truncates the quench. The runs use rtol 0.2:
+re-solve the weighted posterior rows at rtol 0.05 (the baseline_v2 correction, a
+higher cap for those solves only) before any number is quoted. A statement about which paper is right needs the separate-data runs to agree
 with the joint one. Done when the three runs' numbers are in "Runs".
