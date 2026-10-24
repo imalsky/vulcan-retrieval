@@ -29,8 +29,10 @@ draw set (`--u-from` its `e2e_production.npz`), then `compare` down the ladder a
 `VULCAN-JAX/tools/compare_vul.py` on the CLI's W39b and HD189 columns. The job only
 solves; `compare` exits 1 over a gate or with no draw certified on both sides. A rung
 over a gate is localised (the rung names the change; replay the draw with its queue
-neighbours) before a production run. Done when every comparison and the VULCAN 2
-envelope are numbers in notes "Design records".
+neighbours) before a production run. Done: the batch rungs and the CLI against the CPU
+port (notes "Design records"; v5 launched on them). Left: the one-at-a-time GPU rung
+(the first job hit its wall; rerun on gpu_normal), the daw CPU rungs, and a replay of
+row 1352 under ffi and fast. Done when those are numbers in notes "Design records".
 
 ## 2. The v5 run
 

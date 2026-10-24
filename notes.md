@@ -767,6 +767,19 @@ HPC
   port's W39b column is within 0.003 dex of VULCAN 2 on those six species (CH4 worst;
   VULCAN-JAX `output/W39b.vul` against the stored VULCAN 2 columns) [M]. The same
   script's `warmcold` is the warm-vs-cold check (todo).
+  Results on v5 (NAS GH200, 1584 in-window prior draws, cold) [M]: command buffers off,
+  no XLA flags and the codegen RHS are bitwise the production rung (908 certified,
+  every metric 0). The noise floor (production vs shuffled, 17-D): worst bin 0.050
+  sigma, 4 certificate flips, good-fit |dlogL| <= 0.118. ffi vs fast: p95 9e-6 dex,
+  good-fit |dlogL| <= 3e-4, 3 flips; one poor fit (row 1352, 171 nats below the best;
+  lnZ 1.25, lnKzz 3.13, T1bar 979 K) differs by 1.24 sigma in one bin and 0.14 dex.
+  The CLI under ffi + grouped against the CPU port: W39b 4.6e-8 dex, HD189 1.6e-7 dex,
+  both at their gate step counts (1202, 1495).
+- Cold certification of in-window v5 prior draws at count_max 5000 [M]: 57% (885-908
+  of 1584); every failure is a cap exit, worst where the column is cool and metal-rich
+  and weakly mixed (lowest T1bar quintile 21%, highest lnZ quintile 24%, lowest lnKzz
+  quintile 36%, against 81-86% at the other ends). 81% of uniform v5 box draws leave
+  the T-P window (v5's first nautilus batch: 1277 of 1584), against ~4% for v4.
 - Run certificate (`nautilus_report.certificate`, version 1): provenance (the run's
   target digest and manifest, code commits, dirty flags and `src_diff`, versions,
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,
