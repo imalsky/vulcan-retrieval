@@ -36,7 +36,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   beside it; launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
-  `validation/posterior_forward_check.py`.
+  `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
+  specs; "Design records"), runs the same model on the 2024 JWST data.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws the run figures (the spectrum fit from
@@ -819,6 +820,45 @@ HPC
   physical-units corner, grouped marginals, VMR profiles, rejection map and batch
   diagnostics once drawn beside baseline_v4 were retired with their scripts. A figure
   the maintainer asks for is one `scratch/` script (root CLAUDE.md "Figures").
+- WASP-107b case (`runs/w107b/`, inputs in `data/w107b/`): v5's model and solver
+  settings on WASP-107b, to test Welbanks+2024 (arXiv:2405.11018; a 1D-RCPE grid with
+  constant log10 Kzz 7-10 fit to WFC3 + NIRCam + MIRI: 8.6 +0.4/-0.2, ~12x solar, C/O
+  0.33, Tint > 345 K at 3 sigma) against Sing+2024 (arXiv:2405.11027; an ATMO grid
+  with log10 Kzz 11-13 fit to five abundances retrieved from G395H: 11.6 +- 0.1, 43x,
+  Tint 460 K). The grids do not overlap; the prior spans both. Three runs, one model:
+  the joint fit, G395H alone (`w107b_g395h`) and Welbanks's bands alone
+  (`w107b_welbanks`); a statement about either paper needs the three to agree.
+  - Data. Sing: Zenodo 10891400, `Sing_2024_Fig2_WASP107b_transit_spec_data.csv` (Rp/Rs,
+    R ~1000), binned per detector (split at 3.77 um) into equal ln-lambda bins at
+    R 100 with inverse-variance depth means (R 93-110). Welbanks: Zenodo 10780449,
+    `FinalResults/FinalSpectra` (wavelength, half-width, depth, error): the Eureka!
+    NIRCam spectra merged 2 (F322W2, R 82-131) or 3 (F444W, R 67-110) native 0.015 um
+    bins at a time (native R up to 336 is refused by the binning operator), the
+    Pegasus WFC3 G141 and G102 as published. The files keep the reader's Rp/Rs layout.
+    Six groups, G102 the offset reference; offsets (+-800 ppm) and inflations
+    integrated out. Level differences between the products [M]: NRS1 - F322W2 +71 ppm,
+    NRS2 - F444W +267 ppm, F444W - F322W2 -83 ppm (Welbanks applied -81 ppm). The
+    G102 bins skip 1.078-1.088 um (the He 1.083 um line); `obs_wl_lo` 1.02 keeps four.
+    MIRI is past the model band (5.26 um).
+  - System: Piaulet+2021 (arXiv:2011.13444): Mp 30.5 +- 1.7 M_E (lnM sigma 0.0557),
+    R* 0.67 R_Sun, Teff 4425 K, a 0.0566 AU, so Teq 734 K and Tirr = sqrt 2 Teq =
+    1038 K. `rp_cm` 6.6748e9 cm (Rp/Rs 0.1432 at 1 mbar), g there 272.9 cm s^-2; the
+    chemistry's Rp 6.037e9 cm at 1 bar, hydrostatic on the nominal profile.
+  - UV: the MUSCLES v22 HD 85512 `adapt-const-res-sed` (Welbanks's proxy; sha256
+    7c7a683a...407c), its BOLOFLUX shape times sigma (4425 K)^4 at the stellar surface;
+    the file's integral is 1% below sigma Teff^4 (the SED ends at 5.5 um).
+  - Chemistry bottom 10 bar. The T window (<= 2980 K) applies on the chemistry grid,
+    and a deep Guillot column warms as ~P^0.25: a 100 bar bottom would cap T(1 bar)
+    near 940 K and reject Welbanks's profiles (1100-1300 K at 0.25-0.65 bar); 10 bar
+    caps it near 1680 K. A quench below 10 bar (Kzz >~ 1e12 on cool columns) is
+    truncated at the bottom, so Kzz above that reads as one value.
+  - Priors: 1-300x solar about the 10x baseline, C/O 0.1-0.7 (log-uniform), log10 Kzz
+    6-13 constant (Sing's sound-speed bound 13.5), S/O x0.1-10, T1bar 400-2000 K,
+    Tirr 600-1500 K, the v5 cloud power law.
+  - Not modelled: the resolution-linked bias Sing corrected CO for (-0.2 dex; stellar
+    CO dilutes the planet's lines, which needs line-resolved transits); the ~29x NH3
+    enhancement and patchy clouds of Welbanks's fit; stellar contamination differing
+    between epochs beyond a grey offset per group.
 
 ## Physics assumptions and limitations (read before publishing a number)
 

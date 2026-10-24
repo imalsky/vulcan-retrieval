@@ -22,14 +22,17 @@ def _write(path: Path, doc) -> Path:
     return path
 
 
-@pytest.mark.parametrize("name,n_dim", [      # v5 integrates its 5 nuisances out
-    ("wasp39_test1", 12), ("wasp39_test1_kzz1000", 12), ("wasp39_test1_deck", 11),
-    ("wasp39_test1_kzz_powerlaw", 13), ("wasp39_test1_adiabat", 13), ("smoke", 8)])
-def test_shipped_spec_loads_to_its_parameter_count(name, n_dim):
-    spec = R.load_spec(RUN_DIR / f"{name}.yaml")
+@pytest.mark.parametrize("case,name,n_dim", [      # v5 and w107b integrate their nuisances out
+    *[(RUN_DIR.name, n, d) for n, d in (
+        ("wasp39_test1", 12), ("wasp39_test1_kzz1000", 12), ("wasp39_test1_deck", 11),
+        ("wasp39_test1_kzz_powerlaw", 13), ("wasp39_test1_adiabat", 13), ("smoke", 8))],
+    *[("w107b", n, 12) for n in ("w107b_joint", "w107b_g395h", "w107b_welbanks")]])
+def test_shipped_spec_loads_to_its_parameter_count(case, name, n_dim):
+    run_dir = RUN_DIR.parent / case
+    spec = R.load_spec(run_dir / f"{name}.yaml")
     groups = list(OBS.load_real_observations(spec.cfg)["groups"])
     assert len(C.specs_from_config(spec.cfg, groups=groups)) == n_dim
-    assert spec.cfg.out_dir == R.output_base(RUN_DIR) / f"{name}_nautilus"
+    assert spec.cfg.out_dir == R.output_base(run_dir) / f"{name}_nautilus"
 
 
 def test_variant_replaces_a_base_value_whole(tmp_path):
@@ -85,5 +88,7 @@ def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypa
     main([spec, "--dry-run"])
     line = capsys.readouterr().out
     assert "walltime=48:00:00" in line and "group_list=g0" in line
+    with pytest.raises(SystemExit, match="past gpu_normal"):     # 48 h > the 24 h queue
+        main([spec, "--dry-run", "--queue", "gpu_normal"])
     with pytest.raises(SystemExit, match="walltime_seconds"):
         main([str(_write(tmp_path / "t.yaml", {"config": MINIMAL})), "--dry-run"])

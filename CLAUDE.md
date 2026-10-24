@@ -53,7 +53,10 @@ adopted".
 - Import order is guard-enforced: `vulcan_forward.vulcan_chem` raises if exojax was
   imported first.
 - Inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the directory holding this
-  repo); only the observed spectra (`data/cm24_wasp39b/`) are tracked.
+  repo); only the observed spectra (`data/cm24_wasp39b/`) and the WASP-107b case inputs
+  (`data/w107b/`: spectra, its vulcan3 config, atmosphere and UV files) are tracked. A
+  case config given as a path (`vulcan_cfg_name: data/w107b/W107b.yaml`) and its file
+  paths resolve against the working directory: run from the repo root.
 - `runs/<case>/` holds a case's inputs only: one YAML run specification per run
   (`wasp39_test1.yaml`, the v5 configuration; `smoke.yaml`; any `base:` variant) and
   nothing else. A spec is the whole run: `runtime` (the engine's environment),
@@ -258,7 +261,8 @@ adopted".
 
 - A run is `runs/<case>/<name>.yaml` (`run_setup.load_spec`; the format is that
   module's docstring and `wasp39_test1.yaml`'s comments). `runs/w39b_smc_retrieval/`
-  holds the WASP-39b specs; `tools/submit.py` and `tools/run_nas.pbs` are the NAS launch.
+  holds the WASP-39b specs, `runs/w107b/` the WASP-107b ones; `tools/submit.py` and
+  `tools/run_nas.pbs` are the NAS launch.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup`
   (`load_spec`, `export_runtime`), `pipeline`
   (evaluators, T-P window), `retrieval_forward` (chemistry + RT, lane route),

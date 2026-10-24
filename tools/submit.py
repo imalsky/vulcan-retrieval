@@ -3,12 +3,13 @@
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml            # a fresh run
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --resume   # continue its checkpoint
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --dry-run  # print the qsub line only
+    python tools/submit.py runs/w107b/w107b_g395h.yaml --queue gpu_normal       # the 24 h queue
 
 The spec is loaded and validated here (run_setup.load_spec, so a bad file fails before
 anything is queued). The PBS job is not part of the spec: the qsub command line asks for
-one GH200 node on gpu_long, charges the allocation in $PBS_GROUP and sets the walltime
-JOB_HEADROOM_S past the spec's governor (config.walltime_seconds); either unset is
-refused. The run name is the job name, and the job receives three comma-free values:
+one GH200 node on gpu_long (or --queue gpu_normal), charges the allocation in $PBS_GROUP and sets the walltime
+JOB_HEADROOM_S past the spec's governor (config.walltime_seconds); either unset, or a
+walltime past the queue's limit, is refused. The run name is the job name, and the job receives three comma-free values:
 the spec file, the run's output directory and the resume flag. A fresh submit into a
 directory that already holds a run is refused; ``--resume`` needs the checkpoint and,
 when the last job of this run is still queued or running, chains the new one after it.
@@ -31,6 +32,7 @@ REPO = Path(__file__).resolve().parents[1]
 PBS_SCRIPT = REPO / "tools" / "run_nas.pbs"
 # the NAS job every run asks for; the allocation is the submitter's ($PBS_GROUP)
 QUEUE = "gpu_long"
+QUEUE_WALL_H = {"gpu_long": 120, "gpu_normal": 24}   # the NAS queue limits
 SELECT = "1:ncpus=72:ngpus=1:mem=400gb:model=gh200"
 JOB_HEADROOM_S = 7200       # the PBS wall ends this long after the run's governor
 # infrastructure knobs the job script reads; passed through when set in the caller's shell
@@ -62,6 +64,8 @@ def main(argv=None) -> None:
     ap.add_argument("spec", type=Path, help="runs/<case>/<name>.yaml")
     ap.add_argument("--resume", action="store_true", help="continue the run's checkpoint")
     ap.add_argument("--dry-run", action="store_true", help="print the qsub command, submit nothing")
+    ap.add_argument("--queue", default=QUEUE, choices=sorted(QUEUE_WALL_H),
+                    help=f"the GH200 queue (default {QUEUE})")
     args = ap.parse_args(argv)
 
     sys.path.insert(0, str(REPO / "src"))
@@ -75,6 +79,9 @@ def main(argv=None) -> None:
                  "checkpoint and exit before the wall")
     h, rest = divmod(math.ceil(spec.cfg.walltime_seconds + JOB_HEADROOM_S), 3600)
     walltime = f"{h:02d}:{rest // 60:02d}:{rest % 60:02d}"
+    if h * 3600 + rest > QUEUE_WALL_H[args.queue] * 3600:
+        sys.exit(f"walltime {walltime} (the governor + {JOB_HEADROOM_S} s) is past {args.queue}'s "
+                 f"{QUEUE_WALL_H[args.queue]} h: lower config.walltime_seconds")
     out = spec.cfg.out_dir
     jobs = out / "jobs"
     ckpt = out / "nautilus_checkpoint.hdf5"
@@ -92,7 +99,7 @@ def main(argv=None) -> None:
            f"VR_OUT={_safe(str(out), 'output directory')}",
            f"VR_RESUME={int(args.resume)}"]
     env += [f"{k}={_safe(os.environ[k], k)}" for k in PASS_THROUGH if k in os.environ]
-    cmd = ["qsub", "-N", spec.name, "-q", QUEUE,
+    cmd = ["qsub", "-N", spec.name, "-q", args.queue,
            "-l", f"select={SELECT}", "-l", f"walltime={walltime}",
            "-j", "oe", "-o", f"{jobs}/", "-W", ",".join(attrs), "-v", ",".join(env),
            str(PBS_SCRIPT)]

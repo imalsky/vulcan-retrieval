@@ -20,6 +20,10 @@ Paper: WASP-39b results (after the paper plan)
 6. [science] The conditioning map on v5 (the certificate's `conditioning` block) and what it means for the Kzz floor.
 7. [decision] The four sensitivity runs beside v5 (`wasp39_test1_kzz1000`, `_deck`, `_kzz_powerlaw`, `_adiabat`; specs ready, notes "Design records"): the paper decides which it reports.
 
+WASP-107b: Kzz from the two 2024 papers' data
+
+8. [owed] The three WASP-107b runs (`runs/w107b/`: the joint fit, Sing+2024's G395H alone, Welbanks+2024's bands alone), then whether the data constrain Kzz and which paper's value they support.
+
 ## 1. End-to-end check
 
 Evidence: notes "Design records" (the ladder, the gates, the VULCAN 2 envelope). The
@@ -36,6 +40,8 @@ row 1352 under ffi and fast. Done when those are numbers in notes "Design record
 
 ## 2. The v5 run
 
+v5's target binds the NAS checkout it was launched from (vulcan-retrieval `14b3693`,
+vulcan3 `fed3860`, vulcan-forward `c5770a4`): a `--resume` needs those checked out.
 Evidence: notes "Design records" (the decisions and the options), "Current state" (the
 launch recipe). Before launch: the full tier here (`-m "slow or not slow"`; it includes
 `tests/test_v5_options.py`), vulcan-forward's full tier, and the launch path on the CPU
@@ -92,3 +98,17 @@ decides which it reports (a sensitivity table: O/H, total metals, C/O, S/O, Kzz,
 evidence difference; an evidence difference needs cold runs and >= 3 seeds). One submit
 each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`, at v5's code. Done
 when each run that the paper uses has its row.
+
+## 8. WASP-107b runs
+
+Evidence: notes "Design records" (the WASP-107b case: data, system, the 10 bar bottom,
+priors, what is not modelled). Submit from cghfe02: `python tools/submit.py
+runs/w107b/w107b_joint.yaml` (gpu_long, 46 h governor), `w107b_g395h.yaml` and
+`w107b_welbanks.yaml` with `--queue gpu_normal` (22 h governor; `--resume` until each
+finishes). Each run binds the NAS checkout's commit, so keep the checkout fixed until
+all three finish. Then `nautilus_report` on each and the Kzz marginal and the joint
+Kzz-T1bar posterior side by side, with the certificate's `conditioning` block (the
+rejected fraction per lnKzz bin; a low-Kzz cut by the solver is not evidence against
+low Kzz) and the weight above log10 Kzz 12, where the 10 bar bottom truncates the
+quench. A statement about which paper is right needs the separate-data runs to agree
+with the joint one. Done when the three runs' numbers are in "Runs".
