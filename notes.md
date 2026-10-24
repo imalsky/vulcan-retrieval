@@ -879,7 +879,14 @@ HPC
     at 4.29 um; photospheric VMRs within 0.006 dex). rtol 0.1 does not certify 10^8.6
     within 5000. At rtol 0.2 and 5000 steps: 10^9.0 certifies (2714), 10^8.0, 10^7.0 and
     10^6.5 do not (the cells near the atol density keep moving: S2 at 4e-7 bar, CH2_1
-    and C at the top), so the reachable floor is ~10^8.3-8.6. The case runs at rtol 0.2;
+    and C at the top), so the reachable floor is ~10^8.3-8.6. At 10^9.0 the converged
+    rtol 0.2 and 0.05 spectra differ by at most 0.081 sigma (rms 0.018). Cold map at rtol
+    0.2 (`e2e_check.py solve --rung production`, 568 in-window prior draws, daw `fast`)
+    [M]: 71% certify, median 616 steps (p90 2347); by log10 Kzz 6-7 0%, 7-8 24%, 8-9 88%,
+    9-12 96%, 12-13 100%, with no T1bar or metallicity hole inside a bin (8-9: 7/9, 29/33,
+    49/55 across T1bar 400-900-1300-2000 K); 33% of raw prior draws are in the T window.
+    The runs' first five batches (warm, in-window, T-P rejections excluded) certify 2-4%,
+    44-48%, 88-90%, 90-92%, 93-94%, 96-97%, 99-100% per Kzz decade. The case runs at rtol 0.2;
     the WASP-39b finding that rtol-0.2 columns sit 0.28-0.35 nat from rtol 0.05
     ("Runs", baseline_v2) asks for the same re-solve of the posterior rows before a
     number is quoted.
