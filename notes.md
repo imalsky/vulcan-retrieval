@@ -173,6 +173,23 @@ unless stated.
   Launched outside the documented recipe (no notes entry on NAS). On this result the
   maintainer decided v5 runs the plain program ("Design records", the chemistry program).
 
+### wasp39_test1 (v5, job 96598)
+- The v5 spec: 12 sampled parameters (offsets and inflations integrated out), rtol 0.05
+  within 5000, 528 lanes, warm starts, seed 20260704. Code: VULCAN3 fed3860,
+  vulcan-forward c5770a4, vulcan-retrieval 14b3693.
+- 21.4 h, 106 batches, 167,904 calls, n_eff 5009, logZ_box 1158.453 [M, certificate].
+  T-P out 7.5% of calls; of in-window draws 5.27% rejected (cap 5.26%, stalled 0.006%,
+  0 non-finite); 99.1% of calls warm. Rejected fraction per lnKzz decile 2.1-7.9%, the
+  highest (7.8%) in the lowest bin (x0.10-0.18), which holds 0.250 of the posterior
+  weight.
+- Posterior (certificate `derived`, 16/50/84%): O/H 9.0 [6.9, 11.9] x solar, total
+  metals 8.7 [6.7, 11.5]; C/O 0.454 [0.339, 0.572]; S/O 2.55 [1.46, 3.99] x solar; Kzz
+  factor 0.34 [0.14, 1.37], weight below x0.2 0.301, below x0.15 0.175, above x10
+  0.014; T(1 bar) 1879 [1663, 2183] K, Tint 224 [166, 283] K; offsets NRS1 99.8 [74.6,
+  125.3], NRS2 39.4 [-5.4, 86.4] ppm; inflations NIRISS 1.245, NRS1 0.899, NRS2 1.183.
+  The Kzz posterior presses against the x0.1 floor, a stated solver cut. Not quotable
+  before the warm-vs-cold re-solve and the forward checks (`todo.md`).
+
 ## Low-Kzz hole
 
 - conv_gate: the notch came from capped solves failing only in layers 45-50 (4e-7..6e-8

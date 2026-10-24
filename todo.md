@@ -13,7 +13,7 @@ Model
 
 Paper: WASP-39b results (after the paper plan)
 
-2. [owed] The v5 run on 12-D nautilus (`runs/w39b_smc_retrieval/wasp39_test1.yaml`, `python tools/submit.py <spec>`), once the end-to-end check passes and the integrated run path has run end-to-end; numbers to "Runs".
+2. [owed] The v5 run's report: it finished (numbers in "Runs", wasp39_test1); `nautilus_report` and its figures are left.
 3. [owed] Warm-vs-cold check on v5 before any v5 number is quoted: `validation/e2e_check.py warmcold` on 1000 weighted posterior rows re-solved cold.
 4. [owed] Forward checks at v5's posterior draws (`validation/posterior_forward_check.py`, `validation/opacity_leave_one_out.py --from-posterior`), each a number under "Physics assumptions and limitations".
 5. [owed] The rate-range clamp at v5's hottest and coolest posterior draws (the external reviewer's ask; the +1.5% SO2 on the nominal column does not cover the T-window edges).
@@ -40,20 +40,17 @@ row 1352 under ffi and fast. Done when those are numbers in notes "Design record
 
 ## 2. The v5 run
 
-v5's target binds the NAS checkout it was launched from (vulcan-retrieval `14b3693`,
-vulcan3 `fed3860`, vulcan-forward `c5770a4`): a `--resume` needs those checked out.
-Evidence: notes "Design records" (the decisions and the options), "Current state" (the
-launch recipe). Before launch: the full tier here (`-m "slow or not slow"`; it includes
-`tests/test_v5_options.py`), vulcan-forward's full tier, and the launch path on the CPU
-(`smoke.yaml` through `run_nautilus` with a short governor, then `--resume`). 17
-parameters may need more than v4's 24 h, so watch the governor. When it finishes:
-`nautilus_report` (the certificate's `derived` block holds the quoted quantities) and
-the "Physics assumptions and limitations" list beside the posterior. Done when the run's
-numbers are in "Runs".
+v5's target binds the NAS checkout it was launched from (vulcan-retrieval `14b## 2. The v5 run
 
-## 3. Warm-vs-cold on v5
+Finished; its certificate's numbers are in notes "Runs" (wasp39_test1). Left: `python -m
+retrieval_framework.nautilus_report output/w39b_smc_retrieval/wasp39_test1_nautilus`
+on a GPU (the spectrum figure re-solves 32 weighted draws cold; `--spectra 0` draws the
+corner and T-P figures without the forward model) and the "Physics assumptions and
+limitations" list beside the posterior. The target binds the NAS checkout it was
+launched from (vulcan-retrieval `14b3693`, vulcan3 `fed3860`, vulcan-forward `c5770a4`):
+re-solves of its rows run at that code. Done when the report's figures exist.
 
-Evidence: notes "Design records" (the end-to-end check, `warmcold`), "Runs"
+Runs"
 (postrun_93269, the method). On a GPU: `python validation/e2e_check.py solve <spec>
 --rung production --posterior <out_dir> --draws 1000`, then `warmcold` on its npz;
 gate: every parameter's reweighted median within 0.1 sigma. Done when it passes and the
