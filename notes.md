@@ -187,8 +187,11 @@ unless stated.
   factor 0.34 [0.14, 1.37], weight below x0.2 0.301, below x0.15 0.175, above x10
   0.014; T(1 bar) 1879 [1663, 2183] K, Tint 224 [166, 283] K; offsets NRS1 99.8 [74.6,
   125.3], NRS2 39.4 [-5.4, 86.4] ppm; inflations NIRISS 1.245, NRS1 0.899, NRS2 1.183.
-  The Kzz posterior presses against the x0.1 floor, a stated solver cut. Not quotable
-  before the warm-vs-cold re-solve and the forward checks (`todo.md`).
+  The Kzz posterior presses against the x0.1 floor, a stated solver cut.
+- Warm vs cold [M] (`e2e_check.py solve --posterior` on 1000 weighted posterior rows,
+  production rung, then `warmcold`): 919 certify cold (556 of the 630 at lnKzz < -0.7);
+  median |dL| 0.0174; worst reweighted median shift c_o +0.075 sigma (gate 0.1); ESS
+  914: PASS. Not quotable before the forward checks (`todo.md`).
 
 ## Low-Kzz hole
 
@@ -936,9 +939,11 @@ HPC
   Lodders 2019 Table 8), not retrieved and not scaled with Z (d ln(He/H)/d lnZ = 0).
 - RT: 12 molecules, H2-H2 / H2-He CIA, power-law clouds uniformly mixed, H2/He Rayleigh,
   inverse-square gravity (+1.5 ppm against -102 ppm for constant g on a test slab).
-  13 produced species with installed tables are unscreened and out of the RT (CS N2O NO
-  NS NH CN OH CH3 H2CO C2H4 CH C2 H2O2); drop one only with a recorded
-  `opacity_leave_one_out.py --states` bound below the gate.
+  13 produced species with installed tables are out of the RT (CS N2O NO NS NH CN OH
+  CH3 H2CO C2H4 CH C2 H2O2). Screened on v5 [M] (`--states 8 --from-posterior`, 11
+  certified states: 3 prior + 8 posterior): all below min(5 ppm, 0.1 sigma) in every
+  bin; the largest OH 2.82 ppm (0.049 sigma) at 3.13 um, CN 0.48, NO 0.45, the rest
+  <= 0.012 ppm. Drop an RT molecule only with a recorded `--states` bound below the gate.
 - Clouds parametric; no stellar contamination; diagonal Gaussian likelihood with
   per-group inflation (no covariance in the products).
 - Data: Carter & May 2024 fixed-LD NIRISS SOSS + G395H, 150 bins in 1.02-5.24 um after

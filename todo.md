@@ -14,15 +14,14 @@ Model
 Paper: WASP-39b results (after the paper plan)
 
 2. [owed] The v5 run's report: it finished (numbers in "Runs", wasp39_test1); `nautilus_report` and its figures are left.
-3. [owed] Warm-vs-cold check on v5 before any v5 number is quoted: `validation/e2e_check.py warmcold` on 1000 weighted posterior rows re-solved cold.
-4. [owed] Forward checks at v5's posterior draws (`validation/posterior_forward_check.py`, `validation/opacity_leave_one_out.py --from-posterior`), each a number under "Physics assumptions and limitations".
-5. [owed] The rate-range clamp at v5's hottest and coolest posterior draws (the external reviewer's ask; the +1.5% SO2 on the nominal column does not cover the T-window edges).
-6. [science] The conditioning map on v5 (the certificate's `conditioning` block) and what it means for the Kzz floor.
-7. [decision] The four sensitivity runs beside v5 (`wasp39_test1_kzz1000`, `_deck`, `_kzz_powerlaw`, `_adiabat`; specs ready, notes "Design records"): the paper decides which it reports.
+3. [owed] Forward checks at v5's posterior draws (`validation/posterior_forward_check.py`; the opacity screen passed), each a number under "Physics assumptions and limitations".
+4. [owed] The rate-range clamp at v5's hottest and coolest posterior draws (the external reviewer's ask; the +1.5% SO2 on the nominal column does not cover the T-window edges).
+5. [science] The conditioning map on v5 (the certificate's `conditioning` block) and what it means for the Kzz floor.
+6. [decision] The four sensitivity runs beside v5 (`wasp39_test1_kzz1000`, `_deck`, `_kzz_powerlaw`, `_adiabat`; specs ready, notes "Design records"): the paper decides which it reports.
 
 WASP-107b: Kzz from the two 2024 papers' data
 
-8. [owed] The three WASP-107b runs (`runs/w107b/`: the joint fit, Sing+2024's G395H alone, Welbanks+2024's bands alone), then whether the data constrain Kzz and which paper's value they support.
+7. [owed] The three WASP-107b runs (`runs/w107b/`: the joint fit, Sing+2024's G395H alone, Welbanks+2024's bands alone), then whether the data constrain Kzz and which paper's value they support.
 
 ## 1. End-to-end check
 
@@ -40,8 +39,6 @@ row 1352 under ffi and fast. Done when those are numbers in notes "Design record
 
 ## 2. The v5 run
 
-v5's target binds the NAS checkout it was launched from (vulcan-retrieval `14b## 2. The v5 run
-
 Finished; its certificate's numbers are in notes "Runs" (wasp39_test1). Left: `python -m
 retrieval_framework.nautilus_report output/w39b_smc_retrieval/wasp39_test1_nautilus`
 on a GPU (the spectrum figure re-solves 32 weighted draws cold; `--spectra 0` draws the
@@ -50,23 +47,16 @@ limitations" list beside the posterior. The target binds the NAS checkout it was
 launched from (vulcan-retrieval `14b3693`, vulcan3 `fed3860`, vulcan-forward `c5770a4`):
 re-solves of its rows run at that code. Done when the report's figures exist.
 
-Runs"
-(postrun_93269, the method). On a GPU: `python validation/e2e_check.py solve <spec>
---rung production --posterior <out_dir> --draws 1000`, then `warmcold` on its npz;
-gate: every parameter's reweighted median within 0.1 sigma. Done when it passes and the
-numbers are in "Runs".
-
-## 4. Forward checks
+## 3. Forward checks
 
 Evidence: notes "Physics assumptions and limitations". `posterior_forward_check.py run
 <out_dir> --variant base`, then `network2025`, `dayside`, `twolimb`, `mass`, `spot` (one
 process each; the network variant freezes at import), then `compare`; weighted draws,
-the script's 16 by default. `opacity_leave_one_out.py --from-posterior
-<out_dir>/nautilus_posterior.npz` screens the 13 omitted absorbers at the gate min(5 ppm,
-0.1 sigma); one over it joins `molecules` and v5 is re-run with it. Done when each result
-is a number under "Physics assumptions and limitations".
+the script's 16 by default. The opacity screen is done (notes "Physics assumptions and
+limitations": every omitted absorber under the gate). Done when each variant's shift is
+a number under "Physics assumptions and limitations".
 
-## 5. Rate clamp at the T extremes
+## 4. Rate clamp at the T extremes
 
 Evidence: VULCAN3 notes "Parity numbers" (P16 and the nominal patch study). The
 reviewer's design: 8-16 weighted posterior draws at the T(1 bar) and Tirr extremes,
@@ -76,7 +66,7 @@ change in sigma. vulcan3 has no switch: the study patch evaluates `rates_jax._ar
 matched by equation text. Done when the numbers are under "Physics assumptions and
 limitations".
 
-## 6. Conditioning map on v5
+## 5. Conditioning map on v5
 
 Evidence: notes "Design records" (the rejected-draw log). The certificate's
 `conditioning` block bins the in-window proposals in lnKzz, T1bar and lnZ (one at a
@@ -86,7 +76,7 @@ reported as an upper limit or those draws are certified with a longer budget (a 
 change, the maintainer's call). v4 wrote no log. Done when the statement is in "Physics
 assumptions and limitations".
 
-## 7. Sensitivity runs
+## 6. Sensitivity runs
 
 Evidence: notes "Design records" (the four variants, their order and what each is
 compared on). The external review asked for each; the reply to the reviewer promised
@@ -96,7 +86,7 @@ evidence difference; an evidence difference needs cold runs and >= 3 seeds). One
 each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`, at v5's code. Done
 when each run that the paper uses has its row.
 
-## 8. WASP-107b runs
+## 7. WASP-107b runs
 
 Evidence: notes "Design records" (the WASP-107b case: data, system, the 10 bar bottom,
 priors, what is not modelled). Submit from cghfe02: `python tools/submit.py
