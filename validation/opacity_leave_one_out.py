@@ -58,16 +58,19 @@ def unscreened_candidates(prod_mols):
 def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
     """(K, n_dim) theta states to screen at.
 
-    Always includes the nominal state (u=0, the centre of every declared box).
-    ``n_prior`` adds that many T-P-valid prior draws; ``posterior_path`` adds the
-    SAME number again from a finished run's nautilus_posterior.npz (4 when
-    n_prior is 0). The screen runs over a prior/posterior state set, not one
-    state.
+    The nominal state (u=0, the centre of every declared box) when its T-P profile
+    is in the window (v5's is not: its spectrum is NaN). ``n_prior`` adds that many
+    T-P-valid prior draws; ``posterior_path`` adds the SAME number again from a
+    finished run's nautilus_posterior.npz (4 when n_prior is 0). The screen runs
+    over a prior/posterior state set, not one state.
     """
     import jax
     import jax.numpy as jnp
 
-    out = [np.asarray(pipe.theta_from_u(jnp.zeros(pipe.n_dim)), np.float64)]
+    nominal = np.asarray(pipe.theta_from_u(jnp.zeros(pipe.n_dim)), np.float64)
+    out = [nominal] if bool(pipe.tp_valid(jnp.asarray(nominal))) else []
+    if not out:
+        print("[loo] the nominal state leaves the T-P window: not screened", flush=True)
     if n_prior:
         u = pipe.sample_prior_u(jax.random.PRNGKey(int(seed)), int(n_prior))
         out += list(np.asarray(jax.vmap(pipe.theta_from_u)(u), np.float64))
@@ -92,13 +95,16 @@ def _aux_for(pipe, theta):
     chem_theta = th[:pipe.n_chem_tp]
     lnR0 = th[pipe.lnR0_idx]
     cloud = th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
-    y = pipe.fwd.chem_solve_cold_diag(chem_theta)[0]
-    return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud
+    y, diag = pipe.fwd.chem_solve_cold_diag(chem_theta)
+    return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud, bool(diag.conv_normal)
 
 
 def deltas_at(pipe, theta, candidates):
-    """(n_cand, n_bin) |binned depth with each candidate removed - full|."""
-    aux, lnR0, cloud = _aux_for(pipe, theta)
+    """(n_cand, n_bin) |binned depth with each candidate removed - full|, or None
+    when the state's chemistry does not certify cold (not a model state)."""
+    aux, lnR0, cloud, certified = _aux_for(pipe, theta)
+    if not certified:
+        return None
     vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
     full, wo = pipe.fwd.rt.transmission_depth_r(
         vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=vmr_he, cloud=cloud,
@@ -156,10 +162,21 @@ def main() -> int:
     per_state = []
     for i, th in enumerate(states):
         t0 = time.time()
-        per_state.append(deltas_at(pipe, th, candidates))
+        d = deltas_at(pipe, th, candidates)
+        if d is None:
+            print(f"[loo] state {i}: chemistry not certified cold, skipped", flush=True)
+            continue
+        if not np.all(np.isfinite(d)):
+            # max() would carry the NaN and `NaN > gate` reads as a pass
+            raise RuntimeError(f"state {i} {th.tolist()}: certified but a non-finite "
+                               "leave-one-out spectrum")
+        per_state.append(d)
         print(f"[loo] state {i}: {len(candidates)} rungs "
               f"({time.time() - t0:.0f}s)", flush=True)
+    if not per_state:
+        raise RuntimeError("no screened state certified: nothing to gate")
     worst_over_states = np.max(per_state, axis=0)          # (n_cand, n_bin)
+    n_screened = len(per_state)
 
     rows, measurements, worst = [], [], []
     for c, m in enumerate(candidates):
@@ -172,7 +189,7 @@ def main() -> int:
               f"{d[i]/sigma[i]:.3f} sigma  rms {1e6*np.sqrt(np.mean(d**2)):7.3f} ppm  "
               f"{over}/{d.size} bins over gate", flush=True)
         measurements.append({
-            "name": f"omit {m}: max |Delta binned depth| over {len(states)} state(s)",
+            "name": f"omit {m}: max |Delta binned depth| over {n_screened} state(s)",
             "value": f"{1e6*d[i]:.3f} ppm", "value_raw": float(1e6 * d[i]),
             "unit": "ppm", "gate": "< min(5 ppm, 0.1 sigma) in every bin",
             # only an OMITTED absorber over the gate is a failure
@@ -190,7 +207,7 @@ def main() -> int:
     idle = [m for m, _, _, _, _, over in rows if not over and m not in omitted]
     ok = not worst
     msg = (f"Every OMITTED absorber tested is below the per-bin gate across "
-           f"{len(states)} state(s); none is required beyond the production list."
+           f"{n_screened} state(s); none is required beyond the production list."
            if ok else
            f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
            "molecule list and rerun the posterior -- their opacity is currently "
