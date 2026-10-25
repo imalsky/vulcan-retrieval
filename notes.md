@@ -28,11 +28,11 @@ sigma = posterior standard deviation, L = log-likelihood.
   0.05 within 5000 accepted steps; v4 ran the presolve chain, "Superseded designs"),
   per-instrument noise inflation and log10gamma down to -3: 15 parameters in v4 (13
   before its override file's additions); v5 samples 12 (s_o and lnM added, T1bar in
-  place of Tint, the 2 offsets and 3 inflations integrated out: `integrate_nuisance`). Last finished run: baseline_v4 (job 94946, 23.82 h, exit 0; "Runs"), never
-  quotable: its outputs were deleted before a warm-vs-cold re-solve (the maintainer
-  decided). The headline run is v5,
-  `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`; the
-  external-review configuration; "Design records"), then four sensitivity variants
+  place of Tint, the 2 offsets and 3 inflations integrated out: `integrate_nuisance`). baseline_v4 is never quotable: its outputs
+  were deleted before a warm-vs-cold re-solve (the maintainer decided). The headline run
+  is v5, finished with its report, warm-vs-cold and forward checks ("Runs",
+  wasp39_test1), `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`;
+  the external-review configuration; "Design records"), then four sensitivity variants
   beside it; launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
@@ -191,7 +191,14 @@ unless stated.
 - Warm vs cold [M] (`e2e_check.py solve --posterior` on 1000 weighted posterior rows,
   production rung, then `warmcold`): 919 certify cold (556 of the 630 at lnKzz < -0.7);
   median |dL| 0.0174; worst reweighted median shift c_o +0.075 sigma (gate 0.1); ESS
-  914: PASS. Not quotable before the forward checks (`todo.md`).
+  914: PASS.
+- Report [M] (`nautilus_report --spectra 32`): corner, T-P and spectrum figures; 29 of
+  32 draws certify cold for the spectrum; the rewritten certificate's `derived` block
+  matches the numbers above. It, the warm-vs-cold check and the forward checks ("Physics
+  assumptions and limitations") ran at vulcan-retrieval ea0b96b, which differs from the
+  launch commit only outside `src/` and `validation/` (vulcan3 and vulcan-forward at the
+  launch commits). The rate clamp at the T extremes and the conditioning map are still
+  owed (`todo.md`).
 
 ## Low-Kzz hole
 
@@ -924,9 +931,9 @@ HPC
   term and the window reshape the uniform prior); the certificate's `derived` block
   (metallicity as O/H and as total metals, C/O, S/O, the Kzz factor with the weight at
   the floor and above x10 and the x10-truncated posterior, T at 1 bar and Tint); that
-  lnM acts in the RT only while the chemistry column keeps M0; and the warm-vs-cold
+  lnM acts in the RT only while the chemistry column keeps M0; the warm-vs-cold
   check: a weighted subsample of 500 to 1000 posterior draws re-solved cold through the
-  production chain at unchanged tolerances. logZ_box is comparable only between runs
+  production chain at unchanged tolerances; and the forward checks below. logZ_box is comparable only between runs
   with the same chemistry and rejection rule.
 - Guillot T-P, f = 1/4, no convective adjustment: (Tirr, kappa, gamma, the deep
   parameter) shape one 1D limb; the deep parameter is a deep-temperature knob (Tint
@@ -944,6 +951,26 @@ HPC
   certified states: 3 prior + 8 posterior): all below min(5 ppm, 0.1 sigma) in every
   bin; the largest OH 2.82 ppm (0.049 sigma) at 3.13 um, CN 0.48, NO 0.45, the rest
   <= 0.012 ppm. Drop an RT molecule only with a recorded `--states` bound below the gate.
+- Forward checks at v5's draws [M] (`posterior_forward_check.py`, 16 weighted draws,
+  seed 0): one change at a time against the base model at the same theta, so a shift at
+  fixed parameters, not a posterior shift. Band means: SO2 3.95-4.15 um, CO2 4.20-4.45
+  um, in ppm and in sigma of the band mean (median over the draws certified on both
+  sides).
+  - network2025 (12 draws): worst bin 1.05 sigma, median over draws 0.014; both bands
+    <= 0.4 ppm. Negligible.
+  - Dayside geometry (sl_angle 60 deg, f_diurnal 0.5, against W39b.yaml's 83 deg and
+    1.0; 14 draws): SO2 -122 ppm (max 253; 3.8 sigma), CO2 +11 ppm (0.3 sigma); worst
+    bin 5.2 sigma.
+  - Two limbs (Tirr -/+ 150 K, depths averaged; only 4 of 16 draws usable on both):
+    SO2 -98 ppm (3.7 sigma), CO2 -35 ppm (1.0 sigma).
+  - Mass +1 sigma in the RT (lnM + 0.11 at frozen chemistry; 14 draws): CO2 -131 ppm
+    (3.9 sigma), SO2 -15 ppm (0.5 sigma). The posterior already marginalizes this
+    through lnM; the chemistry's gravity (M0) is not varied.
+  - Spot (3% covering, 400 K below a 5400 K photosphere; 14 draws): +64 ppm SO2 and +66
+    ppm CO2 (2.0 sigma each), nearly grey across the two bands.
+  - The photochemistry geometry and a limb asymmetry each move the SO2 band by several
+    band sigma: v5's S/O and SO2 assume one 83 deg terminator column. A fit with either
+    change is a sensitivity run, not done.
 - Clouds parametric; no stellar contamination; diagonal Gaussian likelihood with
   per-group inflation (no covariance in the products).
 - Data: Carter & May 2024 fixed-LD NIRISS SOSS + G395H, 150 bins in 1.02-5.24 um after
