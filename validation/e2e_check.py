@@ -7,8 +7,8 @@ column of six species. A disagreement names the rung (the change) that made it.
     python validation/e2e_check.py solve <spec> --rung production
     python validation/e2e_check.py solve <spec> --rung reference_cpu --rows 0:128 --part 0
     python validation/e2e_check.py compare <a.npz> <b.npz> [<b_part2.npz> ...]
-    python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws 1000
-    python validation/e2e_check.py warmcold <e2e_production_posterior.npz> [<part2.npz> ...]
+    python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws 1000 [--results <dir>]
+    python validation/e2e_check.py warmcold <e2e_production_posterior.npz> [<part2.npz> ...] [--results <dir>]
 
 Rungs, top to bottom (the ladder; batch rungs run on the run's GPU):
   production      the spec's runtime (ffi, grouped RHS, XLA flags with command
@@ -55,8 +55,9 @@ shift in posterior sigma, low-Kzz rows (lnKzz < -0.7) reported apart. Gate: ever
 median within 0.1 sigma. A warm run's numbers are quotable only after it passes.
 `compare` and `warmcold` exit 1 over a gate, and `compare` also when no draw certifies
 on both sides (every metric would read zero).
-Results: output/w39b_smc_retrieval/validation/e2e_<rung>[_posterior][_partK].npz,
-e2e_<a>_vs_<b>.json and warm_cold_<run>.json.
+Results: e2e_<rung>[_posterior][_partK].npz, e2e_<a>_vs_<b>.json and
+warm_cold_<run>.json in --results, default output/w39b_smc_retrieval/validation; another
+run's re-solve takes its own (output/<case>/<run>_validation), so it overwrites nothing.
 """
 from __future__ import annotations
 
@@ -205,10 +206,10 @@ def solve(args) -> int:
                 posterior=str(args.posterior or ""),
                 rows=args.rows, lanes=lanes, runtime=rt.env(), n_corners=len(C),
                 device=str(jax.devices()[0]), provenance=_artifact.collect_provenance())
-    _artifact.RESULTS.mkdir(parents=True, exist_ok=True)
+    args.results.mkdir(parents=True, exist_ok=True)
     tag = (f"e2e_{args.rung}" + ("_posterior" if args.posterior else "")
            + (f"_part{args.part}" if args.part is not None else ""))
-    path = _artifact.RESULTS / f"{tag}.npz"
+    path = args.results / f"{tag}.npz"
     np.savez(path, rows=rows, u=U[rows], theta=np.asarray(theta, np.float64)[inv],
              logL=np.asarray(L, np.float64)[inv], acc=np.asarray(acc)[inv],
              certified=np.asarray(ok)[inv], mu=mu, sigma=np.asarray(pipe.obs["sigma"]),
@@ -287,7 +288,8 @@ def compare(args) -> int:
     for w in m["worst"]:
         print("  ", w)
     _artifact.emit(f"e2e_{ra}_vs_{rb}", f"End-to-end forward map, {ra} vs {rb}",
-                   [m, {"gates": GATES, "meta_a": a["meta"], "meta_b": b["meta"]}], status, summary)
+                   [m, {"gates": GATES, "meta_a": a["meta"], "meta_b": b["meta"]}], status, summary,
+                   out_dir=args.results)
     return int(bool(fails))
 
 
@@ -327,7 +329,7 @@ def warmcold(args) -> int:
                f"(gate {WARM_COLD_SHIFT_SIGMA}); ESS {m['ess']:.0f}")
     print(summary)
     _artifact.emit(f"warm_cold_{Path(z['meta']['posterior']).name}", "Warm vs cold posterior rows",
-                   [m], status, summary)
+                   [m], status, summary, out_dir=args.results)
     return int(status == "FAIL")
 
 
@@ -351,6 +353,9 @@ def main() -> int:
     c.add_argument("--worst", type=int, default=10)
     w = sub.add_parser("warmcold")
     w.add_argument("cold", nargs="+", help="the production rung's --posterior solve (parts)")
+    for p in (s, c, w):
+        p.add_argument("--results", type=Path, default=_artifact.RESULTS,
+                       help="the results directory (default: WASP-39b's validation directory)")
     args = ap.parse_args()
     return {"solve": solve, "compare": compare, "warmcold": warmcold}[args.cmd](args)
 
