@@ -19,7 +19,7 @@ Paper: WASP-39b results (after the paper plan)
 
 WASP-107b: Kzz from the two 2024 papers' data
 
-5. [owed] The three WASP-107b runs (`runs/w107b/`: the joint fit, Sing+2024's G395H alone, Welbanks+2024's bands alone), then whether the data constrain Kzz and which paper's value they support.
+5. [decision] WASP-107b, before a Kzz number is quoted: re-solve the three runs' posterior rows at rtol 0.05 (the low-Kzz lobe sits on a solver cut; the cap for those solves is the maintainer's) and decide the sensitivity rerun with the Tirr edge at ~400 K, a lower C/O floor and a higher log10 gamma ceiling.
 
 ## 1. End-to-end check
 
@@ -65,18 +65,17 @@ evidence difference; an evidence difference needs cold runs and >= 3 seeds). One
 each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`, at v5's code. Done
 when each run that the paper uses has its row.
 
-## 5. WASP-107b runs
+## 5. WASP-107b: the re-solve and the prior-edge rerun
 
-Evidence: notes "Design records" (the WASP-107b case: data, system, the 10 bar bottom,
-priors, what is not modelled). Submit from cghfe02: `python tools/submit.py
-runs/w107b/w107b_joint.yaml` (gpu_long, 46 h governor), `w107b_g395h.yaml` and
-`w107b_welbanks.yaml` with `--queue gpu_normal` (22 h governor; `--resume` until each
-finishes). Each run binds the NAS checkout's commit, so keep the checkout fixed until
-all three finish. Then `nautilus_report` on each and the Kzz marginal and the joint
-Kzz-T1bar posterior side by side, with the certificate's `conditioning` block (the
-rejected fraction per lnKzz bin; columns below ~10^8.3 do not certify within 5000
-steps at rtol 0.2, a solver cut, not evidence against low Kzz) and the weight above
-log10 Kzz 12, where the 10 bar bottom truncates the quench. The runs use rtol 0.2:
-re-solve the weighted posterior rows at rtol 0.05 (the baseline_v2 correction, a
-higher cap for those solves only) before any number is quoted. A statement about which paper is right needs the separate-data runs to agree
-with the joint one. Done when the three runs' numbers are in "Runs".
+Evidence: notes "Runs" (the three runs' numbers: the Kzz lobe at log10 Kzz 7.5-8.5 on
+the solver cut, the three prior edges) and "Design records" (the case, the 10 bar
+bottom). The runs used rtol 0.2 so the low-Kzz columns certify within the cap: re-solve
+the weighted posterior rows of each run at rtol 0.05 (the baseline_v2 correction, a
+higher cap for those solves only, the maintainer's choice) before any number is quoted;
+the result says whether the lobe survives or Kzz is reported as an upper limit. The
+sensitivity rerun (the reviewer's ask): one joint-fit variant spec with Tirr's lower
+edge at ~400 K, the C/O floor below 0.1 and the log10 gamma ceiling above 0.3,
+`python tools/submit.py runs/w107b/<name>.yaml` (about 24 GPU-h on gpu_long),
+reporting the shifts in O/H, C/O and Kzz. A statement about which paper is right needs
+the separate-data runs to agree with the joint one: on Kzz they do, on O/H and C/O they
+do not. Done when the re-solve's numbers and the rerun's row are in "Runs".

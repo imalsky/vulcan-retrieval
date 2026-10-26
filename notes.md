@@ -37,7 +37,9 @@ sigma = posterior standard deviation, L = log-likelihood.
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
-  specs; "Design records"), runs the same model on the 2024 JWST data.
+  specs; "Design records"), ran the same model on the 2024 JWST data: the three runs are
+  finished ("Runs", w107b), with the rtol 0.05 re-solve and a prior-edge rerun owed
+  before a number is quoted (`todo.md`).
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws the run figures (the spectrum fit from
@@ -199,6 +201,63 @@ unless stated.
   launch commit only outside `src/` and `validation/` (vulcan3 and vulcan-forward at the
   launch commits). The rate clamp at the T extremes and the conditioning map are still
   owed (`todo.md`).
+
+### w107b_joint, w107b_welbanks, w107b_g395h (jobs 96955, 96957, 96956 + 97202)
+- The WASP-107b case ("Design records"): v5's model at rtol 0.2 within 5000, 528 lanes,
+  warm starts, seed 20261024, 12 sampled parameters (Tirr sampled, 600-1500 K; the
+  offsets and inflations integrated out). Code: VULCAN3 fed3860, vulcan-forward
+  c5770a4, vulcan-retrieval ea0b96b. All three reached n_eff >= 5000 [M, certificates].
+- Joint (G395H + NIRCam + WFC3): 23.9 h, 122 batches, 193,248 calls, n_eff 5003,
+  logZ_box 1253.521. T-P out 3.6% of calls; of in-window draws 6.0% rejected (cap 5.7%,
+  stalled 0.3%, 0 non-finite); 99.2% of calls warm. Posterior (certificate `derived`,
+  16/50/84%): O/H 43.7 [26.0, 64.4] x solar, total metals 33.9 [20.8, 49.0]; C/O 0.166
+  [0.119, 0.261]; S/O 0.39 [0.21, 0.84] x solar; Kzz factor 1.74 [0.14, 6.6] on 1e9
+  (log10 Kzz 9.24 [8.13, 9.82]), weight below x0.2 0.200, below x0.15 0.171, above x10
+  0.085, above 10^10.9 zero; T(1 bar) 1519 [1375, 1646] K, Tint 337 [203, 462] K;
+  offsets (ppm) G141 86, F322W2 230, NRS1 326, NRS2 384, F444W 103; inflations G102
+  0.89, G141 1.24, F322W2 1.61, NRS1 1.65, NRS2 1.37, F444W 1.17.
+- Welbanks's bands (NIRCam + WFC3): 18.1 h, 109 batches, 172,656 calls, n_eff 5047,
+  logZ_box 770.020. T-P out 4.0%; 3.4% rejected (cap 3.2%, stalled 0.15%); 99.1% warm.
+  O/H 28.0 [9.8, 49.9], total 21.1 [7.8, 37.0]; C/O 0.135 [0.108, 0.216]; S/O 0.42
+  [0.22, 0.85]; Kzz factor 4.47 [1.06, 14.2] (log10 9.65 [9.03, 10.15]), below x0.2
+  0.029, above x10 0.245, above 10^11.6 0.003; T(1 bar) 1410 [1263, 1591] K, Tint 338
+  [185, 514] K; offsets G141 102, F322W2 293, F444W 214 ppm; inflations G102 0.88,
+  G141 1.25, F322W2 1.45, F444W 1.24.
+- G395H alone: 22.1 h to the wall at n_eff 2699, resumed once for 8.3 h more; 155
+  batches, 245,520 calls, n_eff 5096, logZ_box 480.396. T-P out 4.1%; 5.5% rejected
+  (cap 5.2%, stalled 0.27%); 99.4% warm. O/H 48.4 [23.1, 82.2], total 41.9 [20.0,
+  69.8]; C/O 0.309 [0.196, 0.468]; S/O 0.35 [0.17, 1.04]; Kzz factor 0.92 [0.08, 8.4]
+  (log10 8.96 [7.91, 9.92]), below x0.2 0.292, above x10 0.133, above 10^11.6 zero;
+  T(1 bar) 1610 [1465, 1741] K, Tint 336 [208, 476] K; offset NRS2 -4 ppm; inflations
+  NRS1 1.37, NRS2 1.37.
+- Kzz against the papers [M, the certificates' `conditioning` blocks and the posterior
+  files]: the three fits put the median at log10 Kzz 9.0-9.7 with every 68% interval
+  inside 7.9-10.2; Sing+2024's 10^11.6 holds at most 0.4% of the weight in any fit, and
+  Welbanks+2024's 10^8.6 lies inside the joint and G395H 68% intervals and the
+  Welbanks-data fit's 95% interval. The joint and G395H posteriors carry a second lobe
+  at log10 Kzz 7.5-8.5 (0.20 and 0.29 of the weight below 10^8.3) where the solver
+  rejects 15-25% of the in-window draws (bin 7.4-8.1) and 64-70% (bin 6.7-7.4), against
+  93-95% in the lowest bin (6.0-6.7, zero weight): the lobe's lower edge is a solver cut
+  until the posterior rows are re-solved at rtol 0.05 (`todo.md`). The three fits agree
+  on Kzz, T(1 bar) and Tint and disagree on the composition (O/H 28-48x, C/O
+  0.135-0.31), so the separate-data runs do not yet support a statement about either
+  paper's abundances.
+- Prior edges pressed [M, posterior files; 2.5/16/50/84/97.5%]: Tirr 604/621/671/759/
+  864 K (joint), 611/655/745/847/975 (Welbanks's bands), 612/673/755/841/959 (G395H)
+  against the 600 K edge and 1038 K = sqrt 2 Teq. At the joint fit's draws the 320 K
+  window would allow Tirr down to ~270 K once Tint rises to hold T(1 bar), so the edge,
+  not the window, cuts the posterior; Welbanks+2024's free retrievals put the upper
+  atmosphere at 447-525 K under a 400-900 K prior and their grid dropped the
+  irradiation temperature to 560 K. C/O presses its 0.10 floor (Welbanks's bands: 2.5%
+  0.102, 16% 0.108, 0.34 of the weight below 0.12; joint 0.17 below 0.12). log10 gamma
+  presses its +0.30 ceiling in the joint fit (0.16 of the weight within 0.1 dex of it,
+  84% quantile 0.20; 0.06 and 0.03 in the other two). T(1 bar) 84% quantiles
+  1591-1741 K sit near the ~1680 K ceiling of the 10 bar bottom ("Design records").
+- Report [M] (`nautilus_report --spectra 32` on each run, one GPU job at the runs'
+  commits, 18 min per run): corner, T-P and spectrum figures per run; 31, 32 and 31 of
+  32 draws (joint, Welbanks's bands, G395H) certify cold for the spectrum; the
+  rewritten certificates' `derived` blocks equal the run-end ones. The rtol 0.05
+  re-solve and the prior-edge rerun are owed (`todo.md`).
 
 ## Low-Kzz hole
 
