@@ -70,22 +70,43 @@ when each run that the paper uses has its row.
 
 Evidence: notes "Runs" (the w107b entry: the Kzz plateau whose lower edge sits on the
 solver cut, the rejected fraction per bin) and "Design records" (the case; the
-baseline_v2 correction; the fixedmass rejected-draw study). Both at the runs' source
-(vulcan-retrieval ea0b96b, VULCAN3 fed3860, vulcan-forward c5770a4: the reweighting is
-exp(L_new - L_run)). (1) The cut: the draws it removed are in each run's `rejected/`
-log, not in the posterior, so solve the in-window rejected draws below log10 Kzz ~8.1
-with a longer cap (the cap is the maintainer's choice) and compare their log L with the
-posterior's at the same Kzz; the result says whether the plateau extends below 10^7.4
-or Kzz is quoted as an upper limit. (2) The rtol bias of the accepted draws: re-solve
-the weighted posterior rows of each run at rtol 0.05 (`validation/e2e_check.py solve
-<spec> --rung production --posterior <out_dir>`, then `warmcold`, the v5 gate 0.1
-sigma) with a variant spec whose `count_max` lets a 10^8.6 column certify (13k steps
-at rtol 0.05, "Design records"): `warmcold` gives zero weight to a row that does not
-certify and would remove the plateau it is meant to test. `validation/_artifact.py`
-fixes RESULTS to `output/w39b_smc_retrieval/validation` and `e2e_check.py` always
-writes `e2e_production_posterior.npz` there: give each run its own results directory
-(`output/w107b/<run>_validation/`) first, or the three re-solves overwrite v5's
-artifact and each other. Done when both results are in "Runs".
+baseline_v2 correction; the fixedmass rejected-draw study). Runs on the final WASP-107b
+runs (the MIRI-band reruns replace the joint and Welbanks-bands fits; G395H alone
+stays), each at its own launch commits (the reweighting is exp(L_new - L_run); the
+current three: vulcan-retrieval ea0b96b, VULCAN3 fed3860, vulcan-forward c5770a4). The
+cap for both is `count_max` 30000 (a cold 10^8.6 column certifies in 13085 steps at
+rtol 0.05, "Design records"). Each run's results go to `output/w107b/<run>_validation/`
+(`e2e_check.py --results`), never to WASP-39b's directory. From the repo root, `<run>`
+the run name:
+(1) The cut: the draws it removed are in each run's `rejected/` log, not in the
+posterior, so re-solve the in-window rejected draws below log10 Kzz 8.1 cold at the
+run's rtol (0.2) and compare their log L with the posterior rows' at the same Kzz (0.35
+dex bins); the result says whether the plateau extends below 10^7.4 or Kzz is quoted
+as an upper limit. `<run>_cut.yaml` is the run's spec with only `count_max: 30000`
+(not written yet; `--dry-run` against the run's must differ only there):
+
+    python validation/rejected_resolve.py select output/w107b/<run>_nautilus --results output/w107b/<run>_validation/solver_cut --per-bin 300
+    python validation/e2e_check.py solve runs/w107b/<run>_cut.yaml --rung production --u-from output/w107b/<run>_validation/solver_cut/rejected_draws.npz --results output/w107b/<run>_validation/solver_cut
+    python validation/rejected_resolve.py compare output/w107b/<run>_nautilus output/w107b/<run>_validation/solver_cut/e2e_production.npz
+
+On the current three [M]: 3053, 1221 and 5246 such draws (joint, Welbanks's bands,
+G395H), 95-96% exhausted at the cap and the rest stalled, 89-98% rejected warm;
+`--per-bin 300` keeps 1214, 1109 and 1211.
+(2) The rtol bias of the accepted draws: the weighted posterior rows re-solved at rtol
+0.05 (the v5 gate 0.1 sigma); `warmcold` gives zero weight to a row that does not
+certify, so the cap must let the plateau rows certify. `<run>_resolve.yaml` is the
+run's spec with rtol 0.05 and `count_max` 30000, nothing else (written for the current
+three):
+
+    python validation/e2e_check.py solve runs/w107b/<run>_resolve.yaml --rung production --posterior output/w107b/<run>_nautilus --draws 1000 --results output/w107b/<run>_validation
+    python validation/e2e_check.py warmcold output/w107b/<run>_validation/e2e_production_posterior.npz --results output/w107b/<run>_validation
+
+Cost [E]: the runs' warm batches move ~3000 lane-steps/s on 528 lanes (their
+`batches.jsonl`; cold unmeasured) and v5's 1000-row re-solve at cap 5000 took 31 min,
+so about 3 h per run for (2) if the slowest lanes reach the cap, and at most ~7 h per
+run for (1) (two cold stages of up to 30000 steps per draw). One GPU job per run in
+the v5 postrun job's environment, its log under `scratch/` (`qsub -o`). Done when both
+results are in "Runs".
 
 ## 6. WASP-107b: the prior-edge rerun
 

@@ -1,0 +1,10 @@
+# Analysis variant of w107b_joint, never submitted as a run: the rtol 0.05 re-solve of the
+# run's weighted posterior rows (validation/e2e_check.py solve --posterior, then warmcold;
+# todo item 5). count_max 30000: a cold Kzz 10^8.6 column needs 13085 steps at rtol 0.05
+# (notes "Design records", WASP-107b case), so the plateau rows can certify; at 5000 warmcold
+# would give them zero weight. cfg_overrides is restated whole (a variant replaces it whole);
+# only rtol differs from the run.
+base: w107b_joint.yaml
+config:
+  cfg_overrides: {rtol: 0.05, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  count_max: 30000

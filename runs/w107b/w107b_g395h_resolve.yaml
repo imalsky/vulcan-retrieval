@@ -1,0 +1,10 @@
+# Analysis variant of w107b_g395h, never submitted as a run: the rtol 0.05 re-solve of
+# its posterior rows (as w107b_joint_resolve.yaml). A base has no base, so this restates
+# w107b_g395h's own keys (combo, walltime_seconds) on the joint spec; only rtol and
+# count_max differ from the run.
+base: w107b_joint.yaml
+config:
+  combo: [NRS1, NRS2]
+  walltime_seconds: 79200
+  cfg_overrides: {rtol: 0.05, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  count_max: 30000
