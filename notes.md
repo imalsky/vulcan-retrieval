@@ -245,9 +245,11 @@ unless stated.
   in-window draws is 15-17% in bin 7.4-8.1, 70% in 6.7-7.4 and 93-95% in 6.0-6.7 (zero
   weight). Reweighting each bin by 1/(1 - rejected fraction), as if the rejected draws
   had the certified ones' likelihood [E], moves the joint weight below 10^8.1 from 0.15
-  to 0.19 (G395H 0.22 to 0.26): the cut shapes the tail, not the bulk. The test of the
-  cut is a re-solve of the rejected in-window draws below ~10^8.1 with a longer cap
-  against the posterior's log L, not a re-solve of the posterior rows (`todo.md`).
+  to 0.19 (G395H 0.22 to 0.26): under that assumption the cut shapes the tail, not the
+  bulk; if the rejected draws recover higher likelihoods than their certified
+  neighbours the bulk moves too. The test of the cut is a re-solve of the rejected
+  in-window draws below ~10^8.1 with a longer cap against the posterior's log L, not a
+  re-solve of the posterior rows (`todo.md`).
   Across the fits every pairwise 68% interval overlaps for every quantity; the largest
   offset is C/O, 0.135 (Welbanks's bands, on the 0.10 floor) against 0.309 (G395H),
   1.5 sigma on the 68% half-widths in the log; O/H differs by <= 0.5 sigma, log10 Kzz

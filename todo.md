@@ -82,9 +82,10 @@ the weighted posterior rows of each run at rtol 0.05 (`validation/e2e_check.py s
 sigma) with a variant spec whose `count_max` lets a 10^8.6 column certify (13k steps
 at rtol 0.05, "Design records"): `warmcold` gives zero weight to a row that does not
 certify and would remove the plateau it is meant to test. `validation/_artifact.py`
-fixes RESULTS to `output/w39b_smc_retrieval/validation`; point it at `output/w107b/`
-first, or the three re-solves overwrite v5's artifact and each other. Done when both
-results are in "Runs".
+fixes RESULTS to `output/w39b_smc_retrieval/validation` and `e2e_check.py` always
+writes `e2e_production_posterior.npz` there: give each run its own results directory
+(`output/w107b/<run>_validation/`) first, or the three re-solves overwrite v5's
+artifact and each other. Done when both results are in "Runs".
 
 ## 6. WASP-107b: the prior-edge rerun
 
