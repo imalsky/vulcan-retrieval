@@ -19,7 +19,8 @@ Paper: WASP-39b results (after the paper plan)
 
 WASP-107b: Kzz from the two 2024 papers' data
 
-5. [decision] WASP-107b, before a Kzz number is quoted: re-solve the three runs' posterior rows at rtol 0.05 (the low-Kzz lobe sits on a solver cut; the cap for those solves is the maintainer's) and decide the sensitivity rerun with the Tirr edge at ~400 K, a lower C/O floor and a higher log10 gamma ceiling.
+5. [owed] WASP-107b, before a Kzz number is quoted: the solver-cut test (re-solve the rejected in-window draws below log10 Kzz ~8.1 with a longer cap against the posterior's log L) and the rtol 0.05 re-solve of the posterior rows with the warm-vs-cold check, both at the runs' source.
+6. [decision] WASP-107b prior-edge rerun: a joint-fit variant with the Tirr edge lowered (the 320 K window meets ~400 K for half the posterior), the C/O floor below 0.1 and the log10 gamma ceiling above 0.3; about 24 GPU-h.
 
 ## 1. End-to-end check
 
@@ -65,17 +66,37 @@ evidence difference; an evidence difference needs cold runs and >= 3 seeds). One
 each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`, at v5's code. Done
 when each run that the paper uses has its row.
 
-## 5. WASP-107b: the re-solve and the prior-edge rerun
+## 5. WASP-107b: the solver-cut test and the re-solve
 
-Evidence: notes "Runs" (the three runs' numbers: the Kzz lobe at log10 Kzz 7.5-8.5 on
-the solver cut, the three prior edges) and "Design records" (the case, the 10 bar
-bottom). The runs used rtol 0.2 so the low-Kzz columns certify within the cap: re-solve
-the weighted posterior rows of each run at rtol 0.05 (the baseline_v2 correction, a
-higher cap for those solves only, the maintainer's choice) before any number is quoted;
-the result says whether the lobe survives or Kzz is reported as an upper limit. The
-sensitivity rerun (the reviewer's ask): one joint-fit variant spec with Tirr's lower
-edge at ~400 K, the C/O floor below 0.1 and the log10 gamma ceiling above 0.3,
-`python tools/submit.py runs/w107b/<name>.yaml` (about 24 GPU-h on gpu_long),
-reporting the shifts in O/H, C/O and Kzz. A statement about which paper is right needs
-the separate-data runs to agree with the joint one: on Kzz they do, on O/H and C/O they
-do not. Done when the re-solve's numbers and the rerun's row are in "Runs".
+Evidence: notes "Runs" (the w107b entry: the Kzz plateau whose lower edge sits on the
+solver cut, the rejected fraction per bin) and "Design records" (the case; the
+baseline_v2 correction; the fixedmass rejected-draw study). Both at the runs' source
+(vulcan-retrieval ea0b96b, VULCAN3 fed3860, vulcan-forward c5770a4: the reweighting is
+exp(L_new - L_run)). (1) The cut: the draws it removed are in each run's `rejected/`
+log, not in the posterior, so solve the in-window rejected draws below log10 Kzz ~8.1
+with a longer cap (the cap is the maintainer's choice) and compare their log L with the
+posterior's at the same Kzz; the result says whether the plateau extends below 10^7.4
+or Kzz is quoted as an upper limit. (2) The rtol bias of the accepted draws: re-solve
+the weighted posterior rows of each run at rtol 0.05 (`validation/e2e_check.py solve
+<spec> --rung production --posterior <out_dir>`, then `warmcold`, the v5 gate 0.1
+sigma) with a variant spec whose `count_max` lets a 10^8.6 column certify (13k steps
+at rtol 0.05, "Design records"): `warmcold` gives zero weight to a row that does not
+certify and would remove the plateau it is meant to test. `validation/_artifact.py`
+fixes RESULTS to `output/w39b_smc_retrieval/validation`; point it at `output/w107b/`
+first, or the three re-solves overwrite v5's artifact and each other. Done when both
+results are in "Runs".
+
+## 6. WASP-107b: the prior-edge rerun
+
+Evidence: notes "Runs" (the w107b entry: Tirr at the 600 K edge, C/O at the 0.10
+floor, log10 gamma at the +0.30 ceiling, T(1 bar) against the ~1680 K window ceiling,
+the window's own Tirr floor) and "Design records" (the case). One joint-fit variant
+spec (`base: w107b_joint.yaml`) with the Tirr edge lowered, the C/O floor below 0.1 and
+the log10 gamma ceiling above 0.3; cold-certify columns at the new prior corners before
+submitting, as was done for the case; `python tools/submit.py runs/w107b/<name>.yaml`
+(about 24 GPU-h on gpu_long; rtol 0.2 like the runs, so item 5's re-solve applies to it
+too). Lowering Tirr below ~450 K trades the prior edge for the window edge for about
+half the posterior, so the shift it can show is bounded; the 10 bar bottom is a
+separate variant if wanted. Reported as the shifts in O/H, C/O and Kzz against the
+joint fit; a shift inside the 68% widths is not evidence without seeds. Closes when the
+maintainer decides to run it or not; the decision goes to "Design records".

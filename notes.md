@@ -37,9 +37,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
-  specs; "Design records"), ran the same model on the 2024 JWST data: the three runs are
-  finished ("Runs", w107b), with the rtol 0.05 re-solve and a prior-edge rerun owed
-  before a number is quoted (`todo.md`).
+  specs; "Design records"), ran the same model at rtol 0.2 on the 2024 JWST and HST
+  data: the three runs are finished ("Runs", w107b); the open work is in `todo.md`.
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws the run figures (the spectrum fit from
@@ -212,7 +211,7 @@ unless stated.
   stalled 0.3%, 0 non-finite); 99.2% of calls warm. Posterior (certificate `derived`,
   16/50/84%): O/H 43.7 [26.0, 64.4] x solar, total metals 33.9 [20.8, 49.0]; C/O 0.166
   [0.119, 0.261]; S/O 0.39 [0.21, 0.84] x solar; Kzz factor 1.74 [0.14, 6.6] on 1e9
-  (log10 Kzz 9.24 [8.13, 9.82]), weight below x0.2 0.200, below x0.15 0.171, above x10
+  (log10 Kzz 9.24 [8.14, 9.82]), weight below x0.2 0.200, below x0.15 0.171, above x10
   0.085, above 10^10.9 zero; T(1 bar) 1519 [1375, 1646] K, Tint 337 [203, 462] K;
   offsets (ppm) G141 86, F322W2 230, NRS1 326, NRS2 384, F444W 103; inflations G102
   0.89, G141 1.24, F322W2 1.61, NRS1 1.65, NRS2 1.37, F444W 1.17.
@@ -231,33 +230,55 @@ unless stated.
   T(1 bar) 1610 [1465, 1741] K, Tint 336 [208, 476] K; offset NRS2 -4 ppm; inflations
   NRS1 1.37, NRS2 1.37.
 - Kzz against the papers [M, the certificates' `conditioning` blocks and the posterior
-  files]: the three fits put the median at log10 Kzz 9.0-9.7 with every 68% interval
-  inside 7.9-10.2; Sing+2024's 10^11.6 holds at most 0.4% of the weight in any fit, and
-  Welbanks+2024's 10^8.6 lies inside the joint and G395H 68% intervals and the
-  Welbanks-data fit's 95% interval. The joint and G395H posteriors carry a second lobe
-  at log10 Kzz 7.5-8.5 (0.20 and 0.29 of the weight below 10^8.3) where the solver
-  rejects 15-25% of the in-window draws (bin 7.4-8.1) and 64-70% (bin 6.7-7.4), against
-  93-95% in the lowest bin (6.0-6.7, zero weight): the lobe's lower edge is a solver cut
-  until the posterior rows are re-solved at rtol 0.05 (`todo.md`). The three fits agree
-  on Kzz, T(1 bar) and Tint and disagree on the composition (O/H 28-48x, C/O
-  0.135-0.31), so the separate-data runs do not yet support a statement about either
-  paper's abundances.
+  files; the readings are inferred]: the three fits put the median at log10 Kzz 9.0-9.7
+  with every 68% interval inside 7.9-10.2. Within this model (constant Kzz, the 10 bar
+  bottom, T(1 bar) under the ~1680 K window ceiling) Kzz >= 10^11 is excluded by the
+  likelihood, not the solver (rejections above 10^10.2 are 0.1-4%): Sing+2024's 10^11.6
+  holds at most 0.4% of the weight in any fit, but the model cannot represent a quench
+  below 10 bar, so this is a statement about the data under this chemistry, not a test
+  of Sing's grid. Welbanks+2024's 10^8.6 sits at the 6th percentile of the fit to his
+  own bands (median 9.65) and at the 29% and 39% points of the joint and G395H fits.
+  The joint and G395H posteriors are a plateau below 10^9 (joint: ~0.027 per 0.1 dex
+  over 7.8-8.9 under a peak of 0.063 at 9.5; G395H: flat at 0.03-0.04 per 0.1 dex from
+  7.4 to 10.1, so close to an upper limit; 0.20 and 0.29 of the weight below 10^8.3)
+  whose lower edge coincides with the solver cut: the rejected fraction of the
+  in-window draws is 15-17% in bin 7.4-8.1, 70% in 6.7-7.4 and 93-95% in 6.0-6.7 (zero
+  weight). Reweighting each bin by 1/(1 - rejected fraction), as if the rejected draws
+  had the certified ones' likelihood [E], moves the joint weight below 10^8.1 from 0.15
+  to 0.19 (G395H 0.22 to 0.26): the cut shapes the tail, not the bulk. The test of the
+  cut is a re-solve of the rejected in-window draws below ~10^8.1 with a longer cap
+  against the posterior's log L, not a re-solve of the posterior rows (`todo.md`).
+  Across the fits every pairwise 68% interval overlaps for every quantity; the largest
+  offset is C/O, 0.135 (Welbanks's bands, on the 0.10 floor) against 0.309 (G395H),
+  1.5 sigma on the 68% half-widths in the log; O/H differs by <= 0.5 sigma, log10 Kzz
+  by <= 0.6, T(1 bar) by <= 0.9. Tint's agreement (336-338 K in all three) carries no
+  information: it is reconstructed from T(1 bar) and the Guillot parameters.
 - Prior edges pressed [M, posterior files; 2.5/16/50/84/97.5%]: Tirr 604/621/671/759/
   864 K (joint), 611/655/745/847/975 (Welbanks's bands), 612/673/755/841/959 (G395H)
-  against the 600 K edge and 1038 K = sqrt 2 Teq. At the joint fit's draws the 320 K
-  window would allow Tirr down to ~270 K once Tint rises to hold T(1 bar), so the edge,
-  not the window, cuts the posterior; Welbanks+2024's free retrievals put the upper
-  atmosphere at 447-525 K under a 400-900 K prior and their grid dropped the
-  irradiation temperature to 560 K. C/O presses its 0.10 floor (Welbanks's bands: 2.5%
-  0.102, 16% 0.108, 0.34 of the weight below 0.12; joint 0.17 below 0.12). log10 gamma
-  presses its +0.30 ceiling in the joint fit (0.16 of the weight within 0.1 dex of it,
-  84% quantile 0.20; 0.06 and 0.03 in the other two). T(1 bar) 84% quantiles
-  1591-1741 K sit near the ~1680 K ceiling of the 10 bar bottom ("Design records").
+  against the 600 K edge. The window's own floor on Tirr at the joint fit's draws (Tint
+  re-solved to hold T(1 bar); the T window on the ART and chemistry grids) [E]: half
+  the weight has no floor (the profile never leaves the window), the rest has floors
+  of 386/446/473 K (16/50/84%); 4% of the weight has a floor above 600 K, so the edge,
+  not the window, cuts the posterior, but a 400 K edge would meet the window for about
+  half the posterior (the window is the k-tables' 300 K limit plus the inset and
+  cannot move). The limb itself is already cold: T(1 mbar) 485 [446, 546] K (joint),
+  542 [484, 654] (Welbanks's bands), 550 [497, 665] (G395H) [M, 3000 weighted draws],
+  against the 447-525 K of Welbanks+2024's free retrievals (a 400-900 K prior; their
+  grid dropped the irradiation temperature to 560 K). C/O: the Welbanks-bands fit
+  rises toward the 0.10 floor (2.5% 0.102, 16% 0.108, 0.34 of the weight below 0.12
+  against 0.09 for the prior), the joint fit is flat down to it (0.17 below 0.12).
+  log10 gamma piles into the last 0.1 dex below its +0.30 ceiling in the joint fit
+  (0.16 of the weight against 0.03 for the prior; 0.06 and 0.03 in the other two
+  fits). T(1 bar) reaches the ~1680 K
+  where the 10 bar bottom caps a high-kappa deep profile ("Design records"): the 84%
+  quantiles are 1591-1741 K and the weight above 1680 K is 0.08, 0.05 and 0.27 (joint,
+  Welbanks's bands, G395H).
 - Report [M] (`nautilus_report --spectra 32` on each run, one GPU job at the runs'
-  commits, 18 min per run): corner, T-P and spectrum figures per run; 31, 32 and 31 of
-  32 draws (joint, Welbanks's bands, G395H) certify cold for the spectrum; the
-  rewritten certificates' `derived` blocks equal the run-end ones. The rtol 0.05
-  re-solve and the prior-edge rerun are owed (`todo.md`).
+  commits, about 15 min per run): corner, T-P and spectrum figures per run; 31, 32 and 31 of
+  32 draws (joint, Welbanks's bands, G395H) certify cold for the spectrum (the analysis
+  tools' solver choice, ffi with the default codegen RHS, which the spec calls bitwise
+  with the runs' grouped RHS on the ffi path); the rewritten certificates' `derived`
+  blocks equal the run-end ones.
 
 ## Low-Kzz hole
 
@@ -504,6 +525,10 @@ unless stated.
   served by `pbs05a` and take jobs only from `cghfe01`/`cghfe02`; `cfe` answers `Unknown
   queue`; `qsub -q gpu_long@pbs05a` is rejected. Login: sfe -> `ssh -o
   PreferredAuthentications=keyboard-interactive cfe02` -> `ssh cghfe01`.
+- A `qsub` from the repo root without `-o` drops its PBS log (`<name>.o<id>`) at the
+  root, which `.gitignore` does not cover: the checkout reads dirty, a certificate
+  written then records it, and a resume watcher that requires a clean checkout stops.
+  Pass `-o` with a path under a gitignored directory (`scratch/`, `output/`).
 - Data is not in git: seed `data/opacity_cache/` (CIA) and `data/exomolop/`. Fetch the
   k-tables on the front end with `python3 -m vulcan_forward.fetch_exomolop --molecules
   <the spec's molecules>` (`module load python3`, `VULCAN_FORWARD_DATA` and `PYTHONPATH` set
