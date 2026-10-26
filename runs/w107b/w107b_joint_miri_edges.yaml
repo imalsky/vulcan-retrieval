@@ -3,8 +3,8 @@
 # MIRI run). These are the edges the finished runs pressed (notes "Runs", w107b entry);
 # the run measures the shift in O/H, C/O and Kzz against w107b_joint_miri. Below ~450 K
 # the Tirr draws meet the 320 K opacity floor for about half the posterior and are
-# rejected as T-P-out, which is accepted. Data handling, the per-group noise inflation and
-# the model's limits as w107b_joint_miri (no 6-11 um aerosol term, no nitrogen freedom).
+# rejected as T-P-out, which is accepted. Data handling, the published errors and the
+# model's limits as w107b_joint_miri (no 6-11 um aerosol term, no nitrogen freedom).
 #
 #   python tools/submit.py runs/w107b/w107b_joint_miri_edges.yaml [--dry-run]
 base: w107b_joint.yaml
@@ -17,5 +17,7 @@ config:
   nu_min: 800.0                        # cm^-1 (12.5 um)
   obs_wl_hi: 12.0                      # um: keeps the 47 MIRI bins (centres to 11.98)
   prior_c_o: [-2.396, 0.24]            # C/O 0.05-0.70 about the 0.549 baseline: ln(0.05/0.549)
+  infer_noise_inflation: false
+  noise_inflation_per_group: false
   prior_Tirr: [400.0, 1500.0]
   prior_log10gamma: [-3.0, 1.0]

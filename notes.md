@@ -956,7 +956,12 @@ HPC
     integrated out. Level differences between the products [M]: NRS1 - F322W2 +71 ppm,
     NRS2 - F444W +267 ppm, F444W - F322W2 -83 ppm (Welbanks applied -81 ppm). The
     G102 bins skip 1.078-1.088 um (the He 1.083 um line); `obs_wl_lo` 1.02 keeps four.
-    MIRI is past the model band (5.26 um).
+    MIRI is left out (the maintainer decided): at the joint fit's certified columns it
+    shows the broad 6.5-11 um aerosol excess (+300 to +630 ppm against the WFC3/NIRCam
+    level, chi2/N ~10 [M]) that Welbanks fitted with a skewed-normal absorber and
+    Dyrek+2024 with silicates, a term this model lacks. Inputs and specs for a MIRI
+    extension at each product's published binning are in `data/w107b/` and `runs/w107b/`
+    (`*_miri*`, `w107b_g395h_r300`), not run.
   - System: Piaulet+2021 (arXiv:2011.13444): Mp 30.5 +- 1.7 M_E (lnM sigma 0.0557),
     R* 0.67 R_Sun, Teff 4425 K, a 0.0566 AU, so Teq 734 K and Tirr = sqrt 2 Teq =
     1038 K. `rp_cm` 6.6748e9 cm (Rp/Rs 0.1432 at 1 mbar), g there 272.9 cm s^-2; the
