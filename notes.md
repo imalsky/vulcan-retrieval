@@ -946,7 +946,11 @@ HPC
     R 100 with inverse-variance depth means (R 93-110). Welbanks: Zenodo 10780449,
     `FinalResults/FinalSpectra` (wavelength, half-width, depth, error): the Eureka!
     NIRCam spectra merged 2 (F322W2, R 82-131) or 3 (F444W, R 67-110) native 0.015 um
-    bins at a time (native R up to 336 is refused by the binning operator), the
+    bins at a time (the binning operator then refused native R above 333; it now refuses
+    only bins under two model bands, R > 500, since its trapezoid average stays within
+    0.16 sigma per bin and 0.15 in sum (D/sigma)^2 per product of the exact k-band
+    overlap average on native NIRCam and R300 G395H bins at 8 certified joint columns
+    [M]), the
     Pegasus WFC3 G141 and G102 as published. The files keep the reader's Rp/Rs layout.
     Six groups, G102 the offset reference; offsets (+-800 ppm) and inflations
     integrated out. Level differences between the products [M]: NRS1 - F322W2 +71 ppm,

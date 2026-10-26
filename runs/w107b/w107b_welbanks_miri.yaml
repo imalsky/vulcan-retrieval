@@ -5,7 +5,7 @@
 # offset (Delta_MIRI, prior -50..500 ppm, +282) raises the MIRI data to F444W's level
 # (MIRI sits ~250 ppm below it at 5 um); here an offset is added to the model, so the
 # same prior is -500..50 ppm. The joint spec's model; C/O floor 0.05 (his prior); the
-# band to 12.5 um. Not modelled: the 7-10 um aerosol term and a nitrogen freedom
+# band to 12.5 um. Not modelled: the 6-11 um aerosol term and a nitrogen freedom
 # (w107b_joint_miri). A base has no base of its own, so this restates w107b_welbanks's
 # keys (combo, the 22 h governor: fits gpu_normal's 24 h wall; resume to finish).
 #
