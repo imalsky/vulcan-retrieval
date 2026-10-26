@@ -1,0 +1,19 @@
+# WASP-107b on Sing+2024's NIRSpec G395H alone, binned to R300 per detector (the R100
+# bins of w107b_g395h dilute the 3.32 um CH4 band head; no bin spans a native gap), as
+# Sing fitted it: no NRS1/NRS2 offset, the published error bars as they are. The joint
+# spec's model and band; C/O floor 0.05 as in every MIRI-era run. One group, so nothing
+# is integrated. 22 h governor: fits gpu_normal's 24 h wall; resume to finish.
+#
+#   python tools/submit.py runs/w107b/w107b_g395h_r300.yaml --queue gpu_normal [--dry-run]
+base: w107b_joint.yaml
+config:
+  obs_products:
+    WFC3_NIRCam: [WFC3_G102.csv, WFC3_G141_20.csv, NIRCam_F322W2_native_m81ppm.csv, NIRCam_F444W_native.csv]
+    NIRSpec: [G395H_NRS1_R300.csv, G395H_NRS2_R300.csv]
+    MIRI: [MIRI_LRS.csv]
+  combo: [NIRSpec]
+  prior_c_o: [-2.396, 0.24]            # C/O 0.05-0.70 about the 0.549 baseline: ln(0.05/0.549)
+  infer_noise_inflation: false
+  noise_inflation_per_group: false
+  integrate_nuisance: false
+  walltime_seconds: 79200
