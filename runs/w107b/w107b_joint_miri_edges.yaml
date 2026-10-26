@@ -1,0 +1,24 @@
+# WASP-107b joint fit with MIRI and three prior edges widened: w107b_joint_miri's data and
+# band with the Tirr floor at 400 K, the C/O floor at 0.05 and the log10 gamma ceiling at
+# 1.0. These are the three edges the finished runs pressed (notes "Runs", w107b entry);
+# the run measures the shift in O/H, C/O and Kzz against w107b_joint_miri. Below ~450 K
+# the Tirr draws meet the 320 K opacity floor for about half the posterior and are
+# rejected as T-P-out, which is accepted.
+#
+#   python tools/submit.py runs/w107b/w107b_joint_miri_edges.yaml [--dry-run]
+base: w107b_joint.yaml
+config:
+  obs_products:
+    G102: [WFC3_G102.csv]
+    G141: [WFC3_G141.csv]
+    F322W2: [NIRCam_F322W2_native.csv]
+    F444W: [NIRCam_F444W_native.csv]
+    NRS1: [G395H_NRS1_R100.csv]
+    NRS2: [G395H_NRS2_R100.csv]
+    MIRI: [MIRI_LRS.csv]
+  combo: [G102, G141, F322W2, F444W, NRS1, NRS2, MIRI]
+  nu_min: 714.0                        # cm^-1 (14.0 um)
+  obs_wl_hi: 13.7
+  prior_Tirr: [400.0, 1500.0]
+  prior_c_o: [-2.396, 0.24]            # C/O 0.05-0.70 about the 0.549 baseline: ln(0.05/0.549)
+  prior_log10gamma: [-3.0, 1.0]

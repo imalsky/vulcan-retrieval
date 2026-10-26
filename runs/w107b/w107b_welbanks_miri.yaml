@@ -1,0 +1,21 @@
+# WASP-107b on Welbanks+2024's data at its published binning: WFC3 G102 + G141, NIRCam
+# F322W2 + F444W at their native 0.015 um bins and MIRI LRS as released (5.0-13.7 um, its
+# own offset and inflation). w107b_welbanks with MIRI: the joint spec's model and priors,
+# the band to 14.0 um. A base has no base of its own, so this restates w107b_welbanks's
+# keys (combo, the 22 h governor: fits gpu_normal's 24 h wall; resume to finish).
+#
+#   python tools/submit.py runs/w107b/w107b_welbanks_miri.yaml --queue gpu_normal [--dry-run]
+base: w107b_joint.yaml
+config:
+  obs_products:
+    G102: [WFC3_G102.csv]
+    G141: [WFC3_G141.csv]
+    F322W2: [NIRCam_F322W2_native.csv]
+    F444W: [NIRCam_F444W_native.csv]
+    NRS1: [G395H_NRS1_R100.csv]
+    NRS2: [G395H_NRS2_R100.csv]
+    MIRI: [MIRI_LRS.csv]
+  combo: [G102, G141, F322W2, F444W, MIRI]
+  nu_min: 714.0                        # cm^-1 (14.0 um)
+  obs_wl_hi: 13.7
+  walltime_seconds: 79200

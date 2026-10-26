@@ -1,0 +1,24 @@
+# WASP-107b joint fit with MIRI: w107b_joint's model, priors and solver settings on every
+# product at its published binning (the maintainer decided): Welbanks+2024's NIRCam F322W2
+# and F444W at their native 0.015 um bins (R 164-336) and MIRI LRS as released (58 bins,
+# 5.0-13.7 um, its own offset and inflation; G102 stays the offset reference); G395H at
+# R100 and WFC3 as in w107b_joint. The model band reaches 14.0 um (the k-tables cover
+# 0.3-50 um).
+#
+#   python tools/submit.py runs/w107b/w107b_joint_miri.yaml [--dry-run]
+#
+# 12 sampled parameters as w107b_joint; the 6 offsets and 7 noise inflations are
+# integrated out.
+base: w107b_joint.yaml
+config:
+  obs_products:
+    G102: [WFC3_G102.csv]
+    G141: [WFC3_G141.csv]
+    F322W2: [NIRCam_F322W2_native.csv]
+    F444W: [NIRCam_F444W_native.csv]
+    NRS1: [G395H_NRS1_R100.csv]
+    NRS2: [G395H_NRS2_R100.csv]
+    MIRI: [MIRI_LRS.csv]
+  combo: [G102, G141, F322W2, F444W, NRS1, NRS2, MIRI]
+  nu_min: 714.0                        # cm^-1 (14.0 um)
+  obs_wl_hi: 13.7
