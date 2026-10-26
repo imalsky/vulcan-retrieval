@@ -122,8 +122,8 @@ class Config:
     # Drop product bins finer than this R before they reach the binning operator.
     # Published R100 products carry truncation remnants where a masked region cuts a
     # bin short: they are a few times narrower than the nominal grid, carry a much
-    # larger sigma, and are fine enough that the missing LSF matters
-    # (observations._refuse_unresolved_products refuses them). 0 disables the cut.
+    # larger sigma, and come close to the model R, where the binning operator has no
+    # LSF (observations._refuse_unresolved_products). 0 disables the cut.
     obs_max_bin_R: float = 0.0
 
     # ---- T-P profile: exojax.atm.atmprof.atmprof_Guillot(P, g, kappa, gamma, Tint,

@@ -91,19 +91,21 @@ def test_binning_matrix_on_real_cm24_bins():
 
 
 def test_binning_matrix_refuses_a_product_near_the_model_resolution():
-    """No LSF is applied, so bins approaching the model band R are refused.
+    """No LSF is applied, so a bin narrower than two model bands is refused; one
+    about three bands wide (Welbanks+2024's native 0.015 um NIRCam bins, R up to
+    336 on the R1000 k-table grid) is admitted.
 
     A pure cell average is only faithful while the model is smooth across a bin;
     the sibling jwst tool applies an instrument response and this one does not.
     """
-    wl_model = np.geomspace(2.0, 5.0, 1500)            # R ~ 1636
-    fine = np.geomspace(3.0, 4.0, 400)                 # R ~ 1390, above R_model/3
+    wl_model = np.exp(np.arange(np.log(2.0), np.log(5.5), 1.0e-3))   # R 1000
+    fine = np.exp(np.arange(np.log(3.0), np.log(4.0), 1.7e-3))       # 1.7 bands per bin
     obs = {"wl_lo": fine[:-1], "wl_hi": fine[1:]}
     with pytest.raises(ValueError, match="line-spread"):
         OBS.build_binning_matrix(wl_model, obs)
 
-    coarse = np.geomspace(3.0, 4.0, 30)                # R ~ 100, comfortably coarse
-    OBS.build_binning_matrix(wl_model, {"wl_lo": coarse[:-1], "wl_hi": coarse[1:]})
+    lo = 2.45 + 0.015 * np.arange(173)                                # R 164-336
+    OBS.build_binning_matrix(wl_model, {"wl_lo": lo, "wl_hi": lo + 0.015})
 
 
 def test_offset_design_groups():

@@ -187,9 +187,11 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> Tuple[Dict[str, n
 
 
 # The model band resolution is set by the k-tables (ExoMolOP R1000). A cell
-# average is a faithful binning operator only when the data bins are much wider
-# than one model band; within this factor the missing LSF is a real error.
-_LSF_R_SAFETY = 3.0
+# average is a faithful binning operator only when a data bin spans at least this
+# many model bands; a narrower bin is below what the model resolves and the
+# missing LSF is a real error. Two admits Welbanks+2024's native 0.015 um NIRCam
+# bins (R up to 336, about three bands).
+_LSF_R_SAFETY = 2.0
 
 
 def _refuse_unresolved_products(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]) -> None:
@@ -225,9 +227,9 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: Dict[str, np.ndarray]
     JVP of a binned depth is B @ (JVP of native depth).
 
     NO INSTRUMENT LINE-SPREAD FUNCTION is applied: this is a pure cell average.
-    That is only defensible while the data bins are much coarser than the model
-    band resolution (the ExoMolOP R1000 grid), so the model is already smooth
-    across a bin. A product approaching the model's own R is refused rather than
+    That is only defensible while each data bin spans at least _LSF_R_SAFETY
+    model bands (the ExoMolOP R1000 grid), so the model is already smooth across
+    a bin. A product approaching the model's own R is refused rather than
     modelled without its LSF.
     """
     wl = _validated_model_wavelengths(wl_model_um)
