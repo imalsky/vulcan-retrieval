@@ -322,6 +322,10 @@ def certificate(out_dir) -> dict:
             "(the evidence and the other parameters' posterior are those of the sampled "
             "model); their posteriors are one conditional draw per row from the statistics "
             "the run logged, on the log10-b quadrature grid.")
+    if cfg.get("infer_lnM"):
+        caveats.append(
+            "lnM moves the planet mass in the RT only: the chemistry column keeps the "
+            "baseline mass M0, so its gravity does not vary with lnM.")
     if int(cfg.get("cold_lanes") or 0) > 0:
         caveats.append(
             "Lane queue: a draw that starts in a freed lane starts at that tick, so its "

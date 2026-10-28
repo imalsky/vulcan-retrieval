@@ -79,7 +79,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
 
     Returns SimpleNamespace with:
         native_depth_aux(chem_theta, lnR0) -> ((n_nu,) native transit depth, aux, ok)
-        rt_depth, aux_from_y, the cold and warm chemistry solves (single and batched)
+        rt_depth, aux_from_y, the chemistry solves (cold single, cold batched, warm batched)
         wl_um     : (n_nu,) native wavelengths (um)
         n_tp      : number of T-P parameters
         tp_model  : the tp_profile object (eval)
@@ -130,13 +130,14 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     he_col = chem.sidx["He"]          # H2-He CIA partner (He is inert in the network)
     species_masses = chem.species_masses
     # GAS-phase normalization: the network's condensed-phase reservoir columns
-    # (*_l_s) are particles, not gas. Counting them dilutes every gas VMR and
+    # (*_l_s, *_l, *_s: the names in vulcan3's conden.GAS_TO_CONDENSATE) are
+    # particles, not gas. Counting them dilutes every gas VMR and
     # inflates the RT mean molecular weight as if the condensate were vapor
     # (S8_l_s carries ~256 g/mol). The condensate's aerosol opacity is excluded:
     # that is the cloud deck's job.
     _gas = np.ones(int(np.asarray(species_masses).size))
     for _sp, _i in chem.sidx.items():
-        if _sp.endswith("_l_s"):
+        if _sp.endswith(("_l_s", "_l", "_s")):
             _gas[int(_i)] = 0.0
     gas_mask = jnp.asarray(_gas)
     p_art_bar_j = jnp.asarray(rt.p_art_bar)
