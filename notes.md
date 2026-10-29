@@ -17,8 +17,9 @@ sigma = posterior standard deviation, L = log-likelihood.
   the adiabat; "Design records"), the rejected-draw log and the certificate's derived
   quantities. 0.27.0 removed the SMC path and added the nautilus report (the last commit
   with SMC is `397d8bb`; "Superseded designs"). pyproject floors: vulcan-forward>=0.30.0,
-  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `490e822`, vulcan-forward
-  `c5770a4` (the v5 code; v4 ran on `a420570` / `acdf63e`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
+  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `2441e6c`, vulcan-forward
+  `0accd36` (the 2025 network; v5 ran on `490e822` / `c5770a4`, v4 on `a420570` /
+  `acdf63e`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
   refuses the former fork (same version string) and fails on stale metadata after a
   version bump until all three trees are reinstalled editable. TestPyPI releases, tags
   confirmed by the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0,
@@ -32,13 +33,18 @@ sigma = posterior standard deviation, L = log-likelihood.
   were deleted before a warm-vs-cold re-solve (the maintainer decided). The headline run
   is v5, finished with its report, warm-vs-cold and forward checks ("Runs",
   wasp39_test1), `runs/w39b_smc_retrieval/wasp39_test1.yaml` (run name `wasp39_test1`;
-  the external-review configuration; "Design records"), then four sensitivity variants
-  beside it; launch: `PBS_GROUP=<allocation>
+  the external-review configuration; "Design records"); launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
   specs; "Design records"), ran the same model at rtol 0.2 on the 2024 JWST and HST
   data: the three runs are finished ("Runs", w107b); the open work is in `todo.md`.
+- Network: `config.network`, required (no default); the base specs name the 2025 SNCHO
+  file (93 species). Every run up to v5 and the three WASP-107b runs solved the 2021
+  `SNCHO_photo_network.txt` (89): their config.json carries no `network`, so the report
+  and the forward checks refuse them until it is added; the `*_resolve` specs name it.
+  The finished runs are not rerun on the 2025 file, and the WASP-107b prior-edge rerun
+  (Tirr, C/O and log10 gamma edges widened) is not run (the maintainer decided).
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
   (`nautilus_report.write_certificate`); `python -m retrieval_framework.nautilus_report
   <out_dir> [--spectra N]` rewrites it and draws the run figures (the spectrum fit from
@@ -48,12 +54,10 @@ sigma = posterior standard deviation, L = log-likelihood.
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
   `test_set_observations`' production preflight and `test_v5_options`, every v5 option
-  on the real smoke pipeline). Counts [M]: the v4 tree, daw CPU `-n 16`, normal 79
-  passed / 1 skipped in 18 s, full 88 passed / 2 skipped in 4.5 min; the v5 tree
-  without the presolve chain, laptop CPU `-n 8`, normal 82 passed / 1 skipped in 15 s.
-  With the chain still in, `test_v5_options` and `test_cold_reject` passed (2 in 15.6
-  min of CPU). The full tier has not run on the tree without the chain (owed before
-  the v5 launch, `todo.md`).
+  on the real smoke pipeline). Counts [M], daw CPU `-n 8`, the 2025-network tree:
+  normal 104 passed / 1 skipped in 32 s, full 113 passed / 2 skipped / 1 xfailed in
+  5.6 min. The opt-in production preflight (with `test_group_noise`): 12 passed in
+  1.9 min, laptop CPU.
 
 ## Runs
 
@@ -733,8 +737,8 @@ HPC
     pressure, 18; compare Kzz at stated pressures, not the amplitude) and
     `wasp39_test1_adiabat` (an adiabat below a free boundary, 18). Each is compared
     with v5 on O/H and total metals, C/O, S/O, Kzz and SO2; their warm evidences are
-    approximate and compared only at matched programs. They wait on the paper plan
-    (the maintainer decided).
+    approximate and compared only at matched programs. Not run (the maintainer
+    decided); the specs stay.
   - The chemistry program: every draw is solved once, at rtol 0.05 within 5000
     accepted steps with photolysis every step, and only its VULCAN certificate keeps
     it; the presolve chain is removed (the maintainer decided). On the v4 target the
@@ -893,7 +897,11 @@ HPC
   of 1584); every failure is a cap exit, worst where the column is cool and metal-rich
   and weakly mixed (lowest T1bar quintile 21%, highest lnZ quintile 24%, lowest lnKzz
   quintile 36%, against 81-86% at the other ends). 81% of uniform v5 box draws leave
-  the T-P window (v5's first nautilus batch: 1277 of 1584), against ~4% for v4.
+  the T-P window (v5's first nautilus batch: 1277 of 1584), against ~4% for v4. The
+  first 16 in-window draws of `sample_prior_u(PRNGKey(0))` [M] (cold, `fast`, daw CPU):
+  5 certify on the 2021 file and 6 on the 2025 file, the same draws within 3% in steps
+  (the extra one at 4997); every failure is a cap exit on both, so the network is not
+  the cause. The production preflight evaluates the most strongly mixed of those 16.
 - Run certificate (`nautilus_report.certificate`, version 1): provenance (the run's
   target digest and manifest, code commits, dirty flags and `src_diff`, versions,
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,

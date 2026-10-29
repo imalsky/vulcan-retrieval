@@ -94,6 +94,11 @@ class Config:
     # VULCAN baseline config name for the chemistry pre-loop, loaded via
     # vulcan3.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
+    # The kinetics network, a vulcan3 path (thermo/...); no default: the spec names it
+    # (validate_config). Import-frozen: export_network selects it before vulcan3 is
+    # imported and the forward build refuses an engine frozen on another.
+    # thermo/SNCHO_photo_network.txt is the 2021 file every run before this key used.
+    network: str = ""
     # Planet/stellar radii for the RT depth normalization (cm).
     # tp_gravity_cgs below doubles as the RT's gravity at rp_cm; the planet mass
     # GM = g rp_cm^2 stays fixed when lnR0 scales the radius.
@@ -463,6 +468,24 @@ def hardware_profile() -> dict:
     return prof
 
 
+def export_network(cfg: Config) -> None:
+    """Select ``cfg.network`` for the engine. vulcan3 freezes the network at its
+    first import, so this runs before it; an unset network and an environment value
+    that disagrees are refused (the config decides)."""
+    if not str(cfg.network).strip():
+        raise ValueError("network is unset: name the kinetics network under config:, "
+                         "e.g. network: thermo/SNCHO_photo_network_2025.txt")
+    have = os.environ.get("VULCAN3_NETWORK")
+    if have is not None and have != cfg.network:
+        raise RuntimeError(f"VULCAN3_NETWORK={have!r} in the environment disagrees with "
+                           f"the config's network ({cfg.network!r}): unset it, the "
+                           "config decides")
+    if "vulcan3" in sys.modules and have is None:
+        raise RuntimeError("export_network: vulcan3 is already imported; select the "
+                           "network before the first vulcan3 import")
+    os.environ["VULCAN3_NETWORK"] = cfg.network
+
+
 def choose_solver() -> str:
     """Set VULCAN3_SOLVER for this process from the device, unless the user
     set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
@@ -550,6 +573,9 @@ def validate_config(cfg: Config) -> None:
     if not str(cfg.vulcan_cfg_name).strip():
         raise ValueError("vulcan_cfg_name is unset: the case must name its VULCAN "
                          "baseline config (e.g. 'W39b', loaded from vulcan3/configs/)")
+    if not str(cfg.network).strip():
+        raise ValueError("network is unset: the case must name its kinetics network "
+                         "(e.g. network: thermo/SNCHO_photo_network_2025.txt)")
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): "
                          "the case must set both (cm)")
@@ -593,6 +619,7 @@ def describe_config(cfg: Config, name: str = "") -> str:
         bar,
         rule("forward model"),
         f"    nz={cfg.nz}   band {wl_lo:.2f}-{wl_hi:.2f} um   art_nlayer={cfg.art_nlayer}",
+        f"    network: {cfg.network or '(UNSET)'}   baseline: {cfg.vulcan_cfg_name}",
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
         f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"

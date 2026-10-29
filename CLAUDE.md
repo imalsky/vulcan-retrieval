@@ -183,6 +183,12 @@ adopted".
   upper edge below the b_z bound (`build_retrieval_forward` raises).
 - No minichem and no self-made or pruned network; any published upstream network may
   be used (notes "Design records").
+- The network is `config.network` and has no default: every base spec names it
+  (`validate_config` refuses an unset one, `_config_from_json` a config.json without
+  it). It is import-frozen: every entry point that rebuilds a run calls
+  `config_schema.export_network(cfg)` before the first vulcan3 import, and the forward
+  build refuses an engine frozen on another. A re-solve of a finished run names that
+  run's network.
 
 ### Lanes and batching
 

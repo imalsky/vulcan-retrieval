@@ -13,7 +13,7 @@ atom_list:
 - S
 
 # ====== Setting up paths and filenames for the input and output files ======
-network: thermo/SNCHO_photo_network.txt
+network: thermo/SNCHO_photo_network_2025.txt
 # P 10 bar .. 1e-9 bar, a nominal Guillot T (replaced per draw), constant Kzz 1e9 cm^2/s
 atm_file: data/w107b/atm_W107b_Kzz.txt
 # MUSCLES v22 HD 85512 (the Welbanks+2024 proxy), scaled to sigma Teff^4 of WASP-107

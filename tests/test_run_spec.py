@@ -2,6 +2,7 @@
 parameter count it is documented with and to its derived output directory; a variant
 replaces its base's values one level deep, whole; a malformed file is refused by name;
 the runtime block is exported only when the environment does not contradict it;
+the forward build refuses an engine frozen on another network than the config's;
 tools/submit.py charges $PBS_GROUP and sets the wall from the spec's governor."""
 import runpy
 from pathlib import Path
@@ -14,7 +15,8 @@ from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
 from retrieval_framework import run_setup as R
 
-MINIMAL = {"vulcan_cfg_name": "W39b", "rp_cm": 1.0, "rstar_cm": 1.0}
+MINIMAL = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.txt",
+           "rp_cm": 1.0, "rstar_cm": 1.0}
 
 
 def _write(path: Path, doc) -> Path:
@@ -92,3 +94,12 @@ def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypa
         main([spec, "--dry-run", "--queue", "gpu_normal"])
     with pytest.raises(SystemExit, match="walltime_seconds"):
         main([str(_write(tmp_path / "t.yaml", {"config": MINIMAL})), "--dry-run"])
+
+
+def test_forward_build_refuses_an_engine_frozen_on_another_network():
+    """A run's network is its config's: a tool that rebuilt the run without
+    C.export_network would solve other chemistry, so the build refuses."""
+    from retrieval_framework import retrieval_forward as RF
+    RF._check_frozen_network(C.Config(**MINIMAL))          # what the test session froze
+    with pytest.raises(RuntimeError, match="export_network"):
+        RF._check_frozen_network(C.Config(**{**MINIMAL, "network": "thermo/SNCHO_photo_network.txt"}))

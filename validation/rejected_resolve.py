@@ -11,12 +11,14 @@ cls, the accepted steps acc, the chunk's start mode warm) and keeps the in-windo
 rejections (cls 1 exhausted, 2 stalled, 3 non-finite) with log10 Kzz below the cut, each
 point once, at most --per-bin of them per bin (seeded), as rejected_draws.npz in
 e2e_check's --u-from layout (u = logit z) with their class, steps and start mode. The
-cut spec is the run's spec with only count_max raised (runs/w107b/<run>_cut.yaml). The
+cut spec is the run's spec with only count_max raised, the run's network named
+(runs/w107b/<run>_cut.yaml). The
 re-solve is cold, through the production cold evaluator: the run rejected most of these
 draws warm (continued from the nearest anchor within its cap), and the cold map does not
 depend on the run's evaluation order.
 `compare` refuses a solve that does not hold the draws of the rejected_draws.npz beside
-it, or whose theta is not the run's prior map of its u (a spec with other priors), then bins the re-solved draws and the posterior rows in log10 Kzz
+it, whose network is not the run's, or whose theta is not the run's prior map of its u (a
+spec with other priors), then bins the re-solved draws and the posterior rows in log10 Kzz
 (BIN_DEX from the prior's lower edge to the cut; Kzz = KZZ0 e^lnKzz, the case's
 constant profile) and reports per bin: draws re-solved and certified, the certified
 draws' log L (median, max, how many reach the posterior rows' weighted median there)
@@ -118,6 +120,13 @@ def compare(args) -> int:
     fin = np.isfinite(Lp)
     lk_p = _log10kzz(post["theta"][:, j])
     meta = json.loads(str(e["meta"]))
+    if not cfg.get("network"):
+        raise RuntimeError(f"{out}/config.json names no network. A run written before "
+                           "`network` was a Config key solved thermo/SNCHO_photo_network.txt: add "
+                           "\"network\": \"thermo/SNCHO_photo_network.txt\" to it")
+    if meta.get("network") != cfg["network"]:
+        raise RuntimeError(f"{args.solved} solved {meta.get('network')!r} but the run solved "
+                           f"{cfg['network']!r}: the cut spec must name the run's network")
     sel = np.load(Path(args.solved).resolve().parent / "rejected_draws.npz")
     if not np.array_equal(sel["u"][e["rows"]], e["u"]):
         raise RuntimeError(f"{args.solved} does not hold the draws of rejected_draws.npz beside it")

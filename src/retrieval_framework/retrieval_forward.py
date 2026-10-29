@@ -23,6 +23,7 @@ Import order matters: ``vulcan_chem`` (env + jax x64) is imported before ``exoja
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -74,6 +75,19 @@ def _rtol_accept(chem) -> float | None:
     return None if st is None else float(st.rtol_accept)
 
 
+def _check_frozen_network(cfg: Any) -> None:
+    """The engine's import-frozen network must be the config's: a tool that
+    rebuilt a run without ``C.export_network`` would solve other chemistry."""
+    import vulcan3
+    from vulcan3 import chem_funs
+    frozen = Path(chem_funs._NETWORK.network_path).resolve()
+    want = (Path(vulcan3.__file__).parent / cfg.network).resolve()
+    if frozen != want:
+        raise RuntimeError(f"vulcan3 is frozen on {frozen} but the config's network is "
+                           f"{cfg.network!r}: call config_schema.export_network(cfg) "
+                           "before the first vulcan3 import")
+
+
 def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
     """Build the theta-space forward model for a Config.
 
@@ -85,6 +99,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:
         tp_model  : the tp_profile object (eval)
         chem, rt  : the engine's chemistry and RT models
     """
+    _check_frozen_network(cfg)
     profile = cfg.profile()
 
     # T-P first (grid-agnostic evaluator), then hook it into the chemistry so the VULCAN

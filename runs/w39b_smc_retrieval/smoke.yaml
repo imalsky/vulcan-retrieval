@@ -23,6 +23,7 @@ sampler:
 config:
   run_label: WASP-39b
   vulcan_cfg_name: W39b
+  network: thermo/SNCHO_photo_network_2025.txt
   nz: 30
   molecules: [CO]
   nu_min: 4280.0                       # cm^-1: the CO 2-0 band only

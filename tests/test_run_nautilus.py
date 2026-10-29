@@ -144,7 +144,8 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
 
 
-VALID = dict(vulcan_cfg_name="W39b", rp_cm=1.0, rstar_cm=10.0)
+VALID = dict(vulcan_cfg_name="W39b", network="thermo/SNCHO_photo_network_2025.txt",
+             rp_cm=1.0, rstar_cm=10.0)
 
 
 @pytest.mark.parametrize("over, msg", [
@@ -159,6 +160,7 @@ VALID = dict(vulcan_cfg_name="W39b", rp_cm=1.0, rstar_cm=10.0)
     (dict(kzz_mode="const"), "kzz_mode"),
     (dict(cloud_model="patchy"), "cloud_model"),
     (dict(infer_lnM=True, prior_lnM_sigma=0.0), "prior_lnM_sigma"),
+    (dict(network=""), "network is unset"),               # no default network
     # accepted: condensation with its explicit opt-in, and the v5 model choices
     (dict(cfg_overrides={"use_condense": True}, allow_condense_inference=True), None),
     (dict(tp_infer_Tint=True, tp_deep_param="T1bar", tp_adiabat=True, infer_s_o=True,

@@ -4,7 +4,7 @@ The evidence behind each item is in `notes.md` (sections named below); solver an
 items live in VULCAN3's and vulcan-forward's own `todo.md`. Two parts (the maintainer
 decided, notes "Design records"): the model, the checks and changes that make the
 pipeline right in general, comes first; everything about WASP-39b's results (the v5
-run, checks at its posterior draws, sensitivity runs, how a number is quoted) waits for
+run, checks at its posterior draws, how a number is quoted) waits for
 the paper plan, where those tests are designed together.
 
 Model
@@ -15,12 +15,10 @@ Paper: WASP-39b results (after the paper plan)
 
 2. [owed] The rate-range clamp at v5's hottest and coolest posterior draws (the external reviewer's ask; the +1.5% SO2 on the nominal column does not cover the T-window edges).
 3. [science] The conditioning map on v5 (the certificate's `conditioning` block) and what it means for the Kzz floor.
-4. [decision] The four sensitivity runs beside v5 (`wasp39_test1_kzz1000`, `_deck`, `_kzz_powerlaw`, `_adiabat`; specs ready, notes "Design records"): the paper decides which it reports.
 
 WASP-107b: Kzz from the two 2024 papers' data
 
-5. [owed] WASP-107b, before a Kzz number is quoted: the solver-cut test (re-solve the rejected in-window draws below log10 Kzz ~8.1 with a longer cap against the posterior's log L) and the rtol 0.05 re-solve of the posterior rows with the warm-vs-cold check, both on the three finished runs at their source.
-6. [decision] WASP-107b prior-edge rerun: a joint-fit variant with the Tirr edge lowered (the 320 K window meets ~400 K for half the posterior), the C/O floor below 0.1 and the log10 gamma ceiling above 0.3; about 24 GPU-h.
+4. [owed] WASP-107b, before a Kzz number is quoted: the solver-cut test (re-solve the rejected in-window draws below log10 Kzz ~8.1 with a longer cap against the posterior's log L) and the rtol 0.05 re-solve of the posterior rows with the warm-vs-cold check, both on the three finished runs at their source.
 
 ## 1. End-to-end check
 
@@ -56,17 +54,7 @@ reported as an upper limit or those draws are certified with a longer budget (a 
 change, the maintainer's call). v4 wrote no log. Done when the statement is in "Physics
 assumptions and limitations".
 
-## 4. Sensitivity runs
-
-Evidence: notes "Design records" (the four variants, their order and what each is
-compared on). The external review asked for each; the reply to the reviewer promised
-them. Each answers whether a modelling choice moves a headline number, so the paper
-decides which it reports (a sensitivity table: O/H, total metals, C/O, S/O, Kzz, SO2,
-evidence difference; an evidence difference needs cold runs and >= 3 seeds). One submit
-each, `python tools/submit.py runs/w39b_smc_retrieval/<name>.yaml`, at v5's code. Done
-when each run that the paper uses has its row.
-
-## 5. WASP-107b: the solver-cut test and the re-solve
+## 4. WASP-107b: the solver-cut test and the re-solve
 
 Evidence: notes "Runs" (the w107b entry: the Kzz plateau whose lower edge sits on the
 solver cut, the rejected fraction per bin) and "Design records" (the case; the
@@ -107,18 +95,3 @@ so about 3 h per run for (2) if the slowest lanes reach the cap, and at most ~7 
 run for (1) (two cold stages of up to 30000 steps per draw). One GPU job per run in
 the v5 postrun job's environment, its log under `scratch/` (`qsub -o`). Done when both
 results are in "Runs".
-
-## 6. WASP-107b: the prior-edge rerun
-
-Evidence: notes "Runs" (the w107b entry: Tirr at the 600 K edge, C/O at the 0.10
-floor, log10 gamma at the +0.30 ceiling, T(1 bar) against the ~1680 K window ceiling,
-the window's own Tirr floor) and "Design records" (the case). One joint-fit variant
-spec (`base: w107b_joint.yaml`) with the Tirr edge lowered, the C/O floor below 0.1 and
-the log10 gamma ceiling above 0.3; cold-certify columns at the new prior corners before
-submitting, as was done for the case; `python tools/submit.py runs/w107b/<name>.yaml`
-(about 24 GPU-h on gpu_long; rtol 0.2 like the runs, so item 5's re-solve applies to it
-too). Lowering Tirr below ~450 K trades the prior edge for the window edge for about
-half the posterior, so the shift it can show is bounded; the 10 bar bottom is a
-separate variant if wanted. Reported as the shifts in O/H, C/O and Kzz against the
-joint fit; a shift inside the 68% widths is not evidence without seeds. Closes when the
-maintainer decides to run it or not; the decision goes to "Design records".

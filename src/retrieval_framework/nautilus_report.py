@@ -418,6 +418,9 @@ def _config_from_json(path: Path) -> C.Config:
     d = json.loads(Path(path).read_text())
     names = {f.name for f in fields(C.Config)}
     kw = {k: tuple(v) if isinstance(v, list) else v for k, v in d.items() if k in names}
+    if not kw.get("network"):
+        raise ValueError(f"{path} names no network. A run written before `network` was a "
+                         "Config key solved thermo/SNCHO_photo_network.txt: add \"network\": \"thermo/SNCHO_photo_network.txt\" to it")
     for k in ("out_dir", "obs_dir"):
         if kw.get(k) is not None:
             kw[k] = Path(kw[k])
@@ -430,12 +433,13 @@ def model_spectra(out_dir, n: int):
     (module docstring). With integrated nuisances the depth carries each row's
     drawn offsets and the multiplier its drawn inflations; otherwise theta holds
     both (the multiplier is None)."""
+    out = Path(out_dir).resolve()
+    cfg = _config_from_json(out / "config.json")
+    C.export_network(cfg)                        # before vulcan3 is imported
     import jax
     import jax.numpy as jnp
 
     from retrieval_framework import pipeline as P
-    out = Path(out_dir).resolve()
-    cfg = _config_from_json(out / "config.json")
     post = np.load(out / "nautilus_posterior.npz")
     rng = np.random.default_rng(int(cfg.seed) + 1)
     theta = np.asarray(post["theta"], np.float64)

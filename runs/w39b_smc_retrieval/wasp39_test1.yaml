@@ -39,7 +39,8 @@ config:
   # ---- identity ---------------------------------------------------------------
   run_label: WASP-39b
   seed: 20260704                       # nautilus and the synthetic injection; one file per seed
-  vulcan_cfg_name: W39b                # chemistry baseline: vulcan3/configs/W39b.yaml (network, 10x solar, Kzz profile)
+  vulcan_cfg_name: W39b                # chemistry baseline: vulcan3/configs/W39b.yaml (10x solar, Kzz profile)
+  network: thermo/SNCHO_photo_network_2025.txt   # required; v5 ran thermo/SNCHO_photo_network.txt
 
   # ---- forward model ------------------------------------------------------------
   nz: 100                              # chemistry layers, log-uniform over 1e-9..7.6 bar (10.1 per decade)

@@ -402,6 +402,7 @@ def main(argv=None) -> None:
         print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
         return
     export_runtime(spec.runtime)       # before the first jax / vulcan3 import
+    C.export_network(cfg)
     lanes = int(cfg.cold_lanes)
     if spec.runtime.solver == "ffi":
         lanes *= FFI_BLOCKS_PER_SM

@@ -38,7 +38,6 @@ import argparse
 import json
 import logging
 import math
-import os
 import sys
 import time
 from dataclasses import replace
@@ -98,14 +97,16 @@ def run(args) -> int:
     if json.loads((out / "config.json").read_text()).get("chem_presolve"):
         raise RuntimeError(f"{out} ran the presolve chain, removed after vulcan-retrieval "
                            "0a2dbf3: check its draws at that commit")
-    if args.variant == "network2025":
-        os.environ["VULCAN3_NETWORK"] = NETWORK_2025    # before any vulcan3 import
-    from vulcan_forward import vulcan_chem  # noqa: F401  (import order)
     from retrieval_framework import config_schema as C
-    from retrieval_framework import pipeline as P
     from retrieval_framework.nautilus_report import _config_from_json
 
     cfg = _config_from_json(out / "config.json")
+    if args.variant == "network2025":
+        cfg = replace(cfg, network=NETWORK_2025)
+    C.export_network(cfg)                   # before any vulcan3 import
+    from vulcan_forward import vulcan_chem  # noqa: F401  (import order)
+    from retrieval_framework import pipeline as P
+
     settings = {"variant": args.variant, "run": str(out), "draws": int(args.draws),
                 "seed": int(args.seed)}
     if args.variant == "dayside":

@@ -147,6 +147,8 @@ def solve(args) -> int:
     from retrieval_framework.run_setup import load_spec, set_observations
     spec = load_spec(args.spec)
     rt = _set_environment(spec, args.rung)
+    from retrieval_framework.config_schema import export_network
+    export_network(spec.cfg)                # before vulcan3 is imported
     from vulcan_forward import vulcan_chem  # noqa: F401  (import order)
     import jax
     import jax.numpy as jnp
@@ -202,7 +204,8 @@ def solve(args) -> int:
     sidx = pipe.fwd.chem.sidx
     Yn = np.asarray(Y, np.float64)[inv]
     vmr = Yn / Yn.sum(axis=2, keepdims=True)
-    meta = dict(rung=args.rung, spec=str(spec.path), seed=args.seed, draws=args.draws,
+    meta = dict(rung=args.rung, spec=str(spec.path), network=spec.cfg.network,
+                seed=args.seed, draws=args.draws,
                 posterior=str(args.posterior or ""),
                 rows=args.rows, lanes=lanes, runtime=rt.env(), n_corners=len(C),
                 device=str(jax.devices()[0]), provenance=_artifact.collect_provenance())

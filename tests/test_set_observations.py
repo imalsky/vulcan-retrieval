@@ -77,7 +77,13 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     assert pipe.n_bin == obs["wl"].size >= 4
     assert pipe.target_digest, "the run carries no target identity"
 
-    U = pipe.sample_prior_u(jax.random.PRNGKey(0), 1)
+    # A cold solve certifies only about half of the prior draws within count_max,
+    # every failure a cap exit in a cool, metal-rich or weakly mixed column (notes
+    # "Design records"), so the check takes the most strongly mixed of 16 draws.
+    U16 = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)
+    lnkzz = np.asarray(jax.vmap(pipe.theta_from_u)(U16))[:, list(pipe.names).index("lnKzz")]
+    k = int(np.argmax(lnkzz))
+    U = U16[k:k + 1]
     Y0, refs0 = P._blank_state(pipe, 1)
     logl = float(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(1, bool))[0][0])
     assert np.isfinite(logl) and logl > P.REJECT_BELOW, f"non-finite/rejected likelihood: {logl}"
@@ -87,14 +93,18 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     sys.path.insert(0, str(RUN_DIR.parent.parent / "validation"))
     from opacity_leave_one_out import states_for
     st = states_for(pipe, n_prior=2)
-    assert st.shape == (3, pipe.n_dim)                     # nominal + 2 prior draws
-    assert np.all(st >= pipe.param_prior_lo) and np.all(st <= pipe.param_prior_hi)
+    # the nominal state (u = 0) only when its T-P is in the window (v5's is not)
+    nominal = int(bool(pipe.tp_valid(pipe.theta_from_u(jax.numpy.zeros(pipe.n_dim)))))
+    assert st.shape == (nominal + 2, pipe.n_dim)           # nominal + 2 prior draws
+    box = np.asarray(pipe.prior_types) != "gaussian"       # gaussian: lo, hi = mean, sigma
+    assert np.all(st[:, box] >= pipe.param_prior_lo[box])
+    assert np.all(st[:, box] <= pipe.param_prior_hi[box])
     assert all(bool(pipe.tp_valid(t)) for t in st), "a screened state is off-window"
 
     post = tmp_path / "nautilus_posterior.npz"
     np.savez(post, param_names=np.asarray(pipe.names, dtype="<U64"),
              samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
-    assert states_for(pipe, 2, post).shape == (5, pipe.n_dim)
+    assert states_for(pipe, 2, post).shape == (nominal + 4, pipe.n_dim)
     np.savez(post, param_names=np.asarray(list(pipe.names)[::-1], dtype="<U64"),
              samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
     with pytest.raises(RuntimeError, match="different target"):

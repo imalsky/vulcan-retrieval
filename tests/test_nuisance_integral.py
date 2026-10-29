@@ -24,7 +24,8 @@ from retrieval_framework.run_nautilus import make_loglike, nuisance_posterior  #
 
 GROUPS = ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
 SIZES = (91, 30, 29)                                  # v5's bins per group
-BASE = C.Config(molecules=("H2O",), vulcan_cfg_name="W39b", infer_noise_inflation=True,
+BASE = C.Config(molecules=("H2O",), vulcan_cfg_name="W39b",
+                network="thermo/SNCHO_photo_network_2025.txt", infer_noise_inflation=True,
                 noise_inflation_per_group=True, integrate_nuisance=True)
 
 

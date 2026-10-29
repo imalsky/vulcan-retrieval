@@ -22,7 +22,8 @@ TALLY = {"n_eval": 1000, "tp_out": 100, "exhausted": 40, "stalled": 5, "nonfinit
 
 def _run_dir(out):
     rng = np.random.default_rng(0)
-    cfg = asdict(C.Config(molecules=("H2O",), vulcan_cfg_name="W39b", cold_lanes=8))
+    cfg = asdict(C.Config(molecules=("H2O",), vulcan_cfg_name="W39b",
+                          network="thermo/SNCHO_photo_network_2025.txt", cold_lanes=8))
     cfg.update(inferred_param_names=NAMES, inferred_param_labels=NAMES,
                inferred_param_truth=[float("nan")] * len(NAMES))
     (out / "config.json").write_text(json.dumps(cfg, default=str))

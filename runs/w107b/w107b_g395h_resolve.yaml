@@ -8,3 +8,4 @@ config:
   walltime_seconds: 79200
   cfg_overrides: {rtol: 0.05, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
   count_max: 30000
+  network: thermo/SNCHO_photo_network.txt     # the run's own; the base names the 2025 file

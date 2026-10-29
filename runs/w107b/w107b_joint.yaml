@@ -32,6 +32,7 @@ config:
   # the case's own vulcan3 config (a path from the repo root): SNCHO network, 10x solar
   # baseline, 10 bar .. 1e-9 bar, constant Kzz 1e9 cm^2/s, the HD 85512 UV proxy
   vulcan_cfg_name: data/w107b/W107b.yaml
+  network: thermo/SNCHO_photo_network_2025.txt   # required; the three finished runs ran thermo/SNCHO_photo_network.txt
 
   # ---- forward model (as v5) ----------------------------------------------------
   nz: 100                              # log-uniform over 1e-9..10 bar (10 per decade)

@@ -203,6 +203,9 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     ident["data_root_resolved"] = str(root) if root is not None else None
 
     # the reaction network is a vendored VULCAN-JAX input; hash the exact file
+    netfile = cfg_dict.get("network")
+    if not netfile:
+        ident["network_file_error"] = "config.json names no network"
     net = cfg_dict.get("vulcan_cfg_name")
     ident["vulcan_cfg_name"] = net
     try:
@@ -218,12 +221,9 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
         if cfg_yaml.is_file():
             ident["vulcan_config_yaml"] = {"path": str(cfg_yaml),
                                            "sha256": _sha256(cfg_yaml)}
-            import yaml
-            netfile = yaml.safe_load(cfg_yaml.read_text()).get("network")
-            npath = pkg / netfile if netfile else None
-            if npath and npath.is_file():
-                ident["network_file"] = {"path": str(npath),
-                                         "sha256": _sha256(npath)}
+        npath = pkg / netfile if netfile else None
+        if npath is not None and npath.is_file():
+            ident["network_file"] = {"path": str(npath), "sha256": _sha256(npath)}
     # broad: a provenance collector records any failure instead of raising
     except Exception as exc:                                # pragma: no cover
         ident["network_file_error"] = str(exc)
