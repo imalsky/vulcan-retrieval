@@ -4,6 +4,7 @@ replaces its base's values one level deep, whole; a malformed file is refused by
 the runtime block is exported only when the environment does not contradict it;
 the forward build refuses an engine frozen on another network than the config's;
 tools/submit.py charges $PBS_GROUP and sets the wall from the spec's governor."""
+import importlib.util
 import runpy
 from pathlib import Path
 
@@ -96,6 +97,10 @@ def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypa
         main([str(_write(tmp_path / "t.yaml", {"config": MINIMAL})), "--dry-run"])
 
 
+# find_spec, not importorskip: importing exojax before vulcan_chem breaks the
+# import-order guard for every later test in the worker.
+@pytest.mark.skipif(importlib.util.find_spec("exojax") is None,
+                    reason="needs exojax (retrieval_forward); CI is stack-free")
 def test_forward_build_refuses_an_engine_frozen_on_another_network():
     """A run's network is its config's: a tool that rebuilt the run without
     C.export_network would solve other chemistry, so the build refuses."""
