@@ -202,8 +202,9 @@ unless stated.
   matches the numbers above. It, the warm-vs-cold check and the forward checks ("Physics
   assumptions and limitations") ran at vulcan-retrieval ea0b96b, which differs from the
   launch commit only outside `src/` and `validation/` (vulcan3 and vulcan-forward at the
-  launch commits). The rate clamp at the T extremes and the conditioning map are still
-  owed (`todo.md`).
+  launch commits). The rate clamp at the T extremes is under "Physics assumptions and
+  limitations". The conditioning map was not computed: it needs the run's `anchors/`,
+  which only the NAS copy keeps, and the maintainer dropped it.
 
 ### w107b_joint, w107b_welbanks, w107b_g395h (jobs 96955, 96957, 96956 + 97202)
 - The WASP-107b case ("Design records"): v5's model at rtol 0.2 within 5000, 528 lanes,
@@ -251,9 +252,10 @@ unless stated.
   had the certified ones' likelihood [E], moves the joint weight below 10^8.1 from 0.15
   to 0.19 (G395H 0.22 to 0.26): under that assumption the cut shapes the tail, not the
   bulk; if the rejected draws recover higher likelihoods than their certified
-  neighbours the bulk moves too. The test of the cut is a re-solve of the rejected
-  in-window draws below ~10^8.1 with a longer cap against the posterior's log L, not a
-  re-solve of the posterior rows (`todo.md`).
+  neighbours the bulk moves too. The test of the cut (a re-solve of the rejected
+  in-window draws below ~10^8.1 with a longer cap against the posterior's log L) and
+  the rtol 0.05 re-solve of the posterior rows are not run (the maintainer decided): a
+  quoted WASP-107b Kzz carries the solver cut as a caveat.
   Across the fits every pairwise 68% interval overlaps for every quantity; the largest
   offset is C/O, 0.135 (Welbanks's bands, on the 0.10 floor) against 0.309 (G395H),
   1.5 sigma on the 68% half-widths in the log; O/H differs by <= 0.5 sigma, log10 Kzz
@@ -613,10 +615,13 @@ Sampler and policy
   3e4 / 1e4 gave open-ended init tails (64073, 64163); 29% stayed censored at 20000.
 - Override keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the
   exceptions; `run_nautilus` refuses a resume across a digest or setting change): no
-  measurement. The manifest (`manifest_version` 4; the version also moves when the
+  measurement. The manifest (`manifest_version` 5; the version also moves when the
   evaluators' keep/reject logic changes at a fixed config) also binds the solver choices
   `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS` and `VULCAN3_BT_BUFFERS`, so a resume cannot
-  switch them (design; not every one moves results).
+  switch them (design; not every one moves results), and since version 5 the sha256 of
+  the case's vulcan3 config and of the atm and stellar-flux files it names
+  (`provenance.case_inputs`, resolved as vulcan3 resolves them): a path-style case
+  (`data/...`, the survey and WASP-107b) lives outside every tree the code state binds.
 - Quote from the weighted points: `nautilus_posterior.npz`'s `samples` come from
   `sampler.posterior(equal_weight=True)` (`run_nautilus.main`), which draws about
   sum(w)/max(w) samples (256 for 90302) [M].
@@ -785,8 +790,11 @@ HPC
   rejected draw with its class (`rejected/*.npz`: the unit-cube point, the class, the
   accepted steps and the start mode per chunk), and the certificate's `derived` block
   holds the weighted 16/50/84% quantiles the paper quotes (O/H and total-metals
-  metallicity, C/O, S/O, the Kzz factor with the weights below x0.2 / x0.15 and above
-  x10 and the x10-truncated posterior, T at the deep level and Tint).
+  metallicity, C/O, S/O, the Kzz factor and log10 Kzz at 1 mbar on the case's own
+  profile, the weights below 1.5x and 2x the prior's Kzz floor (v5: x0.15 and x0.2), on
+  W39b's profile the weight above x10 and the x10-truncated posterior, T at the deep
+  level and Tint). The x10 is the Tsai+2023 GCM's full-H w_rms, so no other case has a
+  ceiling (`nautilus_report.KZZ_CEILING_X`).
 - Storage convention (the maintainer's, with an outside design review): code, tests,
   the inputs a run needs and the validation scripts are tracked; everything generated is
   not. `runs/<case>/` holds inputs only (the run specification files);
@@ -892,7 +900,9 @@ HPC
   good-fit |dlogL| <= 3e-4, 3 flips; one poor fit (row 1352, 171 nats below the best;
   lnZ 1.25, lnKzz 3.13, T1bar 979 K) differs by 1.24 sigma in one bin and 0.14 dex.
   The CLI under ffi + grouped against the CPU port: W39b 4.6e-8 dex, HD189 1.6e-7 dex,
-  both at their gate step counts (1202, 1495).
+  both at their gate step counts (1202, 1495). The rest of the ladder (the
+  one-at-a-time GPU rung, the daw CPU rungs, a replay of row 1352 under ffi and fast) is
+  not run (the maintainer decided).
 - Cold certification of in-window v5 prior draws at count_max 5000 [M]: 57% (885-908
   of 1584); every failure is a cap exit, worst where the column is cool and metal-rich
   and weakly mixed (lowest T1bar quintile 21%, highest lnZ quintile 24%, lowest lnKzz
@@ -1032,8 +1042,9 @@ HPC
   prior-rail check). v4 is not quotable (its outputs are deleted, never re-solved cold).
 - Beside the v5 posterior, report: the accepted joint prior of T1bar (the irradiation
   term and the window reshape the uniform prior); the certificate's `derived` block
-  (metallicity as O/H and as total metals, C/O, S/O, the Kzz factor with the weight at
-  the floor and above x10 and the x10-truncated posterior, T at 1 bar and Tint); that
+  (metallicity as O/H and as total metals, C/O, S/O, the Kzz factor and log10 Kzz at 1
+  mbar with the weights near the floor, the weight above x10 and the x10-truncated
+  posterior, T at 1 bar and Tint); that
   lnM acts in the RT only while the chemistry column keeps M0; the warm-vs-cold
   check: a weighted subsample of 500 to 1000 posterior draws re-solved cold through the
   production chain at unchanged tolerances; and the forward checks below. logZ_box is comparable only between runs
@@ -1082,6 +1093,14 @@ HPC
 - 194 of 513 thermal rates run outside their documented T range in >= 1 layer (SO + OH
   is a smooth power law): disclose. Rate uncertainty matches the statistical error on
   metallicity ("Rate sensitivities").
+  - The one-sided clamp (each forward Arrhenius term of the 345 ranged rates at
+    min(T, its upper edge)) at v5's T extremes [M] (`scratch/rate_clamp/clamp_extremes.py`,
+    daw CPU, cold, the 2021 network v5 ran): the 4 coolest and 4 hottest of a 4000-row
+    weighted resample in T1bar (1336-1396 K, 2650-2776 K) and in Tirr (737-809 K,
+    1233-1283 K); 13 of 16 certify with and without (the other 3 with neither). Worst
+    bin 0.034 sigma (median 0.007), SO2 band <= 0.059 band sigma, CO2 band <= 0.012;
+    SO2 at its peak -0.16% to +1.43%, at most 0.24 dex in one layer. Negligible at the
+    edges, as on the nominal column (VULCAN3 notes P16).
 - k-table floor 1e-5 bar: <= 1.53 ppm per node. T-P table constant fill above 5.35e-6
   bar: a +-200 K ramp moves the depth 17.5 / 68.0 ppm (a bracket).
 - Known and deliberately untracked:

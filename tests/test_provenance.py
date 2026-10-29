@@ -110,8 +110,8 @@ def test_target_digest_binds_code_state_not_file_churn(state, moves, digest_pipe
 
 
 def test_target_digest_binds_the_cia_tables(digest_pipe, monkeypatch):
-    """The CIA tables are the only target-affecting input outside git, so nothing
-    else can notice a swapped continuum."""
+    """The CIA tables are outside git, so nothing else can notice a swapped
+    continuum."""
     cfg = C.Config(molecules=("H2O",))
     monkeypatch.setattr(provenance, "_cia_identity",
                         lambda *a, **k: {n: {"sha256": "1" * 64}
@@ -150,3 +150,29 @@ def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
     assert clean != one != two and clean != two, "untracked src content unbound"
     (repo / "src" / "new_module.py").unlink()
     assert _src_state(repo) == clean
+
+
+def test_target_digest_binds_a_path_style_case_and_its_files(digest_pipe, tmp_path,
+                                                             monkeypatch):
+    """A path-style case (`vulcan_cfg_name: data/<case>/X.yaml`) and the atm and
+    stellar-flux files it names live outside every tree the code state binds, so
+    an edit to any of them must refuse a resume; the shipped cases resolve all
+    three files as vulcan3 does, from the repo root."""
+    repo = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(tmp_path)
+    case = tmp_path / "data" / "c"
+    case.mkdir(parents=True)
+    (case / "atm.txt").write_text("atm\n")
+    (case / "sflux.txt").write_text("flux\n")
+    (case / "C.yaml").write_text("atm_file: data/c/atm.txt\nsflux_file: data/c/sflux.txt\n")
+    cfg = C.Config(molecules=("H2O",), vulcan_cfg_name="data/c/C.yaml")
+    d0 = provenance.target_digest(cfg, digest_pipe)
+    for f in ("atm.txt", "sflux.txt", "C.yaml"):
+        (case / f).write_text((case / f).read_text() + "# edited\n")
+        d1 = provenance.target_digest(cfg, digest_pipe)
+        assert d1 != d0, f"{f} not bound"
+        d0 = d1
+    monkeypatch.chdir(repo)
+    for name in ("W39b", "data/w107b/W107b.yaml"):
+        got = provenance.case_inputs(name, {})
+        assert all(got[k] for k in ("config", "atm_file", "sflux_file")), (name, got)

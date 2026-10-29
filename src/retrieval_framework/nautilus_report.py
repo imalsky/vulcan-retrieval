@@ -10,9 +10,10 @@ nautilus_tally.json, nautilus_posterior.npz) and writes
                                 the rejection tally as fractions, the start mode,
                                 the chemistry settings, plain-English caveats and
                                 the derived quantities (metallicity as O/H and as
-                                total metals, C/O, S/O, the Kzz factor with the
-                                weight at its floor and above x10 and the
-                                posterior truncated at x10, T at the deep level
+                                total metals, C/O, S/O, the Kzz factor and the
+                                absolute Kzz at 1 mbar, the weight near the
+                                prior floor, on W39b's profile the weight above
+                                x10 and the posterior truncated at x10, T at the deep level
                                 and Tint; integrated offsets and noise
                                 inflations), weighted 16/50/84% quantiles, and
                                 the conditioning map (where the rejected draws sit)
@@ -50,6 +51,7 @@ import numpy as np
 from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
 from retrieval_framework import provenance
+from vulcan_forward.constants import KZZ_P_REF_BAR   # the engine's Kzz reference level
 
 log = logging.getLogger("retrieval")
 
@@ -108,7 +110,12 @@ def _wquant(x, w, qs=(0.16, 0.5, 0.84)) -> list:
 # Lodders (2020) present-day photospheric log eps (the vulcan3 .dat header
 # cites its Table 8); the total-metals factor weighs C and S by their knobs.
 LODDERS2020_LOG_EPS = {"C": 8.47, "N": 7.85, "O": 8.73, "S": 7.15}
-KZZ_FLOOR_X, KZZ_LOW_X, KZZ_TRUNCATE_X = 0.15, 0.2, 10.0
+# Kzz weights near the prior floor are taken at these multiples of the spec's
+# prior_lnKzz lower edge (v5: x0.15 and x0.2 on its x0.1 floor). A ceiling is a
+# property of a case's profile: x10 on W39b's Tsai+2023 profile is the GCM's full-H
+# w_rms (notes "Design records"); no other case has one.
+KZZ_FLOOR_MULTIPLES = (1.5, 2.0)
+KZZ_CEILING_X = {"W39b": 10.0}
 COND_BINS = 10                           # equal bins over each prior box in the map
 COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
 
@@ -152,13 +159,35 @@ def tp_curve(t, names, cfgj, p_bar):
     return T
 
 
+def _kzz_at_ref(cfgj) -> float:
+    """The case's base Kzz (cm^2/s) at KZZ_P_REF_BAR, the value e^lnKzz scales
+    (the power law anchors on it too): vulcan3's `const_Kzz`, or its atm file's
+    Kzz column interpolated linearly in pressure as vulcan3 puts it on its grid
+    (`atm_setup._interp_descending_or_ascending`), as the case's `Kzz_prof` says."""
+    over = cfgj.get("cfg_overrides") or {}
+    _, case = provenance.case_config(cfgj["vulcan_cfg_name"])
+    prof = over.get("Kzz_prof", case["Kzz_prof"])
+    if prof == "const":
+        return float(over.get("const_Kzz", case["const_Kzz"]))
+    if prof != "file":
+        raise ValueError(f"Kzz_prof {prof!r}: the report reads only 'file' or 'const'")
+    atm = provenance.case_data_file(over.get("atm_file", case["atm_file"]))
+    t = np.genfromtxt(atm, names=True, dtype=None, skip_header=1)
+    p = np.asarray(t["Pressure"], np.float64) / 1e6                # dyne/cm^2 -> bar
+    if not p.min() <= KZZ_P_REF_BAR <= p.max():
+        raise ValueError(f"{atm} does not span {KZZ_P_REF_BAR} bar")
+    o = np.argsort(p)
+    return float(np.interp(KZZ_P_REF_BAR, p[o], np.asarray(t["Kzz"], np.float64)[o]))
+
+
 def derived_quantities(out_dir) -> dict | None:
     """Weighted 16/50/84% quantiles of the quantities the paper quotes, from
     nautilus_posterior.npz (None before the run finishes): metallicity as
     O/H and as total metals (C and S at their own knobs), C/O, S/O, the Kzz
-    factor with the weight below x0.2, at the x0.1 floor (below x0.15) and
-    above x10, the posterior truncated at Kzz <= x10, T at the deep level and
-    Tint (reconstructed when T1bar is the parameter)."""
+    factor and the absolute log10 Kzz at KZZ_P_REF_BAR, the weight below
+    KZZ_FLOOR_MULTIPLES of the prior floor, on a case with a ceiling
+    (KZZ_CEILING_X) the weight above it and the posterior truncated at it, T at
+    the deep level and Tint (reconstructed when T1bar is the parameter)."""
     out = Path(out_dir).resolve()
     if not (out / "nautilus_posterior.npz").exists():
         return None
@@ -178,6 +207,7 @@ def derived_quantities(out_dir) -> dict | None:
     z_o = base * np.exp(lnZ)
     tot = eps["O"] + eps["N"] + eps["S"] * np.exp(s_o) + eps["C"] * np.exp(c_o)
     kzz = np.exp(col("lnKzz"))
+    floor = float(np.exp(cfgj["prior_lnKzz"][0]))
     d = {
         "quantiles": [0.16, 0.5, 0.84],
         "metallicity_O_H_solar": _wquant(z_o, w),
@@ -185,14 +215,18 @@ def derived_quantities(out_dir) -> dict | None:
         "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o), w),
         "S_to_O_solar": _wquant(np.exp(s_o), w) if "s_o" in names else None,
         "kzz_factor": _wquant(kzz, w),
-        "kzz_weight_below_x0.2": float(w[kzz < KZZ_LOW_X].sum()),
-        "kzz_weight_below_x0.15": float(w[kzz < KZZ_FLOOR_X].sum()),
-        "kzz_weight_above_x10": float(w[kzz > KZZ_TRUNCATE_X].sum()),
+        "kzz_ref_p_bar": KZZ_P_REF_BAR,
+        "log10_kzz_ref_cgs": _wquant(np.log10(_kzz_at_ref(cfgj) * kzz), w),
+        "kzz_prior_floor_factor": floor,
+        **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum())
+           for m in KZZ_FLOOR_MULTIPLES},
     }
-    keep = kzz <= KZZ_TRUNCATE_X
-    if keep.any():
+    ceil = KZZ_CEILING_X.get(cfgj["vulcan_cfg_name"])
+    keep = kzz <= (np.inf if ceil is None else ceil)
+    if ceil is not None and keep.any():
         wt = w[keep] / w[keep].sum()
-        d["truncated_kzz_le_x10"] = {
+        d[f"kzz_weight_above_x{ceil:g}"] = float(w[~keep].sum())
+        d[f"truncated_kzz_le_x{ceil:g}"] = {
             "weight": float(w[keep].sum()),
             "metallicity_O_H_solar": _wquant(z_o[keep], wt),
             "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o[keep]), wt),

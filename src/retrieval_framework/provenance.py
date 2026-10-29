@@ -18,6 +18,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
@@ -135,9 +136,10 @@ def _cia_identity() -> dict:
     They are direct radiative-transfer inputs, small enough to hash exactly and
     too important to hide inside a directory file-count: a swapped H2-He table
     leaves the tree summary unchanged while changing the continuum the retrieval
-    fits. They and the ExoMolOP k-tables are the only target-affecting inputs NOT tracked in git --
-    everything else (network, baseline T-P, Kzz, elemental abundances) is
-    vendored in vulcan3 and therefore bound by its commit.
+    fits. With the ExoMolOP k-tables and a path-style case's inputs
+    (`case_inputs`) they are the target-affecting inputs that no commit binds;
+    a named vulcan3 case (network, baseline T-P, Kzz, elemental abundances) is
+    vendored in vulcan3 and bound by its commit.
     """
     try:
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401
@@ -180,6 +182,58 @@ def science_data_identity(molecules) -> dict:
                            for k, v in _cia_identity().items()}}
 
 
+def _vulcan3_root() -> Path:
+    """The installed vulcan3 package directory, by find_spec: importing vulcan3
+    parses and import-locks its reaction network."""
+    import importlib.util
+    spec = importlib.util.find_spec("vulcan3")
+    if spec is None or not spec.origin:
+        raise ModuleNotFoundError("vulcan3 is not installed")
+    return Path(spec.origin).resolve().parent
+
+
+def _file_identity(path: Path):
+    return {"path": str(path), "sha256": _sha256(path)} if path.is_file() else None
+
+
+def case_config(name: str) -> tuple[Path, dict]:
+    """(path, settings) of a vulcan3 case config, resolved as vulcan3 resolves it
+    from the working directory (`config._read_text`: a path or `*.yaml`, else
+    `./configs/<name>.yaml`, else the packaged one), each key the file omits
+    taken from the packaged `default.yaml`."""
+    pkg = _vulcan3_root()
+    p = Path(name)
+    if not (p.suffix in (".yaml", ".yml") or p.exists()):
+        p = Path("configs") / f"{name}.yaml"
+        if not p.is_file():
+            p = pkg / "configs" / f"{name}.yaml"
+    if not p.is_file():
+        raise FileNotFoundError(f"vulcan3 config {name!r} not found (resolved to {p})")
+    default = yaml.safe_load((pkg / "configs" / "default.yaml").read_text())
+    return p.resolve(), {**default, **(yaml.safe_load(p.read_text()) or {})}
+
+
+def case_data_file(rel) -> Path:
+    """A case's data path, resolved as `vulcan3._paths.resolve_data_path` does:
+    absolute, else the working directory, else the package."""
+    rel = Path(rel)
+    return (rel if rel.is_absolute() or rel.exists() else _vulcan3_root() / rel).resolve()
+
+
+def case_inputs(name: str, cfg_overrides: dict) -> dict | None:
+    """sha256 of the case's vulcan3 config file and of the atm and stellar-flux
+    files it names (`cfg_overrides` over the file), None for an unset name. A
+    path-style case (`data/...`) lives outside the trees the code state binds,
+    so these hashes are its only identity."""
+    if not name:
+        return None
+    path, case = case_config(name)
+    out = {"config": _file_identity(path)}
+    for key in ("atm_file", "sflux_file"):
+        out[key] = _file_identity(case_data_file(cfg_overrides.get(key, case[key])))
+    return out
+
+
 def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     """Hash observations and record the resolved data and VULCAN inputs."""
     ident = {}
@@ -209,18 +263,12 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     net = cfg_dict.get("vulcan_cfg_name")
     ident["vulcan_cfg_name"] = net
     try:
-        # find_spec, NOT import: importing vulcan3 parses and import-locks
-        # its reaction network, and this identity collector only needs the
-        # package path.
-        import importlib.util
-        spec = importlib.util.find_spec("vulcan3")
-        if spec is None or not spec.origin:
-            raise ModuleNotFoundError("vulcan3 is not installed")
-        pkg = Path(spec.origin).resolve().parent
-        cfg_yaml = pkg / "configs" / f"{net}.yaml"
-        if cfg_yaml.is_file():
-            ident["vulcan_config_yaml"] = {"path": str(cfg_yaml),
-                                           "sha256": _sha256(cfg_yaml)}
+        ident["case_inputs"] = case_inputs(net, cfg_dict.get("cfg_overrides") or {})
+    # broad: a provenance collector records any failure instead of raising
+    except Exception as exc:
+        ident["case_inputs_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        pkg = _vulcan3_root()
         npath = pkg / netfile if netfile else None
         if npath is not None and npath.is_file():
             ident["network_file"] = {"path": str(npath), "sha256": _sha256(npath)}
@@ -260,7 +308,7 @@ def target_manifest(cfg, pipe) -> dict:
     return {
         # bumped when the manifest's fields change, or when the evaluators'
         # keep/reject or start logic changes the target at a fixed config
-        "manifest_version": 4,
+        "manifest_version": 5,
         "config": cfg_bound,
         "params": {"names": list(pipe.names),
                    "prior_types": list(pipe.prior_types),
@@ -270,6 +318,7 @@ def target_manifest(cfg, pipe) -> dict:
         "observations_sha256": h.hexdigest(),
         "n_bin": int(pipe.n_bin),
         **science_data_identity(cfg.molecules),
+        "case_inputs": case_inputs(cfg.vulcan_cfg_name, cfg.cfg_overrides),
         # commit + dirty flag + the src/ diff hash. NOT dirty_files: that list
         # churns with any scratch edit and would refuse every resume in a
         # campaign without identifying a different code state, while src_diff

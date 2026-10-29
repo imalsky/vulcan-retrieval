@@ -240,7 +240,8 @@ adopted".
   a run stopped by the governor has none yet) and `nautilus_report`'s figures. The
   certificate has no pass/fail verdict: read its caveats. Quote the paper's quantities
   from its `derived` block (metallicity as O/H and as total metals, C/O, S/O, the Kzz
-  factor with the floor weight and the x10 truncation, T at the deep level), never
+  factor and log10 Kzz at 1 mbar with the floor weights, on W39b's profile the x10
+  truncation, T at the deep level), never
   re-derived by hand; a T1bar run is reported against its accepted joint prior (notes
   "Physics assumptions and limitations"). Forward checks at a run's draws:
   `validation/posterior_forward_check.py`.

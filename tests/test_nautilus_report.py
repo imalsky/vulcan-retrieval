@@ -4,6 +4,7 @@ summary and the identity files, and the CLI writes the weighted corner and T-P
 figures; given model spectra, the spectrum fit too."""
 import json
 from dataclasses import asdict
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -80,9 +81,21 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert abs(z_o[1] - 10.0 * np.exp(MEAN[0])) < 0.5          # the baseline is 10x solar
     assert der["metallicity_total_solar"][1] < z_o[1]           # C/O below solar lowers total metals
     assert der["S_to_O_solar"] is None                          # sulfur was not freed in this run
+    # the Kzz block: weights at multiples of the prior floor, the absolute Kzz on the
+    # case's own profile, and the x10 ceiling only on W39b's; a constant-Kzz case
+    # (1e9) shifts the absolute Kzz by its base and has no ceiling
     assert der["truncated_kzz_le_x10"]["weight"] == pytest.approx(
         1.0 - der["kzz_weight_above_x10"])
-    assert der["kzz_weight_below_x0.15"] <= der["kzz_weight_below_x0.2"]
+    assert der["kzz_weight_below_1.5x_floor"] <= der["kzz_weight_below_2x_floor"]
+    cfgj = json.loads((tmp_path / "config.json").read_text())
+    (tmp_path / "config.json").write_text(
+        json.dumps({**cfgj, "vulcan_cfg_name": "data/w107b/W107b.yaml"}))
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    d107 = NR.derived_quantities(tmp_path)
+    assert not any("x10" in k for k in d107)
+    np.testing.assert_allclose(
+        np.subtract(d107["log10_kzz_ref_cgs"], der["log10_kzz_ref_cgs"]),
+        9.0 - np.log10(NR._kzz_at_ref({"vulcan_cfg_name": "W39b"})), rtol=0, atol=1e-12)
     assert der["T_deep_p_bar"] == 1.0 and len(der["T_deep_K"]) == 3 == len(der["Tint_K"])
     cond = cert["conditioning"]
     assert cond["rejected_of_in_window"] == pytest.approx(10 / 100)
