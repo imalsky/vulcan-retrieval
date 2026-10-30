@@ -54,10 +54,10 @@ sigma = posterior standard deviation, L = log-likelihood.
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
   `test_set_observations`' production preflight and `test_v5_options`, every v5 option
-  on the real smoke pipeline). Counts [M], daw CPU `-n 8`, the 2025-network tree:
-  normal 104 passed / 1 skipped in 32 s, full 113 passed / 2 skipped / 1 xfailed in
-  5.6 min. The opt-in production preflight (with `test_group_noise`): 12 passed in
-  1.9 min, laptop CPU.
+  on the real smoke pipeline, the production case's build, and the job path end to end
+  on the smoke case). Counts [M], daw CPU `-n 8` (cores 64-79): normal 111 passed in
+  33 s, full 123 passed / 1 xfailed in 87 min, the job-path test most of it (12 min
+  alone on the laptop).
 
 ## Runs
 

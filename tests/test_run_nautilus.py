@@ -11,6 +11,7 @@ decade is solver-cut or whose first chunk kept nothing; the real job path runs
 end to end on the smoke case (slow). Last, every config refusal of validate_config."""
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -187,9 +188,12 @@ def test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes(tmp_path):
            "from retrieval_framework.run_nautilus import main\n"
            "main(sys.argv[1:])\n")
 
+    # one compile cache for the three calls: the resume reuses the first call's programs
+    env = {**os.environ, "JAX_COMPILATION_CACHE_DIR": str(tmp_path / "jax_cache")}
+
     def main(*args):
         return subprocess.run([sys.executable, "-c", job, str(spec), *args], cwd=repo,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=env)
 
     r = main()
     assert r.returncode == 0, r.stderr[-3000:]
