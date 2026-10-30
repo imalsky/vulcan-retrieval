@@ -3,29 +3,30 @@
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml            # a fresh run
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --resume   # continue its checkpoint
     python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml --dry-run  # print the qsub line only
-    python tools/submit.py runs/w107b/w107b_g395h.yaml --queue gpu_normal       # the 24 h queue
 
 The spec is loaded and validated here (run_setup.load_spec, so a bad file fails before
 anything is queued), and its input files are checked as the job will resolve them, from
 the repo (run_setup.check_inputs: network, case config, atm and stellar-flux files,
 observation products). The PBS job is not part of the spec: the qsub command line asks for
-one GH200 node on gpu_long (or --queue gpu_normal), charges the allocation in $PBS_GROUP and sets the walltime
+one GH200 node on gpu_long, charges the allocation in $PBS_GROUP and sets the walltime
 JOB_HEADROOM_S past the spec's governor (config.walltime_seconds); either unset, or a
-walltime past the queue's limit, is refused. The run name is the job name, and the job receives three comma-free values:
-the spec file, the run's output directory and the resume flag. A fresh submit into a
-directory that already holds a run is refused; ``--resume`` needs the checkpoint and,
-when the last job of this run is still queued or running, chains the new one after it.
-Each submission is recorded under <out_dir>/jobs/: the qsub line and the git revision
-in jobs.txt and a copy of the spec as <jobid>.yaml. Run it from the activated
+walltime past the queue's limit, is refused. The run name is the job name, and the job
+receives four comma-free values: the spec file, its digest (run_setup.spec_digest: the
+job refuses a spec or base edited after submission), the run's output directory and the
+resume flag. A fresh submit into a directory that already holds a run is refused;
+``--resume`` needs the checkpoint and, when the last job of this run is still queued or
+running, chains the new one after it. Each submission is one line of
+<out_dir>/jobs/jobs.txt (job id, resume flag, git revision, spec digest, the qsub line);
+the run itself copies the spec it ran into <out_dir>. Run it from the activated
 environment on cghfe01/cghfe02 (it imports retrieval_framework).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,12 +34,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PBS_SCRIPT = REPO / "tools" / "run_nas.pbs"
 # the NAS job every run asks for; the allocation is the submitter's ($PBS_GROUP)
-QUEUE = "gpu_long"
-QUEUE_WALL_H = {"gpu_long": 120, "gpu_normal": 24}   # the NAS queue limits
+QUEUE, QUEUE_WALL_H = "gpu_long", 120      # every run's queue and its wall limit
 SELECT = "1:ncpus=72:ngpus=1:mem=400gb:model=gh200"
 JOB_HEADROOM_S = 7200       # the PBS wall ends this long after the run's governor
 # infrastructure knobs the job script reads; passed through when set in the caller's shell
-PASS_THROUGH = ("CONDA_ENV", "VULCAN_SCRATCH", "PROFILE_BATCH", "PROFILE_HLO", "NSYS_JAX", "NSYS_BIN")
+PASS_THROUGH = ("CONDA_ENV", "VULCAN_SCRATCH")
 ACTIVE_STATES = {"Q", "R", "H", "W", "S", "E", "B"}
 
 
@@ -49,15 +49,20 @@ def _safe(value: str, what: str) -> str:
 
 
 def _last_active_job(jobs_txt: Path) -> str | None:
+    """The run's last job id while PBS still holds it, else None. A job PBS no longer
+    knows is gone; any other qstat failure stops the submit."""
     ids = [ln.split()[0] for ln in jobs_txt.read_text().splitlines() if ln.strip()] \
         if jobs_txt.exists() else []
     if not ids:
         return None
-    q = subprocess.run(["qstat", ids[-1]], capture_output=True, text=True)
-    if q.returncode != 0 or not q.stdout.strip():
-        return None
-    state = q.stdout.strip().splitlines()[-1].split()[-2]
-    return ids[-1] if state in ACTIVE_STATES else None
+    q = subprocess.run(["qstat", "-f", "-F", "json", ids[-1]], capture_output=True, text=True)
+    if q.returncode != 0:
+        if "Unknown Job Id" in q.stderr:
+            return None
+        sys.exit(f"qstat {ids[-1]} failed (exit {q.returncode}): {q.stderr.strip()}")
+    jobs = json.loads(q.stdout).get("Jobs", {})
+    states = [j.get("job_state") for j in jobs.values()]
+    return ids[-1] if any(st in ACTIVE_STATES for st in states) else None
 
 
 def main(argv=None) -> None:
@@ -66,21 +71,15 @@ def main(argv=None) -> None:
     ap.add_argument("spec", type=Path, help="runs/<case>/<name>.yaml")
     ap.add_argument("--resume", action="store_true", help="continue the run's checkpoint")
     ap.add_argument("--dry-run", action="store_true", help="print the qsub command, submit nothing")
-    ap.add_argument("--queue", default=QUEUE, choices=sorted(QUEUE_WALL_H),
-                    help=f"the GH200 queue (default {QUEUE})")
     args = ap.parse_args(argv)
 
-    sys.path.insert(0, str(REPO / "src"))
-    from retrieval_framework.run_setup import check_inputs, check_run_dir, load_spec
-    spec = load_spec(args.spec)
-    here = os.getcwd()
-    os.chdir(REPO)                       # the job resolves its paths from the repo
+    from retrieval_framework.run_setup import check_inputs, check_run_dir, load_spec, spec_digest
+    spec = load_spec(args.spec.resolve())
+    os.chdir(REPO)                       # the job's working directory: paths resolve as there
     try:
         check_inputs(spec.cfg)
     except (OSError, ValueError) as e:
         sys.exit(f"{spec.path.name}: {e}")
-    finally:
-        os.chdir(here)
     group = _safe(os.environ.get("PBS_GROUP", ""), "PBS_GROUP")
     if not group:
         sys.exit("set PBS_GROUP to the allocation the job is charged to (qsub -W group_list)")
@@ -89,9 +88,9 @@ def main(argv=None) -> None:
                  "checkpoint and exit before the wall")
     h, rest = divmod(math.ceil(spec.cfg.walltime_seconds + JOB_HEADROOM_S), 3600)
     walltime = f"{h:02d}:{rest // 60:02d}:{rest % 60:02d}"
-    if h * 3600 + rest > QUEUE_WALL_H[args.queue] * 3600:
-        sys.exit(f"walltime {walltime} (the governor + {JOB_HEADROOM_S} s) is past {args.queue}'s "
-                 f"{QUEUE_WALL_H[args.queue]} h: lower config.walltime_seconds")
+    if h * 3600 + rest > QUEUE_WALL_H * 3600:
+        sys.exit(f"walltime {walltime} (the governor + {JOB_HEADROOM_S} s) is past {QUEUE}'s "
+                 f"{QUEUE_WALL_H} h: lower config.walltime_seconds")
     out = spec.cfg.out_dir
     jobs = out / "jobs"
     try:
@@ -103,11 +102,12 @@ def main(argv=None) -> None:
     prev = _last_active_job(jobs / "jobs.txt") if args.resume else None
     if prev:
         attrs.append(f"depend=afterany:{prev}")
-    env = [f"VR_SPEC={_safe(str(spec.path), 'spec path')}",
+    digest = spec_digest(spec)
+    env = [f"VR_SPEC={_safe(str(spec.path), 'spec path')}", f"VR_SPEC_DIGEST={digest}",
            f"VR_OUT={_safe(str(out), 'output directory')}",
            f"VR_RESUME={int(args.resume)}"]
     env += [f"{k}={_safe(os.environ[k], k)}" for k in PASS_THROUGH if k in os.environ]
-    cmd = ["qsub", "-N", spec.name, "-q", args.queue,
+    cmd = ["qsub", "-N", spec.name, "-q", QUEUE,
            "-l", f"select={SELECT}", "-l", f"walltime={walltime}",
            "-j", "oe", "-o", f"{jobs}/", "-W", ",".join(attrs), "-v", ",".join(env),
            str(PBS_SCRIPT)]
@@ -121,9 +121,8 @@ def main(argv=None) -> None:
     jobid = r.stdout.strip()
     rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
                          capture_output=True, text=True).stdout.strip() or "?"
-    shutil.copy(spec.path, jobs / f"{jobid.split('.')[0]}.yaml")
     with (jobs / "jobs.txt").open("a") as f:
-        f.write(f"{jobid} resume={int(args.resume)} git={rev} {shlex.join(cmd)}\n")
+        f.write(f"{jobid} resume={int(args.resume)} git={rev} spec={digest} {shlex.join(cmd)}\n")
     print(jobid)
 
 

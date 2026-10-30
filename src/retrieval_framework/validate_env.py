@@ -158,7 +158,8 @@ def _check_cross_repo_pin() -> None:
     try:
         from packaging.requirements import Requirement
     except ImportError:
-        _warn("`packaging` unavailable; cannot verify the sibling-engine requirements.")
+        _err("`packaging` is not installed, so the sibling-engine requirements cannot be "
+             "verified: install it (`pip install packaging`; the bootstrap does).")
         return
     for dist in ("vulcan3", "vulcan-forward"):
         spec = next((r for r in reqs if r.split()[0].startswith(dist)), None)
@@ -197,20 +198,16 @@ def _check_exojax() -> None:
 PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")   # relative to the retrieval repo
 
 
-def _check_spec_inputs(root: Path, cfg) -> None:
-    """The spec's own input files (run_setup.check_inputs), resolved from the
-    retrieval repo as the job resolves them."""
+def _check_spec_inputs(cfg) -> None:
+    """The spec's own input files (run_setup.check_inputs), from the working
+    directory main sets: the retrieval repo, the job's."""
     from retrieval_framework.run_setup import check_inputs
-    here = os.getcwd()
-    os.chdir(root / "vulcan-retrieval")
     try:
         check_inputs(cfg)
     except (OSError, ValueError) as e:
         _err(str(e))
     else:
         _ok("the spec's network, case files and observation products are present")
-    finally:
-        os.chdir(here)
 
 
 def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
@@ -304,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"the run specification whose data to check (default {PRODUCTION_SPEC})")
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
+    spec = (args.spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).resolve()
 
     if not (root / "vulcan-retrieval").is_dir() or not (root / "VULCAN-JAX").is_dir():
         _err(
@@ -326,8 +324,9 @@ def main(argv: list[str] | None = None) -> int:
         _check_cross_repo_pin()
         _check_exojax()
         from retrieval_framework.run_setup import load_spec
-        cfg = load_spec(args.spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).cfg
-        _check_spec_inputs(root, cfg)
+        cfg = load_spec(spec).cfg
+        os.chdir(root / "vulcan-retrieval")    # the job's working directory
+        _check_spec_inputs(cfg)
         _check_data_tree(root, tuple(cfg.molecules))
         _check_exogibbs()
         _check_nautilus()

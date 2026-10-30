@@ -22,6 +22,7 @@ an inherited value that disagrees with the file.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -243,6 +244,16 @@ def load_spec(path: str | Path) -> Spec:
                 runtime=runtime)
 
 
+def spec_digest(spec: Spec) -> str:
+    """sha256 over the bytes of the spec file and of its base: submit.py records it and
+    the job refuses a spec that no longer has it (edited while the job was queued)."""
+    h = hashlib.sha256()
+    for f in (spec.path, spec.base):
+        if f is not None:
+            h.update(Path(f).read_bytes())
+    return h.hexdigest()
+
+
 def check_run_dir(out: Path, resume: bool) -> None:
     """Refuse a resume with no checkpoint, and a fresh run into a directory that holds
     a previous run: a checkpoint or anchor files (an empty ``anchors/`` is a run that
@@ -409,8 +420,14 @@ def main(argv=None) -> None:
     as the run: ``eval "$(python -m retrieval_framework.run_setup <spec>)"``."""
     ap = argparse.ArgumentParser(description=main.__doc__)
     ap.add_argument("spec", help="runs/<case>/<name>.yaml")
+    ap.add_argument("--digest", default=None,
+                    help="refuse unless the spec still has this spec_digest (submit.py's)")
     args = ap.parse_args(argv)
-    for var, val in load_spec(args.spec).runtime.env().items():
+    spec = load_spec(args.spec)
+    if args.digest is not None and spec_digest(spec) != args.digest:
+        sys.exit(f"{spec.path}: the spec or its base changed after it was submitted (digest "
+                 f"{spec_digest(spec)}, submitted {args.digest}): resubmit it")
+    for var, val in spec.runtime.env().items():
         print(f"unset {var}" if val is None else f"export {var}={shlex.quote(val)}")
 
 

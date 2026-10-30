@@ -1,6 +1,6 @@
 # WASP-107b on Welbanks+2024's data inside the model band: WFC3 G102 + G141 and NIRCam
 # F322W2 + F444W (MIRI is past 5.26 um). The joint spec's model and priors. 22 h
-# governor: fits gpu_normal's 24 h wall; resume to finish.
+# governor; resume to finish.
 base: w107b_joint.yaml
 config:
   combo: [G102, G141, F322W2, F444W]

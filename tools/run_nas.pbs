@@ -11,10 +11,11 @@
 # submit.py validates the spec, puts the job (queue, the allocation in $PBS_GROUP,
 # select line, a walltime past the spec's governor), the run name and the log
 # directory on the qsub command line (nothing run- or user-specific lives up here)
-# and passes three comma-free values:
-#   VR_SPEC    the spec file (absolute)
-#   VR_OUT     the run's output directory, output/<case>/<name>_nautilus (absolute)
-#   VR_RESUME  0 fresh run, 1 continue the checkpoint in VR_OUT
+# and passes four comma-free values:
+#   VR_SPEC         the spec file (absolute)
+#   VR_SPEC_DIGEST  its run_setup.spec_digest at submission: an edited spec is refused
+#   VR_OUT          the run's output directory, output/<case>/<name>_nautilus (absolute)
+#   VR_RESUME       0 fresh run, 1 continue the checkpoint in VR_OUT
 # The spec's runtime block (VULCAN3_SOLVER, VULCAN3_CHEM_RHS, VULCAN3_BT_BUFFERS,
 # XLA_PYTHON_CLIENT_MEM_FRACTION, XLA_FLAGS) is exported below through
 # retrieval_framework.run_setup, so the kernel build, the preflight and the run see
@@ -28,13 +29,7 @@
 # Infrastructure knobs, passed through by submit.py when set in its shell:
 #   CONDA_ENV        interpreter env (default pyt2_8_gh)
 #   VULCAN_SCRATCH   cache root (default /nobackup/$USER/.vulcan)
-#   PROFILE_BATCH=k  run under nsys-jax and capture ONE batch, the k-th likelihood
-#                    batch of this job (3 = the first steady warm batch of a fresh
-#                    run) plus the nautilus update after it (run_nautilus.BatchProfiler,
-#                    cudaProfilerApi window; the run continues unprofiled). Report:
-#                    ${VR_OUT}/jobs/nsys_<jobid>/pipeline_gh200_jax_profile.zip. NSYS_JAX
-#                    (nsys-jax executable), NSYS_BIN (nsys binary), PROFILE_HLO=1 (also
-#                    dumps the HLO protos: ~10 GB, compressed for tens of minutes at exit).
+# Profiling is not part of this job (notes "HPC (NAS GH200) and daw", profiling).
 #
 # Live log:  tail -f <out_dir>/jobs/<jobid>.log   (the PBS .OU lands beside it at job end)
 # After a finished run: python -m retrieval_framework.nautilus_report <out_dir> [--spectra N]
@@ -42,6 +37,7 @@
 set -euo pipefail
 
 : "${VR_SPEC:?submit through tools/submit.py}"
+: "${VR_SPEC_DIGEST:?submit through tools/submit.py}"
 : "${VR_OUT:?submit through tools/submit.py}"
 : "${VR_RESUME:=0}"
 REPO_DIR="$(cd -- "${PBS_O_WORKDIR:?}" && pwd -P)"
@@ -49,6 +45,7 @@ if [ ! -f "${REPO_DIR}/src/retrieval_framework/run_nautilus.py" ]; then
   echo "ERROR: PBS_O_WORKDIR=${REPO_DIR} is not the vulcan-retrieval root (submit through tools/submit.py)"
   exit 1
 fi
+cd -P "${REPO_DIR}"   # the job's working directory: the spec's relative paths resolve here
 PROJECT_ROOT="$(dirname "${REPO_DIR}")"
 export PROJECT_ROOT
 export VULCAN_PROJECT_ROOT="${PROJECT_ROOT}"   # makes forward/config.py portable
@@ -77,9 +74,11 @@ mkdir -p "${PIP_CACHE_DIR}" "${JAX_COMPILATION_CACHE_DIR}" \
          "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
 
 # --- conda env (shared GH200 env; user site populated by the bootstrap) -------
-module purge 2>/dev/null || true
-module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
-module load miniconda3/gh2 2>/dev/null || true
+set +u   # the module scripts read unset variables; a failing module command still stops the job
+module purge
+module use -a /swbuild/analytix/tools/modulefiles
+module load miniconda3/gh2
+set -u
 CONDA_BASE="$(conda info --base)"
 # shellcheck disable=SC1091
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
@@ -100,8 +99,8 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=true
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
 # --- the spec's runtime block, exported before any vulcan3 or jax import ------
-RUNTIME_EXPORTS="$(python -m retrieval_framework.run_setup "${VR_SPEC}")" || {
-  echo "ERROR: the spec ${VR_SPEC} did not load (see above)"; exit 1; }
+RUNTIME_EXPORTS="$(python -m retrieval_framework.run_setup "${VR_SPEC}" --digest "${VR_SPEC_DIGEST}")" || {
+  echo "ERROR: the spec ${VR_SPEC} did not load or changed after submission (see above)"; exit 1; }
 eval "${RUNTIME_EXPORTS}"
 echo "runtime: VULCAN3_SOLVER=${VULCAN3_SOLVER} VULCAN3_CHEM_RHS=${VULCAN3_CHEM_RHS}" \
      "VULCAN3_BT_BUFFERS=${VULCAN3_BT_BUFFERS:-<unset>} XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-<unset>}"
@@ -145,49 +144,11 @@ cleanup() { kill "${GPU_MON_PID}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 echo "GPU monitor: ${GPU_MON_LOG}"
 
-cd -P "${REPO_DIR}"   # stable cwd only; retrieval_framework is installed, imports need no cwd
-
 rc=0
 echo "========== NAUTILUS RETRIEVAL =========="
 NAUT_CMD=(python -u -m retrieval_framework.run_nautilus "${VR_SPEC}")
 if [ "${VR_RESUME}" = "1" ]; then NAUT_CMD+=(--resume); fi
-if [ -n "${PROFILE_BATCH:-}" ]; then
-  # One-batch nsys-jax profile (off by default). nsys-jax calls `nsys` from PATH:
-  # a one-file bin dir puts the chosen binary first (cuda-12.6's nsys wrapper is
-  # not installed on the GH200 nodes). The default nsys-jax is a python3.12 venv:
-  #   python3.12 -m venv ${VULCAN_SCRATCH}/tools/nsysjax_venv && .../bin/pip install
-  #   "git+https://github.com/NVIDIA/JAX-Toolbox.git@f9d55b6#subdirectory=.github/container/nsys_jax"
-  PROFILE_DIR="${PROFILE_DIR:-${JOB_DIR}/nsys_${_jobid}}"
-  NSYS_JAX="${NSYS_JAX:-${VULCAN_SCRATCH}/tools/nsysjax_venv/bin/nsys-jax}"
-  NSYS_BIN="${NSYS_BIN:-/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys}"
-  mkdir -p "${PROFILE_DIR}/bin"
-  ln -sfn "${NSYS_BIN}" "${PROFILE_DIR}/bin/nsys"
-  export PATH="${PROFILE_DIR}/bin:${PATH}"
-  echo "profile: batch ${PROFILE_BATCH} -> ${PROFILE_DIR}; nsys $(nsys --version | awk '{print $NF}'); ${NSYS_JAX}"
-  if [ "${PROFILE_HLO:-0}" = "1" ]; then
-    export JAX_COMPILATION_CACHE_DIR="${PROFILE_DIR}/jax_cache"   # compile, so XLA dumps
-    mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
-  else
-    export XLA_FLAGS="${XLA_FLAGS:-} --xla_dump_hlo_as_proto=false"   # nsys-jax: no dump
-  fi
-  # nsys-jax sets -1 (whole tracebacks in the HLO metadata) only when unset; JAX's
-  # default keeps the programs, and their cache entries, the production ones
-  export JAX_TRACEBACK_IN_LOCATIONS_LIMIT="${JAX_TRACEBACK_IN_LOCATIONS_LIMIT:-10}"
-  export VULCAN_PROFILE_BATCH="${PROFILE_BATCH}"
-  NAUT_CMD=("${NSYS_JAX}" --trace=cuda,nvtx,osrt --sample=cpu --cpuctxsw=process-tree
-            --capture-range=cudaProfilerApi --capture-range-end=stop -f
-            --output="${PROFILE_DIR}/pipeline_gh200_jax_profile" --
-            "$(command -v python)" -u -m retrieval_framework.run_nautilus "${VR_SPEC}")
-  if [ "${VR_RESUME}" = "1" ]; then NAUT_CMD+=(--resume); fi
-fi
 "${NAUT_CMD[@]}" || rc=$?
-if [ -n "${PROFILE_BATCH:-}" ] && [ -f "${PROFILE_DIR}/pipeline_gh200_jax_profile.zip" ]; then
-  # nsys-jax exits 1 when only its source-file gathering failed (no XLA .proto
-  # files on the node); the archive is complete then. It prints "Application
-  # returned unexpected code" when the run itself failed: then rc stands.
-  echo "profile: ${PROFILE_DIR}/pipeline_gh200_jax_profile.zip written"
-  [ "${rc}" -eq 1 ] && ! grep -q "Application returned unexpected code" "${LOG_FILE}" && rc=0
-fi
 echo "job finished rc=${rc} at $(date)"
 if [ "${rc}" -ne 0 ]; then
   echo "NOT A CERTIFIED PRODUCTION RUN: see the errors above. Artifacts on disk are forensic."

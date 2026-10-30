@@ -6,7 +6,7 @@
 # w107b_g395h.yaml (Sing) and w107b_welbanks.yaml (Welbanks without MIRI, which is past
 # the model band). Machinery as the WASP-39b v5 spec; the step tolerance is looser.
 #
-#   python tools/submit.py runs/w107b/w107b_joint.yaml [--queue gpu_normal] [--dry-run]
+#   python tools/submit.py runs/w107b/w107b_joint.yaml [--dry-run]
 #
 # 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar,
 # lnR0, lnM, log10kappa_cloud, cloud_alpha. The 5 offsets and 6 noise inflations are

@@ -84,6 +84,9 @@ def test_runtime_env_refuses_a_contradicting_environment():
 
 
 def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypatch, capsys):
+    """The qsub line charges $PBS_GROUP, walls 2 h past the governor on gpu_long, and
+    carries the spec digest the job checks (run_setup.main refuses an edited spec)."""
+    monkeypatch.chdir(tmp_path)                  # submit.py moves to the repo; restored after
     main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "tools" / "submit.py"))["main"]
     spec = str(_write(tmp_path / "s.yaml", {"config": dict(MINIMAL, walltime_seconds=165600.0)}))
     monkeypatch.delenv("PBS_GROUP", raising=False)
@@ -92,9 +95,16 @@ def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypa
     monkeypatch.setenv("PBS_GROUP", "g0")
     main([spec, "--dry-run"])
     line = capsys.readouterr().out
-    assert "walltime=48:00:00" in line and "group_list=g0" in line
-    with pytest.raises(SystemExit, match="past gpu_normal"):     # 48 h > the 24 h queue
-        main([spec, "--dry-run", "--queue", "gpu_normal"])
+    assert "walltime=48:00:00" in line and "group_list=g0" in line and "-q gpu_long" in line
+    digest = R.spec_digest(R.load_spec(spec))
+    assert f"VR_SPEC_DIGEST={digest}" in line
+    R.main([spec, "--digest", digest])
+    Path(spec).write_text(Path(spec).read_text() + "# edited after submission\n")
+    with pytest.raises(SystemExit, match="changed after it was submitted"):
+        R.main([spec, "--digest", digest])
+    with pytest.raises(SystemExit, match="past gpu_long"):       # 120 h + 2 h > the 120 h queue
+        main([str(_write(tmp_path / "u.yaml", {"config": dict(MINIMAL, walltime_seconds=432000.0)})),
+              "--dry-run"])
     with pytest.raises(SystemExit, match="walltime_seconds"):
         main([str(_write(tmp_path / "t.yaml", {"config": MINIMAL})), "--dry-run"])
 

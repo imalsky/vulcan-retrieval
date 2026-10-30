@@ -7,9 +7,9 @@
 # same prior is -500..50 ppm. The joint spec's model; C/O floor 0.05 (his prior); the
 # band to 12.5 um. Not modelled: the 6-11 um aerosol term and a nitrogen freedom
 # (w107b_joint_miri). A base has no base of its own, so this restates w107b_welbanks's
-# keys (combo, the 22 h governor: fits gpu_normal's 24 h wall; resume to finish).
+# keys (combo, the 22 h governor; resume to finish).
 #
-#   python tools/submit.py runs/w107b/w107b_welbanks_miri.yaml --queue gpu_normal [--dry-run]
+#   python tools/submit.py runs/w107b/w107b_welbanks_miri.yaml [--dry-run]
 base: w107b_joint.yaml
 config:
   obs_products:

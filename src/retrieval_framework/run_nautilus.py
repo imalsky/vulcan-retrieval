@@ -48,7 +48,8 @@ The sampler settings are the spec's ``sampler`` block (n_live, with n_update at
 half of it; n_eff; n_batch, default BATCH_PER_LANE x the lane count, so a lane
 whose column certifies refills from the same batch; warm_starts); the engine's
 environment is its ``runtime`` block, exported before the first jax import.
-VULCAN_PROFILE_BATCH (BatchProfiler, off unless set) comes from the job script.
+VULCAN_PROFILE_BATCH (BatchProfiler, off unless set) is set by hand when profiling
+(notes "HPC (NAS GH200) and daw").
 Each evaluator is a plain jax.jit program, compiled at its first call.
 
 Sampler settings (the constants below, built by make_sampler): STOCK

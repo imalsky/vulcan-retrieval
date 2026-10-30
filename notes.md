@@ -531,7 +531,8 @@ unless stated.
   `anchors/` (gigabytes) and, unless the conditioning map needs it, the checkpoint.
 - Queues: the GH200 queues (`gpu_long` 120 h, `gpu_normal` 24 h, `gpu_devel` 2 h) are
   served by `pbs05a` and take jobs only from `cghfe01`/`cghfe02`; `cfe` answers `Unknown
-  queue`; `qsub -q gpu_long@pbs05a` is rejected. Login: sfe -> `ssh -o
+  queue`; `qsub -q gpu_long@pbs05a` is rejected; `submit.py` submits to `gpu_long` only
+  (the maintainer decided). Login: sfe -> `ssh -o
   PreferredAuthentications=keyboard-interactive cfe02` -> `ssh cghfe01`.
 - A `qsub` from the repo root without `-o` drops its PBS log (`<name>.o<id>`) at the
   root, which `.gitignore` does not cover: the checkout reads dirty, a certificate
@@ -557,22 +558,32 @@ unless stated.
 - Env `pyt2_8_gh`, caches under `/nobackup/$USER/.vulcan`; jobs are read-only on the env
   (a per-job `pip install --user -e` raced across concurrent jobs, 64961). The bootstrap
   installs `exogibbs==0.6.0` with `--no-deps` (its `pyfastchem` does not build on aarch64).
-- The nsys-jax used by PROFILE_BATCH lives in `$VULCAN_SCRATCH/tools/nsysjax_venv`
-  (rebuild recipe in tools/run_nas.pbs next to NSYS_JAX). Profiling lessons: nsys masks
-  the exit code (64604), a full trace hits the 100 GiB cap after ~340 s (66476), a
-  windowed nsys can orphan the app with its 90% preallocation (78814), ncu's lock file
-  cannot live on the /nobackup TMPDIR (80076). PROFILE_BATCH's `.nsys-rep` is written
-  to nsys-jax's `${TMPDIR}/tmp*/` when the window stops; the zip in
-  `logs/nsys_<jobid>` only at exit (94946). The front end reads it:
-  `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys export --type
-  sqlite` took 43 s for 14.6 M events. In that trace the RT pass shows 0.5 s of kernels
-  in 37 s while the host waits on the stream (kernels inside CUDA-graph conditional
-  bodies not traced per node, probably [I]), and CUPTI's device-to-device byte counts
-  are unphysical (238 MB per 66 us copy): use copy durations, not bytes. `PROFILE_HLO=1`
-  fails at start: nsys-jax adds its dump flags to `XLA_FLAGS`, which
-  `run_setup.export_runtime` refuses (the spec decides); put `--xla_dump_to=<dir> --xla_dump_hlo_as_text=true
-  --xla_dump_hlo_as_proto=false` in a throwaway spec's `runtime.xla_flags`, with a fresh
-  `JAX_COMPILATION_CACHE_DIR`. Match kernels to HLO by the sqlite's `demangledName`.
+- Profiling (not part of `run_nas.pbs`: its branch changed `XLA_FLAGS` after the runtime
+  export, which `export_runtime` refuses, so it could not start). One batch by hand on a
+  GH200 node in the job's environment: nsys first on PATH (a one-file bin dir linking
+  `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys`; cuda-12.6's nsys
+  wrapper is not on the nodes), `VULCAN_PROFILE_BATCH=k` (`run_nautilus.BatchProfiler`:
+  cudaProfilerStart before likelihood batch k; 3 is a fresh run's first steady warm
+  batch), `JAX_TRACEBACK_IN_LOCATIONS_LIMIT=10` (nsys-jax sets -1 only when unset, which
+  changes the programs), then `nsys-jax --trace=cuda,nvtx,osrt --sample=cpu
+  --cpuctxsw=process-tree --capture-range=cudaProfilerApi --capture-range-end=stop -f
+  --output=<dir>/profile -- python -u -m retrieval_framework.run_nautilus <spec>`. XLA
+  dump flags (`--xla_dump_to=<dir> --xla_dump_hlo_as_text=true
+  --xla_dump_hlo_as_proto=false`) go in a throwaway spec's `runtime.xla_flags`, with a
+  fresh `JAX_COMPILATION_CACHE_DIR`. nsys-jax is a python3.12 venv at
+  `$VULCAN_SCRATCH/tools/nsysjax_venv` (`pip install
+  "git+https://github.com/NVIDIA/JAX-Toolbox.git@f9d55b6#subdirectory=.github/container/nsys_jax"`);
+  it exits 1 when only its source-file gathering failed (the archive is complete then).
+  Lessons: nsys masks the exit code (64604), a full trace hits the 100 GiB cap after
+  ~340 s (66476), a windowed nsys can orphan the app with its 90% preallocation (78814),
+  ncu's lock file cannot live on the /nobackup TMPDIR (80076). The `.nsys-rep` is written
+  to nsys-jax's `${TMPDIR}/tmp*/` when the window stops, the zip only at exit (94946).
+  The front end reads it: `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys
+  export --type sqlite` took 43 s for 14.6 M events. In that trace the RT pass shows 0.5 s
+  of kernels in 37 s while the host waits on the stream (kernels inside CUDA-graph
+  conditional bodies not traced per node, probably [I]), and CUPTI's device-to-device
+  byte counts are unphysical (238 MB per 66 us copy): use copy durations, not bytes.
+  Match kernels to HLO by the sqlite's `demangledName`.
 - JAX compile cache: see VULCAN3 notes (private cache for any memory fraction != 0.90).
 - daw lane benchmark [M, GPU 0 RTX 6000 Ada; `fast` solver; the v4 config: nz 100, the
   presolve program at rtol 0.2, photolysis every step, grouped RHS; 150 accepted steps
@@ -917,7 +928,9 @@ HPC
   errors as early as possible). `submit.py` and `validate_env --spec` refuse missing
   inputs (`run_setup.check_inputs`: network, case config, atm and stellar-flux files,
   observation products, and for real data `MIN_REAL_BINS` bins in the window and one per
-  group); `submit.py` and `run_nautilus` share one run-directory check
+  group); the job refuses a spec or base edited after submission (`submit.py` passes
+  `run_setup.spec_digest`, `run_setup.main --digest` compares it), so the run's own copy
+  in its directory is the one record; `submit.py` and `run_nautilus` share one run-directory check
   (`run_setup.check_run_dir`; an empty `anchors/` left by a startup refusal does not block
   a resubmit), the runner's before the pipeline build; CI lints
   (`ruff check .`); the full tier runs `run_nautilus.main` on the smoke case in

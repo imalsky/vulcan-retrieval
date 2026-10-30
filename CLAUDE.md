@@ -103,7 +103,8 @@ adopted".
 - Submit with `python tools/submit.py runs/<case>/<name>.yaml [--resume] [--dry-run]`
   from the activated env: it validates the spec, builds the qsub line (`gpu_long`, one
   GH200 node, the allocation in `$PBS_GROUP`, a walltime 2 h past the spec's governor)
-  and records the submission under `<out dir>/jobs/`. The bootstrap, the kernel test and
+  and records the submission under `<out dir>/jobs/`; the job refuses a spec edited after
+  submission (`run_setup.spec_digest`). The bootstrap, the kernel test and
   the GPU checks (`tools/check_nas.pbs -v CHECK=e2e`, the end-to-end ladder) go through
   `qsub -W "group_list=${PBS_GROUP:?}" [-v ...] tools/<script>.pbs`. No allocation,
   account or user path in a spec or a tracked script. `tools/run_nas.pbs` is
