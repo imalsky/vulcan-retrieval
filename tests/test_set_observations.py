@@ -3,10 +3,9 @@
 pipeline.validate_observations is the API-boundary guard behind
 pipe.set_observations: the Gaussian likelihood divides by sigma and logs it, so
 a non-finite depth or a non-positive/non-finite sigma must RAISE here rather than
-silently produce NaN/Inf likelihoods. Pure-numpy except for the opt-in
-production preflight at the bottom, which builds the real forward.
+silently produce NaN/Inf likelihoods. Pure-numpy except for the production
+case at the bottom (slow), which builds the real forward.
 """
-import os
 import sys
 
 import numpy as np
@@ -49,13 +48,9 @@ def test_invalid_observations_raise():
             P.validate_observations(GOOD_DEPTH, s, N, np.float64)
 
 
-# --- production preflight -----------------------------------------------------
+# --- the production case -------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",
-                    reason="opt-in: builds the exact production forward "
-                           "(RUN_PRODUCTION_PREFLIGHT=1 python -m pytest "
-                           "tests/test_set_observations.py -m slow)")
 def test_production_case_assembles_and_evaluates_one_finite_likelihood(
         monkeypatch, tmp_path):
     """Assemble the shipped case (real products, binning and offset operators)

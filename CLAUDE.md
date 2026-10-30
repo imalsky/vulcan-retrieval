@@ -75,13 +75,13 @@ adopted".
   pytest-xdist, in the root env; conftest defaults `JAX_PLATFORMS=cpu`; pyproject's
   addopts deselect `slow`). Full, before a production run or after a change to the
   chemistry/RT path or a likelihood gate: add `-m "slow or not slow"`; a single slow
-  file or node id needs `-m slow`. Production forward build, opt-in:
-  `RUN_PRODUCTION_PREFLIGHT=1 python -m pytest tests/test_set_observations.py
-  tests/test_group_noise.py -m "slow or not slow"`.
+  file or node id needs `-m slow`. The full tier holds the job path end to end
+  (`run_nautilus` on the smoke case in subprocesses, `test_run_nautilus.py`) and the
+  production case's build.
 - Mark a test `slow` if it builds a real pipeline (`build_pipeline` on a real config);
   claims that share one heavy build stay in one test (xdist builds a fixture per worker).
-- Lint every changed file with `ruff check .` before a merge. After a push, check CI:
-  `gh run list --repo imalsky/vulcan-retrieval --limit 1`.
+- CI lints (`ruff check .`, the pinned rule set) and runs the normal tier; lint before
+  a push. After a push, check CI: `gh run list --repo imalsky/vulcan-retrieval --limit 1`.
 - On daw: tests and single chemistry runs on CPU. A batched run uses the one GPU with
   the `fast` solver, so the lanes are `cold_lanes` as given: a variant spec with
   `runtime: {solver: fast, xla_flags: null}` and `config: {cold_lanes: 284}`, with
@@ -95,8 +95,11 @@ adopted".
   load-bearing) and `vulcan-forward`. Update with `git pull --ff-only` in all three; a
   version or dependency change needs `tools/bootstrap_nas_env.pbs` again.
 - Production jobs never install anything; `validate_env` runs in every preflight.
-  Chain dependent jobs on `afterany` and let `validate_env` refuse. Run a new job path
-  end-to-end on the CPU before submitting it (notes "Do not retry").
+  Chain dependent jobs on `afterany` and let `validate_env` refuse. No separate pre-run
+  is asked of a user: `submit.py` refuses missing inputs (`run_setup.check_inputs`), CI
+  and the full tier cover the job path, and the first chunk refuses a solver-cut prior
+  (`run_nautilus.startup_check`). A new guard goes into one of those, never into a
+  step a user must remember.
 - Submit with `python tools/submit.py runs/<case>/<name>.yaml [--resume] [--dry-run]`
   from the activated env: it validates the spec, builds the qsub line (`gpu_long`, one
   GH200 node, the allocation in `$PBS_GROUP`, a walltime 2 h past the spec's governor)
@@ -118,6 +121,10 @@ adopted".
 
 ### Fail fast
 
+- Error fast (the maintainer's standing preference): refuse at the earliest point a
+  problem is detectable (spec load, `submit.py`, `validate_env`, the run's first chunk),
+  with the offending value and the remedy. Prefer a loud refusal to a fallback, a
+  retry, a workaround or a separate check.
 - No behavior-changing fallback paths. Keep the refusals: missing H2-He CIA, an unset
   planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a
   real-data run with no overlapping bins, RESUME with no checkpoint.

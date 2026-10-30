@@ -64,6 +64,13 @@ spread_batch), which carried the same 1.0.6 version string.
 Every likelihood chunk appends one line to ``batches.jsonl``: its wall time,
 start mode and the accepted step count of each column.
 
+The first chunk of a fresh run (cold, box-prior draws) is its startup check
+(startup_check): the run stops there, before any anchor or checkpoint is written,
+if no draw was kept or if a decade of log10 Kzz at the case's reference pressure
+holds STARTUP_MIN_DRAWS or more in-window draws and none certified, so a prior
+region the solver cannot certify is refused in minutes instead of shaping the
+posterior for a day.
+
 Padding and out-of-window draws cost no solve: a chunk shorter than n_batch
 is filled with copies of its last row, and the evaluator masks those and every
 T-P-invalid row (``active``): their lanes take no chemistry step and no RT. The
@@ -104,6 +111,38 @@ BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 # ~63 KB of shared memory each in the SM's 228 KB (VULCAN-JAX
 # block_thomas_cuda.cu, bt_choose picks that variant at this width).
 FFI_BLOCKS_PER_SM = 3
+# In-window cold draws a log10 Kzz decade needs before none certifying refuses the
+# run: 0 of 30 bounds that decade's certified fraction below 10% (95%).
+STARTUP_MIN_DRAWS = 30
+
+
+def startup_check(log10_kzz, in_window, kept, counts: dict) -> list[str]:
+    """The first chunk's verdict: one line per decade of ``log10_kzz`` (at the
+    reference pressure) with its in-window and kept (certified, finite log L) draws.
+    Raises when nothing was kept (``counts``: the chunk's rejection classes, for the
+    message) or when a decade with STARTUP_MIN_DRAWS or more in-window draws kept
+    none: the posterior there would be cut by the solver, not by the data."""
+    dec = np.floor(np.asarray(log10_kzz, np.float64)[in_window]).astype(int)
+    ok = np.asarray(kept, bool)[in_window]
+    lines, cut = [], []
+    for d in np.unique(dec):
+        n, k = int((dec == d).sum()), int(ok[dec == d].sum())
+        thin = " (too few to judge)" if n < STARTUP_MIN_DRAWS else ""
+        lines.append(f"startup: log10 Kzz [{d}, {d + 1}): {n} in window, {k} kept{thin}")
+        if n >= STARTUP_MIN_DRAWS and k == 0:
+            cut.append(f"[{d}, {d + 1})")
+    if not ok.any():
+        raise RuntimeError(
+            "startup check: no draw of the first chunk was kept "
+            f"({', '.join(f'{v} {c}' for c, v in counts.items())}); the run cannot start. "
+            + " | ".join(lines))
+    if cut:
+        raise RuntimeError(
+            f"startup check: no in-window cold draw certified in log10 Kzz {', '.join(cut)} "
+            f"(>= {STARTUP_MIN_DRAWS} draws each): the posterior there would be cut by the "
+            "solver, not the data. Narrow prior_lnKzz to exclude it, or measure the "
+            "count_max that certifies it before raising the cap. " + " | ".join(lines))
+    return lines
 
 
 class Anchors:
@@ -220,7 +259,8 @@ class BatchProfiler:
 
 def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None,
                  batch_log: Path | None = None, prof: BatchProfiler | None = None,
-                 rejects: Path | None = None, nuisance: Path | None = None):
+                 rejects: Path | None = None, nuisance: Path | None = None,
+                 kzz_ref: float | None = None):
     """Batched log-likelihood of unit-cube points (n, n_dim) -> (n,), -inf on
     every rejection class. Calls a jitted evaluator at one fixed width
     ``n_batch`` (a short last chunk is padded with masked copies of its last
@@ -234,7 +274,9 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     class, ``acc`` accepted steps, ``warm`` the start mode), so the rejected
     fraction can be mapped over the posterior afterwards. With ``nuisance`` (a
     directory; integrated nuisances), each chunk writes its certified rows' ``z``,
-    returned ``log_l`` and group ``stats`` before nautilus sees them."""
+    returned ``log_l`` and group ``stats`` before nautilus sees them. With ``kzz_ref``
+    (the case's base Kzz at the reference pressure, cm^2/s), the first chunk is the
+    run's startup check (startup_check), run before that chunk writes anything."""
     import jax
     import jax.numpy as jnp
 
@@ -256,6 +298,10 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
     fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
+    pending = [kzz_ref is not None]                  # the startup check, once
+    if pending[0]:
+        theta_of = jax.jit(jax.vmap(pipe.theta_from_u))
+        i_kzz = list(pipe.names).index("lnKzz")
 
     def loglike(Z):
         Z = np.atleast_2d(np.asarray(Z, np.float64))
@@ -286,11 +332,6 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
-            if batch_log is not None:
-                with open(batch_log, "a") as fh:
-                    fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
-                                         "mode": "warm" if warm else "cold",
-                                         "acc": acc.tolist()}) + "\n")
             tp_out = ~tp_in[:m]
             # solver state first: the warm evaluator already floors L on a
             # stalled or exhausted exit, which is not a non-finite forward. The
@@ -303,6 +344,19 @@ def make_loglike(pipe, n_batch: int, tally: dict, anchors: Anchors | None = None
                          & (~np.isfinite(L) | (L <= P.REJECT_BELOW)))
             dead = tp_out | exhausted | stalled | nonfinite
             out[i:i + m] = np.where(dead, -np.inf, L)
+            if pending[0]:
+                th = np.asarray(jax.device_get(theta_of(Uj)), np.float64)[:m]
+                counts = {"T-P out": tp_out.sum(), "exhausted": exhausted.sum(),
+                          "stalled": stalled.sum(), "non-finite": nonfinite.sum()}
+                for line in startup_check(np.log10(kzz_ref) + th[:, i_kzz] / np.log(10.0),
+                                          ~tp_out, ~dead, counts):
+                    log.info(line)
+                pending[0] = False
+            if batch_log is not None:
+                with open(batch_log, "a") as fh:
+                    fh.write(json.dumps({"t": round(time.perf_counter() - t0, 2),
+                                         "mode": "warm" if warm else "cold",
+                                         "acc": acc.tolist()}) + "\n")
             if n_rej is not None and dead.any():
                 cls = np.where(tp_out, 0, np.where(exhausted, 1, np.where(stalled, 2, 3)))
                 f = rejects / f"rejected_{n_rej[0]:05d}.npz"
@@ -408,6 +462,16 @@ def main(argv=None) -> None:
         lanes *= FFI_BLOCKS_PER_SM
     cfg = replace(cfg, cold_lanes=lanes)
     out = cfg.out_dir
+    ckpt = out / "nautilus_checkpoint.hdf5"
+    resume = bool(args.resume)
+    # the run directory's state, before the minutes of the pipeline build
+    if resume and not ckpt.exists():
+        raise FileNotFoundError(f"--resume but no checkpoint at {ckpt}; drop --resume "
+                                "to start a fresh run.")
+    if not resume and (ckpt.exists() or any((out / "anchors").glob("anchors_*.npz"))):
+        raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
+                              "pass --resume to continue it, or copy the spec to a new file "
+                              "name for a fresh run.")
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(spec.sampler.n_live)
@@ -440,27 +504,18 @@ def main(argv=None) -> None:
     # start policy, the batch width (the lane queue's composition) and the
     # sampler settings (nautilus restores none of them) are part of the
     # target, so a resume cannot switch them
-    ckpt = out / "nautilus_checkpoint.hdf5"
     digest_path = out / "target_digest.txt"
     tally_path = out / "nautilus_tally.json"
     want = (f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
             f"|n_batch={n_batch}|n_live={n_live}|n_update={n_update}|f_live={F_LIVE}"
             f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock")
-    resume = bool(args.resume)
     if resume:
-        if not ckpt.exists():
-            raise FileNotFoundError(f"--resume but no checkpoint at {ckpt}; drop --resume "
-                                    "to start a fresh run.")
         have = digest_path.read_text().strip() if digest_path.exists() else ""
         if have != want:
             raise RuntimeError(f"nautilus resume refused: {ckpt.name} belongs to a different "
                                f"target ({have or '<absent>'} vs this run's {want}). Restore "
                                "the original target and settings or use a fresh output "
                                "directory.")
-    elif ckpt.exists() or any((out / "anchors").glob("anchors_*.npz")):
-        raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
-                              "pass --resume to continue it, or copy the spec to a new file "
-                              "name for a fresh run.")
     write_run_identity(cfg, pipe, spec, obs_save)
     shutil.copy(spec.path, out / "spec.yaml")       # the run's own record of its spec
     if spec.base is not None:
@@ -471,9 +526,14 @@ def main(argv=None) -> None:
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info(f"nautilus: {len(anchors)} anchor column(s) loaded")
+    # a fresh run's first chunk is its startup check (a resumed run passed it)
+    from retrieval_framework.nautilus_report import _kzz_at_ref
+    kzz_ref = None if resume else _kzz_at_ref({"vulcan_cfg_name": cfg.vulcan_cfg_name,
+                                               "cfg_overrides": cfg.cfg_overrides})
     like = make_loglike(pipe, n_batch, tally, anchors, out / "batches.jsonl",
                         BatchProfiler(), rejects=out / "rejected",
-                        nuisance=out / "nuisance" if pipe.nuisance is not None else None)
+                        nuisance=out / "nuisance" if pipe.nuisance is not None else None,
+                        kzz_ref=kzz_ref)
 
     def loglike_saved(Z):
         L = like(Z)

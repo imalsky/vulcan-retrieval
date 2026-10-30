@@ -12,11 +12,9 @@ Stack-free:
 * nautilus_report.predictive_replicates with one b and with a per-group
   inflation.
 
-Opt-in production preflight (RUN_PRODUCTION_PREFLIGHT=1): the real three-group
-spectrum gets three inflations, in the pipeline's group order.
+The production case (slow): the real three-group spectrum gets three inflations,
+in the pipeline's group order.
 """
-import os
-
 import jax
 import numpy as np
 import pytest
@@ -139,8 +137,7 @@ def test_replicates_carry_the_likelihood_sigma(names, b, want_b):
     assert np.allclose(y_rep.mean(axis=0), mu[0], atol=4 * want / np.sqrt(n))
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PRODUCTION_PREFLIGHT") != "1",
-                    reason="opt-in: builds the exact production forward")
+@pytest.mark.slow
 def test_production_case_gets_one_inflation_per_group():
     from conftest import RUN_DIR
     from retrieval_framework import run_setup as R

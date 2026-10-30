@@ -6,9 +6,14 @@ the exact value on a 3-D Gaussian with three cut regions); with
 anchors, each warm solve starts from the nearest certified column and only
 certified columns become anchors. Padding and T-P-invalid rows are masked: a
 short chunk's filler rows and its out-of-window rows reach the evaluator as
-``active`` False. Last, every config refusal of validate_config."""
+``active`` False. The first chunk's startup check refuses a run whose Kzz
+decade is solver-cut or whose first chunk kept nothing; the real job path runs
+end to end on the smoke case (slow). Last, every config refusal of validate_config."""
 import json
 import math
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -24,7 +29,8 @@ jax.config.update("jax_enable_x64", True)
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
 from retrieval_framework.run_nautilus import (DISCARD_EXPLORATION, F_LIVE, N_NETWORKS,
-                                              Anchors, make_loglike, make_sampler)
+                                              STARTUP_MIN_DRAWS, Anchors, make_loglike,
+                                              make_sampler, startup_check)
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 # log Z of the stub likelihood over the unit box with its three cut regions
@@ -142,6 +148,63 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     assert len(Anchors(tmp_path, 2)) == len(anchors)   # reloads on resume
     rows = [json.loads(r) for r in (tmp_path / "batches.jsonl").read_text().splitlines()]
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
+
+
+def test_startup_check_refuses_a_solver_cut_decade_and_an_empty_first_chunk():
+    """A decade with STARTUP_MIN_DRAWS in-window draws and none kept refuses the
+    run, naming it; one kept draw passes it; a sparse decade is reported as too few
+    to judge, never refused; out-of-window draws do not count; nothing kept refuses."""
+    n = STARTUP_MIN_DRAWS
+    lk = np.r_[np.full(n, 6.5), np.full(n, 8.5), np.full(n - 1, 12.5), np.full(5, 7.5)]
+    win = np.r_[np.ones(3 * n - 1, bool), np.zeros(5, bool)]
+    kept = np.r_[np.zeros(n, bool), np.ones(n, bool), np.zeros(n + 4, bool)]
+    with pytest.raises(RuntimeError, match=r"Kzz \[6, 7\)"):
+        startup_check(lk, win, kept, {})
+    kept[0] = True
+    lines = startup_check(lk, win, kept, {})
+    assert [ln.split(":", 1)[1] for ln in lines] == [
+        f" log10 Kzz [6, 7): {n} in window, 1 kept", f" log10 Kzz [8, 9): {n} in window, {n} kept",
+        f" log10 Kzz [12, 13): {n - 1} in window, 0 kept (too few to judge)"]
+    with pytest.raises(RuntimeError, match="no draw of the first chunk was kept .*7 exhausted"):
+        startup_check(lk, win, np.zeros_like(kept), {"exhausted": 7})
+
+
+@pytest.mark.slow
+def test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes(tmp_path):
+    """The real job path on the CPU, each call in its own process as on NAS (the
+    smoke case on a short sampler budget): the startup check on the first cold chunk,
+    warm chunks after it, the return without a posterior when the budget ends, the
+    refusal of a fresh run over an existing one, and --resume continuing it."""
+    repo = Path(__file__).resolve().parents[1]
+    spec = tmp_path / "smoke_main.yaml"
+    spec.write_text(f"base: {repo / 'runs' / 'w39b_smc_retrieval' / 'smoke.yaml'}\n"
+                    "sampler: {n_live: 16, n_batch: 8}\n"
+                    "config: {cold_lanes: 8, count_max: 2000}\n")   # one draw per lane, short caps
+    job = ("import sys, nautilus\n"
+           "run = nautilus.Sampler.run\n"
+           # n_like_max counts the whole run, resumes included: 32 more per call
+           "nautilus.Sampler.run = lambda self, **kw: run(self, n_like_max=self.n_like + 32, **kw)\n"
+           "from retrieval_framework.run_nautilus import main\n"
+           "main(sys.argv[1:])\n")
+
+    def main(*args):
+        return subprocess.run([sys.executable, "-c", job, str(spec), *args], cwd=repo,
+                              capture_output=True, text=True)
+
+    r = main()
+    assert r.returncode == 0, r.stderr[-3000:]
+    out = tmp_path / "output" / "smoke_main_nautilus"
+    rows = [json.loads(r) for r in (out / "batches.jsonl").read_text().splitlines()]
+    assert rows[0]["mode"] == "cold" and rows[-1]["mode"] == "warm"
+    assert "startup: log10 Kzz" in (out / "run.log").read_text()
+    assert (out / "nautilus_checkpoint.hdf5").exists()
+    assert not (out / "nautilus_posterior.npz").exists()
+    r = main()
+    assert r.returncode != 0 and "FileExistsError" in r.stderr and "--resume" in r.stderr
+    n0 = json.loads((out / "nautilus_tally.json").read_text())["n_eval"]
+    r = main("--resume")
+    assert r.returncode == 0, r.stderr[-3000:]
+    assert json.loads((out / "nautilus_tally.json").read_text())["n_eval"] > n0
 
 
 VALID = dict(vulcan_cfg_name="W39b", network="thermo/SNCHO_photo_network_2025.txt",

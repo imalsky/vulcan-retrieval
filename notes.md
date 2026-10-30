@@ -911,7 +911,26 @@ HPC
   first 16 in-window draws of `sample_prior_u(PRNGKey(0))` [M] (cold, `fast`, daw CPU):
   5 certify on the 2021 file and 6 on the 2025 file, the same draws within 3% in steps
   (the extra one at 4997); every failure is a cap exit on both, so the network is not
-  the cause. The production preflight evaluates the most strongly mixed of those 16.
+  the cause. The production-case test (`test_set_observations`, slow) evaluates the
+  most strongly mixed of those 16.
+- Launch guards (the maintainer decided: no check or pre-run a user must know to run;
+  errors as early as possible). `submit.py` and `validate_env --spec` refuse missing
+  inputs (`run_setup.check_inputs`: network, case config, atm and stellar-flux files,
+  observation products, and for real data `MIN_REAL_BINS` bins in the window and one per
+  group); `run_nautilus` checks the run directory before the pipeline build; CI lints
+  (`ruff check .`); the full tier runs `run_nautilus.main` on the smoke case in
+  subprocesses (cold then warm chunks, the budget return, the refused fresh rerun,
+  resume). A fresh run's first chunk is its startup check (`startup_check`): per decade
+  of log10 Kzz at 1 mbar on the case profile it logs the in-window and kept draws and
+  stops the run, before any anchor or checkpoint, if nothing was kept or a decade with
+  >= 30 in-window draws kept none (0 of 30 bounds its certified fraction below 10% at
+  95%). Basis: WASP-107b kept no cold draw below log10 Kzz 7 and its posterior's lower
+  edge sat on that cut ("Runs"). It refuses a region with no certificate, not a draw
+  fraction (the 10% rule stays in "Do not retry"). Limits: the chunk samples the box
+  prior (v5's first had 307 of 1584 in window), so a thin decade is "too few to judge";
+  it sees cold support only. `e2e_check`'s designed corners start from the in-window
+  prior draw nearest the prior midpoint (the midpoint left the T-P window for five of
+  the six survey planets) and log the corners still dropped.
 - Run certificate (`nautilus_report.certificate`, version 1): provenance (the run's
   target digest and manifest, code commits, dirty flags and `src_diff`, versions,
   per-file k-table + CIA sha256, and the same for the code now), the sampler settings,
@@ -1321,7 +1340,7 @@ Operations
 - Comma lists in `qsub -v` (`XLA_FLAGS`): the commas split the variable list; the flags live in the spec's `runtime.xla_flags`, read inside the job.
 - nsys `--cuda-graph-trace=node` under command buffers: `CUDA_ERROR_ILLEGAL_ADDRESS` mid-capture (79666); profile with command buffers off or graph-level tracing.
 - Chaining jobs on `afterok` of a kernel test: one missing module deleted five benches; chain on `afterany` and let `validate_env` refuse.
-- Merging a file without `ruff check`: an undefined `log` killed five GH200 jobs after their compile; ruff every merged file and run a new job path end-to-end on the CPU first.
+- Merging a file without `ruff check`: an undefined `log` killed five GH200 jobs after their compile; CI now lints every push and the full tier runs the job path end to end (`test_run_nautilus.py`).
 - A 24 h multi-arm calibration chain as a profiling vehicle: a MALA calibrate arm costs ~11 h, so the profiling arms never ran; profile in short bounded jobs.
 - Expecting `LuPivotsToPermutation` count 0 as the perm-cache check: `lax.linalg.lu` reports its permutation through that kernel; 1:1 with getrf is correct.
 - Shrinking the slow tests' memory (2 probe particles, `jax.clear_caches()` between compiles): wall -13% or peak 28.6 -> 23.9 GB in one file only; the peaks are single XLA CPU compiles.

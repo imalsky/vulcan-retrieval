@@ -12,6 +12,18 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    # the pinned rule set (pyproject [tool.ruff.lint]): an undefined name is an
+    # F error here, not a crash minutes into a GPU job
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff==0.16.8" && ruff check .
+
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -22,9 +22,10 @@ exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first)
      vulcan-retrieval's declared requirements (skipped with a warning if
      `packaging` is absent);
   6. exojax imports and matches vulcan-forward's pin;
-  7. required data under <PROJECT_ROOT>/vulcan-retrieval/data/: the real
-     spectrum CSVs, and the ExoMolOP k-tables and H2-H2 + H2-He CIA at the
-     paths vulcan_forward.paths resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
+  7. required data: the spec's own input files (run_setup.check_inputs: network,
+     case config, atm and stellar-flux files, observation products), and the
+     ExoMolOP k-tables and H2-H2 + H2-He CIA at the paths vulcan_forward.paths
+     resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
   8. exogibbs imports and meets the floor the equilibrium cold seed needs;
   9. nautilus (nautilus-sampler) imports and is the stock PyPI release
      NAUTILUS_PIN that run_nautilus is written for; the maintainer's former
@@ -41,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -195,22 +197,26 @@ def _check_exojax() -> None:
 PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")   # relative to the retrieval repo
 
 
-def production_molecules(root: Path, spec: Path | None = None) -> tuple[str, ...]:
-    """The molecule list of the run specification, read from the file, never a copy."""
-    from retrieval_framework.run_setup import load_spec
-    return tuple(load_spec(spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).cfg.molecules)
+def _check_spec_inputs(root: Path, cfg) -> None:
+    """The spec's own input files (run_setup.check_inputs), resolved from the
+    retrieval repo as the job resolves them."""
+    from retrieval_framework.run_setup import check_inputs
+    here = os.getcwd()
+    os.chdir(root / "vulcan-retrieval")
+    try:
+        check_inputs(cfg)
+    except (OSError, ValueError) as e:
+        _err(str(e))
+    else:
+        _ok("the spec's network, case files and observation products are present")
+    finally:
+        os.chdir(here)
 
 
 def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
     from vulcan_forward import paths
 
     data = root / "vulcan-retrieval" / "data"
-    cm24 = data / "cm24_wasp39b"
-    if not any(cm24.glob("*.csv")):
-        _err(f"missing real spectrum CSVs in {cm24}: they are tracked in git; restore them "
-             "with `git checkout -- data/cm24_wasp39b`.")
-    else:
-        _ok(f"real spectrum CSVs present in {cm24}")
     # The engine's own path accessors, so the check reads the files the engine
     # reads ($VULCAN_FORWARD_OPACITY_CACHE included).
     paths.set_data_root(data)
@@ -319,7 +325,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         _check_cross_repo_pin()
         _check_exojax()
-        _check_data_tree(root, production_molecules(root, args.spec))
+        from retrieval_framework.run_setup import load_spec
+        cfg = load_spec(args.spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).cfg
+        _check_spec_inputs(root, cfg)
+        _check_data_tree(root, tuple(cfg.molecules))
         _check_exogibbs()
         _check_nautilus()
 

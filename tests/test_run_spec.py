@@ -3,11 +3,13 @@ parameter count it is documented with and to its derived output directory; a var
 replaces its base's values one level deep, whole; a malformed file is refused by name;
 the runtime block is exported only when the environment does not contradict it;
 the forward build refuses an engine frozen on another network than the config's;
+check_inputs refuses a missing input file before anything is queued or built;
 tools/submit.py charges $PBS_GROUP and sets the wall from the spec's governor."""
 import importlib.util
 import runpy
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -108,3 +110,37 @@ def test_forward_build_refuses_an_engine_frozen_on_another_network():
     RF._check_frozen_network(C.Config(**MINIMAL))          # what the test session froze
     with pytest.raises(RuntimeError, match="export_network"):
         RF._check_frozen_network(C.Config(**{**MINIMAL, "network": "thermo/SNCHO_photo_network.txt"}))
+
+
+@pytest.mark.parametrize("broken, msg", [
+    (None, None), ("network", "network"), ("atm", "atm_file"), ("obs", "obs.csv"),
+    ("window", "bins of"),
+])
+def test_check_inputs_refuses_a_missing_input_before_any_build(broken, msg, tmp_path,
+                                                               monkeypatch):
+    """submit.py and validate_env refuse a spec whose input files would fail only
+    minutes into a job: the network, the case's atm and stellar-flux files, the
+    observation products and, for real data, bins in the fit window."""
+    monkeypatch.chdir(tmp_path)
+    case = tmp_path / "data" / "c"
+    case.mkdir(parents=True)
+    for f in ("atm.txt", "sflux.txt"):
+        (case / f).write_text("x\n")
+    (case / "C.yaml").write_text("atm_file: data/c/atm.txt\nsflux_file: data/c/sflux.txt\n")
+    rows = [f"{i},{w},{w - 0.01},{w + 0.01},0.1,0.001,0.001"
+            for i, w in enumerate(np.linspace(3.0, 3.4, 5))]
+    (case / "obs.csv").write_text("i,wave,lo,hi,rprs,el,eh\n" + "\n".join(rows) + "\n")
+    over = dict(vulcan_cfg_name="data/c/C.yaml", obs_dir="data/c",
+                obs_products={"G": ["obs.csv"]}, combo=("G",), obs_wl_lo=2.9, obs_wl_hi=3.5)
+    if broken == "network":
+        over["network"] = "thermo/no_such_network.txt"
+    elif broken in ("atm", "obs"):
+        (case / {"atm": "atm.txt", "obs": "obs.csv"}[broken]).unlink()
+    elif broken == "window":
+        over.update(obs_wl_lo=4.0, obs_wl_hi=5.0)
+    cfg = C.Config(**{**MINIMAL, **over})
+    if msg is None:
+        R.check_inputs(cfg)
+    else:
+        with pytest.raises((OSError, ValueError), match=msg):
+            R.check_inputs(cfg)

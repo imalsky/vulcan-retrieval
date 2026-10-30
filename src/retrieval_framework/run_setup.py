@@ -243,6 +243,34 @@ def load_spec(path: str | Path) -> Spec:
                 runtime=runtime)
 
 
+def check_inputs(cfg: C.Config) -> None:
+    """Refuse, before anything is queued or built, a config whose input files would
+    only fail minutes into a job: the reaction network, the case's vulcan3 config and
+    the atm and stellar-flux files it names (resolved from the working directory as
+    the run resolves them, ``provenance.case_config``), and with an ``obs_dir`` every
+    product of ``combo`` read as the run reads it; a real-data run also needs
+    observations.MIN_REAL_BINS bins in the fit window and one in every group. No jax."""
+    from retrieval_framework import observations as OBS
+    from retrieval_framework import provenance
+    net = provenance.case_data_file(cfg.network)
+    if not net.is_file():
+        raise FileNotFoundError(f"network {cfg.network!r} not found (resolved to {net})")
+    path, case = provenance.case_config(cfg.vulcan_cfg_name)
+    for key in ("atm_file", "sflux_file"):
+        f = provenance.case_data_file(cfg.cfg_overrides.get(key, case[key]))
+        if not f.is_file():
+            raise FileNotFoundError(f"{path}: its {key} {f} does not exist")
+    if not cfg.obs_dir:
+        return
+    obs = OBS.load_real_observations(cfg)
+    empty = [g for g in cfg.combo if g not in obs["groups"]]
+    if not cfg.generate_synthetic_data and (len(obs["wl"]) < OBS.MIN_REAL_BINS or empty):
+        raise ValueError(
+            f"{cfg.obs_dir}: {len(obs['wl'])} bins of {list(cfg.combo)} in the fit window "
+            f"[{cfg.obs_wl_lo}, {cfg.obs_wl_hi}] um (groups with none: {empty}); a real-data "
+            f"run needs {OBS.MIN_REAL_BINS} and one in every group")
+
+
 def runtime_env_updates(rt: Runtime, environ) -> Dict[str, Optional[str]]:
     """The runtime block as environment values, checked against ``environ``: a
     variable already set to a different value is refused (the file is the single

@@ -120,9 +120,11 @@ def _set_environment(spec, rung):
     return rt
 
 
-def _corners(pipe, names):
+def _corners(pipe, names, origin):
     """Designed corners in u-space (z = CORNER_Z on one parameter, low Kzz with each
-    of LOW_KZZ_WITH), each from the prior midpoint; out-of-window ones dropped."""
+    of LOW_KZZ_WITH), each from ``origin`` (an in-window point: the prior midpoint is
+    out of the T-P window for most cases); the out-of-window ones are dropped and
+    logged."""
     import jax.numpy as jnp
     logit = lambda z: float(np.log(z) - np.log1p(-z))      # noqa: E731
     rows = []
@@ -135,11 +137,13 @@ def _corners(pipe, names):
             rows += [{"lnKzz": CORNER_Z[0], p: z} for z in CORNER_Z]
     out = []
     for r in rows:
-        u = np.zeros(len(names))
+        u = np.array(origin, np.float64)
         for p, z in r.items():
             u[names.index(p)] = logit(z)
         if bool(pipe.tp_valid(pipe.theta_from_u(jnp.asarray(u, pipe.dtype)))):
             out.append(u)
+        else:
+            logging.info(f"corner {r} leaves the T-P window: dropped")
     return np.asarray(out)
 
 
@@ -177,7 +181,7 @@ def solve(args) -> int:
         U, C = np.array(z["u"], np.float64), np.zeros(int(json.loads(str(z["meta"]))["n_corners"]))
     else:
         U = np.array(pipe.sample_prior_u(jax.random.PRNGKey(args.seed), args.draws), np.float64)
-        C = _corners(pipe, names)[:len(U)]
+        C = _corners(pipe, names, U[np.argmin((U ** 2).sum(axis=1))])[:len(U)]
         U[:len(C)] = C
     lo, hi = (int(x) if x else None for x in args.rows.split(":"))
     rows = np.arange(len(U))[lo:hi]

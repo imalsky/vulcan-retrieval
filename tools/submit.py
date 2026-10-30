@@ -6,7 +6,9 @@
     python tools/submit.py runs/w107b/w107b_g395h.yaml --queue gpu_normal       # the 24 h queue
 
 The spec is loaded and validated here (run_setup.load_spec, so a bad file fails before
-anything is queued). The PBS job is not part of the spec: the qsub command line asks for
+anything is queued), and its input files are checked as the job will resolve them, from
+the repo (run_setup.check_inputs: network, case config, atm and stellar-flux files,
+observation products). The PBS job is not part of the spec: the qsub command line asks for
 one GH200 node on gpu_long (or --queue gpu_normal), charges the allocation in $PBS_GROUP and sets the walltime
 JOB_HEADROOM_S past the spec's governor (config.walltime_seconds); either unset, or a
 walltime past the queue's limit, is refused. The run name is the job name, and the job receives three comma-free values:
@@ -69,8 +71,16 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     sys.path.insert(0, str(REPO / "src"))
-    from retrieval_framework.run_setup import load_spec
+    from retrieval_framework.run_setup import check_inputs, load_spec
     spec = load_spec(args.spec)
+    here = os.getcwd()
+    os.chdir(REPO)                       # the job resolves its paths from the repo
+    try:
+        check_inputs(spec.cfg)
+    except (OSError, ValueError) as e:
+        sys.exit(f"{spec.path.name}: {e}")
+    finally:
+        os.chdir(here)
     group = _safe(os.environ.get("PBS_GROUP", ""), "PBS_GROUP")
     if not group:
         sys.exit("set PBS_GROUP to the allocation the job is charged to (qsub -W group_list)")

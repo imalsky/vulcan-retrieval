@@ -38,18 +38,16 @@ def test_data_tree_checks_flag_missing_and_pass_when_seeded(tmp_path: Path, monk
     monkeypatch.delenv(paths.ENV_OPACITY_CACHE, raising=False)
     _reset()
     data = tmp_path / "vulcan-retrieval" / "data"
-    (data / "cm24_wasp39b").mkdir(parents=True)
-    (data / "opacity_cache").mkdir()
+    (data / "opacity_cache").mkdir(parents=True)
     (data / "exomolop").mkdir()
     V._check_data_tree(tmp_path, PROD)
-    # ERRORS: missing CSVs, missing ExoMolOP k-tables (the only opacity path),
-    # and both CIA files. Nothing else is read, so nothing else may warn.
-    assert len(V._ERRORS) == 4
+    # ERRORS: missing ExoMolOP k-tables (the only opacity path) and both CIA
+    # files. Nothing else is read, so nothing else may warn.
+    assert len(V._ERRORS) == 3
     assert any("exomolop" in e or "ExoMolOP" in e for e in V._ERRORS), V._ERRORS
     assert V._WARNINGS == []
 
     _reset()
-    (data / "cm24_wasp39b" / "obs.csv").write_text("wl,depth\n")
     (data / "opacity_cache" / "H2-H2_2011.cia").write_text("")
     (data / "opacity_cache" / "H2-He_2011.cia").write_text("")
     for m in PROD:
