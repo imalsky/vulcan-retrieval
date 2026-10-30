@@ -243,6 +243,21 @@ def load_spec(path: str | Path) -> Spec:
                 runtime=runtime)
 
 
+def check_run_dir(out: Path, resume: bool) -> None:
+    """Refuse a resume with no checkpoint, and a fresh run into a directory that holds
+    a previous run: a checkpoint or anchor files (an empty ``anchors/`` is a run that
+    stopped before its first chunk, e.g. at the startup check, and is not refused).
+    submit.py and run_nautilus call this one check."""
+    ckpt = Path(out) / "nautilus_checkpoint.hdf5"
+    if resume and not ckpt.exists():
+        raise FileNotFoundError(f"--resume but no checkpoint at {ckpt}; drop --resume "
+                                "to start a fresh run.")
+    if not resume and (ckpt.exists() or any((Path(out) / "anchors").glob("anchors_*.npz"))):
+        raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
+                              "pass --resume to continue it, or copy the spec to a new file "
+                              "name for a fresh run.")
+
+
 def check_inputs(cfg: C.Config) -> None:
     """Refuse, before anything is queued or built, a config whose input files would
     only fail minutes into a job: the reaction network, the case's vulcan3 config and

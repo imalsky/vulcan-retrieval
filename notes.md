@@ -917,7 +917,9 @@ HPC
   errors as early as possible). `submit.py` and `validate_env --spec` refuse missing
   inputs (`run_setup.check_inputs`: network, case config, atm and stellar-flux files,
   observation products, and for real data `MIN_REAL_BINS` bins in the window and one per
-  group); `run_nautilus` checks the run directory before the pipeline build; CI lints
+  group); `submit.py` and `run_nautilus` share one run-directory check
+  (`run_setup.check_run_dir`; an empty `anchors/` left by a startup refusal does not block
+  a resubmit), the runner's before the pipeline build; CI lints
   (`ruff check .`); the full tier runs `run_nautilus.main` on the smoke case in
   subprocesses (cold then warm chunks, the budget return, the refused fresh rerun,
   resume). A fresh run's first chunk is its startup check (`startup_check`): per decade

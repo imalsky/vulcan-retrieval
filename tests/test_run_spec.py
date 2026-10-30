@@ -144,3 +144,18 @@ def test_check_inputs_refuses_a_missing_input_before_any_build(broken, msg, tmp_
     else:
         with pytest.raises((OSError, ValueError), match=msg):
             R.check_inputs(cfg)
+
+
+def test_one_run_directory_check_for_submit_and_the_runner(tmp_path):
+    """submit.py and run_nautilus refuse with the same check: a resume needs the
+    checkpoint, a fresh run refuses a checkpoint or anchor files, and the empty
+    anchors/ a run stopped at its startup check leaves does not block a resubmit."""
+    (tmp_path / "anchors").mkdir()
+    R.check_run_dir(tmp_path, resume=False)
+    with pytest.raises(FileNotFoundError, match="no checkpoint"):
+        R.check_run_dir(tmp_path, resume=True)
+    (tmp_path / "anchors" / "anchors_00000.npz").write_bytes(b"")
+    with pytest.raises(FileExistsError, match="--resume"):
+        R.check_run_dir(tmp_path, resume=False)
+    (tmp_path / "nautilus_checkpoint.hdf5").write_bytes(b"")
+    R.check_run_dir(tmp_path, resume=True)

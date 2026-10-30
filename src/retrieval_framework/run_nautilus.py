@@ -97,7 +97,7 @@ import numpy as np
 
 from retrieval_framework import config_schema as C
 from retrieval_framework.run_setup import (
-    export_runtime, load_spec, log_hardware, set_observations, setup_logging,
+    check_run_dir, export_runtime, load_spec, log_hardware, set_observations, setup_logging,
     write_run_identity)
 
 log = logging.getLogger("retrieval")
@@ -464,14 +464,7 @@ def main(argv=None) -> None:
     out = cfg.out_dir
     ckpt = out / "nautilus_checkpoint.hdf5"
     resume = bool(args.resume)
-    # the run directory's state, before the minutes of the pipeline build
-    if resume and not ckpt.exists():
-        raise FileNotFoundError(f"--resume but no checkpoint at {ckpt}; drop --resume "
-                                "to start a fresh run.")
-    if not resume and (ckpt.exists() or any((out / "anchors").glob("anchors_*.npz"))):
-        raise FileExistsError(f"{out} holds a previous nautilus run (checkpoint or anchors/): "
-                              "pass --resume to continue it, or copy the spec to a new file "
-                              "name for a fresh run.")
+    check_run_dir(out, resume)          # before the minutes of the pipeline build
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(spec.sampler.n_live)

@@ -71,7 +71,7 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     sys.path.insert(0, str(REPO / "src"))
-    from retrieval_framework.run_setup import check_inputs, load_spec
+    from retrieval_framework.run_setup import check_inputs, check_run_dir, load_spec
     spec = load_spec(args.spec)
     here = os.getcwd()
     os.chdir(REPO)                       # the job resolves its paths from the repo
@@ -94,12 +94,10 @@ def main(argv=None) -> None:
                  f"{QUEUE_WALL_H[args.queue]} h: lower config.walltime_seconds")
     out = spec.cfg.out_dir
     jobs = out / "jobs"
-    ckpt = out / "nautilus_checkpoint.hdf5"
-    if args.resume and not ckpt.exists():
-        sys.exit(f"nothing to resume: {ckpt} does not exist")
-    if not args.resume and (ckpt.exists() or (out / "anchors").exists()):
-        sys.exit(f"{out} already holds a run: --resume to continue it, or copy the spec to a "
-                 "new file name for a fresh run")
+    try:
+        check_run_dir(out, args.resume)       # the job's own check, before queueing
+    except OSError as e:
+        sys.exit(str(e))
 
     attrs = [f"group_list={group}"]
     prev = _last_active_job(jobs / "jobs.txt") if args.resume else None
