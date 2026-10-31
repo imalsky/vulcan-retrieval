@@ -1,0 +1,16 @@
+# HD209458b in the sulfur survey: survey_base.yaml plus this planet's numbers (the recipe:
+# notes "Design records", sulfur survey case). Data: Zenodo 10557924 NIRCam F322W2 + F444W (Xue+2024, Eureka!), 0.04 um bins.
+#
+#   python tools/submit.py runs/survey/hd209458b.yaml [--dry-run]
+base: survey_base.yaml
+config:
+  run_label: HD209458b
+  vulcan_cfg_name: data/survey/hd209b/HD209b.yaml
+  rp_cm: 9.986325e+09                # Rp/Rs 0.12062 (median depth in the window) x R* 1.19 R_Sun
+  rstar_cm: 8.278830e+10
+  tp_gravity_cgs: 927.35                # G Mp / rp_cm^2, Mp 0.73 M_J
+  obs_dir: data/survey/hd209b
+  obs_products: {F322W2: [NIRCam_F322W2.csv], F444W: [NIRCam_F444W.csv]}
+  combo: [F322W2, F444W]                 # the bluest group is the offset reference
+  prior_Tirr: [825.3, 2888.7]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1459 K
+  prior_lnM_sigma: 0.0548             # the archive mass error

@@ -1,0 +1,16 @@
+# WASP-166b in the sulfur survey: survey_base.yaml plus this planet's numbers (the recipe:
+# notes "Design records", sulfur survey case). Data: Zenodo 15122285 G395M R100 (Eureka! v79).
+#
+#   python tools/submit.py runs/survey/wasp166b.yaml [--dry-run]
+base: survey_base.yaml
+config:
+  run_label: WASP-166b
+  vulcan_cfg_name: data/survey/w166b/W166b.yaml
+  rp_cm: 4.546541e+09                # Rp/Rs 0.05357 (median depth in the window) x R* 1.22 R_Sun
+  rstar_cm: 8.487540e+10
+  tp_gravity_cgs: 619.00                # G Mp / rp_cm^2, Mp 0.101 M_J
+  obs_dir: data/survey/w166b
+  obs_products: {G395M: [G395M_R100.csv]}
+  combo: [G395M]                 # the bluest group is the offset reference
+  prior_Tirr: [718.4, 2514.5]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1270 K
+  prior_lnM_sigma: 0.0495             # the archive mass error

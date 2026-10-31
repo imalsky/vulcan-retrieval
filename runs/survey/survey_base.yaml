@@ -1,0 +1,83 @@
+# The sulfur survey: one model, one prior set and one data recipe for every planet, so a
+# difference between planets is a difference in the planets (notes "Design records",
+# sulfur survey). Each planet is a file beside this one that names it as `base:` and adds
+# only its own numbers (system, data files, Tirr prior, mass error); this file is the
+# base, never a run (it names no planet, so validate_config refuses it).
+#
+#   python tools/submit.py runs/survey/<planet>.yaml [--dry-run]
+#
+# Data: one JWST data set per planet (a NIRSpec G395H or G395M transit, or NIRCam
+# F322W2 + F444W in two visits), the authors' binning near R100 per detector or filter,
+# fitted on 2.87-5.10 um only (CO2, CO, SO2, H2S, H2O, CH4 bands); one offset per group
+# after the bluest and one noise inflation per group, integrated out.
+# Machinery as the WASP-107b case: rtol 0.2 within 5000 steps (re-solve the posterior
+# rows at 0.05 after the run, in a flat variant: a spec has one base), constant Kzz,
+# 10 bar bottom. YAML reads 1e11 as text: write 1.0e+11.
+#
+# 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar,
+# lnR0, lnM, log10kappa_cloud, cloud_alpha.
+
+runtime:
+  solver: ffi
+  chem_rhs: grouped
+  bt_buffers: null
+  gpu_memory_fraction: 0.90
+  xla_flags: "--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
+
+sampler:
+  n_live: 1000
+  n_eff: 5000
+  n_batch: null
+  warm_starts: true
+
+config:
+  seed: 20261029
+  network: thermo/SNCHO_photo_network_2025.txt
+
+  # ---- forward model (as the WASP-107b case) -----------------------------------------
+  nz: 100                              # log-uniform over 1e-9..10 bar (10 per decade)
+  molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO]
+  nu_min: 1900.0                       # cm^-1 (5.26 um); the band every production run uses
+  nu_max: 9900.0                       # cm^-1 (1.01 um)
+  art_nlayer: 67
+  dt_max: 1.0e+11
+  cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  count_max: 5000
+  p_ref_bar: 1.0e-3                    # rp_cm and g apply at 1 mbar
+
+  # ---- data window, the same for every planet ---------------------------------------
+  obs_wl_lo: 2.87                      # um: G395H/G395M with F290LP, inside every product
+  obs_wl_hi: 5.10
+  obs_max_bin_R: 200.0                 # drops masked-gap remnants of an R100 product
+  generate_synthetic_data: false
+
+  # ---- T-P: Guillot profile, f = 1/4 (the planet sets prior_Tirr) --------------------
+  tp_infer_Tint: true
+  tp_deep_param: T1bar
+  prior_T1bar: [320.0, 2980.0]         # K, the opacity window; out-of-window profiles are rejected
+  prior_log10kappa: [-3.5, 0.5]        # IR opacity, cm^2/g
+  prior_log10gamma: [-3.0, 0.3010299956639812]
+
+  # ---- composition and mixing --------------------------------------------------------
+  prior_lnZ: [-3.506557897319982, 3.4011973816621555]   # 0.3x-300x solar about the 10x baseline
+  baseline_metallicity_solar: 10.0
+  prior_c_o: [-3.08922261664133, 0.24]  # C/O 0.025-0.70 about the 0.549 baseline
+  prior_lnKzz: [-4.605170185988091, 9.210340371976184]  # constant Kzz 1e7-1e13 about 1e9 cm^2/s
+  infer_s_o: true
+  prior_s_o: [-2.302585092994046, 2.302585092994046]    # S/O x0.1-10 about the baseline
+  prior_lnR0: [-0.1, 0.1]
+  infer_lnM: true                      # lnM ~ N(0, prior_lnM_sigma), RT-only
+
+  # ---- clouds and noise (the schema defaults, stated so the campaign cannot drift) ---
+  cloud_model: powerlaw
+  prior_log10kappa_cloud: [-7.0, 1.0]  # cm^2/g at 3.5 um
+  prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like
+  prior_offset_ppm: [-800.0, 800.0]    # per extra detector
+  infer_noise_inflation: true
+  prior_noise_inflation: [0.5, 3.0]    # log10-uniform, one per detector
+  noise_inflation_per_group: true
+  integrate_nuisance: true
+
+  # ---- lanes and wall ------------------------------------------------------------------
+  cold_lanes: 176
+  walltime_seconds: 165600             # 46 h governor (gpu_long)

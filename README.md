@@ -7,8 +7,9 @@ transfer through the shared
 
 The sampler is nested sampling with nautilus (`run_nautilus`, which the NAS
 job script runs). The repository contains a WASP-39 b case (the production
-run specification and a small synthetic one), validation scripts, and a run
-report (`nautilus_report`) that writes a certificate and figures.
+run specification and a small synthetic one), a six-planet sulfur survey
+(`runs/survey/`), validation scripts, and a run report (`nautilus_report`)
+that writes a certificate and figures.
 
 This is research software. Validate a new target and model setup before using
 the posterior in a publication.
@@ -60,9 +61,14 @@ python -m retrieval_framework.nautilus_report \
 ```
 
 A run is one YAML specification in `runs/<case>/`: `smoke.yaml` is the small
-synthetic case and [`v5.yaml`](runs/w39b_smc_retrieval/v5.yaml) the WASP-39 b
+synthetic case and
+[`wasp39_test1.yaml`](runs/w39b_smc_retrieval/wasp39_test1.yaml) the WASP-39 b
 production run (`--dry-run` prints the resolved settings). Copy a specification
 to `runs/<new-case>/` for another target.
+
+On NAS, submit a run with `python tools/submit.py runs/<case>/<name>.yaml`
+(`PBS_GROUP` set to the allocation; `--dry-run` prints the job line). It checks
+the specification and its input files before anything is queued.
 
 Each run writes its resolved configuration, target manifest, checkpoint, and
 rejection tally to `output/<case>/<name>_nautilus/`, and when it finishes the

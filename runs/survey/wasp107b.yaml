@@ -1,0 +1,16 @@
+# WASP-107b in the sulfur survey: survey_base.yaml plus this planet's numbers (the recipe:
+# notes "Design records", sulfur survey case). Data: Sing+2024 G395H binned to R100.
+#
+#   python tools/submit.py runs/survey/wasp107b.yaml [--dry-run]
+base: survey_base.yaml
+config:
+  run_label: WASP-107b
+  vulcan_cfg_name: data/survey/w107b/W107b.yaml
+  rp_cm: 6.567906e+09                # Rp/Rs 0.14369 (median depth in the window) x R* 0.657 R_Sun
+  rstar_cm: 4.570749e+10
+  tp_gravity_cgs: 305.14                # G Mp / rp_cm^2, Mp 0.1039 M_J
+  obs_dir: data/survey/w107b
+  obs_products: {NRS1: [G395H_NRS1_R100.csv], NRS2: [G395H_NRS2_R100.csv]}
+  combo: [NRS1, NRS2]                 # the bluest group is the offset reference
+  prior_Tirr: [416.3, 1457.2]            # [0.4, 1.4] x sqrt(2) Teq, Teq 736 K
+  prior_lnM_sigma: 0.0385             # the archive mass error

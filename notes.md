@@ -39,6 +39,12 @@ sigma = posterior standard deviation, L = log-likelihood.
   `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
   specs; "Design records"), ran the same model at rtol 0.2 on the 2024 JWST and HST
   data: the three runs are finished ("Runs", w107b); the open work is in `todo.md`.
+- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b,
+  wasp96b, wasp166b, hd189733b, hd209458b; "Design records", sulfur survey case). On
+  NAS: `git pull --ff-only` in all three trees, `tools/bootstrap_nas_env.pbs` (the pins
+  moved), then `PBS_GROUP=<allocation> python tools/submit.py runs/survey/<planet>.yaml`
+  for each; keep that checkout unchanged until all six end. The first job is the first
+  NAS run of the current `run_nas.pbs`.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO
   file (93 species). Every run up to v5 and the three WASP-107b runs solved the 2021
   `SNCHO_photo_network.txt` (89): their config.json carries no `network`, so the report
@@ -53,7 +59,7 @@ sigma = posterior standard deviation, L = log-likelihood.
 - Tests: the normal tier (plain `pytest tests`; CI runs it serially on Python
   3.10-3.12) deselects `slow` through pyproject's addopts. Full tier
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
-  `test_set_observations`' production preflight and `test_v5_options`, every v5 option
+  `test_set_observations`' production-case likelihood and `test_v5_options`, every v5 option
   on the real smoke pipeline, the production case's build, and the job path end to end
   on the smoke case). Counts [M], daw CPU `-n 8` (cores 64-79): normal 111 passed in
   33 s, full 123 passed / 1 xfailed in 87 min, the job-path test most of it (12 min
@@ -1064,6 +1070,119 @@ HPC
     the WASP-39b finding that rtol-0.2 columns sit 0.28-0.35 nat from rtol 0.05
     ("Runs", baseline_v2) asks for the same re-solve of the posterior rows before a
     number is quoted.
+- Sulfur survey case (`runs/survey/`, inputs in `data/survey/<case>/`; the recipe is
+  "Rules", "Data" and "NIRCam pair" below, the builder script not kept, the maintainer
+  decided): one S/O across warm giants or not, with
+  the photochemistry in the likelihood. Prior work: Fu+2025 (arXiv:2501.02081, eight
+  planets at 2.7-5 um: band indices against equilibrium isothermal grids, and PICASO +
+  photochem forward grids at constant Kzz 1e10 for the SO2 trend), Gressier+2025
+  (arXiv:2509.16082, the SO2-metallicity trend, WASP-107b off it), Crossfield+2025
+  (arXiv:2509.14318, the SO2 shoreline: weak Kzz, UV and Tint dependence above ~1000 K).
+  The maintainer decided: one standard for every planet, one JWST observation each,
+  then added HD 189733b and HD 209458b as a NIRCam pair (two visits each).
+  - Standard. One NIRSpec transit (G395H; WASP-166b G395M, one group), the authors' R100
+    product per detector, fitted on 2.87-5.10 um, `obs_max_bin_R` 200. One model and
+    one prior set in `survey_base.yaml` (never a run: it names no planet); a planet file
+    adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and
+    lnM's sigma. Machinery as the WASP-107b case (2025 network, rtol 0.2 within 5000,
+    constant Kzz 1e7-1e13 about 1e9, 10 bar bottom, 83 deg; the maintainer decided the
+    1e7 floor from the pre-launch check below, run at 1e6); T1bar over the whole window;
+    the schema-default cloud, offset and inflation priors are stated in the base.
+  - Rules. System: NASA Exoplanet Archive composite table (`pscomppars`, queried
+    2026-10-29; R*, a, Mp and its error, Teq, Teff). rp_cm = sqrt(median depth in the window) x R*; vulcan3 Rp = R(1 bar),
+    hydrostatic below it on a nominal Guillot column (kappa 0.01, gamma 0.4, Tint 300 K,
+    mu 2.4). Stellar flux (the maintainer decided: what each host's published
+    photochemistry used): WASP-39 Tsai+2023's spectrum (vulcan3's packaged file, as v5);
+    WASP-107 MUSCLES HD 85512 (Dyrek+2024, a copy of the earlier case's file); HD 189733 Moses+2011's (eps
+    Eri STIS 115-283 nm, solar / 10 above; Fu+2024 ran VULCAN on it; vulcan3's packaged
+    file, ending at 800 nm); HD 209458 the solar analog (Moses+2011), and WASP-166 (F9V)
+    and WASP-96 (G8V), whose published photochemistry names no spectrum, the same: Gueymard
+    solar x (Teff / 5772 K)^4.
+  - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window);
+    WASP-107b Sing+2024 G395H (copied into `data/survey/w107b` with its stellar flux: the
+    maintainer decided the survey uses no file of the earlier WASP-107b case; 55);
+    WASP-96b Zenodo 17065171 (exoTEDRF /
+    exoUPRF, PriorLD_Slope, R100; 55 fitted, the cap drops a 3.712 um remnant at R 269);
+    WASP-166b Zenodo 15122285 (Eureka! v79 R100; `bin_width` is a half-width, the rp^2
+    errors averaged; 58). The converted files match the raw ones to the printed digits.
+    The window drops 5 blue and 1 red bin of each WASP-39b and WASP-107b product the
+    earlier runs fitted.
+  - NIRCam pair [M]: F322W2 and F444W are separate visits, the F322W2 group the offset
+    reference. Both published files merge the filters without a label; each lists the
+    F322W2 block, then the F444W block (one wavelength reset), and the block is the
+    visit; the ~3.9-4.0 um overlap bins stay in both groups (a split at 3.90 um puts
+    seven HD 189733b bins in the wrong visit). HD 189733b: Zenodo
+    11459715 (Fu+2024), 83 + 56 bins of ~0.02 um binned to R100 within each block (51 +
+    25; mean depth and total inverse variance kept); 58 in the window. The file is the
+    spectrum Fu+2024 fitted, after their unocculted-spot (2.7% / 1% dimming, 4250 K) and
+    nightside (1011 K) corrections [M]: 139 points as their Fig. 2, chi2/N
+    1.057 against the archive's free-retrieval model (theirs 1.06), and its F444W - F322W2
+    level sits -8 ppm from that model where the visit-dependent spot dilution they removed
+    is ~+126 ppm [E, blackbody estimate; the nightside term, 4-28 ppm, is not separable];
+    the record's zip holds no other spectrum. Their VULCAN used Moses+2011's spectrum
+    (their ref. 86), this case's file. HD 209458b: Zenodo 10557924 (Xue+2024, Eureka!, the
+    reduction their retrievals use), 41 + 28 channels of 0.04 um with the SPARTA channel
+    edges. Every channel is 0.04 um (Xue+2024 Sec. 2, 69 channels); the Eureka! edges
+    differ on rows 37-43 only, as display labels, and those rows' errors are 0.04 um
+    errors (Eureka!/SPARTA 1.04-1.14, against 1.089 +- 0.039 on the 62 rows with equal
+    edges; a 0.02 um channel would be ~1.54) [M]. Row 37 is the F322W2
+    3.84-3.88 channel (labelled 3.86 +- 0.01); rows 38-43 are both visits' overlap
+    channels interleaved at centre -/+ 0.01, the -0.01 row F444W and the +0.01 row F322W2:
+    that order puts all six error ratios within 1.4 sigma of the 62 rows, the other order
+    four at 5-7 sigma. All 69 kept, 56 in the window. Pairing rows 38-43 in SPARTA's row
+    order biases the F444W offset by up to ~18 ppm; dropping them loses the overlap that
+    ties the two visits; row 37 is not a 0.02 um depth on 0.04 um edges (its error is a
+    0.04 um error). NIRCam ends at 5.0 um, and the window cuts its 2.4-2.87 um
+    H2O band, the published C/O driver for both NIRCam planets.
+  - Left out. HAT-P-26b: Gressier+2025's two reductions at R ~400 are the journal's data
+    behind its Figure 2 (wavelength, depth, error; no bin edges or detector column), not
+    yet converted. HAT-P-1b: no public reduced spectrum (MAST raw only). Both stay out
+    (the maintainer decided).
+    WASP-80b: CS2 (arXiv:2604.13168), no opacity table. WASP-52b: its G395H
+    spectrum needs stellar contamination (arXiv:2609.21810). HIP 67522b: young host,
+    disputed mass. Reserves: WASP-127b (~10% of the flux in the slit), HAT-P-12b (G395M;
+    its CH4 depletion meets the 10 bar bottom). GO 5924 (the Grand Tour, 25 giants, one
+    homogeneous reduction) would replace the per-paper products once its spectra are
+    public.
+  - A Codex review of the setup found no conversion or unit error. Kept and disclosed:
+    the archive's a/R* disagrees with the transit fits (WASP-96b 9.28 against 8.989,
+    WASP-166b 11.30 against 11.83): R*/a sets the UV dilution (6-10%) and R* moves rp_cm
+    3-5%, inside the lnR0 prior; the solar flux keeps the solar UV shape for F/G hosts
+    (enhanced FUV depletes SO2, Tsai+2023; HD 189733 is an active K2V), a UV bracket is a
+    sensitivity run, not done (since the UV decision this holds for the three solar-analog
+    hosts only).
+    The window and the Guillot solution accept ~16, 25, 15, 15, 20 and 13% of the T-P
+    prior box for WASP-39b, -107b, -96b, -166b, HD 189733b and HD 209458b [E, two
+    reviews' replays; the WASP-39b batch on daw kept 96 of 672, 14%]: report the
+    accepted joint prior.
+  - Pre-launch check [M] (daw CPU, the `solo_cpu` rung of `validation/e2e_check.py`, 96
+    in-window draws per planet at seed 0, the decided priors and UV, `count_max` 5000, rtol
+    0.2; 4.8 h at 16 processes, ~10 GB each): certified 60, 65, 66, 60, 70 and 63 of 96
+    (WASP-39b, -107b, -96b, -166b, HD 189733b, HD 209458b), every certified draw with a
+    finite log L. By log10 Kzz: 6-7 kept 0 of 12-16 on the four G395 planets and 1 of 14 on
+    each NIRCam planet; 7-8 kept 4-12 of 14-17 (27-75%); 8 and above 70-100%. Designed
+    corners: the prior-midpoint origin of that run left two per planet on five planets
+    (all certified); on WASP-107b 8 of 17 certified, every low-Kzz corner and the C/O
+    0.027 corner exhausting the cap (the origin is now an in-window draw, "Launch
+    guards").
+  - Full review (two Opus reviewers, one Fable, one Codex), beyond the fix above. Code,
+    fixed: a path-style case config (this case, WASP-107b) recorded no config hash and
+    no hash of its atm or flux file (now `provenance.case_inputs`, "Evidence behind the
+    rules"); `nautilus_report`'s Kzz block used v5's x0.15 / x0.2 / x10 factors, not the
+    floor or a ceiling on a constant Kzz about 1e9 (now the prior floor and the case
+    profile, "Design records"); `e2e_check`'s designed corners started from the prior
+    midpoint, invalid for five of the six planets (now an in-window draw, "Launch
+    guards"). Science [verified against the papers]: the C/O
+    floor 0.10 sits inside the 1-sigma range of HD 209458b (0.11 +0.12/-0.06, Xue+2024)
+    and HD 189733b (0.12 +0.02/-0.01, Fu+2024) and under WASP-107b's Welbanks-bands fit;
+    the 1x metallicity floor is near HD 209458b's 3 +4/-1x; the bolometric solar scaling
+    keeps the solar UV shape, 3-5x above a 5052 K photosphere's ratio at 170-230 nm (HD
+    189733) and ~0.7x at 6050-6091 K (WASP-166, HD 209458), a host-temperature-correlated
+    UV in the SO2-destroying band, and HD 189733's Ly-alpha in the solar-scaled file is
+    ~5x below its measured value [I, review]. The maintainer decided: the C/O floor 0.025
+    and the metallicity floor 0.3x solar (`survey_base.yaml`), and each host's published
+    UV ("Rules"). Inferred, disclose: the G395H detector gap (3.72-3.82 um) removes part of
+    the H2S band for the three G395H planets, which NIRCam and G395M keep.
 
 ## Physics assumptions and limitations (read before publishing a number)
 

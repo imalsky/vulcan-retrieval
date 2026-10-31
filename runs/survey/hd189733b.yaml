@@ -1,0 +1,16 @@
+# HD189733b in the sulfur survey: survey_base.yaml plus this planet's numbers (the recipe:
+# notes "Design records", sulfur survey case). Data: Zenodo 11459715 NIRCam F322W2 + F444W (Fu+2024), binned to R100 per filter.
+#
+#   python tools/submit.py runs/survey/hd189733b.yaml [--dry-run]
+base: survey_base.yaml
+config:
+  run_label: HD189733b
+  vulcan_cfg_name: data/survey/hd189b/HD189b.yaml
+  rp_cm: 8.105826e+09                # Rp/Rs 0.15535 (median depth in the window) x R* 0.75 R_Sun
+  rstar_cm: 5.217750e+10
+  tp_gravity_cgs: 2178.79                # G Mp / rp_cm^2, Mp 1.13 M_J
+  obs_dir: data/survey/hd189b
+  obs_products: {F322W2: [NIRCam_F322W2_R100.csv], F444W: [NIRCam_F444W_R100.csv]}
+  combo: [F322W2, F444W]                 # the bluest group is the offset reference
+  prior_Tirr: [683.9, 2393.7]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1209 K
+  prior_lnM_sigma: 0.0708             # the archive mass error

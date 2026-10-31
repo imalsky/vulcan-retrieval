@@ -1,0 +1,59 @@
+# VULCAN3 configuration (HD209458b), the sulfur survey's chemistry baseline: the WASP-107b
+# case's chemistry settings with this planet's numbers. The recipe:
+# notes "Design records", sulfur survey case.
+# Paths resolve against the working directory: run from the vulcan-retrieval root.
+# System: NASA Exoplanet Archive composite table (2026-10-29): R* 1.19 R_Sun,
+# a 0.04707 AU, Mp 0.73 M_J, Teq 1459 K, Teff 6091 K.
+# Gravity is derived as gs = G*Mp/Rp^2.
+
+# ====== Setting up the elements included in the network ======
+atom_list:
+- H
+- O
+- C
+- N
+- S
+
+# ====== Setting up paths and filenames for the input and output files ======
+network: thermo/SNCHO_photo_network_2025.txt
+# P 10 bar .. 1e-9 bar, a nominal Guillot T (replaced per draw), constant Kzz 1e9 cm^2/s
+atm_file: data/survey/hd209b/atm_hd209b_Kzz.txt
+# Gueymard solar x (Teff 6091 K / 5772 K)^4 (the solar analog, Moses+2011)
+sflux_file: data/survey/hd209b/sflux-solar_hd209b.txt
+vul_ini: output/HD209b-nominal.vul
+out_name: HD209b.vul
+
+# ====== Setting up the elemental abundance ======
+use_solar: false
+# 10x Lodders 2020 present-day solar, as W39b.yaml
+O_H: 0.00537
+C_H: 0.00295
+N_H: 0.000708
+S_H: 0.000141
+He_H: 0.0838
+const_mix:
+  CH4: 0.0059
+  O2: 0.0004807
+  He: 0.0838
+  N2: 0.000354
+  H2: 0.9764
+
+# ====== Setting up photochemistry ======
+r_star: 1.19
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (9.9863e+09 cm,
+# Rp/Rs 0.12062) on the nominal profile
+Rp: 9.6282e+09
+orbit_radius: 0.04707
+sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
+Mp: 1.38563e+30
+
+# ====== Setting up parameters for the atmosphere ======
+# 10 bar bottom, as the WASP-107b case (the T window applies on the chemistry grid too)
+P_b: 1.0e+07
+P_t: 0.1
+
+# ====== Setting up numerical parameters for the ODE solver ======
+count_max: 30000
+
+# ====== Advanced setup (don't change the values if not sure) ======
+ini_update_photo_frq: 5

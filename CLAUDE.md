@@ -1,8 +1,8 @@
 # CLAUDE.md — vulcan-retrieval (dist `vulcan-retrieval`, import `retrieval_framework`)
 
-The WASP-39b retrieval: nautilus nested sampling over a forward model that solves VULCAN
-3 photochemistry per draw and computes the transmission spectrum with ExoJAX; production
-on the NAS GH200s, tests and small runs on daw. A leaf of vulcan3 <- vulcan-forward <-
+The WASP-39b retrieval and the sulfur survey: nautilus nested sampling over a forward
+model that solves VULCAN 3 photochemistry per draw and computes the transmission spectrum
+with ExoJAX; production on the NAS GH200s, tests and small runs on daw. A leaf of vulcan3 <- vulcan-forward <-
 {vulcan-retrieval, jwst-transit-authority}: solver and engine live upstream; this repo
 holds the likelihood, the sampler driver, the cases and the job scripts.
 
@@ -53,8 +53,9 @@ adopted".
 - Import order is guard-enforced: `vulcan_forward.vulcan_chem` raises if exojax was
   imported first.
 - Inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the directory holding this
-  repo); only the observed spectra (`data/cm24_wasp39b/`) and the WASP-107b case inputs
-  (`data/w107b/`: spectra, its vulcan3 config, atmosphere and UV files) are tracked. A
+  repo); only the observed spectra (`data/cm24_wasp39b/`), the WASP-107b case inputs
+  (`data/w107b/`: spectra, its vulcan3 config, atmosphere and UV files) and the survey's
+  (`data/survey/<case>/`, the same kinds) are tracked. A
   case config given as a path (`vulcan_cfg_name: data/w107b/W107b.yaml`) and its file
   paths resolve against the working directory: run from the repo root.
 - `runs/<case>/` holds a case's inputs only: one YAML run specification per run
@@ -276,7 +277,8 @@ adopted".
 
 - A run is `runs/<case>/<name>.yaml` (`run_setup.load_spec`; the format is that
   module's docstring and `wasp39_test1.yaml`'s comments). `runs/w39b_smc_retrieval/`
-  holds the WASP-39b specs, `runs/w107b/` the WASP-107b ones; `tools/submit.py` and
+  holds the WASP-39b specs, `runs/w107b/` the WASP-107b ones, `runs/survey/` the survey's
+  (`survey_base.yaml` and one file per planet); `tools/submit.py` and
   `tools/run_nas.pbs` are the NAS launch.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup`
   (`load_spec`, `export_runtime`), `pipeline`

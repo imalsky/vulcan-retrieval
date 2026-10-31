@@ -1,0 +1,16 @@
+# WASP-96b in the sulfur survey: survey_base.yaml plus this planet's numbers (the recipe:
+# notes "Design records", sulfur survey case). Data: Zenodo 17065171 G395H R100 (exoTEDRF/exoUPRF, PriorLD_Slope).
+#
+#   python tools/submit.py runs/survey/wasp96b.yaml [--dry-run]
+base: survey_base.yaml
+config:
+  run_label: WASP-96b
+  vulcan_cfg_name: data/survey/w96b/W96b.yaml
+  rp_cm: 8.693092e+09                # Rp/Rs 0.11900 (median depth in the window) x R* 1.05 R_Sun
+  rstar_cm: 7.304850e+10
+  tp_gravity_cgs: 804.68                # G Mp / rp_cm^2, Mp 0.48 M_J
+  obs_dir: data/survey/w96b
+  obs_products: {NRS1: [G395H_NRS1_R100.csv], NRS2: [G395H_NRS2_R100.csv]}
+  combo: [NRS1, NRS2]                 # the bluest group is the offset reference
+  prior_Tirr: [726.9, 2544.2]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1285 K
+  prior_lnM_sigma: 0.0625             # the archive mass error
