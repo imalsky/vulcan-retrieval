@@ -64,9 +64,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   `test_set_observations`' production-case likelihood and `test_v5_options`, every v5 option
   on the real smoke pipeline, the production case's build, and the job path end to end
   on the smoke case). Counts [M], daw CPU `-n 8` (cores 64-79): normal 115 passed in
-  32 s (the laptop the same); full 123 passed / 1 xfailed in 87 min before the six
-  survey specs joined the shipped-spec test, the job-path test most of it (12 min alone
-  on the laptop).
+  32 s (the laptop the same); full 127 passed / 1 xfailed (the x86 condensation tangent)
+  in 76 min, the job-path test most of it (12 min alone on the laptop).
 
 ## Runs
 
