@@ -36,9 +36,11 @@ sigma = posterior standard deviation, L = log-likelihood.
   the external-review configuration; "Design records"); launch: `PBS_GROUP=<allocation>
   python tools/submit.py runs/w39b_smc_retrieval/wasp39_test1.yaml` ("Design records",
   run specification). Forward checks at a run's draws:
-  `validation/posterior_forward_check.py`. A second case, WASP-107b (`runs/w107b/`, three
-  specs; "Design records"), ran the same model at rtol 0.2 on the 2024 JWST and HST
-  data: the three runs are finished ("Runs", w107b); the open work is in `todo.md`.
+  `validation/posterior_forward_check.py`. A second case, WASP-107b ("Design records"),
+  ran the same model at rtol 0.2 on the 2024 JWST and HST data: the three runs are
+  finished ("Runs", w107b). Its specs and inputs are removed (the maintainer decided; the
+  last commit with them is `f1a881a`), and its certificates are not rewritten with the
+  report's fixed Kzz block: the "Runs" Kzz numbers stay hand-derived.
 - Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b,
   wasp96b, wasp166b, hd189733b, hd209458b; "Design records", sulfur survey case). On
   NAS: `git pull --ff-only` in all three trees, `tools/bootstrap_nas_env.pbs` (the pins
@@ -48,7 +50,7 @@ sigma = posterior standard deviation, L = log-likelihood.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO
   file (93 species). Every run up to v5 and the three WASP-107b runs solved the 2021
   `SNCHO_photo_network.txt` (89): their config.json carries no `network`, so the report
-  and the forward checks refuse them until it is added; the `*_resolve` specs name it.
+  and the forward checks refuse them until it is added.
   The finished runs are not rerun on the 2025 file, and the WASP-107b prior-edge rerun
   (Tirr, C/O and log10 gamma edges widened) is not run (the maintainer decided).
 - Run report: `run_nautilus` writes `nautilus_certificate.json` when a run finishes
@@ -638,7 +640,7 @@ Sampler and policy
   switch them (design; not every one moves results), and since version 5 the sha256 of
   the case's vulcan3 config and of the atm and stellar-flux files it names
   (`provenance.case_inputs`, resolved as vulcan3 resolves them): a path-style case
-  (`data/...`, the survey and WASP-107b) lives outside every tree the code state binds.
+  (`data/...`, the survey's) lives outside every tree the code state binds.
 - Quote from the weighted points: `nautilus_posterior.npz`'s `samples` come from
   `sampler.posterior(equal_weight=True)` (`run_nautilus.main`), which draws about
   sum(w)/max(w) samples (256 for 90302) [M].
@@ -991,7 +993,8 @@ HPC
   physical-units corner, grouped marginals, VMR profiles, rejection map and batch
   diagnostics once drawn beside baseline_v4 were retired with their scripts. A figure
   the maintainer asks for is one `scratch/` script (root CLAUDE.md "Figures").
-- WASP-107b case (`runs/w107b/`, inputs in `data/w107b/`): v5's model and solver
+- WASP-107b case (removed; the last commit with `runs/w107b/` and `data/w107b/` is
+  `f1a881a`): v5's model and solver
   settings on WASP-107b, to test Welbanks+2024 (arXiv:2405.11018; a 1D-RCPE grid with
   constant log10 Kzz 7-10 fit to WFC3 + NIRCam + MIRI: 8.6 +0.4/-0.2, ~12x solar, C/O
   0.33, Tint > 345 K at 3 sigma) against Sing+2024 (arXiv:2405.11027; an ATMO grid
@@ -1018,7 +1021,7 @@ HPC
     shows the broad 6.5-11 um aerosol excess (+300 to +630 ppm against the WFC3/NIRCam
     level, chi2/N ~10 [M]) that Welbanks fitted with a skewed-normal absorber and
     Dyrek+2024 with silicates, a term this model lacks. Inputs and specs for a MIRI
-    extension at each product's published binning are in `data/w107b/` and `runs/w107b/`
+    extension at each product's published binning were in `data/w107b/` and `runs/w107b/`
     (`*_miri*`, `w107b_g395h_r300`), not run.
   - System: Piaulet+2021 (arXiv:2011.13444): Mp 30.5 +- 1.7 M_E (lnM sigma 0.0557),
     R* 0.67 R_Sun, Teff 4425 K, a 0.0566 AU, so Teq 734 K and Tirr = sqrt 2 Teq =

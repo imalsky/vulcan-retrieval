@@ -53,10 +53,10 @@ adopted".
 - Import order is guard-enforced: `vulcan_forward.vulcan_chem` raises if exojax was
   imported first.
 - Inputs live in the repo `data/` (`$VULCAN_PROJECT_ROOT` = the directory holding this
-  repo); only the observed spectra (`data/cm24_wasp39b/`), the WASP-107b case inputs
-  (`data/w107b/`: spectra, its vulcan3 config, atmosphere and UV files) and the survey's
-  (`data/survey/<case>/`, the same kinds) are tracked. A
-  case config given as a path (`vulcan_cfg_name: data/w107b/W107b.yaml`) and its file
+  repo); only the observed spectra (`data/cm24_wasp39b/`) and the survey's inputs
+  (`data/survey/<case>/`: spectra, each planet's vulcan3 config, atmosphere and UV files)
+  are tracked. A case config given as a path (`vulcan_cfg_name:
+  data/survey/w39b/W39b.yaml`) and its file
   paths resolve against the working directory: run from the repo root.
 - `runs/<case>/` holds a case's inputs only: one YAML run specification per run
   (`wasp39_test1.yaml`, the v5 configuration; `smoke.yaml`; any `base:` variant) and
@@ -277,8 +277,8 @@ adopted".
 
 - A run is `runs/<case>/<name>.yaml` (`run_setup.load_spec`; the format is that
   module's docstring and `wasp39_test1.yaml`'s comments). `runs/w39b_smc_retrieval/`
-  holds the WASP-39b specs, `runs/w107b/` the WASP-107b ones, `runs/survey/` the survey's
-  (`survey_base.yaml` and one file per planet); `tools/submit.py` and
+  holds the WASP-39b specs, `runs/survey/` the survey's (`survey_base.yaml` and one file
+  per planet); `tools/submit.py` and
   `tools/run_nas.pbs` are the NAS launch.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup`
   (`load_spec`, `export_runtime`), `pipeline`

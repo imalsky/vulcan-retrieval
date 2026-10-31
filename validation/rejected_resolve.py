@@ -12,7 +12,7 @@ rejections (cls 1 exhausted, 2 stalled, 3 non-finite) with log10 Kzz below the c
 point once, at most --per-bin of them per bin (seeded), as rejected_draws.npz in
 e2e_check's --u-from layout (u = logit z) with their class, steps and start mode. The
 cut spec is the run's spec with only count_max raised, the run's network named
-(runs/w107b/<run>_cut.yaml). The
+(runs/<case>/<run>_cut.yaml). The
 re-solve is cold, through the production cold evaluator: the run rejected most of these
 draws warm (continued from the nearest anchor within its cap), and the cold map does not
 depend on the run's evaluation order.
@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact  # noqa: E402
 from e2e_check import _wmedian  # noqa: E402
 
-KZZ0 = 1.0e9          # cm^2/s: WASP-107b's constant Kzz (data/w107b/atm_W107b_Kzz.txt)
+KZZ0 = 1.0e9          # cm^2/s: the survey's constant Kzz (data/survey/<case>/atm_<case>_Kzz.txt)
 BIN_DEX = 0.35
 
 

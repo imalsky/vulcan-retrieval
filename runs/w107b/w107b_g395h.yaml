@@ -1,6 +1,0 @@
-# WASP-107b on Sing+2024's NIRSpec G395H alone (the joint spec's model and priors).
-# NRS1 is the offset reference. 22 h governor; resume to finish.
-base: w107b_joint.yaml
-config:
-  combo: [NRS1, NRS2]
-  walltime_seconds: 79200

@@ -27,11 +27,12 @@ def _write(path: Path, doc) -> Path:
     return path
 
 
-@pytest.mark.parametrize("case,name,n_dim", [      # v5 and w107b integrate their nuisances out
+@pytest.mark.parametrize("case,name,n_dim", [      # v5 and the survey integrate their nuisances out
     *[(RUN_DIR.name, n, d) for n, d in (
         ("wasp39_test1", 12), ("wasp39_test1_kzz1000", 12), ("wasp39_test1_deck", 11),
         ("wasp39_test1_kzz_powerlaw", 13), ("wasp39_test1_adiabat", 13), ("smoke", 8))],
-    *[("w107b", n, 12) for n in ("w107b_joint", "w107b_g395h", "w107b_welbanks")]])
+    *[("survey", n, 12) for n in ("wasp39b", "wasp107b", "wasp96b", "wasp166b",
+                                  "hd189733b", "hd209458b")]])
 def test_shipped_spec_loads_to_its_parameter_count(case, name, n_dim):
     run_dir = RUN_DIR.parent / case
     spec = R.load_spec(run_dir / f"{name}.yaml")

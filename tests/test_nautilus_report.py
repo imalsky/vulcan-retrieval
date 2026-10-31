@@ -89,7 +89,7 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert der["kzz_weight_below_1.5x_floor"] <= der["kzz_weight_below_2x_floor"]
     cfgj = json.loads((tmp_path / "config.json").read_text())
     (tmp_path / "config.json").write_text(
-        json.dumps({**cfgj, "vulcan_cfg_name": "data/w107b/W107b.yaml"}))
+        json.dumps({**cfgj, "vulcan_cfg_name": "data/survey/w107b/W107b.yaml"}))
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
     d107 = NR.derived_quantities(tmp_path)
     assert not any("x10" in k for k in d107)

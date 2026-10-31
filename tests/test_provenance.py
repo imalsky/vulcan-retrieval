@@ -173,6 +173,6 @@ def test_target_digest_binds_a_path_style_case_and_its_files(digest_pipe, tmp_pa
         assert d1 != d0, f"{f} not bound"
         d0 = d1
     monkeypatch.chdir(repo)
-    for name in ("W39b", "data/w107b/W107b.yaml"):
+    for name in ("W39b", "data/survey/w107b/W107b.yaml"):
         got = provenance.case_inputs(name, {})
         assert all(got[k] for k in ("config", "atm_file", "sflux_file")), (name, got)
