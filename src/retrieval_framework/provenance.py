@@ -214,7 +214,7 @@ def case_config(name: str) -> tuple[Path, dict]:
 
 
 def case_data_file(rel) -> Path:
-    """A case's data path, resolved as `vulcan3._paths.resolve_data_path` does:
+    """A case's data path, resolved as `vulcan3.paths.resolve_data_path` does:
     absolute, else the working directory, else the package."""
     rel = Path(rel)
     return (rel if rel.is_absolute() or rel.exists() else _vulcan3_root() / rel).resolve()

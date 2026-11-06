@@ -71,7 +71,7 @@ def _refuse_condense_inference(chem, cfg) -> None:
 def _rtol_accept(chem) -> float | None:
     """The step-acceptance tolerance baked into a chemistry program (VULCAN-JAX
     ``_Statics.rtol_accept``), or None when the engine does not expose it."""
-    st = getattr(getattr(chem, "_integ", None), "_statics", None)
+    st = getattr(getattr(chem, "_integ", None), "statics", None)
     return None if st is None else float(st.rtol_accept)
 
 
@@ -80,7 +80,7 @@ def _check_frozen_network(cfg: Any) -> None:
     rebuilt a run without ``C.export_network`` would solve other chemistry."""
     import vulcan3
     from vulcan3 import chem_funs
-    frozen = Path(chem_funs._NETWORK.network_path).resolve()
+    frozen = Path(chem_funs.NETWORK.network_path).resolve()
     want = (Path(vulcan3.__file__).parent / cfg.network).resolve()
     if frozen != want:
         raise RuntimeError(f"vulcan3 is frozen on {frozen} but the config's network is "
