@@ -1,74 +1,64 @@
-"""Static configuration schema for one VULCAN-JAX -> ExoJax transmission retrieval.
+"""The static configuration of one retrieval: the frozen ``Config``, the parameter list and the run banner.
 
-A single frozen dataclass; the planet and the run live in the run specification
-(``runs/<case>/<name>.yaml``, ``run_setup.load_spec``), not here. The parameter vector is
+The planet and the run live in the spec, ``runs/<case>/<name>.yaml`` (``run_setup.load_spec``). The parameter vector
+is
 
-    theta = [ lnZ, dln(C/O), lnKzz, [s_o], [kzz_slope],  <T-P params>,  lnR0, [lnM],
-              VULCAN chemistry (3 + the optional entries)  Guillot T-P    radius, mass
-              <cloud params>,  offset_g ...,   noise_inflation ]
-              power law (2)    offsets (G-1)   optional: one b, or
-              or deck (1)                      one b per group (G)
+    theta = [lnZ, dln(C/O), lnKzz, [s_o], [kzz_slope], <T-P>, lnR0, [lnM], <cloud>, offset_g ..., <noise inflation>]
 
-The chemistry parameters (lnZ, dln(C/O), lnKzz and the optional s_o = ln of the
-S/O multiple and kzz_slope) and the T-P parameters all require re-converging
-VULCAN and are the *expensive* part of every likelihood call; ``lnR0``, the
-optional ``lnM`` (Gaussian, RT-only) and the cloud parameters enter only the
-RT (no chemistry solve), and the instrument offsets are applied analytically
-after the spectrum; all are cheap. The T-P block's deep parameter is Tint or,
-with ``tp_deep_param="T1bar"``, the temperature at ``tp_deep_p_bar``.
-
-Planet identity enters through explicit fields the spec sets: the observed
-spectrum (``obs_dir`` + ``obs_products`` + ``combo``), the VULCAN baseline config
-YAML (``vulcan_cfg_name``), gravity/radii (``tp_gravity_cgs``, ``rp_cm``,
-``rstar_cm``), and the priors. Field defaults document the shapes/scales of the
-original WASP-39b application; every spec sets what defines its planet.
-
-Every field is set from the spec's ``config`` block; a field not named there keeps
-its default.
+The chemistry and T-P entries re-converge VULCAN, the expensive part of a likelihood call; the rest enter only the RT or
+apply after it. Imports no jax. docs/method.md describes the parameters.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import math
 import os
-from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
-# stdlib-only re-export of the engine constants (see forward/config.py); this
-# keeps the schema import-light while the RT grid bottom stays single-sourced
 from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR
 
-# Default lane count (the smoke spec's); the production spec sets cold_lanes itself
-# (one kernel wave of a GH200 is 132 SMs).
+__all__ = [
+    "FFI_COMPUTE_CAPABILITY",
+    "GUILLOT_F",
+    "OFF_GPU_LANES",
+    "UNDERFLOW_DENOM",
+    "Config",
+    "ParamSpec",
+    "chem_extras",
+    "choose_solver",
+    "describe_config",
+    "export_network",
+    "hardware_profile",
+    "specs_from_config",
+    "validate_config",
+]
+
+# Default lane count, the smoke spec's; the production spec sets cold_lanes itself.
 OFF_GPU_LANES = 144
 
 
 @dataclass(frozen=True)
 class Config:
-    """Everything static for one retrieval run; run_setup.load_spec builds one from
-    the spec's ``config`` block and sets ``out_dir`` to output/<case>/<name>_nautilus."""
+    """Everything static for one retrieval run; ``run_setup.load_spec`` builds one from the spec's ``config`` block."""
 
-    # ---- I/O & reproducibility ------------------------------------------------
-    out_dir: Optional[Path] = None     # set by load_spec, never by a spec key
-    run_label: str = ""                # short human label for plot titles (e.g. "WASP-39b")
+    # ---- I/O and reproducibility ----
+    out_dir: Path | None = None  # set by load_spec, never by a spec key
+    run_label: str = ""  # short human label for plot titles (e.g. "WASP-39b")
     seed: int = 20260704
 
-    # Precision is not a knob: VULCAN-JAX forces jax_enable_x64=True on import
-    # (vulcan_chem), so the whole chemistry+RT chain runs in float64 unconditionally;
-    # XLA preallocation is set by the PBS env. Neither is a Config field.
-
-    # ---- forward-model fidelity (the "profile" dict consumed by vulcan_chem /
-    #      exojax_rt; the photo-on requirement: forward/config.py) ----------------
-    nz: int = 62                       # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
-    use_photo: bool = True             # photochemistry (SO2 is photochemical)
+    # ---- forward-model fidelity: the engine's profile dict ----
+    nz: int = 62  # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
+    use_photo: bool = True  # photochemistry (SO2 is photochemical)
     # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
     # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
     # overridden: they inherit the vulcan_cfg_name config (vulcan3/configs/W39b.yaml).
     yconv_cri: float = 0.01
-    molecules: Tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
-    nu_min: float = 1923.0             # ~5.2 um
-    nu_max: float = 3450.0             # ~2.9 um  (NIRSpec G395H/PRISM red)
+    molecules: tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
+    nu_min: float = 1923.0  # ~5.2 um
+    nu_max: float = 3450.0  # ~2.9 um  (NIRSpec G395H/PRISM red)
     # Opacity treatment: correlated-k from the published ExoMolOP tables
     # (ExoMol/HITEMP high-temperature line lists with H2/He broadening already
     # applied, integrated over each R=1000 band offline; the band grid and the
@@ -77,33 +67,30 @@ class Config:
     # anything else).
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
-    art_ptop_bar: float = ART_PTOP_BAR   # model top: chemistry AND RT end here (engine rule)
-    use_rayleigh: bool = True          # H2/He Rayleigh scattering (ExoJax; zero free params)
-    co_mode: str = "fixed_O"           # C/O GUESS construction (the engine repairs it exactly)
-    count_min: Optional[int] = None
-    count_max: Optional[int] = None
+    art_ptop_bar: float = ART_PTOP_BAR  # model top: chemistry AND RT end here (engine rule)
+    use_rayleigh: bool = True  # H2/He Rayleigh scattering (ExoJax; zero free params)
+    co_mode: str = "fixed_O"  # C/O GUESS construction (the engine repairs it exactly)
+    count_min: int | None = None
+    count_max: int | None = None
     # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
     # physically meaningless large-dt Ros2 oscillations without changing the canonical
     # convergence criteria.
-    dt_max: Optional[float] = None
-    cfg_overrides: Dict[str, Any] = field(default_factory=dict)
+    dt_max: float | None = None
+    cfg_overrides: dict[str, Any] = field(default_factory=dict)
 
-    # ---- planet identity (every case MUST set these; unset is a hard error) ----
-    # Placeholders so the dataclass is constructible; validate_config refuses an
-    # unset value.
+    # ---- planet identity: validate_config refuses an unset value ----
     # VULCAN baseline config name for the chemistry pre-loop, loaded via
     # vulcan3.load_config (e.g. "W39b").
     vulcan_cfg_name: str = ""
     # The kinetics network, a vulcan3 path (thermo/...); no default: the spec names it
     # (validate_config). Import-frozen: export_network selects it before vulcan3 is
     # imported and the forward build refuses an engine frozen on another.
-    # thermo/SNCHO_photo_network.txt is the 2021 file every run before this key used.
     network: str = ""
     # Planet/stellar radii for the RT depth normalization (cm).
     # tp_gravity_cgs below doubles as the RT's gravity at rp_cm; the planet mass
     # GM = g rp_cm^2 stays fixed when lnR0 scales the radius.
-    rp_cm: Optional[float] = None
-    rstar_cm: Optional[float] = None
+    rp_cm: float | None = None
+    rstar_cm: float | None = None
     # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
     #
     # Default: the RT grid bottom, where ExoJAX defines radius_btm. lnR0 is the
@@ -111,7 +98,7 @@ class Config:
     # needs a compatible prior_lnR0 (the W39b case anchors at 1 mbar).
     p_ref_bar: float = ART_PBTM_BAR
 
-    # ---- observed spectrum source ---------------------------------------------
+    # ---- observed spectrum source ----
     # obs_dir holds per-instrument product CSVs in the (Rp/Rs)-format observations.py
     # documents; obs_products maps group label -> csv filenames within obs_dir; combo
     # selects WHICH groups to fit. The offset REFERENCE group is NOT combo[0]: it is
@@ -119,11 +106,11 @@ class Config:
     # orders groups by first appearance after the wavelength sort). With G groups the
     # likelihood gets G-1 offset parameters, one per non-reference group.
     # obs_dir=None (or empty products) -> purely synthetic bin grid (offline smokes).
-    obs_dir: Optional[Path] = None
-    obs_products: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
-    combo: Tuple[str, ...] = ("NIRISS", "G395H")   # 2 groups -> ONE offset (on the non-reference group)
-    obs_wl_lo: float = 1.00            # um (H2-H2 CIA short edge)
-    obs_wl_hi: float = 5.28            # um (data-window red edge; bins past the band are dropped)
+    obs_dir: Path | None = None
+    obs_products: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    combo: tuple[str, ...] = ("NIRISS", "G395H")  # 2 groups -> ONE offset (on the non-reference group)
+    obs_wl_lo: float = 1.00  # um (H2-H2 CIA short edge)
+    obs_wl_hi: float = 5.28  # um (data-window red edge; bins past the band are dropped)
     # Drop product bins finer than this R before they reach the binning operator.
     # Published R100 products carry truncation remnants where a masked region cuts a
     # bin short: they are a few times narrower than the nominal grid, carry a much
@@ -134,10 +121,10 @@ class Config:
     # ---- T-P profile: exojax.atm.atmprof.atmprof_Guillot(P, g, kappa, gamma, Tint,
     #      Tirr, f), the built-in irradiated analytic profile (uses jnp.exp,
     #      forward-mode-clean); f = GUILLOT_F below --------------------------------
-    tp_gravity_cgs: float = 422.0      # WASP-39b surface gravity (config.GS_CGS)
-    tp_Tint_K: float = 150.0           # interior temperature when tp_infer_Tint=False
-    tp_infer_gamma: bool = True        # retrieve log10(gamma); False -> fixed no-inversion
-    tp_gamma_fixed: float = 0.4        # used only when tp_infer_gamma=False
+    tp_gravity_cgs: float = 422.0  # WASP-39b surface gravity
+    tp_Tint_K: float = 150.0  # interior temperature when tp_infer_Tint=False
+    tp_infer_gamma: bool = True  # retrieve log10(gamma); False -> fixed no-inversion
+    tp_gamma_fixed: float = 0.4  # used only when tp_infer_gamma=False
     # Retrieve the deep T-P parameter. It sets the deep profile, and so the
     # CO/CH4/NH3 quench, through 3/4 Tint^4 tau at large tau; the T-P sub-vector
     # gains a 4th entry: Tint itself (tp_deep_param="Tint") or the temperature
@@ -147,95 +134,95 @@ class Config:
     # quantity the window acts on directly, so it does not inherit the
     # window-shaped Tint prior (tp_profile).
     tp_infer_Tint: bool = False
-    tp_deep_param: str = "Tint"        # {"Tint", "T1bar"}, with tp_infer_Tint
-    tp_deep_p_bar: float = 1.0         # the level T1bar is quoted at (bar)
+    tp_deep_param: str = "Tint"  # {"Tint", "T1bar"}, with tp_infer_Tint
+    tp_deep_p_bar: float = 1.0  # the level T1bar is quoted at (bar)
     # An adiabat below a free radiative-convective boundary pressure, matched
     # to the Guillot profile there (one more T-P entry, log10P_rcb): a
     # sensitivity model. With constant kappa nothing in the model makes the
     # column convective, so the join is imposed, and the adiabat (R/cp ~0.29)
     # is steeper than Guillot's deep 0.25.
     tp_adiabat: bool = False
-    tp_nabla_ad: float = 0.29          # dlnT/dlnP of the H2-He adiabat near 1000-2000 K
+    tp_nabla_ad: float = 0.29  # dlnT/dlnP of the H2-He adiabat near 1000-2000 K
 
     # ---- clouds: cloud_model "powerlaw" (ExoJax powerlaw_clouds:
     #      kappa(nu)=kappac0*(nu/CLOUD_NUC0)^alphac, cm^2 per gram of atmosphere,
     #      uniformly mixed; alphac=0 -> gray) or "deck" (an opaque grey deck
     #      below a free pressure, engine constants CLOUD_DECK_*) -------------------
     cloud_model: str = "powerlaw"
-    prior_log10kappa_cloud: Tuple[float, float] = (-7.0, 1.0)   # cm^2/g at 3.5 um
-    truth_log10kappa_cloud: float = -6.5                        # ~cloud-free injection
-    prior_cloud_alpha: Tuple[float, float] = (0.0, 6.0)         # 0=gray, 4~Rayleigh haze
+    prior_log10kappa_cloud: tuple[float, float] = (-7.0, 1.0)  # cm^2/g at 3.5 um
+    truth_log10kappa_cloud: float = -6.5  # ~cloud-free injection
+    prior_cloud_alpha: tuple[float, float] = (0.0, 6.0)  # 0=gray, 4~Rayleigh haze
     truth_cloud_alpha: float = 1.0
-    prior_log10P_deck: Tuple[float, float] = (-6.0, 0.8)        # bar; 0.8 ~ the grid bottom
+    prior_log10P_deck: tuple[float, float] = (-6.0, 0.8)  # bar; 0.8 ~ the grid bottom
     truth_log10P_deck: float = 0.5
 
-    # ---- inference toggles (the chemistry block is always inferred) -----------
-    infer_offsets: bool = True         # one flat depth offset per instrument group beyond the reference
+    # ---- inference toggles: the chemistry block is always inferred ----
+    infer_offsets: bool = True  # one flat depth offset per instrument group beyond the reference
 
     # ---- priors (all bounded; uniform unless noted). Truth = synthetic-injection
     #      value, ignored for real-data runs -----------------------------------
     # lnZ is relative to the case's BASELINE composition (the vulcan cfg's <X>_H,
     # 10x solar here): lnZ=0 -> that baseline.
-    prior_lnZ: Tuple[float, float] = (-math.log(10.0), math.log(10.0))   # 1x-100x solar
+    prior_lnZ: tuple[float, float] = (-math.log(10.0), math.log(10.0))  # 1x-100x solar
     truth_lnZ: float = 0.0
     # dln(C/O) about the fixed-O baseline. UPPER BOUND CONSTRAINT: the fixed-O knob's
     # O-only compensation b_z must stay positive, which on the 10x-solar W39b column
     # holds only for c_o < 0.566 (printed at build; retrieval_forward raises if the
     # prior reaches it). 0.45 leaves margin for hotter columns (worst-layer b_z ~ 0.25)
     # and spans C/O up to ~0.86 about the 0.549 baseline.
-    prior_c_o: Tuple[float, float] = (-1.6, 0.45)
+    prior_c_o: tuple[float, float] = (-1.6, 0.45)
     truth_c_o: float = 0.0
-    prior_lnKzz: Tuple[float, float] = (-5.0, 5.0)        # eddy-diffusion multiplier
+    prior_lnKzz: tuple[float, float] = (-5.0, 5.0)  # eddy-diffusion multiplier
     truth_lnKzz: float = 0.0
     # Sulfur freed from the metallicity scaling: s_o = ln of the S/O multiple of
     # the baseline (S/H = e^(lnZ + s_o) times the baseline's), a fourth chemistry
     # entry after lnKzz. Off, sulfur scales with lnZ like O and N.
     infer_s_o: bool = False
-    prior_s_o: Tuple[float, float] = (-math.log(10.0), math.log(10.0))
+    prior_s_o: tuple[float, float] = (-math.log(10.0), math.log(10.0))
     truth_s_o: float = 0.0
     # Kzz shape: "scale" multiplies the vulcan cfg's profile by e^lnKzz;
     # "powerlaw" is Kzz0(kzz_p_ref_bar) e^lnKzz (P / P_ref)^-kzz_slope, with the
     # slope a chemistry entry after s_o (engine kzz_mode).
     kzz_mode: str = "scale"
     kzz_p_ref_bar: float = 1.0e-3
-    prior_kzz_slope: Tuple[float, float] = (-1.0, 1.0)
+    prior_kzz_slope: tuple[float, float] = (-1.0, 1.0)
     truth_kzz_slope: float = 0.0
     # The vulcan cfg's baseline metallicity in solar units (its <X>_H over the
     # Lodders 2020 photospheric values): the report quotes e^lnZ times this.
     baseline_metallicity_solar: float = 10.0
     # Guillot irradiation temperature: WASP-39b Teq ~ 1166 K -> Tirr = sqrt(2)*Teq ~ 1650 K
     # (with f=0.25 the skin temperature is ~0.6*Tirr: 0.59 at gamma << 1, 0.64 at 0.4).
-    prior_Tirr: Tuple[float, float] = (800.0, 2600.0)     # K
+    prior_Tirr: tuple[float, float] = (800.0, 2600.0)  # K
     truth_Tirr: float = 1650.0
-    prior_log10kappa: Tuple[float, float] = (-3.5, 0.5)   # IR opacity, cm^2/g (log10)
+    prior_log10kappa: tuple[float, float] = (-3.5, 0.5)  # IR opacity, cm^2/g (log10)
     truth_log10kappa: float = -2.0
-    prior_log10gamma: Tuple[float, float] = (-2.0, 0.7)   # kappa_v/kappa_th (log10)
+    prior_log10gamma: tuple[float, float] = (-2.0, 0.7)  # kappa_v/kappa_th (log10)
     truth_log10gamma: float = -0.4
-    prior_Tint: Tuple[float, float] = (100.0, 500.0)     # K, used when tp_infer_Tint
+    prior_Tint: tuple[float, float] = (100.0, 500.0)  # K, used when tp_infer_Tint
     truth_Tint: float = 150.0
     # T at tp_deep_p_bar (K), used with tp_deep_param="T1bar": the default is
     # the engine's valid RT window; the irradiation term and the window shape
     # the accepted prior (report it).
-    prior_T1bar: Tuple[float, float] = (320.0, 2980.0)
+    prior_T1bar: tuple[float, float] = (320.0, 2980.0)
     truth_T1bar: float = 1500.0
-    prior_log10P_rcb: Tuple[float, float] = (-1.0, 0.88)  # bar; used with tp_adiabat
+    prior_log10P_rcb: tuple[float, float] = (-1.0, 0.88)  # bar; used with tp_adiabat
     truth_log10P_rcb: float = 0.5
-    prior_lnR0: Tuple[float, float] = (-0.08, 0.08)       # reference-radius log scaling
+    prior_lnR0: tuple[float, float] = (-0.08, 0.08)  # reference-radius log scaling
     truth_lnR0: float = 0.0
     # Planet mass as a nuisance: lnM = ln(M / M0) ~ N(0, prior_lnM_sigma), applied
     # in the RT at the fixed reference radius (GM scales e^lnM; engine
     # transmission_depth_r lnM). The chemistry's hydrostatic column and the
     # Guillot tau keep M0. Off, the mass is fixed at M0 = g rp^2 / G.
     infer_lnM: bool = False
-    prior_lnM_sigma: float = 0.11                          # the literature mass error
+    prior_lnM_sigma: float = 0.11  # the literature mass error
     truth_lnM: float = 0.0
-    prior_offset_ppm: Tuple[float, float] = (-800.0, 800.0)   # per-group depth offset, ppm
+    prior_offset_ppm: tuple[float, float] = (-800.0, 800.0)  # per-group depth offset, ppm
     truth_offset_ppm: float = 0.0
 
     # A free multiplicative noise-inflation term (Line 2015 style) guards against
     # underestimated JWST error bars; k multiplies every sigma. Off by default.
     infer_noise_inflation: bool = False
-    prior_noise_inflation: Tuple[float, float] = (0.5, 3.0)   # log10_uniform
+    prior_noise_inflation: tuple[float, float] = (0.5, 3.0)  # log10_uniform
     truth_noise_inflation: float = 1.0
     # One inflation per observation group instead of one for every bin: b_g
     # multiplies the sigmas of group g's bins, every group included (the
@@ -246,19 +233,19 @@ class Config:
     # Integrate the offsets and the noise inflation(s) out of the likelihood
     # instead of sampling them: per group the offset integral is closed form and
     # the inflation one a trapezoid over NUISANCE_NODES nodes in log10 b
-    # (pipeline.make_nuisance_marginal), at the same priors, so the posterior of
+    # (nuisance.make_nuisance_marginal), at the same priors, so the posterior of
     # the other parameters and the evidence are unchanged. Their posteriors are
     # drawn after the run from statistics the run logs per certified draw
     # (run_nautilus). Needs infer_offsets or infer_noise_inflation.
     integrate_nuisance: bool = False
 
-    # ---- data source ----------------------------------------------------------
+    # ---- data source ----
     # False : fit the real observed spectrum (obs_dir/obs_products above).
     # True  : inject the truth_* parameters, add Gaussian noise at the real per-bin
     #         sigma (or the synthetic grid's), and fit that (recovery self-test).
     generate_synthetic_data: bool = False
 
-    # ---- inference ------------------------------------------------------------
+    # ---- inference ----
     # Expert opt-in: a pipeline with condensation ON. Off by default: no
     # retrieval with condensation has been validated (certification and start
     # dependence of condensing columns are untested).
@@ -278,33 +265,38 @@ class Config:
     # lanes; it is capped at cold_lanes.
     cold_refill_chunk: int = 8
 
-    # ---- walltime governor ----------------------------------------------------
+    # ---- walltime governor ----
     # Soft wall-clock budget (seconds). run_nautilus stops once this is exceeded,
     # with its checkpoint written, and exits 0; RESUME=1 continues (0 -> no limit).
     walltime_seconds: float = 0.0
 
-    def profile(self) -> Dict[str, Any]:
-        """The dict consumed by vulcan_chem.build_chem_model / exojax_rt.build_rt_model."""
-        p: Dict[str, Any] = dict(
-            use_photo=bool(self.use_photo),
-            nz=int(self.nz),
-            yconv_cri=float(self.yconv_cri),
-            molecules=list(self.molecules),
-            nu_min=float(self.nu_min),
-            nu_max=float(self.nu_max),
-            opacity_mode=str(self.opacity_mode),
-            art_nlayer=int(self.art_nlayer),
-            art_ptop_bar=float(self.art_ptop_bar),
-            use_rayleigh=bool(self.use_rayleigh),
-            co_mode=str(self.co_mode),
-            kzz_mode=str(self.kzz_mode),
-            kzz_p_ref_bar=float(self.kzz_p_ref_bar),
-            cfg_overrides=dict(self.cfg_overrides),
-            gs_cgs=float(self.tp_gravity_cgs),   # RT g at rp_cm = the T-P gravity
-            p_ref_bar=float(self.p_ref_bar),      # where rp_cm/gs_cgs apply
-        )
-        # `is not None`, not truthiness: an explicit 0 must reach the engine,
-        # never fall back to the vulcan_cfg value while the banner prints 0
+    def profile(self) -> dict[str, Any]:
+        """Return the settings dict the engine's model builders take.
+
+        Returns
+        -------
+        dict
+            Keys in ``vulcan_forward.constants.PROFILE_KEYS``; optional fields only when set.
+        """
+        p: dict[str, Any] = {
+            "use_photo": bool(self.use_photo),
+            "nz": int(self.nz),
+            "yconv_cri": float(self.yconv_cri),
+            "molecules": list(self.molecules),
+            "nu_min": float(self.nu_min),
+            "nu_max": float(self.nu_max),
+            "opacity_mode": str(self.opacity_mode),
+            "art_nlayer": int(self.art_nlayer),
+            "art_ptop_bar": float(self.art_ptop_bar),
+            "use_rayleigh": bool(self.use_rayleigh),
+            "co_mode": str(self.co_mode),
+            "kzz_mode": str(self.kzz_mode),
+            "kzz_p_ref_bar": float(self.kzz_p_ref_bar),
+            "cfg_overrides": dict(self.cfg_overrides),
+            "gs_cgs": float(self.tp_gravity_cgs),  # RT g at rp_cm = the T-P gravity
+            "p_ref_bar": float(self.p_ref_bar),  # where rp_cm/gs_cgs apply
+        }
+        # is not None: an explicit 0 must reach the engine.
         if self.count_min is not None:
             p["count_min"] = int(self.count_min)
         if self.count_max is not None:
@@ -320,11 +312,8 @@ class Config:
         return p
 
 
-# The planet and the run live in the spec (runs/<case>/<name>.yaml), not here: the
-# framework only defines the schema.
-
 # Fixed choices, not Config fields: no spec sets them.
-GUILLOT_F = 0.25        # Guillot f: 1/4 = whole-planet average irradiation
+GUILLOT_F = 0.25  # Guillot f: 1/4 = whole-planet average irradiation
 # Floor for a denominator or log argument that may be exactly zero.
 UNDERFLOW_DENOM = 1e-300
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
@@ -334,21 +323,50 @@ FFI_COMPUTE_CAPABILITY = "9.0"
 _BASELINE_C_TO_O = 0.549
 
 
-# Parameter specification (the ordered, active parameter list + priors)
 @dataclass(frozen=True)
 class ParamSpec:
+    """One sampled parameter and its prior.
+
+    Attributes
+    ----------
+    name : str
+        The parameter's name.
+    label : str
+        Its mathtext label.
+    prior_type : str
+        "uniform", "log10_uniform" or "gaussian".
+    lo : float
+        The lower bound; a gaussian's mean.
+    hi : float
+        The upper bound; a gaussian's sigma.
+    truth : float
+        The synthetic-injection value.
+    kind : str
+        How the forward consumes it: "chem", "tp", "lnR0", "lnM", "cloud", "offset" or "noise".
+    """
+
     name: str
     label: str
-    prior_type: str   # {"uniform", "log10_uniform", "gaussian"}; gaussian: lo = mean, hi = sigma
+    prior_type: str  # {"uniform", "log10_uniform", "gaussian"}; gaussian: lo = mean, hi = sigma
     lo: float
     hi: float
     truth: float
-    kind: str         # {"chem", "tp", "lnR0", "lnM", "cloud", "offset", "noise"} -- how the forward consumes it
+    kind: str  # {"chem", "tp", "lnR0", "lnM", "cloud", "offset", "noise"} -- how the forward consumes it
 
 
-def chem_extras(cfg: Config) -> Tuple[str, ...]:
-    """The optional chemistry entries this Config carries, in the engine's
-    layout order (vulcan_chem.CHEM_EXTRAS): s_o, then kzz_slope."""
+def chem_extras(cfg: Config) -> tuple[str, ...]:
+    """Return the optional chemistry entries this Config carries, in the engine's layout order.
+
+    Parameters
+    ----------
+    cfg : Config
+        The run's configuration.
+
+    Returns
+    -------
+    tuple of str
+        A subset of ``vulcan_chem.CHEM_EXTRAS``.
+    """
     out = []
     if cfg.infer_s_o:
         out.append("s_o")
@@ -357,12 +375,26 @@ def chem_extras(cfg: Config) -> Tuple[str, ...]:
     return tuple(out)
 
 
-def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[ParamSpec]:
-    """Build the ordered active parameter list. ``groups`` is the ordered instrument-group
-    list from the observations (offsets are added for groups[1:] relative to groups[0])."""
-    specs: List[ParamSpec] = []
+# size-limit-ok: one add per parameter, in theta order
+def specs_from_config(cfg: Config, groups: list[str] | None = None) -> list[ParamSpec]:  # noqa: C901  # one branch per optional parameter
+    """Build the ordered active parameter list.
 
-    def add(name, label, lo, hi, truth, kind, prior_type="uniform"):
+    Parameters
+    ----------
+    cfg : Config
+        The run's configuration.
+    groups : list of str, optional
+        The ordered instrument groups; offsets go on ``groups[1:]``, relative to ``groups[0]``.
+
+    Returns
+    -------
+    list of ParamSpec
+        The parameters, in theta order.
+    """
+    specs: list[ParamSpec] = []
+
+    def add(name: str, label: str, lo: float, hi: float, truth: float, kind: str, prior_type: str = "uniform") -> None:
+        """Append one parameter, refusing bad bounds."""
         if prior_type == "gaussian":
             if not (hi > 0.0):
                 raise ValueError(f"gaussian prior for {name} needs sigma > 0, got {hi}")
@@ -372,8 +404,7 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
             raise ValueError(f"log10_uniform prior needs positive bounds for {name}")
         specs.append(ParamSpec(name, label, prior_type, float(lo), float(hi), float(truth), kind))
 
-    # --- chemistry, always inferred: converged_y and the pipeline unpack
-    # [lnZ, c_o, lnKzz, <extras...>, <tp...>] by position ---
+    # Chemistry: always inferred, unpacked by position.
     add("lnZ", r"$\ln Z$", *cfg.prior_lnZ, cfg.truth_lnZ, "chem")
     add("c_o", r"$\Delta\ln(\mathrm{C/O})$", *cfg.prior_c_o, cfg.truth_c_o, "chem")
     add("lnKzz", r"$\ln K_{zz}$", *cfg.prior_lnKzz, cfg.truth_lnKzz, "chem")
@@ -381,170 +412,217 @@ def specs_from_config(cfg: Config, groups: Optional[List[str]] = None) -> List[P
         if e == "s_o":
             add("s_o", r"$\Delta\ln(\mathrm{S/O})$", *cfg.prior_s_o, cfg.truth_s_o, "chem")
         else:
-            add("kzz_slope", r"$\alpha_{K}$", *cfg.prior_kzz_slope, cfg.truth_kzz_slope,
-                "chem")
+            add("kzz_slope", r"$\alpha_{K}$", *cfg.prior_kzz_slope, cfg.truth_kzz_slope, "chem")
 
-    # --- T-P (ExoJax Guillot) ---
     add("Tirr", r"$T_{\rm irr}$ (K)", *cfg.prior_Tirr, cfg.truth_Tirr, "tp")
     add("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", *cfg.prior_log10kappa, cfg.truth_log10kappa, "tp")
     if cfg.tp_infer_gamma:
         add("log10gamma", r"$\log_{10}\gamma$", *cfg.prior_log10gamma, cfg.truth_log10gamma, "tp")
     if cfg.tp_infer_Tint:
         if cfg.tp_deep_param == "T1bar":
-            add("T1bar", rf"$T_{{{cfg.tp_deep_p_bar:g}\,\rm bar}}$ (K)", *cfg.prior_T1bar,
-                cfg.truth_T1bar, "tp")
+            add("T1bar", rf"$T_{{{cfg.tp_deep_p_bar:g}\,\rm bar}}$ (K)", *cfg.prior_T1bar, cfg.truth_T1bar, "tp")
         else:
             add("Tint", r"$T_{\rm int}$ (K)", *cfg.prior_Tint, cfg.truth_Tint, "tp")
     if cfg.tp_adiabat:
-        add("log10P_rcb", r"$\log_{10}P_{\rm rcb}$", *cfg.prior_log10P_rcb,
-            cfg.truth_log10P_rcb, "tp")
+        add("log10P_rcb", r"$\log_{10}P_{\rm rcb}$", *cfg.prior_log10P_rcb, cfg.truth_log10P_rcb, "tp")
 
-    # --- radius nuisance ---
     add("lnR0", r"$\ln R_0$", *cfg.prior_lnR0, cfg.truth_lnR0, "lnR0")
-    # --- planet mass nuisance (RT-only, Gaussian) ---
     if cfg.infer_lnM:
-        add("lnM", r"$\ln M$", 0.0, cfg.prior_lnM_sigma, cfg.truth_lnM, "lnM",
-            prior_type="gaussian")
+        add("lnM", r"$\ln M$", 0.0, cfg.prior_lnM_sigma, cfg.truth_lnM, "lnM", prior_type="gaussian")
 
-    # --- clouds (RT-only, like lnR0: no chemistry solve) ---
     if cfg.cloud_model == "deck":
-        add("log10P_deck", r"$\log_{10}P_{\rm deck}$", *cfg.prior_log10P_deck,
-            cfg.truth_log10P_deck, "cloud")
+        add("log10P_deck", r"$\log_{10}P_{\rm deck}$", *cfg.prior_log10P_deck, cfg.truth_log10P_deck, "cloud")
     else:
-        add("log10kappa_cloud", r"$\log_{10}\kappa_{\rm cl}$", *cfg.prior_log10kappa_cloud,
-            cfg.truth_log10kappa_cloud, "cloud")
-        add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha,
-            cfg.truth_cloud_alpha, "cloud")
+        add(
+            "log10kappa_cloud",
+            r"$\log_{10}\kappa_{\rm cl}$",
+            *cfg.prior_log10kappa_cloud,
+            cfg.truth_log10kappa_cloud,
+            "cloud",
+        )
+        add("cloud_alpha", r"$\alpha_{\rm cl}$", *cfg.prior_cloud_alpha, cfg.truth_cloud_alpha, "cloud")
 
-    # the integrated nuisances are not parameters (pipeline.make_nuisance_marginal)
+    # the integrated nuisances are not parameters (nuisance.make_nuisance_marginal)
     if cfg.integrate_nuisance:
         return specs
 
-    # --- inter-instrument offsets (ppm), one per group beyond the reference ---
     if cfg.infer_offsets and groups is not None and len(groups) > 1:
         for g in groups[1:]:
-            add(f"offset_{g}", rf"$\delta_{{{g}}}$ (ppm)", *cfg.prior_offset_ppm,
-                cfg.truth_offset_ppm, "offset")
+            add(f"offset_{g}", rf"$\delta_{{{g}}}$ (ppm)", *cfg.prior_offset_ppm, cfg.truth_offset_ppm, "offset")
 
-    # --- optional noise inflation: one b, or one per instrument group ---
     if cfg.infer_noise_inflation and cfg.noise_inflation_per_group:
         if not groups:
-            raise ValueError("noise_inflation_per_group needs the observation groups: "
-                             "call specs_from_config(cfg, groups=...)")
+            raise ValueError(
+                "noise_inflation_per_group needs the observation groups: call specs_from_config(cfg, groups=...)"
+            )
         for g in groups:
-            tex = g.replace("_", r"\_")            # mathtext: a literal underscore
-            add(f"noise_inflation_{g}", rf"$b_{{\rm {tex}}}$",
-                *cfg.prior_noise_inflation, cfg.truth_noise_inflation, "noise",
-                prior_type="log10_uniform")
+            tex = g.replace("_", r"\_")  # mathtext: a literal underscore
+            add(
+                f"noise_inflation_{g}",
+                rf"$b_{{\rm {tex}}}$",
+                *cfg.prior_noise_inflation,
+                cfg.truth_noise_inflation,
+                "noise",
+                prior_type="log10_uniform",
+            )
     elif cfg.infer_noise_inflation:
-        add("noise_inflation", r"$b$", *cfg.prior_noise_inflation, cfg.truth_noise_inflation,
-            "noise", prior_type="log10_uniform")
+        add(
+            "noise_inflation",
+            r"$b$",
+            *cfg.prior_noise_inflation,
+            cfg.truth_noise_inflation,
+            "noise",
+            prior_type="log10_uniform",
+        )
     return specs
 
 
 def hardware_profile() -> dict:
-    """The hardware this process runs on, read from JAX and the OS: backend,
-    device kind, host cores and RAM, and on a CUDA device its SM count,
-    compute capability and memory. run_nautilus logs it and records it in
-    config.json."""
+    """Return the hardware this process runs on, read from JAX and the OS, for the log and config.json.
+
+    Returns
+    -------
+    dict
+        Backend, device kind, host cores and RAM, the solver environment and, on a CUDA device, its SM count, compute
+        capability and memory.
+    """
     import jax
 
     dev = jax.devices()[0]
-    prof = {"backend": jax.default_backend(), "device_kind": dev.device_kind,
-            "n_devices": len(jax.devices()),
-            # sched_getaffinity is Linux-only (absent on macOS)
-            "host_cores": (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
-                           else os.cpu_count()),
-            "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE")
-                                  * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
-            "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
-            "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", ""),
-            "xla_flags": os.environ.get("XLA_FLAGS", "")}
+    prof = {
+        "backend": jax.default_backend(),
+        "device_kind": dev.device_kind,
+        "n_devices": len(jax.devices()),
+        # sched_getaffinity is Linux-only (absent on macOS)
+        "host_cores": (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()),
+        "host_ram_gib": round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
+        "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
+        "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", ""),
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+    }
     if prof["backend"] in ("gpu", "cuda"):
         cc = str(getattr(dev, "compute_capability", ""))
         stats = dev.memory_stats() or {}
-        prof.update(sm_count=getattr(dev, "core_count", None), compute_capability=cc,
-                    device_mem_gib=round(stats.get("bytes_limit", 0) / 2**30, 1))
+        prof.update(
+            sm_count=getattr(dev, "core_count", None),
+            compute_capability=cc,
+            device_mem_gib=round(stats.get("bytes_limit", 0) / 2**30, 1),
+        )
     return prof
 
 
 def export_network(cfg: Config) -> None:
-    """Select ``cfg.network`` for the engine. vulcan3 freezes the network at its
-    first import, so this runs before it; an unset network and an environment value
-    that disagrees are refused (the config decides)."""
+    """Select ``cfg.network`` for the engine; vulcan3 freezes the network at its first import, so this runs before it.
+
+    Parameters
+    ----------
+    cfg : Config
+        The run's configuration.
+
+    Raises
+    ------
+    ValueError
+        If the network is unset.
+    RuntimeError
+        If the environment disagrees, or vulcan3 is already imported.
+    """
     if not str(cfg.network).strip():
-        raise ValueError("network is unset: name the kinetics network under config:, "
-                         "e.g. network: thermo/SNCHO_photo_network_2025.txt")
+        raise ValueError(
+            "network is unset: name the kinetics network under config:, "
+            "e.g. network: thermo/SNCHO_photo_network_2025.txt"
+        )
     have = os.environ.get("VULCAN3_NETWORK")
     if have is not None and have != cfg.network:
-        raise RuntimeError(f"VULCAN3_NETWORK={have!r} in the environment disagrees with "
-                           f"the config's network ({cfg.network!r}): unset it, the "
-                           "config decides")
+        raise RuntimeError(
+            f"VULCAN3_NETWORK={have!r} in the environment disagrees with "
+            f"the config's network ({cfg.network!r}): unset it, the "
+            "config decides"
+        )
     if "vulcan3" in sys.modules and have is None:
-        raise RuntimeError("export_network: vulcan3 is already imported; select the "
-                           "network before the first vulcan3 import")
+        raise RuntimeError(
+            "export_network: vulcan3 is already imported; select the network before the first vulcan3 import"
+        )
     os.environ["VULCAN3_NETWORK"] = cfg.network
 
 
 def choose_solver() -> str:
-    """Set VULCAN3_SOLVER for this process from the device, unless the user
-    set it: `ffi` (the block-Thomas CUDA kernel) on compute capability 9.0,
-    the only card it is validated on, and only when its CUDA library is
-    built; `fast` everywhere else. Import-frozen by VULCAN-JAX, so this runs before
-    the first vulcan3 import (the analysis tools call it before they rebuild a
-    run's forward; a run's own solver is its spec's runtime block). Returns the choice and
-    why, for the log."""
+    """Set VULCAN3_SOLVER for an analysis tool from the device, unless the user set it.
+
+    ``ffi`` (the block-Thomas CUDA kernel) on compute capability 9.0, the only card it is validated on, when its library
+    is built; ``fast`` everywhere else. A run's own solver is its spec's ``runtime`` block. Import-frozen, so this runs
+    before the first vulcan3 import.
+
+    Returns
+    -------
+    str
+        The choice and why, for the log.
+    """
     import importlib.util
+
     import jax
 
     if "VULCAN3_SOLVER" in os.environ:
         return f"{os.environ['VULCAN3_SOLVER']} (set by the user)"
     step = sys.modules.get("vulcan3.jax_step")
-    if step is not None:        # already frozen by an earlier import: report it
+    if step is not None:  # already frozen by an earlier import: report it
         os.environ["VULCAN3_SOLVER"] = step._SOLVER
         return f"{step._SOLVER} (vulcan3 was imported before the choice)"
     dev = jax.devices()[0]
     cc = str(getattr(dev, "compute_capability", ""))
     spec = importlib.util.find_spec("vulcan3")
-    lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"
-    if (jax.default_backend() in ("gpu", "cuda") and cc == FFI_COMPUTE_CAPABILITY
-            and lib.is_file()):
+    lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"  # type: ignore[union-attr, index]  # a dependency
+    if jax.default_backend() in ("gpu", "cuda") and cc == FFI_COMPUTE_CAPABILITY and lib.is_file():
         os.environ["VULCAN3_SOLVER"] = "ffi"
         return f"ffi (compute capability {cc}, {lib.name} built)"
     os.environ["VULCAN3_SOLVER"] = "fast"
-    why = ("not a CUDA device" if jax.default_backend() not in ("gpu", "cuda") else
-           f"compute capability {cc} is not {FFI_COMPUTE_CAPABILITY}"
-           if cc != FFI_COMPUTE_CAPABILITY else
-           f"{lib} is not built (python -c 'from vulcan3 import solver_fast; "
-           "solver_fast.build(cuda=True)' on the GPU host)")
+    why = (
+        "not a CUDA device"
+        if jax.default_backend() not in ("gpu", "cuda")
+        else f"compute capability {cc} is not {FFI_COMPUTE_CAPABILITY}"
+        if cc != FFI_COMPUTE_CAPABILITY
+        else f"{lib} is not built (python -c 'from vulcan3 import solver_fast; "
+        "solver_fast.build(cuda=True)' on the GPU host)"
+    )
     return f"fast ({why})"
 
 
-def validate_config(cfg: Config) -> None:
+def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
+    """Refuse a configuration that is inconsistent or leaves the planet unset.
+
+    Parameters
+    ----------
+    cfg : Config
+        The run's configuration.
+
+    Raises
+    ------
+    ValueError
+        Naming the setting and what it needs.
+    """
     if int(cfg.cold_refill_chunk) < 1:
         raise ValueError(f"cold_refill_chunk must be >= 1, got {cfg.cold_refill_chunk!r}")
-    # The RT chunk size is a batch split where 0 means "one batch".
     if int(cfg.smc_rt_chunk) < 0:
         raise ValueError(f"smc_rt_chunk must be >= 0 (0 = no chunking), got {cfg.smc_rt_chunk!r}")
     if int(cfg.cold_lanes) < 1:
-        raise ValueError("cold_lanes must be > 0 (the lane count of the chemistry "
-                         f"queue every batch runs on), got {cfg.cold_lanes!r}")
+        raise ValueError(
+            "cold_lanes must be > 0 (the lane count of the chemistry "
+            f"queue every batch runs on), got {cfg.cold_lanes!r}"
+        )
     if not math.isfinite(cfg.walltime_seconds):
         raise ValueError("walltime_seconds must be finite (<= 0 means no limit)")
-    # Every pipeline evaluates a likelihood, so condensation ON is refused here
-    # unless allow_condense_inference=True (the opt-in).
-    if (bool(cfg.cfg_overrides.get("use_condense", False))
-            and not cfg.allow_condense_inference):
+    if bool(cfg.cfg_overrides.get("use_condense", False)) and not cfg.allow_condense_inference:
         raise ValueError(
             "use_condense=True is refused in a retrieval: no retrieval with "
             "condensation has been validated (certification and start dependence "
             "of condensing columns are untested). Run a condensation forward model "
             "through vulcan_forward.vulcan_chem.build_chem_model, or set "
-            "allow_condense_inference=True after validating it on your case.")
+            "allow_condense_inference=True after validating it on your case."
+        )
     if cfg.integrate_nuisance:
         if not (cfg.infer_offsets or cfg.infer_noise_inflation):
-            raise ValueError("integrate_nuisance=True needs infer_offsets or "
-                             "infer_noise_inflation: there is nothing to integrate")
+            raise ValueError(
+                "integrate_nuisance=True needs infer_offsets or infer_noise_inflation: there is nothing to integrate"
+            )
         lo, hi = cfg.prior_offset_ppm
         if not lo < hi:
             raise ValueError(f"prior_offset_ppm: lo={lo} !< hi={hi}")
@@ -552,14 +630,18 @@ def validate_config(cfg: Config) -> None:
         if not 0 < lo < hi:
             raise ValueError(f"prior_noise_inflation needs 0 < lo < hi, got {(lo, hi)}")
     if cfg.noise_inflation_per_group and not cfg.infer_noise_inflation:
-        raise ValueError("noise_inflation_per_group=True needs infer_noise_inflation=True "
-                         "(it splits the inferred inflation by group; alone it would "
-                         "silently infer none)")
+        raise ValueError(
+            "noise_inflation_per_group=True needs infer_noise_inflation=True "
+            "(it splits the inferred inflation by group; alone it would "
+            "silently infer none)"
+        )
     if cfg.tp_deep_param not in ("Tint", "T1bar"):
         raise ValueError(f"tp_deep_param={cfg.tp_deep_param!r}: expected 'Tint' or 'T1bar'")
     if cfg.tp_deep_param == "T1bar" and not cfg.tp_infer_Tint:
-        raise ValueError("tp_deep_param='T1bar' needs tp_infer_Tint=True (it names the "
-                         "retrieved deep parameter; with a fixed Tint it would be ignored)")
+        raise ValueError(
+            "tp_deep_param='T1bar' needs tp_infer_Tint=True (it names the "
+            "retrieved deep parameter; with a fixed Tint it would be ignored)"
+        )
     if not (float(cfg.tp_deep_p_bar) > 0.0):
         raise ValueError(f"tp_deep_p_bar must be > 0 bar, got {cfg.tp_deep_p_bar!r}")
     if cfg.kzz_mode not in ("scale", "powerlaw"):
@@ -567,27 +649,40 @@ def validate_config(cfg: Config) -> None:
     if cfg.cloud_model not in ("powerlaw", "deck"):
         raise ValueError(f"cloud_model={cfg.cloud_model!r}: expected 'powerlaw' or 'deck'")
     if cfg.infer_lnM and not (float(cfg.prior_lnM_sigma) > 0.0):
-        raise ValueError(f"prior_lnM_sigma must be > 0 with infer_lnM, got "
-                         f"{cfg.prior_lnM_sigma!r}")
-    # Planet identity must be set by the spec.
+        raise ValueError(f"prior_lnM_sigma must be > 0 with infer_lnM, got {cfg.prior_lnM_sigma!r}")
     if not str(cfg.vulcan_cfg_name).strip():
-        raise ValueError("vulcan_cfg_name is unset: the case must name its VULCAN "
-                         "baseline config (e.g. 'W39b', loaded from vulcan3/configs/)")
+        raise ValueError(
+            "vulcan_cfg_name is unset: the case must name its VULCAN "
+            "baseline config (e.g. 'W39b', loaded from vulcan3/configs/)"
+        )
     if not str(cfg.network).strip():
-        raise ValueError("network is unset: the case must name its kinetics network "
-                         "(e.g. network: thermo/SNCHO_photo_network_2025.txt)")
+        raise ValueError(
+            "network is unset: the case must name its kinetics network "
+            "(e.g. network: thermo/SNCHO_photo_network_2025.txt)"
+        )
     if cfg.rp_cm is None or cfg.rstar_cm is None:
-        raise ValueError(f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): "
-                         "the case must set both (cm)")
+        raise ValueError(
+            f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): the case must set both (cm)"
+        )
 
 
-# Loud config banner (printed at the top of every run so nothing is a surprise)
+# size-limit-ok: one banner line per setting
 def describe_config(cfg: Config, name: str = "") -> str:
-    """A prominent, human-readable dump of the RESOLVED configuration (the spec over
-    the defaults) -- forward-model fidelity, convergence criteria, T-P handling, data
-    source, run settings, and the full parameter/prior table. Every entry point logs
-    this so the exact numbers a run uses (band, count_max, priors, ...)
-    are visible up front."""
+    """Return the resolved configuration as text: the banner every entry point logs.
+
+    Parameters
+    ----------
+    cfg : Config
+        The run's configuration.
+    name : str, optional
+        The spec's name.
+
+    Returns
+    -------
+    str
+        Forward-model fidelity, convergence criteria, T-P handling, data source, run settings and the parameter
+        table.
+    """
     # Offsets are named per non-reference group, and the reference is the
     # wavelength-first group, not combo[0]; read the product CSVs (numpy-only) to
     # get the pipeline's order. Band-edge drops can still differ; the built
@@ -595,12 +690,14 @@ def describe_config(cfg: Config, name: str = "") -> str:
     groups = list(cfg.combo)
     if cfg.obs_dir and cfg.obs_products:
         from retrieval_framework import observations as OBS
+
         groups = list(OBS.load_real_observations(cfg)["groups"])
     specs = specs_from_config(cfg, groups=groups)
     W = 84
     bar = "=" * W
 
-    def rule(title=""):
+    def rule(title: str = "") -> str:
+        """Return one section rule of the banner."""
         return f"  --- {title} " + "-" * max(0, W - 8 - len(title)) if title else "  " + "-" * (W - 2)
 
     opa = "correlated-k (ExoMolOP tables, R=1000 bands, H2/He broadening)"
@@ -608,56 +705,56 @@ def describe_config(cfg: Config, name: str = "") -> str:
     cmax = "(vulcan_cfg default)" if cfg.count_max is None else str(int(cfg.count_max))
     cmin = "(vulcan_cfg default)" if cfg.count_min is None else str(int(cfg.count_min))
     dtmax = "(master default 1e17)" if cfg.dt_max is None else f"{cfg.dt_max:g}"
-    data = ("SYNTHETIC (inject-and-recover at truth_*)" if cfg.generate_synthetic_data
-            else "REAL observed spectrum")
+    data = "SYNTHETIC (inject-and-recover at truth_*)" if cfg.generate_synthetic_data else "REAL observed spectrum"
     lanes = f"{int(cfg.cold_lanes)} lanes, refill {int(cfg.cold_refill_chunk)}"
 
     lines = [
-        "", bar,
-        f"  RETRIEVAL CONFIG    spec={name or '?'}    {cfg.run_label or 'run'}"
-        f"    out_dir={cfg.out_dir}",
+        "",
+        bar,
+        f"  RETRIEVAL CONFIG    spec={name or '?'}    {cfg.run_label or 'run'}    out_dir={cfg.out_dir}",
         bar,
         rule("forward model"),
         f"    nz={cfg.nz}   band {wl_lo:.2f}-{wl_hi:.2f} um   art_nlayer={cfg.art_nlayer}",
         f"    network: {cfg.network or '(UNSET)'}   baseline: {cfg.vulcan_cfg_name}",
         f"    opacity: {opa}",
         f"    molecules: {' '.join(cfg.molecules)}",
-        f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
-        f"   co_mode={cfg.co_mode}"
-        f"   lane queue: {lanes}",
+        (
+            f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
+            f"   co_mode={cfg.co_mode}"
+            f"   lane queue: {lanes}"
+        ),
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}",
-        f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> "
-        "high-Kzz non-convergence)",
+        f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> high-Kzz non-convergence)",
         rule("T-P profile"),
         f"    model=guillot   deep={('free ' + cfg.tp_deep_param) if cfg.tp_infer_Tint else f'Tint {cfg.tp_Tint_K:g}K'}"
         f"   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
         f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}"
         + (f"   adiabat below a free P_rcb (nabla {cfg.tp_nabla_ad:g})" if cfg.tp_adiabat else ""),
-        "    drawn RAW (no clip); profiles leaving the modelable T window on the RT or the "
-        "chemistry grid are REJECTED + REDRAWN",
+        (
+            "    drawn RAW (no clip); profiles leaving the modelable T window on the RT or the "
+            "chemistry grid are REJECTED + REDRAWN"
+        ),
         rule("composition, Kzz, mass, clouds"),
         f"    sulfur={'free (s_o)' if cfg.infer_s_o else 'scales with lnZ'}"
         f"   kzz_mode={cfg.kzz_mode}"
-        + (f" (ref {cfg.kzz_p_ref_bar:g} bar)" if cfg.kzz_mode == 'powerlaw' else "")
+        + (f" (ref {cfg.kzz_p_ref_bar:g} bar)" if cfg.kzz_mode == "powerlaw" else "")
         + f"   mass={('N(0, ' + format(cfg.prior_lnM_sigma, 'g') + ') in lnM') if cfg.infer_lnM else 'fixed'}"
         f"   cloud_model={cfg.cloud_model}",
         rule("data"),
         f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
         rule("run"),
         f"    rt_chunk={cfg.smc_rt_chunk}   walltime governor: "
-        f"{cfg.walltime_seconds / 3600.0:.1f} h"
-        + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
+        f"{cfg.walltime_seconds / 3600.0:.1f} h" + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
         rule(f"parameters ({len(specs)})   [prior : truth]"),
     ]
     for s in specs:
         pt = {"log10_uniform": "log10U", "gaussian": "N"}.get(s.prior_type, "U")
         note = ""
         if s.name == "c_o":
-            note = (f"  [C/O {math.exp(s.lo) * _BASELINE_C_TO_O:.2g}-"
-                    f"{math.exp(s.hi) * _BASELINE_C_TO_O:.2g}]")
+            note = f"  [C/O {math.exp(s.lo) * _BASELINE_C_TO_O:.2g}-{math.exp(s.hi) * _BASELINE_C_TO_O:.2g}]"
         elif s.name == "log10gamma":
-            note = f"  [gamma {10 ** s.lo:.2g}-{10 ** s.hi:.2g}]"
+            note = f"  [gamma {10**s.lo:.2g}-{10**s.hi:.2g}]"
         elif s.name == "lnKzz":
             note = f"  [Kzz x{math.exp(s.lo):.2g}-x{math.exp(s.hi):.2g}]"
         elif s.name == "s_o":

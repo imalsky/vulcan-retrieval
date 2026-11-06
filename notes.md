@@ -772,7 +772,7 @@ HPC
     at matched programs, so v5's is not set against v4's.
 - Integrated nuisances (`integrate_nuisance`, v5; the maintainer decided, with an
   outside design review): per instrument group the offset integral is closed form and
-  the inflation one a trapezoid over 2049 nodes in log10 b (`pipeline.make_nuisance_marginal`),
+  the inflation one a trapezoid over 2049 nodes in log10 b (`nuisance.make_nuisance_marginal`),
   at the sampled model's priors, so the evidence and the physical posterior are the
   sampled model's and nautilus samples 12 dimensions. Go/no-go on the real v5 bins
   (NIRISS 91, NRS1 30, NRS2 29) against brute force [M]: <= 5e-5 nats on realistic
@@ -940,8 +940,8 @@ HPC
   `run_setup.spec_digest`, `run_setup.main --digest` compares it), so the run's own copy
   in its directory is the one record; `submit.py` and `run_nautilus` share one run-directory check
   (`run_setup.check_run_dir`; an empty `anchors/` left by a startup refusal does not block
-  a resubmit), the runner's before the pipeline build; CI lints
-  (`ruff check .`); the full tier runs `run_nautilus.main` on the smoke case in
+  a resubmit), the runner's before the pipeline build; CI runs
+  pre-commit; the full tier runs `run_nautilus.main` on the smoke case in
   subprocesses (cold then warm chunks, the budget return, the refused fresh rerun,
   resume). A fresh run's first chunk is its startup check (`startup_check`): per decade
   of log10 Kzz at 1 mbar on the case profile it logs the in-window and kept draws and

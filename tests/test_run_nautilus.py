@@ -8,7 +8,9 @@ certified columns become anchors. Padding and T-P-invalid rows are masked: a
 short chunk's filler rows and its out-of-window rows reach the evaluator as
 ``active`` False. The first chunk's startup check refuses a run whose Kzz
 decade is solver-cut or whose first chunk kept nothing; the real job path runs
-end to end on the smoke case (slow). Last, every config refusal of validate_config."""
+end to end on the smoke case (slow). Last, every config refusal of validate_config.
+"""
+
 import json
 import math
 import os
@@ -29,14 +31,20 @@ jax.config.update("jax_enable_x64", True)
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
-from retrieval_framework.run_nautilus import (DISCARD_EXPLORATION, F_LIVE, N_NETWORKS,
-                                              STARTUP_MIN_DRAWS, Anchors, make_loglike,
-                                              make_sampler, startup_check)
+from retrieval_framework.run_nautilus import (
+    DISCARD_EXPLORATION,
+    F_LIVE,
+    N_NETWORKS,
+    STARTUP_MIN_DRAWS,
+    Anchors,
+    make_loglike,
+    make_sampler,
+    startup_check,
+)
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 # log Z of the stub likelihood over the unit box with its three cut regions
-EXACT_LOGZ = (math.log(ndtr(1.0) - ndtr(-5.0)) + math.log(ndtr(5.0) - ndtr(-1.5))
-              + math.log(ndtr(2.0) - ndtr(-5.0)))
+EXACT_LOGZ = math.log(ndtr(1.0) - ndtr(-5.0)) + math.log(ndtr(5.0) - ndtr(-1.5)) + math.log(ndtr(2.0) - ndtr(-5.0))
 
 
 class _Stats(NamedTuple):
@@ -46,12 +54,11 @@ class _Stats(NamedTuple):
 
 def _masked(name, seen, active, L, acc, conv):
     """The pipeline's padding contract: an inactive row takes no step (acc 0,
-    uncertified) and scores the reject sentinel. Records (name, active) per call."""
+    uncertified) and scores the reject sentinel. Records (name, active) per call.
+    """
     if seen is not None:
-        jax.debug.callback(lambda a: seen.append((name, np.asarray(a).tolist())), active,
-                           ordered=True)
-    return (jnp.where(active, L, P.REJECT_LOGL), jnp.where(active, acc, 0),
-            active & conv)
+        jax.debug.callback(lambda a: seen.append((name, np.asarray(a).tolist())), active, ordered=True)
+    return (jnp.where(active, L, P.REJECT_LOGL), jnp.where(active, acc, 0), active & conv)
 
 
 def _stub_pipe(seen=None):
@@ -61,22 +68,22 @@ def _stub_pipe(seen=None):
     def common(U):
         th = jax.vmap(theta_from_u)(U)
         L = jnp.sum(-0.5 * ((th - MU) / SD) ** 2 - math.log(SD * math.sqrt(2 * math.pi)), axis=1)
-        conv = (th[:, 1] >= 0.35) & (th[:, 0] <= 0.6)              # stalled below p1 0.35
+        conv = (th[:, 1] >= 0.35) & (th[:, 0] <= 0.6)  # stalled below p1 0.35
         # at the cap: exhausted above p0 = 0.6 (a cap exit never certifies),
         # certified AT the cap in (0.55, 0.6] (kept, as the solver says)
         acc = jnp.where((th[:, 0] > 0.6) | (conv & (th[:, 0] > 0.55)), COUNT_MAX, 10)
-        return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L), acc, conv   # T-P window
+        return th, jnp.where(th[:, 2] > 0.7, -jnp.inf, L), acc, conv  # T-P window
 
-    def refs_of(th):   # (lnZ, c_o, s_o): the pipeline's three-wide references
+    def refs_of(th):  # (lnZ, c_o, s_o): the pipeline's three-wide references
         return jnp.concatenate([th[:, :2], jnp.zeros((th.shape[0], 1))], axis=1)
 
-    def cold(U, Y, refs, active):  # the column is a code of the point's own chemistry
+    def cold(U, _Y, _refs, active):  # the column is a code of the point's own chemistry
         th, L, acc, conv = common(U)
         L, acc, conv = _masked("cold", seen, active, L, acc, conv)
         return L, (th[:, 0] + 1000 * th[:, 1])[:, None, None], refs_of(th), _Stats(acc, conv)
 
     def warm(U, Y, refs, active):  # hands back the column it started from; like the
-        _, L, acc, conv = common(U)   # pipeline's, it floors L on a stalled/exhausted exit
+        _, L, acc, conv = common(U)  # pipeline's, it floors L on a stalled/exhausted exit
         L, acc, conv = _masked("warm", seen, active, L, acc, conv)
         L = jnp.where(conv, L, P.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
@@ -84,27 +91,43 @@ def _stub_pipe(seen=None):
     def make(mode):
         return cold if mode == "cold" else warm
 
-    return SimpleNamespace(_make_batch_eval=make, n_dim=D, refs_of=refs_of,
-                           theta_from_u=theta_from_u, tp_valid=lambda th: th[2] <= 0.7,
-                           dtype=jnp.float64, n_chem_tp=2, y_baseline=jnp.zeros((1, 1)),
-                           fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX)))
+    return SimpleNamespace(
+        _make_batch_eval=make,
+        n_dim=D,
+        refs_of=refs_of,
+        theta_from_u=theta_from_u,
+        tp_valid=lambda th: th[2] <= 0.7,
+        dtype=jnp.float64,
+        n_chem_tp=2,
+        y_baseline=jnp.zeros((1, 1)),
+        fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX)),
+    )
 
 
 def test_rejection_classes(tmp_path):
     tally = {}
     like = make_loglike(_stub_pipe(), 64, tally, rejects=tmp_path / "rejected")
-    z = np.array([[0.5, 0.5, 0.5], [0.65, 0.5, 0.5], [0.5, 0.3, 0.5], [0.5, 0.5, 0.75],
-                  [0.58, 0.5, 0.5]])             # the last certifies at the cap
-    L = like(z)                                  # 5 rows through one padded chunk of 64
-    assert np.all(np.isfinite(L[[0, 4]])) and np.all(np.isneginf(L[1:4]))
+    z = np.array(
+        [[0.5, 0.5, 0.5], [0.65, 0.5, 0.5], [0.5, 0.3, 0.5], [0.5, 0.5, 0.75], [0.58, 0.5, 0.5]]
+    )  # the last certifies at the cap
+    L = like(z)  # 5 rows through one padded chunk of 64
+    assert np.all(np.isfinite(L[[0, 4]]))
+    assert np.all(np.isneginf(L[1:4]))
     assert {k: tally[k] for k in ("n_eval", "tp_out", "exhausted", "stalled", "nonfinite")} == {
-        "n_eval": 5, "tp_out": 1, "exhausted": 1, "stalled": 1, "nonfinite": 0}
+        "n_eval": 5,
+        "tp_out": 1,
+        "exhausted": 1,
+        "stalled": 1,
+        "nonfinite": 0,
+    }
     # the rejected draws are kept with their class: exhausted, stalled, T-P out (a
     # T-P-out row is masked, so its lane took no step)
     with np.load(tmp_path / "rejected" / "rejected_00000.npz") as d:
-        assert np.array_equal(d["z"], z[1:4]) and d["cls"].tolist() == [1, 2, 0]
-        assert d["acc"].tolist() == [COUNT_MAX, 10, 0] and int(d["warm"]) == 0
-    like(z[:1])                                  # a chunk with nothing rejected writes nothing
+        assert np.array_equal(d["z"], z[1:4])
+        assert d["cls"].tolist() == [1, 2, 0]
+        assert d["acc"].tolist() == [COUNT_MAX, 10, 0]
+        assert int(d["warm"]) == 0
+    like(z[:1])  # a chunk with nothing rejected writes nothing
     assert sorted(p.name for p in (tmp_path / "rejected").iterdir()) == ["rejected_00000.npz"]
 
 
@@ -112,19 +135,24 @@ def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
     """run_nautilus builds a STOCK nautilus.Sampler (PyPI 1.0.6, not the former
     SiLU / spread_batch fork) with nautilus's default networks, discards the
     exploration phase, and on the stub pipeline gets the exact zero-filled evidence;
-    its checkpoint resumes."""
+    its checkpoint resumes.
+    """
     assert nautilus.__version__ == "1.0.6"
     assert not hasattr(nautilus.Sampler, "add_samples_spread")
     like = make_loglike(_stub_pipe(), 64, {})
     f = tmp_path / "ckpt.hdf5"
     s = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f))
     assert type(s) is nautilus.Sampler
-    assert s.n_networks == N_NETWORKS == 4 and s.neural_network_kwargs == {}
+    assert s.n_networks == N_NETWORKS == 4
+    assert s.neural_network_kwargs == {}
     assert DISCARD_EXPLORATION is True
     s.run(f_live=F_LIVE, n_eff=2000, discard_exploration=DISCARD_EXPLORATION, verbose=False)
-    assert s.n_eff >= 2000 and abs(s.log_z - EXACT_LOGZ) < 0.05
+    assert s.n_eff >= 2000
+    assert abs(s.log_z - EXACT_LOGZ) < 0.05
     r = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f), resume=True)
-    assert r.n_like == s.n_like and r.explored and abs(r.log_z - s.log_z) < 1e-12
+    assert r.n_like == s.n_like
+    assert r.explored
+    assert abs(r.log_z - s.log_z) < 1e-12
 
 
 def test_warm_starts_from_the_nearest_certified_column(tmp_path):
@@ -132,21 +160,24 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     anchors, tally = Anchors(tmp_path, 2), {}
     like = make_loglike(_stub_pipe(), 16, tally, anchors, tmp_path / "batches.jsonl")
     z1 = rng.uniform(0.02, 0.98, (16, D))
-    L1 = like(z1)                                # no anchors yet: cold
-    assert len(anchors) == np.isfinite(L1).sum() > 0 and tally["n_cold"] == 16
+    L1 = like(z1)  # no anchors yet: cold
+    assert len(anchors) == np.isfinite(L1).sum() > 0
+    assert tally["n_cold"] == 16
     z_a, code_a = anchors.z.copy(), anchors.columns(np.arange(len(anchors)))[0][:, 0, 0]
     z2 = rng.uniform(0.02, 0.98, (16, D))
-    L2 = like(z2)                                # warm from the first batch's anchors
+    L2 = like(z2)  # warm from the first batch's anchors
     new = np.arange(len(z_a), len(anchors))
-    assert tally["n_warm"] == 16 and len(new) == np.isfinite(L2).sum()
+    assert tally["n_warm"] == 16
+    assert len(new) == np.isfinite(L2).sum()
     # a stalled warm exit is tallied as stalled, not as a non-finite forward
-    z = np.concatenate([z1, z2])                 # theta = z on the unit box
+    z = np.concatenate([z1, z2])  # theta = z on the unit box
     live = (z[:, 2] <= 0.7) & (z[:, 0] <= 0.6)
     assert (live & (z[:, 1] < 0.35))[16:].any()
-    assert tally["stalled"] == (live & (z[:, 1] < 0.35)).sum() and tally["nonfinite"] == 0
+    assert tally["stalled"] == (live & (z[:, 1] < 0.35)).sum()
+    assert tally["nonfinite"] == 0
     want = code_a[((anchors.z[new, None, :] - z_a[None]) ** 2).sum(-1).argmin(1)]
     assert np.array_equal(anchors.columns(new)[0][:, 0, 0], want)
-    assert len(Anchors(tmp_path, 2)) == len(anchors)   # reloads on resume
+    assert len(Anchors(tmp_path, 2)) == len(anchors)  # reloads on resume
     rows = [json.loads(r) for r in (tmp_path / "batches.jsonl").read_text().splitlines()]
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
 
@@ -154,7 +185,8 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
 def test_startup_check_refuses_a_solver_cut_decade_and_an_empty_first_chunk():
     """A decade with STARTUP_MIN_DRAWS in-window draws and none kept refuses the
     run, naming it; one kept draw passes it; a sparse decade is reported as too few
-    to judge, never refused; out-of-window draws do not count; nothing kept refuses."""
+    to judge, never refused; out-of-window draws do not count; nothing kept refuses.
+    """
     n = STARTUP_MIN_DRAWS
     lk = np.r_[np.full(n, 6.5), np.full(n, 8.5), np.full(n - 1, 12.5), np.full(5, 7.5)]
     win = np.r_[np.ones(3 * n - 1, bool), np.zeros(5, bool)]
@@ -164,9 +196,11 @@ def test_startup_check_refuses_a_solver_cut_decade_and_an_empty_first_chunk():
     kept[0] = True
     lines = startup_check(lk, win, kept, {})
     assert [ln.split(":", 1)[1] for ln in lines] == [
-        f" log10 Kzz [6, 7): {n} in window, 1 kept", f" log10 Kzz [8, 9): {n} in window, {n} kept",
-        f" log10 Kzz [12, 13): {n - 1} in window, 0 kept (too few to judge)"]
-    with pytest.raises(RuntimeError, match="no draw of the first chunk was kept .*7 exhausted"):
+        f" log10 Kzz [6, 7): {n} in window, 1 kept",
+        f" log10 Kzz [8, 9): {n} in window, {n} kept",
+        f" log10 Kzz [12, 13): {n - 1} in window, 0 kept (too few to judge)",
+    ]
+    with pytest.raises(RuntimeError, match=r"no draw of the first chunk was kept .*7 exhausted"):
         startup_check(lk, win, np.zeros_like(kept), {"exhausted": 7})
 
 
@@ -175,67 +209,92 @@ def test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes(tmp_path):
     """The real job path on the CPU, each call in its own process as on NAS (the
     smoke case on a short sampler budget): the startup check on the first cold chunk,
     warm chunks after it, the return without a posterior when the budget ends, the
-    refusal of a fresh run over an existing one, and --resume continuing it."""
+    refusal of a fresh run over an existing one, and --resume continuing it.
+    """
     repo = Path(__file__).resolve().parents[1]
     spec = tmp_path / "smoke_main.yaml"
-    spec.write_text(f"base: {repo / 'runs' / 'w39b_smc_retrieval' / 'smoke.yaml'}\n"
-                    "sampler: {n_live: 16, n_batch: 8}\n"
-                    "config: {cold_lanes: 8, count_max: 2000}\n")   # one draw per lane, short caps
-    job = ("import sys, nautilus\n"
-           "run = nautilus.Sampler.run\n"
-           # n_like_max counts the whole run, resumes included: 32 more per call
-           "nautilus.Sampler.run = lambda self, **kw: run(self, n_like_max=self.n_like + 32, **kw)\n"
-           "from retrieval_framework.run_nautilus import main\n"
-           "main(sys.argv[1:])\n")
+    spec.write_text(
+        f"base: {repo / 'runs' / 'w39b_smc_retrieval' / 'smoke.yaml'}\n"
+        "sampler: {n_live: 16, n_batch: 8}\n"
+        "config: {cold_lanes: 8, count_max: 2000}\n"
+    )  # one draw per lane, short caps
+    job = (
+        "import sys, nautilus\n"
+        "run = nautilus.Sampler.run\n"
+        # n_like_max counts the whole run, resumes included: 32 more per call
+        "nautilus.Sampler.run = lambda self, **kw: run(self, n_like_max=self.n_like + 32, **kw)\n"
+        "from retrieval_framework.run_nautilus import main\n"
+        "main(sys.argv[1:])\n"
+    )
 
     # one compile cache for the three calls: the resume reuses the first call's programs
     env = {**os.environ, "JAX_COMPILATION_CACHE_DIR": str(tmp_path / "jax_cache")}
 
     def main(*args):
-        return subprocess.run([sys.executable, "-c", job, str(spec), *args], cwd=repo,
-                              capture_output=True, text=True, env=env)
+        return subprocess.run(
+            [sys.executable, "-c", job, str(spec), *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
 
     r = main()
     assert r.returncode == 0, r.stderr[-3000:]
     out = tmp_path / "output" / "smoke_main_nautilus"
     rows = [json.loads(r) for r in (out / "batches.jsonl").read_text().splitlines()]
-    assert rows[0]["mode"] == "cold" and rows[-1]["mode"] == "warm"
+    assert rows[0]["mode"] == "cold"
+    assert rows[-1]["mode"] == "warm"
     assert "startup: log10 Kzz" in (out / "run.log").read_text()
     assert (out / "nautilus_checkpoint.hdf5").exists()
     assert not (out / "nautilus_posterior.npz").exists()
     r = main()
-    assert r.returncode != 0 and "FileExistsError" in r.stderr and "--resume" in r.stderr
+    assert r.returncode != 0
+    assert "FileExistsError" in r.stderr
+    assert "--resume" in r.stderr
     n0 = json.loads((out / "nautilus_tally.json").read_text())["n_eval"]
     r = main("--resume")
     assert r.returncode == 0, r.stderr[-3000:]
     assert json.loads((out / "nautilus_tally.json").read_text())["n_eval"] > n0
 
 
-VALID = dict(vulcan_cfg_name="W39b", network="thermo/SNCHO_photo_network_2025.txt",
-             rp_cm=1.0, rstar_cm=10.0)
+VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.txt", "rp_cm": 1.0, "rstar_cm": 10.0}
 
 
-@pytest.mark.parametrize("over, msg", [
-    (dict(cold_lanes=0), "cold_lanes"),       # every batch runs on the lane queue
-    (dict(cold_lanes=-1), "cold_lanes"),
-    (dict(cold_refill_chunk=0), "cold_refill_chunk"),
-    (dict(noise_inflation_per_group=True), "infer_noise_inflation"),
-    (dict(cfg_overrides={"use_condense": True}), "use_condense"),
-    (dict(tp_deep_param="T_1bar", tp_infer_Tint=True), "tp_deep_param"),
-    (dict(tp_deep_param="T1bar"), "tp_infer_Tint"),       # a fixed Tint would ignore it
-    (dict(tp_deep_p_bar=0.0, tp_infer_Tint=True), "tp_deep_p_bar"),
-    (dict(kzz_mode="const"), "kzz_mode"),
-    (dict(cloud_model="patchy"), "cloud_model"),
-    (dict(infer_lnM=True, prior_lnM_sigma=0.0), "prior_lnM_sigma"),
-    (dict(network=""), "network is unset"),               # no default network
-    # accepted: condensation with its explicit opt-in, and the v5 model choices
-    (dict(cfg_overrides={"use_condense": True}, allow_condense_inference=True), None),
-    (dict(tp_infer_Tint=True, tp_deep_param="T1bar", tp_adiabat=True, infer_s_o=True,
-          kzz_mode="powerlaw", infer_lnM=True, cloud_model="deck"), None),
-])
+@pytest.mark.parametrize(
+    ("over", "msg"),
+    [
+        ({"cold_lanes": 0}, "cold_lanes"),  # every batch runs on the lane queue
+        ({"cold_lanes": -1}, "cold_lanes"),
+        ({"cold_refill_chunk": 0}, "cold_refill_chunk"),
+        ({"noise_inflation_per_group": True}, "infer_noise_inflation"),
+        ({"cfg_overrides": {"use_condense": True}}, "use_condense"),
+        ({"tp_deep_param": "T_1bar", "tp_infer_Tint": True}, "tp_deep_param"),
+        ({"tp_deep_param": "T1bar"}, "tp_infer_Tint"),  # a fixed Tint would ignore it
+        ({"tp_deep_p_bar": 0.0, "tp_infer_Tint": True}, "tp_deep_p_bar"),
+        ({"kzz_mode": "const"}, "kzz_mode"),
+        ({"cloud_model": "patchy"}, "cloud_model"),
+        ({"infer_lnM": True, "prior_lnM_sigma": 0.0}, "prior_lnM_sigma"),
+        ({"network": ""}, "network is unset"),  # no default network
+        # accepted: condensation with its explicit opt-in, and the v5 model choices
+        ({"cfg_overrides": {"use_condense": True}, "allow_condense_inference": True}, None),
+        (
+            {
+                "tp_infer_Tint": True,
+                "tp_deep_param": "T1bar",
+                "tp_adiabat": True,
+                "infer_s_o": True,
+                "kzz_mode": "powerlaw",
+                "infer_lnM": True,
+                "cloud_model": "deck",
+            },
+            None,
+        ),
+    ],
+)
 def test_validate_config_refusals(over, msg):
-    """Every refusal a case preset or an override file can hit (msg None:
-    accepted)."""
+    """Every refusal a case preset or an override file can hit (msg None: accepted)."""
     cfg = C.Config(**{**VALID, **over})
     if msg is None:
         C.validate_config(cfg)

@@ -11,22 +11,35 @@ on:
     branches: [main]
   pull_request:
 
+permissions: {}
+
 jobs:
   lint:
-    # the pinned rule set (pyproject [tool.ruff.lint]): an undefined name is an
-    # F error here, not a crash minutes into a GPU job
+    name: Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install "ruff==0.16.8" && ruff check .
+      - uses: astral-sh/setup-uv@v6
+      - name: Format, lint, types, spelling
+        run: uvx pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: check-size-limits
+      - name: Size limits
+        run: python3 tools/check_size_limits.py
 
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       matrix:
         # 3.10 is the NAS deploy interpreter (pyt2_8_gh = 3.10.18); keep it tested

@@ -1,14 +1,7 @@
-"""Shared helpers for the validation scripts: the production Config and profile,
-R-binning, and the JSON result artifact that the two production-fidelity ladders
-(`resolution_ladder.py`: art_nlayer; `top_pressure_ladder.py`: the model top)
-and `opacity_leave_one_out.py` emit.
+"""Shared helpers for the validation scripts: the production Config and profile, R-binning and the JSON artifact.
 
-Each script's `emit()` writes a JSON artifact under
-`output/w39b_smc_retrieval/validation/` (the ignored output tree, beside the
-run outputs) with the code and data provenance that ties the number to one state.
-
-Nothing here imports jax, exojax, or the chemistry stack, so it stays cheap and
-cannot perturb the measurement.
+Each script's ``emit()`` writes under ``output/w39b_smc_retrieval/validation/``, with the code and data provenance that
+ties the number to one state. Imports no jax, exojax or chemistry, so it cannot perturb the measurement.
 """
 
 from __future__ import annotations
@@ -27,8 +20,7 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the provenance module
-from retrieval_framework.provenance import (_data_identity, _repo_states, _versions,
-                                            science_data_identity)
+from retrieval_framework.provenance import _data_identity, _repo_states, _versions, science_data_identity
 
 logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -40,6 +32,7 @@ PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "wasp39_test1.yaml"
 def production_config():
     """The Config of the PRODUCTION run (PRODUCTION_SPEC); no jax import."""
     from retrieval_framework.run_setup import load_spec
+
     return load_spec(PRODUCTION_SPEC).cfg
 
 
@@ -68,7 +61,9 @@ def make_r_bins(wl_lo, wl_hi, R):
 def bin_trapz(wl, y, edges):
     """d(lambda)-weighted (local-trapezoid) bin means; NaN where empty."""
     w = np.empty_like(wl)
-    w[1:-1] = 0.5 * (wl[2:] - wl[:-2]); w[0] = wl[1] - wl[0]; w[-1] = wl[-1] - wl[-2]
+    w[1:-1] = 0.5 * (wl[2:] - wl[:-2])
+    w[0] = wl[1] - wl[0]
+    w[-1] = wl[-1] - wl[-2]
     idx = np.digitize(wl, edges) - 1
     out = np.full(len(edges) - 1, np.nan)
     for b in range(len(edges) - 1):
@@ -110,7 +105,8 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         # the data root, the VULCAN config and its network (no observations here)
         "data": _data_identity(RESULTS, rc),
         "env_overrides": {
-            k: os.environ[k] for k in sorted(os.environ)
+            k: os.environ[k]
+            for k in sorted(os.environ)
             if k.startswith(("SMC_", "VULCAN_", "JAX_", "XLA_", "VALIDATE_"))
         },
     }
@@ -121,8 +117,7 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
     if resolved_config is not None:
         blob = json.dumps(resolved_config, sort_keys=True, default=str)
         prov["resolved_config"] = resolved_config
-        prov["resolved_config_sha256"] = hashlib.sha256(
-            blob.encode()).hexdigest()
+        prov["resolved_config_sha256"] = hashlib.sha256(blob.encode()).hexdigest()
         # CONTENT identity of the opacity/CIA files this measurement read, in
         # the same shape the run's target manifest records, so an artifact
         # measured against different data can be told apart from the run's.
@@ -130,9 +125,15 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
     return prov
 
 
-def emit(name: str, title: str, measurements: list[dict], status: str,
-         summary: str, resolved_config: dict | None = None,
-         out_dir: Path | None = None) -> Path:
+def emit(
+    name: str,
+    title: str,
+    measurements: list[dict],
+    status: str,
+    summary: str,
+    resolved_config: dict | None = None,
+    out_dir: Path | None = None,
+) -> Path:
     """Write `<name>.json` under validation/results/.
 
     `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate).
@@ -151,5 +152,5 @@ def emit(name: str, title: str, measurements: list[dict], status: str,
     }
     jpath = out_dir / f"{name}.json"
     jpath.write_text(json.dumps(payload, indent=2, default=str) + "\n")
-    logger.info(f"[artifact] wrote {jpath}")
+    logger.info("[artifact] wrote %s", jpath)
     return jpath

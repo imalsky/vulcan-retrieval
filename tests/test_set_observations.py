@@ -6,7 +6,6 @@ a non-finite depth or a non-positive/non-finite sigma must RAISE here rather tha
 silently produce NaN/Inf likelihoods. Pure-numpy except for the production
 case at the bottom (slow), which builds the real forward.
 """
-import sys
 
 import numpy as np
 import pytest
@@ -24,17 +23,16 @@ def test_valid_vector_is_preserved_exactly():
     d, s = P.validate_observations(GOOD_DEPTH, GOOD_SIGMA, N, np.float64)
     assert np.array_equal(d, GOOD_DEPTH)
     assert np.array_equal(s, GOOD_SIGMA)
-    assert d.shape == (N,) and s.shape == (N,)
+    assert d.shape == (N,)
+    assert s.shape == (N,)
     # tiny but positive-finite sigmas are legal
-    _, out = P.validate_observations(GOOD_DEPTH, np.full(N, 1e-30), N,
-                                     np.float64)
+    _, out = P.validate_observations(GOOD_DEPTH, np.full(N, 1e-30), N, np.float64)
     assert np.all(out > 0.0)
 
 
 def test_invalid_observations_raise():
     with pytest.raises(ValueError, match="length must be n_bin"):
-        P.validate_observations(GOOD_DEPTH[:-1], GOOD_SIGMA[:-1], N,
-                                np.float64)
+        P.validate_observations(GOOD_DEPTH[:-1], GOOD_SIGMA[:-1], N, np.float64)
     for bad in (np.nan, np.inf, -np.inf):
         d = GOOD_DEPTH.copy()
         d[2] = bad
@@ -43,27 +41,28 @@ def test_invalid_observations_raise():
     for bad in (0.0, -1e-4, np.nan, np.inf, -np.inf):
         s = GOOD_SIGMA.copy()
         s[1] = bad
-        with pytest.raises(ValueError,
-                           match="sigmas must all be finite and strictly"):
+        with pytest.raises(ValueError, match="sigmas must all be finite and strictly"):
             P.validate_observations(GOOD_DEPTH, s, N, np.float64)
 
 
 # --- the production case -------------------------------------------------------
 
+
 @pytest.mark.slow
-def test_production_case_assembles_and_evaluates_one_finite_likelihood(
-        monkeypatch, tmp_path):
+def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypatch, tmp_path):
     """Assemble the shipped case (real products, binning and offset operators)
     and evaluate one finite likelihood, so a product the binning operator
-    refuses fails here rather than after a submit."""
+    refuses fails here rather than after a submit.
+    """
     from retrieval_framework import run_setup as R
+
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
     cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg
 
     import jax
 
-    pipe = P.build_pipeline(cfg)                 # raises if any operator refuses
+    pipe = P.build_pipeline(cfg)  # raises if any operator refuses
     P.load_real_into_pipe(pipe)
     obs = pipe.obs
 
@@ -78,29 +77,33 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(
     U16 = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)
     lnkzz = np.asarray(jax.vmap(pipe.theta_from_u)(U16))[:, list(pipe.names).index("lnKzz")]
     k = int(np.argmax(lnkzz))
-    U = U16[k:k + 1]
+    U = U16[k : k + 1]
     Y0, refs0 = P._blank_state(pipe, 1)
     logl = float(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(1, bool))[0][0])
-    assert np.isfinite(logl) and logl > P.REJECT_BELOW, f"non-finite/rejected likelihood: {logl}"
+    assert np.isfinite(logl), f"non-finite likelihood: {logl}"
+    assert logl > P.REJECT_BELOW, f"rejected likelihood: {logl}"
 
     # The opacity leave-one-out screen selects its states from this same pipe;
     # prove the selection on the real object before a GPU run.
-    sys.path.insert(0, str(RUN_DIR.parent.parent / "validation"))
+    monkeypatch.syspath_prepend(str(RUN_DIR.parent.parent / "validation"))
     from opacity_leave_one_out import states_for
+
     st = states_for(pipe, n_prior=2)
     # the nominal state (u = 0) only when its T-P is in the window (v5's is not)
     nominal = int(bool(pipe.tp_valid(pipe.theta_from_u(jax.numpy.zeros(pipe.n_dim)))))
-    assert st.shape == (nominal + 2, pipe.n_dim)           # nominal + 2 prior draws
-    box = np.asarray(pipe.prior_types) != "gaussian"       # gaussian: lo, hi = mean, sigma
+    assert st.shape == (nominal + 2, pipe.n_dim)  # nominal + 2 prior draws
+    box = np.asarray(pipe.prior_types) != "gaussian"  # gaussian: lo, hi = mean, sigma
     assert np.all(st[:, box] >= pipe.param_prior_lo[box])
     assert np.all(st[:, box] <= pipe.param_prior_hi[box])
     assert all(bool(pipe.tp_valid(t)) for t in st), "a screened state is off-window"
 
     post = tmp_path / "nautilus_posterior.npz"
-    np.savez(post, param_names=np.asarray(pipe.names, dtype="<U64"),
-             samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
+    np.savez(post, param_names=np.asarray(pipe.names, dtype="<U64"), samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
     assert states_for(pipe, 2, post).shape == (nominal + 4, pipe.n_dim)
-    np.savez(post, param_names=np.asarray(list(pipe.names)[::-1], dtype="<U64"),
-             samples=np.broadcast_to(st[0], (8, pipe.n_dim)))
+    np.savez(
+        post,
+        param_names=np.asarray(list(pipe.names)[::-1], dtype="<U64"),
+        samples=np.broadcast_to(st[0], (8, pipe.n_dim)),
+    )
     with pytest.raises(RuntimeError, match="different target"):
         states_for(pipe, 2, post)

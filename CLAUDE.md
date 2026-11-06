@@ -74,7 +74,8 @@ Name a notes section by its heading. Before proposing a solver, sampler or speed
   likelihood gate.
 - Mark a test `slow` if it builds a real pipeline (`build_pipeline` on a real config); claims that share one heavy build
   stay in one test (xdist builds a fixture per worker).
-- CI lints (`ruff check .`, the pinned rule set) and runs the normal tier; lint before a push.
+- Lint and types: `uvx pre-commit run --all-files`; size limits: `python3 tools/check_size_limits.py`. CI runs both and
+  the normal tier; lint before a push.
 - On daw: tests and single chemistry runs on CPU. A batched run uses one GPU with the `fast` solver, so the lanes are
   `cold_lanes` as given: use the daw variant spec in notes "HPC (NAS GH200) and daw".
 
@@ -219,7 +220,8 @@ The maintainer runs these; give the exact commands and run none of them unasked.
   the spec format is `run_setup`'s docstring and `wasp39_test1.yaml`'s comments. NAS launch: `tools/submit.py`,
   `tools/run_nas.pbs`.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup` (`load_spec`, `export_runtime`),
-  `pipeline` (evaluators, T-P window), `retrieval_forward` (chemistry + RT, lane route), `run_nautilus` (sampler,
+  `pipeline` (evaluators, T-P window), `nuisance` (the integrated offsets and inflations), `retrieval_forward` (chemistry + RT, lane route), `run_nautilus` (sampler,
   anchors, resume refusal), `provenance` (target digest), `nautilus_report` (certificate, figures), `validate_env`.
+- `docs/method.md`: the methods, their sources, the validation scripts' rungs and variants, the glossary.
 - notes: "Current state" (versions, pins, production setup, next run), "Runs", "Design records", "HPC (NAS GH200) and
   daw", "Superseded designs".

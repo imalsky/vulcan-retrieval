@@ -18,21 +18,23 @@ import pytest
 
 # Import order: vulcan_chem must precede exojax, so check availability with
 # find_spec; importorskip("exojax") would import it first and break collection.
-if importlib.util.find_spec("exojax") is None:                  # pragma: no cover
+if importlib.util.find_spec("exojax") is None:  # pragma: no cover
     pytest.skip(
-        "chemistry/RT stack (exojax) not installed; the CI here is "
-        "stack-free. Run this integration test locally.",
+        "chemistry/RT stack (exojax) not installed; the CI here is stack-free. Run this integration test locally.",
         allow_module_level=True,
     )
 
-from retrieval_framework.retrieval_forward import _refuse_condense_inference  # noqa: E402
+from retrieval_framework.retrieval_forward import _refuse_condense_inference
 
 
-@pytest.mark.parametrize("conden, allow, refused", [
-    (True, False, True),     # a retrieval through a resolved condensing state
-    (True, True, False),     # the explicit expert opt-in
-    (False, False, False),   # conden_spec is None: condensation off
-])
+@pytest.mark.parametrize(
+    ("conden", "allow", "refused"),
+    [
+        (True, False, True),  # a retrieval through a resolved condensing state
+        (True, True, False),  # the explicit expert opt-in
+        (False, False, False),  # conden_spec is None: condensation off
+    ],
+)
 def test_gate_reads_the_resolved_conden_spec(conden, allow, refused):
     chem = SimpleNamespace(conden_spec=object() if conden else None)
     cfg = SimpleNamespace(allow_condense_inference=allow, vulcan_cfg_name="Earth")

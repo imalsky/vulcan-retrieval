@@ -1,31 +1,20 @@
-#!/usr/bin/env python3
-"""Numerical convergence of the BINNED transit depth, on the production RT path.
+"""Numerical convergence of the binned transit depth in ``art_nlayer``, on the production RT path.
 
-Transmission is nonlinear in optical depth (T = e^-tau), so a grid that does not
-resolve the physics does not average into the correct R~100 bin -- narrow
-saturated lines and low-opacity windows must be resolved, or treated with a
-validated k-distribution.
+    python validation/resolution_ladder.py [--jacobian]
 
-WHICH KNOB THIS SWEEPS: the production RT is correlated-k on the tables' own
-R=1000 band grid and their own 16-point quadrature. There is no spectral
-resolution knob -- both come from the files -- so the remaining free numerical
-axis is the ART VERTICAL grid, ``art_nlayer``, and that is what the ladder
-sweeps.
+Transmission is nonlinear in optical depth, so a grid that does not resolve the physics does not average into the
+correct
+R=100 bin. The band grid and quadrature come from the tables, so the free axis is the ART vertical grid. The
+chemistry
+converges once, then the RT is rebuilt at each rung and every spectrum binned on the same bins.
 
-Method: converge the W39b chemistry ONCE (baseline theta), then rebuild the RT at
-each rung, bin every native spectrum onto the SAME R=100 bins, and compare
-adjacent rungs, and optionally check a chemistry Jacobian column (--jacobian:
-d(binned depth)/d lnZ via a warm-started jvp per rung).
-
-Run on the GPU node (primal RT only -- the vjp memory wall does not apply):
-
-    python validation/resolution_ladder.py
-
-PASS gates: the production rung must change by < 5 ppm against the next rung,
-and its Jacobian direction by < 1% where the depth response is significant.
+Gates: the production rung changes by < 5 ppm against the next rung, and its Jacobian direction by < 1% where the depth
+response is significant.
 """
+
 from __future__ import annotations
 
+import itertools
 import argparse
 import logging
 import sys
@@ -37,13 +26,13 @@ import numpy as np
 # PYTHONSAFEPATH strips the script's own directory from sys.path in some
 # sandboxes, so be explicit rather than relying on it.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _artifact  # noqa: E402
+import _artifact
 
 GATE_PPM = 5.0
 GATE_JAC_REL = 0.01
 BIN_R = 100.0
-BAND = (1900.0, 9900.0)          # production retrieval band (cm^-1)
-LADDER = (67, 101, 151)          # art_nlayer rungs; the lowest must be production's
+BAND = (1900.0, 9900.0)  # production retrieval band (cm^-1)
+LADDER = (67, 101, 151)  # art_nlayer rungs; the lowest must be production's
 
 
 def production_pair(rungs, production_value, knob="art_nlayer"):
@@ -52,22 +41,21 @@ def production_pair(rungs, production_value, knob="art_nlayer"):
     if len(ordered) < 2:
         raise ValueError("resolution ladder needs at least two distinct rungs")
     if ordered[0] != int(production_value):
-        raise ValueError(
-            f"lowest rung must be production {knob}={production_value}, "
-            f"got {ordered[0]}")
+        raise ValueError(f"lowest rung must be production {knob}={production_value}, got {ordered[0]}")
     return ordered, (ordered[0], ordered[1])
 
 
+# size-limit-ok: one measurement, in order
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--jacobian", action="store_true",
-                    help="also compare d(binned)/dlnZ per rung (jvp; expensive)")
+    ap.add_argument("--jacobian", action="store_true", help="also compare d(binned)/dlnZ per rung (jvp; expensive)")
     args = ap.parse_args()
     knob = "art_nlayer"
 
     from vulcan_forward import constants
     from vulcan_forward import interp_map
+
     # import order matters: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
@@ -87,38 +75,39 @@ def main() -> int:
 
     def run_rung(prof, want_jac):
         """Build the RT for one profile and return its R=100 binned depth (and,
-        optionally, the binned d(depth)/dlnZ from a warm-started jvp)."""
+        optionally, the binned d(depth)/dlnZ from a warm-started jvp).
+        """
         rt = exojax_rt.build_rt_model(prof)
         to_art = interp_map.make_to_art(chem.p_bar, rt.p_art_bar)
 
         def depth_of(y):
             ymix = y / jnp.sum(y, axis=1, keepdims=True)
             mmw = to_art(ymix @ chem.species_masses)
-            vmr = {k: to_art(ymix[:, chem.sidx[constants.MOLECULES[k]["vulcan"]]])
-                   for k in rt.molecules}
+            vmr = {k: to_art(ymix[:, chem.sidx[constants.MOLECULES[k]["vulcan"]]]) for k in rt.molecules}
             T_art = to_art(jnp.asarray(chem.T_base))
-            return rt.transmission_depth(vmr, to_art(ymix[:, h2]), T_art, mmw,
-                                         vmr_he=to_art(ymix[:, he]))
+            return rt.transmission_depth(vmr, to_art(ymix[:, h2]), T_art, mmw, vmr_he=to_art(ymix[:, he]))
 
         d = np.asarray(depth_of(y0), np.float64)
         wl = np.asarray(rt.wl_um, np.float64)
-        o = np.argsort(wl); wl, d = wl[o], d[o]
-        entry = dict(binned=_artifact.bin_trapz(wl, d, edges))
+        o = np.argsort(wl)
+        wl, d = wl[o], d[o]
+        entry = {"binned": _artifact.bin_trapz(wl, d, edges)}
         if want_jac:
+
             def f(th):
-                return depth_of(chem.converged_y(th, warm_y=y0,
-                                                 lnZ_ref=0.0, c_o_ref=0.0))
+                return depth_of(chem.converged_y(th, warm_y=y0, lnZ_ref=0.0, c_o_ref=0.0))
+
             _, jd = jax.jvp(f, (theta0,), (jnp.array([1.0, 0.0, 0.0, 0.0]),))
-            entry["jac_lnZ"] = _artifact.bin_trapz(wl, np.asarray(jd, np.float64)[o],
-                                                   edges)
+            entry["jac_lnZ"] = _artifact.bin_trapz(wl, np.asarray(jd, np.float64)[o], edges)
         return entry
 
     results = {}
     for rung in LADDER:
         t0 = time.time()
-        prof = dict(profile); prof[knob] = int(rung)
+        prof = dict(profile)
+        prof[knob] = int(rung)
         results[rung] = run_rung(prof, args.jacobian)
-        print(f"[ladder] {knob}={rung}: {time.time()-t0:.0f}s", flush=True)
+        print(f"[ladder] {knob}={rung}: {time.time() - t0:.0f}s", flush=True)
 
     try:
         rungs, decisive_pair = production_pair(results, profile[knob], knob)
@@ -127,20 +116,23 @@ def main() -> int:
     ok = True
     measurements = []
     print("\n==== binned-depth convergence (vs next rung) ====")
-    for a, b in zip(rungs[:-1], rungs[1:]):
+    for a, b in itertools.pairwise(rungs):
         da, db = results[a]["binned"], results[b]["binned"]
         m = np.isfinite(da) & np.isfinite(db)
         dppm = 1e6 * np.max(np.abs(da[m] - db[m]))
         print(f"{knob} {a} -> {b}: max |Delta binned depth| = {dppm:.2f} ppm")
         decisive = (a, b) == decisive_pair
-        measurements.append({
-            "name": f"max |Delta binned depth|, {knob} {a} -> {b}",
-            "value": f"{dppm:.2f} ppm",
-            "value_raw": float(dppm), "unit": "ppm",
-            "gate": f"< {GATE_PPM} ppm" if decisive else "(informational)",
-            "decisive": decisive,
-            "passed": bool(dppm < GATE_PPM) if decisive else None,
-        })
+        measurements.append(
+            {
+                "name": f"max |Delta binned depth|, {knob} {a} -> {b}",
+                "value": f"{dppm:.2f} ppm",
+                "value_raw": float(dppm),
+                "unit": "ppm",
+                "gate": f"< {GATE_PPM} ppm" if decisive else "(informational)",
+                "decisive": decisive,
+                "passed": bool(dppm < GATE_PPM) if decisive else None,
+            }
+        )
         if decisive:
             ok &= dppm < GATE_PPM
     if args.jacobian:
@@ -150,18 +142,26 @@ def main() -> int:
         m = np.isfinite(ja) & np.isfinite(jb) & (np.abs(jb) > 0.01 * np.nanmax(np.abs(jb)))
         jrel = float(np.max(np.abs(ja[m] - jb[m]) / np.abs(jb[m])))
         print(f"{knob} {a} -> {b}: max rel Jacobian change (significant bins) = {jrel:.3%}")
-        measurements.append({
-            "name": f"max rel Jacobian (dlnZ) change, {knob} {a} -> {b}",
-            "value": f"{jrel:.3%}", "value_raw": float(jrel), "unit": "relative",
-            "gate": f"< {GATE_JAC_REL:.0%}", "decisive": True,
-            "passed": bool(jrel < GATE_JAC_REL),
-        })
+        measurements.append(
+            {
+                "name": f"max rel Jacobian (dlnZ) change, {knob} {a} -> {b}",
+                "value": f"{jrel:.3%}",
+                "value_raw": float(jrel),
+                "unit": "relative",
+                "gate": f"< {GATE_JAC_REL:.0%}",
+                "decisive": True,
+                "passed": bool(jrel < GATE_JAC_REL),
+            }
+        )
         ok &= jrel < GATE_JAC_REL
     # Without --jacobian the depth gate alone cannot certify gradient convergence,
     # so a clean run is REPORT, not PASS.
     status = ("PASS" if args.jacobian else "REPORT") if ok else "FAIL"
-    print(f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
-          + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "") + ")")
+    print(
+        f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
+        + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "")
+        + ")"
+    )
 
     # Archive the verdict with its provenance.
     _artifact.emit(
@@ -172,13 +172,18 @@ def main() -> int:
         summary=(
             f"opacity_mode=exomolop; {knob} ladder {rungs}; "
             f"production is {profile[knob]}. "
-            + ("The production resolution is converged at the declared "
-               "gates." if ok else
-               f"NOT converged at the declared gates -- adopt the lowest "
-               f"tested passing rung as the production {knob}.")
-            + (" Jacobian axis included." if args.jacobian else
-               " Jacobian axis NOT run (--jacobian); the depth gate alone "
-               "does not certify gradient convergence.")),
+            + (
+                "The production resolution is converged at the declared gates."
+                if ok
+                else f"NOT converged at the declared gates -- adopt the lowest "
+                f"tested passing rung as the production {knob}."
+            )
+            + (
+                " Jacobian axis included."
+                if args.jacobian
+                else " Jacobian axis NOT run (--jacobian); the depth gate alone does not certify gradient convergence."
+            )
+        ),
         resolved_config=profile,
     )
     return 0 if ok else 1

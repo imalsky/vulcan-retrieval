@@ -1,43 +1,14 @@
-#!/usr/bin/env python3
-"""validate_env.py -- one-command environment validation for the retrieval stack.
+"""One-command environment validation for the retrieval stack.
 
-Jobs are READ-ONLY on the environment: all installs happen once in
-tools/bootstrap_nas_env.pbs (NAS) or a local editable install, and every PBS
-job runs this module first instead of pip. It aggregates check failures into one
-report (exit 1) that names the remedy; an exception while loading the spec's
-molecule list ends the run with a traceback instead.
+    python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu] [--spec <file>]
 
-Checks, in import-order-safe sequence (vulcan3 / retrieval_framework BEFORE
-exojax -- vulcan_forward.vulcan_chem's guard raises if exojax is imported first):
-
-  1. python interpreter version within the supported range (>=3.10);
-  2. jax imports; backend + devices reported; GPU asserted with --require-gpu;
-  3. vulcan3 imports, resolves EDITABLE under <PROJECT_ROOT>/VULCAN-JAX, and
-     the installed dist version matches the checkout's _version.py (a mismatch
-     means the editable install predates a metadata change -- re-bootstrap);
-  4. vulcan_forward same, under <PROJECT_ROOT>/vulcan-forward -- the shared
-     engine every retrieval path imports;
-  4b. retrieval_framework same, under <PROJECT_ROOT>/vulcan-retrieval;
-  5. cross-repo pin: the installed vulcan3 and vulcan-forward satisfy
-     vulcan-retrieval's declared requirements (skipped with a warning if
-     `packaging` is absent);
-  6. exojax imports and matches vulcan-forward's pin;
-  7. required data: the spec's own input files (run_setup.check_inputs: network,
-     case config, atm and stellar-flux files, observation products), and the
-     ExoMolOP k-tables and H2-H2 + H2-He CIA at the paths vulcan_forward.paths
-     resolves ($VULCAN_FORWARD_OPACITY_CACHE wins);
-  8. exogibbs imports and meets the floor the equilibrium cold seed needs;
-  9. nautilus (nautilus-sampler) imports and is the stock PyPI release
-     NAUTILUS_PIN that run_nautilus is written for; the maintainer's former
-     fork (SiLU networks, spread_batch), which carried the same version string,
-     is refused so a run's sampler is unambiguous.
-
-Usage:
-    python -m retrieval_framework.validate_env <PROJECT_ROOT> [--require-gpu]
-
-PROJECT_ROOT is the directory CONTAINING the VULCAN-JAX, vulcan-forward and
-vulcan-retrieval checkouts (same meaning as $VULCAN_PROJECT_ROOT).
+Jobs are read-only on the environment, so every PBS job runs this first instead of pip. It aggregates failures into one
+report that names the remedy, in import-order-safe sequence: the interpreter, jax, the three editable checkouts and
+their versions under PROJECT_ROOT (the directory containing VULCAN-JAX, vulcan-forward and vulcan-retrieval), the
+cross-repo requirements, the exojax pin, the spec's inputs, the k-tables and CIA, exogibbs and the stock nautilus
+release.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,31 +17,30 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any
+
+__all__ = ["main"]
 
 SUPPORTED_PYTHON = (3, 10)
 EXOJAX_PIN = "2.6.0"  # keep in lockstep with vulcan-forward's pyproject.toml
 EXOGIBBS_MIN = "0.6.0"  # the Gibbs minimizer behind vulcan3.ini_abun.eq_seed
 
 _ERRORS: list[str] = []
-_WARNINGS: list[str] = []
 
 
 def _err(msg: str) -> None:
+    """Record and print one failure."""
     _ERRORS.append(msg)
     print(f"ERROR: {msg}", file=sys.stderr)
 
 
-def _warn(msg: str) -> None:
-    _WARNINGS.append(msg)
-    print(f"WARNING: {msg}")
-
-
 def _ok(msg: str) -> None:
+    """Print one passed check."""
     print(f"ok: {msg}")
 
 
 def _repo_version(repo: Path, pkg_dir: str) -> str | None:
-    """Read __version__ out of <repo>/src/<pkg_dir>/_version.py without importing."""
+    """Read ``__version__`` out of a checkout's _version.py without importing it."""
     p = repo / "src" / pkg_dir / "_version.py"
     try:
         m = re.search(r'__version__\s*=\s*"([^"]+)"', p.read_text(encoding="utf-8"))
@@ -80,6 +50,7 @@ def _repo_version(repo: Path, pkg_dir: str) -> str | None:
 
 
 def _check_python() -> None:
+    """Check the interpreter against the supported floor."""
     v = sys.version_info
     if (v.major, v.minor) < SUPPORTED_PYTHON:
         _err(
@@ -91,9 +62,10 @@ def _check_python() -> None:
 
 
 def _check_jax(require_gpu: bool) -> None:
+    """Check that jax imports, and that it found a GPU when required."""
     try:
         import jax
-    except Exception as e:  # noqa: BLE001 - aggregate every failure loudly
+    except Exception as e:
         _err(f"jax failed to import: {e!r}. Re-run the bootstrap.")
         return
     backend = jax.default_backend()
@@ -107,12 +79,13 @@ def _check_jax(require_gpu: bool) -> None:
 
 
 def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -> None:
+    """Check that a package imports from its checkout and that its installed metadata matches."""
     try:
         mod = __import__(pkg_import)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _err(f"{pkg_import} failed to import: {e!r}. Run the bootstrap to install it.")
         return
-    mod_path = Path(mod.__file__).resolve()
+    mod_path = Path(mod.__file__).resolve()  # type: ignore[arg-type]  # an installed package has a file
     expected = (repo / "src" / pkg_dir).resolve()
     if mod_path.parent != expected:
         _err(
@@ -124,11 +97,8 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
     installed = getattr(mod, "__version__", None)
     checkout = _repo_version(repo, pkg_dir)
     if checkout is not None and installed != checkout:
-        # __version__ is read live from the editable tree, so a mismatch here
-        # means a half-updated checkout; the dist-metadata drift check is below.
-        _err(
-            f"{pkg_import} __version__ {installed} != checkout _version.py {checkout}."
-        )
+        # __version__ is read live from the editable tree, so a mismatch means a half-updated checkout.
+        _err(f"{pkg_import} __version__ {installed} != checkout _version.py {checkout}.")
     from importlib import metadata
 
     try:
@@ -147,19 +117,20 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
 
 
 def _check_cross_repo_pin() -> None:
-    """Every sibling-engine requirement vulcan-retrieval declares (vulcan3
-    AND vulcan-forward) must be satisfied by the INSTALLED sibling."""
+    """Check the installed vulcan3 and vulcan-forward against this distribution's requirements."""
     from importlib import metadata
 
     try:
         reqs = metadata.requires("vulcan-retrieval") or []
     except metadata.PackageNotFoundError:
-        return  # already reported by _check_editable
+        return
     try:
         from packaging.requirements import Requirement
     except ImportError:
-        _err("`packaging` is not installed, so the sibling-engine requirements cannot be "
-             "verified: install it (`pip install packaging`; the bootstrap does).")
+        _err(
+            "`packaging` is not installed, so the sibling-engine requirements cannot be "
+            "verified: install it (`pip install packaging`; the bootstrap does)."
+        )
         return
     for dist in ("vulcan3", "vulcan-forward"):
         spec = next((r for r in reqs if r.split()[0].startswith(dist)), None)
@@ -168,7 +139,7 @@ def _check_cross_repo_pin() -> None:
         try:
             version = metadata.version(dist)
         except metadata.PackageNotFoundError:
-            continue  # already reported by _check_editable
+            continue
         req = Requirement(spec)
         if not req.specifier.contains(version, prereleases=True):
             _err(
@@ -181,27 +152,25 @@ def _check_cross_repo_pin() -> None:
 
 
 def _check_exojax() -> None:
+    """Check the exojax pin."""
     try:
         import exojax
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _err(f"exojax failed to import: {e!r}. Re-run the bootstrap.")
         return
     if exojax.__version__ != EXOJAX_PIN:
-        _err(
-            f"exojax {exojax.__version__} != pinned {EXOJAX_PIN} (vulcan-forward). "
-            "Re-run the bootstrap."
-        )
+        _err(f"exojax {exojax.__version__} != pinned {EXOJAX_PIN} (vulcan-forward). Re-run the bootstrap.")
     else:
         _ok(f"exojax {exojax.__version__}")
 
 
-PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")   # relative to the retrieval repo
+PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")
 
 
-def _check_spec_inputs(cfg) -> None:
-    """The spec's own input files (run_setup.check_inputs), from the working
-    directory main sets: the retrieval repo, the job's."""
+def _check_spec_inputs(cfg: Any) -> None:
+    """Check the spec's input files, from the job's working directory."""
     from retrieval_framework.run_setup import check_inputs
+
     try:
         check_inputs(cfg)
     except (OSError, ValueError) as e:
@@ -211,14 +180,11 @@ def _check_spec_inputs(cfg) -> None:
 
 
 def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
+    """Check the k-tables and CIA at the paths the engine reads."""
     from vulcan_forward import paths
 
     data = root / "vulcan-retrieval" / "data"
-    # The engine's own path accessors, so the check reads the files the engine
-    # reads ($VULCAN_FORWARD_OPACITY_CACHE included).
     paths.set_data_root(data)
-    # Correlated-k tables: the PRODUCTION opacity path. A missing table raises
-    # deep inside the RT build, minutes into a job, so catch it in preflight.
     try:
         ckdir = paths.exomolop_dir()
     except RuntimeError as e:
@@ -247,19 +213,19 @@ def _check_data_tree(root: Path, prod: tuple[str, ...]) -> None:
 
 
 def _check_exogibbs() -> None:
-    """The EQ cold seed minimizes the Gibbs energy through exogibbs: pure JAX,
-    nothing to build per architecture, but a hard import of every cold solve."""
+    """Check exogibbs, a hard import of every cold solve, against its floor."""
     remedy = f'pip install --user --no-deps "exogibbs=={EXOGIBBS_MIN}"'
     try:
         import exogibbs
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _err(f"exogibbs failed to import: {e!r}. Install it: {remedy}")
         return
     got = str(getattr(exogibbs, "__version__", ""))
     parts = tuple(int(n) for n in re.findall(r"\d+", got)[:3])
     if parts < tuple(int(n) for n in EXOGIBBS_MIN.split(".")):
-        _err(f"exogibbs {got or '?'} is below the {EXOGIBBS_MIN} floor the "
-             f"equilibrium seed needs. Upgrade it: {remedy}")
+        _err(
+            f"exogibbs {got or '?'} is below the {EXOGIBBS_MIN} floor the equilibrium seed needs. Upgrade it: {remedy}"
+        )
     else:
         _ok(f"exogibbs {got}")
 
@@ -268,37 +234,52 @@ NAUTILUS_PIN = "1.0.6"  # keep in lockstep with pyproject.toml and requirements-
 
 
 def _check_nautilus() -> None:
-    """run_nautilus (PBS SAMPLER=nautilus) imports nautilus inside the job,
-    after the config resolves; catch a missing install, another version, or the
-    former fork (SiLU networks, spread_batch; same version string), here."""
-    fix = (f'pip install --user --no-deps --force-reinstall "nautilus-sampler=={NAUTILUS_PIN}" '
-           "(tools/bootstrap_nas_env.pbs does).")
+    """Check for the stock nautilus release that run_nautilus is written for, refusing the former fork."""
+    fix = (
+        f'pip install --user --no-deps --force-reinstall "nautilus-sampler=={NAUTILUS_PIN}" '
+        "(tools/bootstrap_nas_env.pbs does)."
+    )
     try:
         import nautilus
         import nautilus.neural
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _err(f"nautilus failed to import: {e!r}. Install it: {fix}")
         return
     got = str(getattr(nautilus, "__version__", ""))
     if got != NAUTILUS_PIN:
-        _err(f"nautilus {got or '?'} at {nautilus.__file__}; run_nautilus is pinned to "
-             f"{NAUTILUS_PIN}. Install it: {fix}")
+        _err(
+            f"nautilus {got or '?'} at {nautilus.__file__}; run_nautilus is pinned to {NAUTILUS_PIN}. Install it: {fix}"
+        )
         return
-    if (hasattr(nautilus.Sampler, "add_samples_spread")
-            or hasattr(nautilus.neural, "SiLUMLPRegressor")):
-        _err(f"nautilus at {nautilus.__file__} is the former fork (spread_batch, SiLU "
-             f"networks), not the PyPI release. Replace it: {fix}")
+    if hasattr(nautilus.Sampler, "add_samples_spread") or hasattr(nautilus.neural, "SiLUMLPRegressor"):
+        _err(
+            f"nautilus at {nautilus.__file__} is the former fork (spread_batch, SiLU "
+            f"networks), not the PyPI release. Replace it: {fix}"
+        )
         return
     _ok(f"nautilus {got} (stock PyPI release)")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run every check and report.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        The arguments; default ``sys.argv``.
+
+    Returns
+    -------
+    int
+        0 when every check passes.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path)
     parser.add_argument("--require-gpu", action="store_true")
-    parser.add_argument("--spec", type=Path, default=None,
-                        help=f"the run specification whose data to check (default {PRODUCTION_SPEC})")
+    parser.add_argument(
+        "--spec", type=Path, default=None, help=f"the run specification whose data to check (default {PRODUCTION_SPEC})"
+    )
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
     spec = (args.spec or root / "vulcan-retrieval" / PRODUCTION_SPEC).resolve()
@@ -312,20 +293,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _check_python()
         _check_jax(args.require_gpu)
-        # vulcan3 / retrieval_framework BEFORE exojax: vulcan_forward.vulcan_chem's
-        # import-order guard raises if exojax comes first.
+        # Before exojax: vulcan_chem's import-order guard raises if exojax comes first.
         _check_editable("vulcan3", "vulcan3", root / "VULCAN-JAX", "vulcan3")
-        # the shared forward engine (chemistry + RT) is its own distribution
-        _check_editable("vulcan_forward", "vulcan-forward",
-                        root / "vulcan-forward", "vulcan_forward")
-        _check_editable(
-            "retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework"
-        )
+        _check_editable("vulcan_forward", "vulcan-forward", root / "vulcan-forward", "vulcan_forward")
+        _check_editable("retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework")
         _check_cross_repo_pin()
         _check_exojax()
         from retrieval_framework.run_setup import load_spec
+
         cfg = load_spec(spec).cfg
-        os.chdir(root / "vulcan-retrieval")    # the job's working directory
+        os.chdir(root / "vulcan-retrieval")  # the job's working directory
         _check_spec_inputs(cfg)
         _check_data_tree(root, tuple(cfg.molecules))
         _check_exogibbs()
@@ -334,14 +311,14 @@ def main(argv: list[str] | None = None) -> int:
     print()
     if _ERRORS:
         print(
-            f"validate_env: FAIL ({len(_ERRORS)} error(s), {len(_WARNINGS)} warning(s)).\n"
+            f"validate_env: FAIL ({len(_ERRORS)} error(s)).\n"
             "Remedy: one-time bootstrap (the editable installs), then resubmit:\n"
             f"  cd {root / 'vulcan-retrieval'}\n"
             "  qsub -W group_list=$PBS_GROUP tools/bootstrap_nas_env.pbs",
             file=sys.stderr,
         )
         return 1
-    print(f"validate_env: PASS ({len(_WARNINGS)} warning(s)).")
+    print("validate_env: PASS.")
     return 0
 
 

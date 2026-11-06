@@ -1,30 +1,16 @@
-#!/usr/bin/env python3
-"""Which absorbers does the production spectrum actually need?
+"""Which absorbers does the production spectrum need: leave-one-out on the production forward.
 
-The chemistry solves ~90 species; 25 of them have an installed ExoMolOP k-table.
-Production radiates only some of them, and an absorber the chemistry PRODUCES but
-the RT omits does not vanish -- its opacity gets absorbed by whatever else can
-fit it (metallicity, C/O, the cloud deck, the instrument offsets).
+    python validation/opacity_leave_one_out.py [--molecules NH3 SO] [--states 8] [--from-posterior <npz>]
 
-Leave-one-out on the PRODUCTION forward (`build_pipeline`, so the parametric T-P
-and the two-stage cold solve are the real ones): for each state, solve the
-chemistry ONCE, then take the engine's own leave-one-out observable
-(`transmission_depth_r(..., wo_mols=...)`, bit-identical on the CPU to a from-scratch solve
-with that VMR zeroed but sharing the correlated-k fold prefix) and bin every row
-onto the real observation grid with the run's own binning matrix. Chemistry and
-continuum are untouched between rungs, so the difference is opacity alone.
+An absorber the chemistry produces but the RT omits does not vanish: its opacity gets absorbed by whatever else can fit
+it. For each state this solves the chemistry once, takes ``transmission_depth_r(..., wo_mols=...)`` and bins every row
+on the real observation grid, so the difference is opacity alone.
 
-    python validation/opacity_leave_one_out.py                  # every unscreened table
-    python validation/opacity_leave_one_out.py --molecules NH3 SO
-    python validation/opacity_leave_one_out.py --states 8       # + 8 prior draws
-    python validation/opacity_leave_one_out.py --from-posterior <out_dir>/nautilus_posterior.npz
-
-GATE (per bin, per state): |Delta binned depth| < min(5 ppm, 0.1 * quoted sigma).
-A species may be dropped from production only with a recorded bound BELOW the gate
-across the screened state set -- not by chemical intuition, and not from one state:
-a thick cloud deck suppresses molecular features, so a single cloud-free state
-reads optimistic.
+Gate, per bin and state: |Delta binned depth| < min(5 ppm, 0.1 sigma). A species may be dropped only with a recorded
+bound below the gate across the screened states: a thick cloud deck suppresses molecular features, so one cloud-free
+state reads optimistic.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,6 +28,7 @@ import _artifact
 GATE_PPM = 5.0
 GATE_SIGMA_FRAC = 0.1
 
+
 def unscreened_candidates(prod_mols):
     """Every molecule with an INSTALLED k-table that production does not radiate.
 
@@ -51,8 +38,8 @@ def unscreened_candidates(prod_mols):
     solve makes build_pipeline raise, which is the intended loud failure.
     """
     from vulcan_forward import constants, exomolop
-    return [m for m in constants.MOLECULES
-            if m not in prod_mols and exomolop.table_path(m).is_file()]
+
+    return [m for m in constants.MOLECULES if m not in prod_mols and exomolop.table_path(m).is_file()]
 
 
 def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
@@ -80,7 +67,8 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
         if names != list(pipe.names):
             raise RuntimeError(
                 f"posterior parameter order {names} does not match this "
-                f"configuration {list(pipe.names)}: it is a different target")
+                f"configuration {list(pipe.names)}: it is a different target"
+            )
         draws = np.asarray(z["samples"], np.float64).reshape(-1, len(names))
         rng = np.random.default_rng(int(seed))
         k = min(int(n_prior) or 4, draws.shape[0])
@@ -91,52 +79,58 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
 def _aux_for(pipe, theta):
     """(aux, lnR0, cloud) at one state -- the chemistry solve, done ONCE."""
     import jax.numpy as jnp
+
     th = jnp.asarray(theta)
-    chem_theta = th[:pipe.n_chem_tp]
+    chem_theta = th[: pipe.n_chem_tp]
     lnR0 = th[pipe.lnR0_idx]
-    cloud = th[pipe.cloud_idx[0]:pipe.cloud_idx[0] + pipe.n_cloud]
+    cloud = th[pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
     y, diag = pipe.fwd.chem_solve_cold_diag(chem_theta)
     return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud, bool(diag.conv_normal)
 
 
 def deltas_at(pipe, theta, candidates):
     """(n_cand, n_bin) |binned depth with each candidate removed - full|, or None
-    when the state's chemistry does not certify cold (not a model state)."""
+    when the state's chemistry does not certify cold (not a model state).
+    """
     aux, lnR0, cloud, certified = _aux_for(pipe, theta)
     if not certified:
         return None
     vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
     full, wo = pipe.fwd.rt.transmission_depth_r(
-        vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=vmr_he, cloud=cloud,
-        wo_mols=list(candidates))
+        vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=vmr_he, cloud=cloud, wo_mols=list(candidates)
+    )
     B = np.asarray(pipe.B, np.float64)
-    return np.abs(np.asarray(wo, np.float64) @ B.T
-                  - (B @ np.asarray(full, np.float64))[None, :])
+    return np.abs(np.asarray(wo, np.float64) @ B.T - (B @ np.asarray(full, np.float64))[None, :])
 
 
+# size-limit-ok: one measurement, in order
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--molecules", nargs="*", default=None,
-                    help="candidates to test (default: every installed table "
-                         "production does not radiate)")
-    ap.add_argument("--states", type=int, default=0,
-                    help="prior draws on top of the nominal state (and the same "
-                         "number from --from-posterior)")
-    ap.add_argument("--from-posterior", default=None,
-                    help="nautilus_posterior.npz to draw representative states from")
+    ap.add_argument(
+        "--molecules",
+        nargs="*",
+        default=None,
+        help="candidates to test (default: every installed table production does not radiate)",
+    )
+    ap.add_argument(
+        "--states",
+        type=int,
+        default=0,
+        help="prior draws on top of the nominal state (and the same number from --from-posterior)",
+    )
+    ap.add_argument("--from-posterior", default=None, help="nautilus_posterior.npz to draw representative states from")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     # import order matters: vulcan_chem sets the import-frozen env vars
-    from vulcan_forward import vulcan_chem  # noqa: F401
+    from vulcan_forward import vulcan_chem  # noqa: F401  # before exojax
     from retrieval_framework.pipeline import build_pipeline
 
     cfg = _artifact.production_config()
     prod_mols = list(cfg.molecules)
     named = args.molecules
-    extra = ([m for m in named if m not in prod_mols] if named is not None
-             else unscreened_candidates(prod_mols))
+    extra = [m for m in named if m not in prod_mols] if named is not None else unscreened_candidates(prod_mols)
     baseline_mols = prod_mols + extra
     # An OMITTED candidate over the gate is a defect; a PRODUCTION one over the
     # gate is the list working as intended. Screening both is useful, but they
@@ -154,9 +148,11 @@ def main() -> int:
 
     states = states_for(pipe, args.states, args.from_posterior, args.seed)
     print(f"[loo] baseline {len(baseline_mols)} absorbers: {baseline_mols}", flush=True)
-    print(f"[loo] testing {len(candidates)} over {len(states)} state(s); "
-          f"{len(omitted & set(candidates))} of them omitted from production",
-          flush=True)
+    print(
+        f"[loo] testing {len(candidates)} over {len(states)} state(s); "
+        f"{len(omitted & set(candidates))} of them omitted from production",
+        flush=True,
+    )
 
     # one chemistry solve + one folded RT pass per state gives every candidate
     per_state = []
@@ -168,14 +164,12 @@ def main() -> int:
             continue
         if not np.all(np.isfinite(d)):
             # max() would carry the NaN and `NaN > gate` reads as a pass
-            raise RuntimeError(f"state {i} {th.tolist()}: certified but a non-finite "
-                               "leave-one-out spectrum")
+            raise RuntimeError(f"state {i} {th.tolist()}: certified but a non-finite leave-one-out spectrum")
         per_state.append(d)
-        print(f"[loo] state {i}: {len(candidates)} rungs "
-              f"({time.time() - t0:.0f}s)", flush=True)
+        print(f"[loo] state {i}: {len(candidates)} rungs ({time.time() - t0:.0f}s)", flush=True)
     if not per_state:
         raise RuntimeError("no screened state certified: nothing to gate")
-    worst_over_states = np.max(per_state, axis=0)          # (n_cand, n_bin)
+    worst_over_states = np.max(per_state, axis=0)  # (n_cand, n_bin)
     n_screened = len(per_state)
 
     rows, measurements, worst = [], [], []
@@ -183,45 +177,57 @@ def main() -> int:
         d = worst_over_states[c]
         i = int(np.argmax(d))
         over = int(np.sum(d > gate))
-        rows.append((m, 1e6 * d[i], wl_bin[i], d[i] / sigma[i],
-                     1e6 * float(np.sqrt(np.mean(d ** 2))), over))
-        print(f"[loo] {m:5s} max {1e6*d[i]:8.3f} ppm @ {wl_bin[i]:.5f} um  "
-              f"{d[i]/sigma[i]:.3f} sigma  rms {1e6*np.sqrt(np.mean(d**2)):7.3f} ppm  "
-              f"{over}/{d.size} bins over gate", flush=True)
-        measurements.append({
-            "name": f"omit {m}: max |Delta binned depth| over {n_screened} state(s)",
-            "value": f"{1e6*d[i]:.3f} ppm", "value_raw": float(1e6 * d[i]),
-            "unit": "ppm", "gate": "< min(5 ppm, 0.1 sigma) in every bin",
-            # only an OMITTED absorber over the gate is a failure
-            "decisive": bool(m in omitted),
-            "passed": not bool(over and m in omitted),
-        })
+        rows.append((m, 1e6 * d[i], wl_bin[i], d[i] / sigma[i], 1e6 * float(np.sqrt(np.mean(d**2))), over))
+        print(
+            f"[loo] {m:5s} max {1e6 * d[i]:8.3f} ppm @ {wl_bin[i]:.5f} um  "
+            f"{d[i] / sigma[i]:.3f} sigma  rms {1e6 * np.sqrt(np.mean(d**2)):7.3f} ppm  "
+            f"{over}/{d.size} bins over gate",
+            flush=True,
+        )
+        measurements.append(
+            {
+                "name": f"omit {m}: max |Delta binned depth| over {n_screened} state(s)",
+                "value": f"{1e6 * d[i]:.3f} ppm",
+                "value_raw": float(1e6 * d[i]),
+                "unit": "ppm",
+                "gate": "< min(5 ppm, 0.1 sigma) in every bin",
+                # only an OMITTED absorber over the gate is a failure
+                "decisive": bool(m in omitted),
+                "passed": not bool(over and m in omitted),
+            }
+        )
         if over and m in omitted:
             worst.append(m)
 
-    print(f"\n{'species':>8} {'max ppm':>10} {'at um':>10} {'/sigma':>8} "
-          f"{'rms ppm':>9} {'bins over':>10}")
+    print(f"\n{'species':>8} {'max ppm':>10} {'at um':>10} {'/sigma':>8} {'rms ppm':>9} {'bins over':>10}")
     for m, mx, w, s, rms, over in sorted(rows, key=lambda r: -r[1]):
         print(f"{m:>8} {mx:10.3f} {w:10.5f} {s:8.3f} {rms:9.3f} {over:10d}")
 
     idle = [m for m, _, _, _, _, over in rows if not over and m not in omitted]
     ok = not worst
-    msg = (f"Every OMITTED absorber tested is below the per-bin gate across "
-           f"{n_screened} state(s); none is required beyond the production list."
-           if ok else
-           f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
-           "molecule list and rerun the posterior -- their opacity is currently "
-           "absorbed by the fitted parameters.")
+    msg = (
+        f"Every OMITTED absorber tested is below the per-bin gate across "
+        f"{n_screened} state(s); none is required beyond the production list."
+        if ok
+        else f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
+        "molecule list and rerun the posterior -- their opacity is currently "
+        "absorbed by the fitted parameters."
+    )
     if idle:
-        msg += (f" Production absorbers under the gate at this state set "
-                f"({', '.join(idle)}) are carried without measurable effect -- "
-                "informational, not a failure; the gate only refuses OMISSIONS.")
+        msg += (
+            f" Production absorbers under the gate at this state set "
+            f"({', '.join(idle)}) are carried without measurable effect -- "
+            "informational, not a failure; the gate only refuses OMISSIONS."
+        )
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} -- {msg}")
     _artifact.emit(
         name="opacity_leave_one_out",
         title="Leave-one-out absorber screen on the production observation grid",
-        measurements=measurements, status="PASS" if ok else "FAIL",
-        summary=msg, resolved_config=profile)
+        measurements=measurements,
+        status="PASS" if ok else "FAIL",
+        summary=msg,
+        resolved_config=profile,
+    )
     return 0 if ok else 1
 
 

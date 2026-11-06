@@ -1,35 +1,17 @@
 """Live-T(P) condensation through the chemistry model.
 
-Validates the on-graph condensation rebuild end-to-end:
+The conden arrays of a live solve follow the proposed temperature; at the structural T they are bit-compatible with the
+host-baked ``CondenStatic``; an isothermal and a Guillot run complete, move mass into the condensate and relax
+supersaturation toward the live saturation curve; jit, vmap and jvp run, and the jvp matches finite differences away
+from active-layer switches.
 
-* the ProfileVars conden arrays in a live solve correspond to the PROPOSED
-  temperature, never the baseline structural one;
-* at theta whose T(P) equals the structural baseline, the rebuilt arrays are
-  bit-compatible with the host-baked CondenStatic (identical runner input
-  state => identical solve);
-* an isothermal AND a Guillot-profile condensation run complete end-to-end
-  (terminating at a physical runtime cap -- this anchor-free synthetic column
-  has no reachable full thermochemical equilibrium; see _CFG_OVERRIDES), move
-  mass into the condensate, and relax supersaturation toward the LIVE
-  saturation curve;
-* jit / vmap / forward-mode jvp execute without tracer errors, and the jvp
-  through a condensing steady state matches warm-started centered finite
-  differences away from active-layer switches.
-
-Setup mirrors VULCAN-JAX's condensation runtime test: a small synthetic
-column on the production SNCHO network (its one condensation reaction is
-S8 -> S8_l_s), photochemistry off. Every solve starts from the cfg's
-const_mix column (``chem.y0``) as a continuation, not from the engine's cold
-equilibrium seed: at 400 K that seed holds S8 at ~1e-66 VMR, nothing
-condenses and the solve certifies at count_min.
-Convergence uses the upstream conden-window + whole-column fix_species pin
-(same methodology jwst_tool.forward.CONDEN_CFG ships): without the pin the
-steady state is transport-limited -- the upper S8 reservoir drains through
-the condensation front on the Kzz timescale (~1e9 s) while dt stays capped
-at the front's condensation timescale, so every solve exhausts count_max.
-Builds two chem models (~1-2 min each, compile-dominated); every test skips
-cleanly when the chem stack is unavailable.
+A small synthetic column on the SNCHO network (S8 -> S8_l_s), photochemistry off. Every solve starts from the cfg's
+const_mix column as a continuation: at 400 K the equilibrium seed holds S8 at 1e-66 VMR and nothing condenses.
+Convergence uses the conden-window and whole-column fix_species pin: without it the upper S8 reservoir drains on the Kzz
+timescale while dt stays capped at the condensation timescale, so every solve exhausts count_max. Builds two chem
+models, 1-2 min each.
 """
+
 from __future__ import annotations
 
 import platform
@@ -40,42 +22,40 @@ import pytest
 # SLOW (full tier only): this module builds a REAL chemistry + RT pipeline
 # (ExoJAX RT model, k-tables, chemistry converged to steady state), so it
 # costs minutes, not seconds.
-pytestmark = [pytest.mark.slow,
-              pytest.mark.filterwarnings("ignore::DeprecationWarning")]
+pytestmark = [pytest.mark.slow, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 
 # Structural/thermal setup: T where the S8 saturation boundary sits inside the
 # grid for an S8 VMR of 1e-4 (sat_mix ~ 1.5e-5 at 5 bar, ~7.4e-3 at 0.01 bar).
 T_STRUCT = 400.0
 S8_VMR = 1.0e-4
 NZ = 32
-STOP_CONDEN = 1.0e5   # conden window end; S8/S8_l_s pinned whole-column after
-SAME_OPS_RTOL = 1e-14   # the same arithmetic on both sides (jit, vmap, a direct call)
-REBUILD_RTOL = 1e-12    # on-graph rebuild vs the host-baked arrays / a direct evaluation
+STOP_CONDEN = 1.0e5  # conden window end; S8/S8_l_s pinned whole-column after
+SAME_OPS_RTOL = 1e-14  # the same arithmetic on both sides (jit, vmap, a direct call)
+REBUILD_RTOL = 1e-12  # on-graph rebuild vs the host-baked arrays / a direct evaluation
 
 _CFG_OVERRIDES = {
     "atm_type": "isothermal",
     "Tiso": T_STRUCT,
-    "P_b": 5.0e6,          # 5 bar
-    "P_t": 1.0e4,          # 0.01 bar
+    "P_b": 5.0e6,  # 5 bar
+    "P_t": 1.0e4,  # 0.01 bar
     "Kzz_prof": "const",
     "const_Kzz": 1.0e7,
     "use_photo": False,
     "use_moldiff": True,
     "ini_mix": "const_mix",
     # He/H2O/CO/N2/H2S are the elemental-repair species and must be present.
-    "const_mix": {"H2": 0.85877, "He": 0.14, "H2O": 5e-4, "CO": 5e-4,
-                  "N2": 1e-4, "H2S": 1e-4, "S8": S8_VMR},
+    "const_mix": {"H2": 0.85877, "He": 0.14, "H2O": 5e-4, "CO": 5e-4, "N2": 1e-4, "H2S": 1e-4, "S8": S8_VMR},
     "use_condense": True,
     "condense_sp": ["S8"],
     "non_gas_sp": ["S8_l_s"],
     # Rainout-sized particles: smaller radii stiffen the growth term (~1/r^2)
     # until dt is pinned at the condensation-front timescale.
-    "r_p": {"S8_l_s": 5.0e-3},   # 50 um
-    "rho_p": {"S8_l_s": 2.07},   # orthorhombic sulfur, g/cm^3
+    "r_p": {"S8_l_s": 5.0e-3},  # 50 um
+    "rho_p": {"S8_l_s": 2.07},  # orthorhombic sulfur, g/cm^3
     "use_relax": [],
     "use_settling": False,
     "fix_species": ["S8", "S8_l_s"],
-    "fix_species_from_coldtrap_lev": False,   # whole-column pin (isothermal-safe)
+    "fix_species_from_coldtrap_lev": False,  # whole-column pin (isothermal-safe)
     "start_conden_time": 0.0,
     "stop_conden_time": STOP_CONDEN,
     # Convergence mixing-ratio floor raised from the 1e-20 default: at 400 K
@@ -89,9 +69,25 @@ _CFG_OVERRIDES = {
     # re-equilibrate on cold-top thermal timescales measured at >=1e15 s --
     # physically unreachable, and all far below RT relevance (none is an RT
     # molecule; the observable sulfur species SO2/H2S/SO stay in the gate).
-    "conver_ignore": ["C6H6", "C2H2", "C6H5", "C2H", "C2H4", "C2H5", "C2H6",
-                      "C3H2", "C3H3", "C4H5", "CH2NH", "CH3NH2", "H2CCO",
-                      "S", "S2", "S3", "S4"],
+    "conver_ignore": [
+        "C6H6",
+        "C2H2",
+        "C6H5",
+        "C2H",
+        "C2H4",
+        "C2H5",
+        "C2H6",
+        "C3H2",
+        "C3H3",
+        "C4H5",
+        "CH2NH",
+        "CH3NH2",
+        "H2CCO",
+        "S",
+        "S2",
+        "S3",
+        "S4",
+    ],
     # With the allotropes ignored the gate could fire before the conden
     # window ends (measured: t ~ 2.3e3 s), leaving a half-rained S8 column.
     # Bound certification from below so the window + whole-column pin always
@@ -108,8 +104,14 @@ _CFG_OVERRIDES = {
 
 
 def _profile(**extra):
-    return {"nz": NZ, "use_photo": False, "yconv_cri": 1.0e-2, "count_max": 5000,
-            "cfg_overrides": dict(_CFG_OVERRIDES), **extra}
+    return {
+        "nz": NZ,
+        "use_photo": False,
+        "yconv_cri": 1.0e-2,
+        "count_max": 5000,
+        "cfg_overrides": dict(_CFG_OVERRIDES),
+        **extra,
+    }
 
 
 def _const_mix(chem):
@@ -121,10 +123,10 @@ def _const_mix(chem):
 def stack():
     """Import the chem stack (vulcan_chem BEFORE jax/exojax) or skip."""
     try:
-        from vulcan_forward import vulcan_chem  # noqa: F401
+        from vulcan_forward import vulcan_chem
         import jax
         import jax.numpy as jnp
-    except Exception as e:  # pragma: no cover - env-dependent
+    except ImportError as e:
         pytest.skip(f"chem stack unavailable: {e}")
     return vulcan_chem, jax, jnp
 
@@ -132,7 +134,7 @@ def stack():
 @pytest.fixture(scope="module")
 def chem_iso(stack):
     """Isothermal tp_eval model: theta = [lnZ, c_o, lnKzz, T]."""
-    vulcan_chem, jax, jnp = stack
+    vulcan_chem, _jax, jnp = stack
 
     def tp_eval(tp, p_bar):
         return jnp.zeros_like(jnp.asarray(p_bar)) + tp[0]
@@ -140,8 +142,7 @@ def chem_iso(stack):
     # Skip only on missing data; a broader handler would report a real
     # forward-model break (e.g. a changed private-API signature) as a green skip.
     try:
-        return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval,
-                                            n_tp_params=1)
+        return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval, n_tp_params=1)
     except (FileNotFoundError, OSError) as e:  # pragma: no cover - env-dependent
         pytest.skip(f"chem model data unavailable: {e}")
 
@@ -166,13 +167,15 @@ def test_conden_spec_extracted(chem_iso):
     assert spec is not None
     assert spec.gas_names == ("S8",)
     assert spec.coeff_per_re[0] > 0.0
-    assert not spec.h2o_active and not spec.nh3_active
+    assert not spec.h2o_active
+    assert not spec.nh3_active
 
 
 def test_live_arrays_follow_proposed_temperature(stack, chem_iso):
     """No baseline conden array survives a live solve: the carry's saturation
-    row equals sat(T_live) exactly, and differs from the baseline-T one."""
-    _, jax, jnp = stack
+    row equals sat(T_live) exactly, and differs from the baseline-T one.
+    """
+    _, _jax, jnp = stack
     pv_400 = chem_iso.prep_pv(_theta(400.0))
     pv_430 = chem_iso.prep_pv(_theta(430.0))
     sat_400 = np.asarray(pv_400.c_sat_n_per_re[0])
@@ -188,33 +191,30 @@ def test_live_arrays_follow_proposed_temperature(stack, chem_iso):
 
 
 def test_baseline_T_parity_with_baked_static(chem_iso):
-    """theta at the structural temperature reproduces the host-baked conden
-    arrays bit-compatibly => the runner input equals the host-baked path."""
+    """Theta at the structural temperature reproduces the host-baked conden
+    arrays bit-compatibly => the runner input equals the host-baked path.
+    """
     baked = chem_iso._integ._conden_static
     pv = chem_iso.prep_pv(_theta(T_STRUCT))
-    np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re),
-                               np.asarray(baked.sat_n_per_re), rtol=SAME_OPS_RTOL, atol=0.0)
-    np.testing.assert_allclose(np.asarray(pv.c_Dg_per_re),
-                               np.asarray(baked.Dg_per_re), rtol=REBUILD_RTOL, atol=0.0)
-    np.testing.assert_allclose(np.asarray(pv.n_0),
-                               np.asarray(baked.n_0), rtol=REBUILD_RTOL, atol=0.0)
+    np.testing.assert_allclose(
+        np.asarray(pv.c_sat_n_per_re), np.asarray(baked.sat_n_per_re), rtol=SAME_OPS_RTOL, atol=0.0
+    )
+    np.testing.assert_allclose(np.asarray(pv.c_Dg_per_re), np.asarray(baked.Dg_per_re), rtol=REBUILD_RTOL, atol=0.0)
+    np.testing.assert_allclose(np.asarray(pv.n_0), np.asarray(baked.n_0), rtol=REBUILD_RTOL, atol=0.0)
 
 
 def test_isothermal_condensation_converges_and_rains_out(stack, chem_iso):
     """End-to-end isothermal condensing solve: completes within the step
     budget (terminating at the physical runtime cap, NOT by exhausting
     count_max -- see the `runtime` note in _CFG_OVERRIDES), with the pin
-    activated and the S8 rainout observables settled."""
-    _, jax, jnp = stack
+    activated and the S8 rainout observables settled.
+    """
+    _, _jax, jnp = stack
     s8, s8_ls = _s8_cols(chem_iso)
-    final, _init = chem_iso.run_diag(jnp.asarray(_theta(T_STRUCT)),
-                                     **_const_mix(chem_iso))
-    assert int(final.accept_count) < chem_iso.count_max, \
-        "condensing solve must complete within the step budget"
-    assert float(final.t) >= float(_CFG_OVERRIDES["runtime"]), \
-        "solve must reach the physical runtime cap"
-    assert bool(final.fix_species_started), \
-        "the conden-window + fix pin must have activated"
+    final, _init = chem_iso.run_diag(jnp.asarray(_theta(T_STRUCT)), **_const_mix(chem_iso))
+    assert int(final.accept_count) < chem_iso.count_max, "condensing solve must complete within the step budget"
+    assert float(final.t) >= float(_CFG_OVERRIDES["runtime"]), "solve must reach the physical runtime cap"
+    assert bool(final.fix_species_started), "the conden-window + fix pin must have activated"
     y = np.asarray(final.y)
     assert np.all(np.isfinite(y))
     assert y[:, s8_ls].sum() > 0.0, "mass must move into the condensate"
@@ -239,8 +239,9 @@ GUILLOT_COUNT_MAX = 15000
 @pytest.fixture(scope="module")
 def chem_guillot(stack):
     """Guillot tp_eval model (exojax parameterization, jwst-tool pattern):
-    theta = [lnZ, c_o, lnKzz, Tirr, Tint, log_kappa, log_gamma]."""
-    vulcan_chem, jax, jnp = stack
+    theta = [lnZ, c_o, lnKzz, Tirr, Tint, log_kappa, log_gamma].
+    """
+    vulcan_chem, _jax, jnp = stack
     try:
         from exojax.atm.atmprof import atmprof_Guillot
     except Exception as e:  # pragma: no cover - env-dependent
@@ -248,6 +249,7 @@ def chem_guillot(stack):
     from vulcan3.phy_const import G_grav
 
     from retrieval_framework.forward.config import RP_CM
+
     gs_cgs = 1000.0
 
     def tp_eval(tp, p_bar):
@@ -257,22 +259,29 @@ def chem_guillot(stack):
 
     try:
         return vulcan_chem.build_chem_model(
-            _profile(cfg_overrides=dict(_CFG_OVERRIDES,
-                                        # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
-                                        # to reproduce gs_cgs at the W39b radius.
-                                        Rp=RP_CM,
-                                        Mp=gs_cgs * RP_CM ** 2 / G_grav,
-                                        runtime=GUILLOT_RUNTIME),
-                     count_max=GUILLOT_COUNT_MAX),
-            tp_eval=tp_eval, n_tp_params=4)
+            _profile(
+                cfg_overrides=dict(
+                    _CFG_OVERRIDES,
+                    # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
+                    # to reproduce gs_cgs at the W39b radius.
+                    Rp=RP_CM,
+                    Mp=gs_cgs * RP_CM**2 / G_grav,
+                    runtime=GUILLOT_RUNTIME,
+                ),
+                count_max=GUILLOT_COUNT_MAX,
+            ),
+            tp_eval=tp_eval,
+            n_tp_params=4,
+        )
     except Exception as e:  # pragma: no cover - env-dependent
         pytest.skip(f"chem model build failed: {e}")
 
 
 def test_guillot_condensation_end_to_end(stack, chem_guillot):
     """A non-isothermal (Guillot) T-P condensation solve: converges, rains
-    out, and the carry saturation row follows the Guillot temperatures."""
-    _, jax, jnp = stack
+    out, and the carry saturation row follows the Guillot temperatures.
+    """
+    _, _jax, jnp = stack
     # Guillot parameters giving a ~360-450 K column over 5 -> 0.01 bar: cold
     # enough aloft to supersaturate S8 at 1e-4 VMR, warm enough deep to stay
     # inside the thermo tables.
@@ -282,15 +291,13 @@ def test_guillot_condensation_end_to_end(stack, chem_guillot):
     T_live = np.asarray(pv.r_Tco)
     assert T_live.std() > 5.0, "Guillot profile must be genuinely non-isothermal"
     want_sat = np.asarray(_sat_n_s8(jnp, T_live))
-    np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re[0]), want_sat,
-                               rtol=REBUILD_RTOL)
+    np.testing.assert_allclose(np.asarray(pv.c_sat_n_per_re[0]), want_sat, rtol=REBUILD_RTOL)
     s8, s8_ls = _s8_cols(chem_guillot)
-    final, _init = chem_guillot.run_diag(jnp.asarray(th),
-                                         **_const_mix(chem_guillot))
-    assert int(final.accept_count) < chem_guillot.count_max, \
+    final, _init = chem_guillot.run_diag(jnp.asarray(th), **_const_mix(chem_guillot))
+    assert int(final.accept_count) < chem_guillot.count_max, (
         "Guillot condensing solve must complete within the step budget"
-    assert float(final.t) >= GUILLOT_RUNTIME, \
-        "solve must reach the physical runtime cap"
+    )
+    assert float(final.t) >= GUILLOT_RUNTIME, "solve must reach the physical runtime cap"
     assert bool(final.fix_species_started)
     y = np.asarray(final.y)
     assert np.all(np.isfinite(y))
@@ -300,25 +307,24 @@ def test_guillot_condensation_end_to_end(stack, chem_guillot):
 
 
 def test_prep_jit_vmap_jvp_traceable(stack, chem_iso):
-    """jit / vmap / jvp through the live conden rebuild: no concretization or
-    tracer errors, vmap lanes match solo calls, tangents are finite."""
+    """Jit / vmap / jvp through the live conden rebuild: no concretization or
+    tracer errors, vmap lanes match solo calls, tangents are finite.
+    """
     _, jax, jnp = stack
     th0 = jnp.asarray(_theta(400.0))
     th1 = jnp.asarray(_theta(430.0))
 
-    sat_of = lambda th: chem_iso.prep_pv(th).c_sat_n_per_re  # noqa: E731
+    sat_of = lambda th: chem_iso.prep_pv(th).c_sat_n_per_re  # noqa: E731  # a short local name
     jit_sat = jax.jit(sat_of)(th0)
-    np.testing.assert_allclose(np.asarray(jit_sat), np.asarray(sat_of(th0)),
-                               rtol=SAME_OPS_RTOL)
+    np.testing.assert_allclose(np.asarray(jit_sat), np.asarray(sat_of(th0)), rtol=SAME_OPS_RTOL)
     batched = jax.vmap(sat_of)(jnp.stack([th0, th1]))
-    np.testing.assert_allclose(np.asarray(batched[0]), np.asarray(sat_of(th0)),
-                               rtol=SAME_OPS_RTOL)
-    np.testing.assert_allclose(np.asarray(batched[1]), np.asarray(sat_of(th1)),
-                               rtol=SAME_OPS_RTOL)
+    np.testing.assert_allclose(np.asarray(batched[0]), np.asarray(sat_of(th0)), rtol=SAME_OPS_RTOL)
+    np.testing.assert_allclose(np.asarray(batched[1]), np.asarray(sat_of(th1)), rtol=SAME_OPS_RTOL)
     e_T = jnp.zeros(4, dtype=jnp.float64).at[3].set(1.0)
     _, dsat = jax.jvp(sat_of, (th0,), (e_T,))
     dsat = np.asarray(dsat)
-    assert np.all(np.isfinite(dsat)) and np.all(dsat > 0.0)
+    assert np.all(np.isfinite(dsat))
+    assert np.all(dsat > 0.0)
 
 
 def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso):
@@ -355,8 +361,8 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     e_T = jnp.zeros(4, dtype=jnp.float64).at[3].set(1.0)
     _, (jv_smooth, jv_pin) = jax.jvp(f, (th0,), (e_T,))
     jv_smooth, jv_pin = np.asarray(jv_smooth), np.asarray(jv_pin)
-    assert np.all(np.isfinite(jv_smooth)) and np.all(np.isfinite(jv_pin)), \
-        "tangent through condensing state must be finite"
+    assert np.all(np.isfinite(jv_smooth)), "tangent through condensing state must be finite"
+    assert np.all(np.isfinite(jv_pin)), "tangent through condensing state must be finite"
 
     dT = 0.5
     hi_s, hi_p = (np.asarray(a) for a in f(jnp.asarray(_theta(T_STRUCT + dT))))
@@ -366,8 +372,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
 
     for i, name in enumerate(("H2O", "CO", "H2S")):
         rel = abs(jv_smooth[i] - fd_smooth[i]) / max(abs(fd_smooth[i]), 1e-300)
-        msg = (f"{name} column: jvp {jv_smooth[i]:.6e} vs FD "
-               f"{fd_smooth[i]:.6e} (rel {rel:.3f}) -- exceeds 15%")
+        msg = f"{name} column: jvp {jv_smooth[i]:.6e} vs FD {fd_smooth[i]:.6e} (rel {rel:.3f}) -- exceeds 15%"
         # The FD is step-stable to 0.03% and the jvp matches it on aarch64 (the
         # certified platform); on x86 the tangent through the pinned state is
         # platform-dependent (1.3-2.4x).
@@ -382,8 +387,7 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     # pinned-state tangent is platform-dependent while the FD is not.
     jv_tot, fd_tot = float(jv_pin.sum()), float(fd_pin.sum())
     rel_tot = abs(jv_tot - fd_tot) / max(abs(fd_tot), 1e-300)
-    msg = (f"S8 reservoir (gas + condensate): jvp {jv_tot:.6e} vs FD "
-           f"{fd_tot:.6e} (rel {rel_tot:.3f}) -- exceeds 35%")
+    msg = f"S8 reservoir (gas + condensate): jvp {jv_tot:.6e} vs FD {fd_tot:.6e} (rel {rel_tot:.3f}) -- exceeds 35%"
     if rel_tot >= 0.35 and platform.machine() not in ("arm64", "aarch64"):
         pytest.xfail(msg + " [x86 tangent]")
     assert rel_tot < 0.35, msg

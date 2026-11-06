@@ -1,10 +1,8 @@
 """Run provenance: code, version and data identity, and the target manifest.
 
-The target digest is the sha256 of the canonical target manifest
-(``target_manifest``: resolved config, ordered priors, observation arrays,
-opacity and CIA content, code commits and versions, the solver env choices). A
-run writes the manifest beside its outputs and binds its checkpoint to the
-digest, so a resume across a change is refused.
+The target digest is the sha256 of the canonical manifest (``target_manifest``: resolved config, ordered priors,
+observation arrays, opacity and CIA content, code commits and versions, the solver environment). A run writes the
+manifest beside its outputs and binds its checkpoint to the digest, so a resume across a change is refused.
 """
 
 from __future__ import annotations
@@ -16,24 +14,40 @@ import platform
 import subprocess
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import yaml
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from types import SimpleNamespace
+
+__all__ = [
+    "MANIFEST_FILE",
+    "REPOSITORIES",
+    "TARGET_FREE_KEYS",
+    "archived_manifest_digest",
+    "case_config",
+    "case_data_file",
+    "case_inputs",
+    "science_data_identity",
+    "target_digest",
+    "target_manifest",
+]
+
 REPO = Path(__file__).resolve().parents[2]
 WORKSPACE = REPO.parent
-# Canonical repository labels plus accepted checkout names: the repository is
-# VULCAN3 (formerly jax-vulcan), the NAS clone directory is VULCAN-JAX.
+# Repository labels and their accepted checkout names; the NAS clone of VULCAN3 is VULCAN-JAX.
 REPOSITORIES = {
     "VULCAN3": ("VULCAN3", "VULCAN-JAX", "jax-vulcan"),
     "vulcan-forward": ("vulcan-forward",),
     "vulcan-retrieval": ("vulcan-retrieval",),
-    # jwst-transit-authority is not a dependency of a retrieval run, so it is
-    # not bound.
 }
 
 
 def _sha256(path: Path) -> str:
+    """Return the sha256 of one file."""
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -41,40 +55,33 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-_GIT_FAILED = object()   # git did not run (or exited non-zero): NOT "clean"
+def _git_raw(repo: Path, *args: str) -> str | None:
+    """Return stdout on a zero exit, possibly empty, or None.
 
-
-def _git_raw(repo: Path, *args: str):
-    """Stdout on a zero exit -- possibly empty -- or `_GIT_FAILED`.
-
-    `git status --porcelain` on a clean tree exits 0 with zero bytes, which is
-    indistinguishable from a failed call if both collapse to None. Provenance
-    must not record a repo as clean because git was missing.
+    ``git status --porcelain`` on a clean tree exits 0 with no bytes; provenance must not record a repo as clean because
+    git was missing.
     """
     try:
-        r = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, errors="replace",
-                           timeout=15)
+        r = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, errors="replace", timeout=15, check=False
+        )
     except (OSError, subprocess.TimeoutExpired):
-        return _GIT_FAILED
-    return r.stdout.strip() if r.returncode == 0 else _GIT_FAILED
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
 def _git(repo: Path, *args: str) -> str | None:
+    """Return stdout on a zero exit, or None when empty or failed."""
     out = _git_raw(repo, *args)
-    return out or None if out is not _GIT_FAILED else None
+    return out or None
 
 
-def _src_state(repo: Path):
-    """Content of the uncommitted src/ state: tracked diff + untracked files.
-
-    Returns `_GIT_FAILED` if git could not run, so "unknown" never reads as
-    "unmodified".
-    """
+def _src_state(repo: Path) -> str | None:
+    """Return the uncommitted src/ state, tracked diff and untracked files, or None when git could not run."""
     diff = _git_raw(repo, "diff", "HEAD", "--", "src")
     others = _git_raw(repo, "ls-files", "--others", "--exclude-standard", "--", "src")
-    if diff is _GIT_FAILED or others is _GIT_FAILED:
-        return _GIT_FAILED
+    if diff is None or others is None:
+        return None
     parts = [diff]
     for rel in sorted(p for p in others.splitlines() if p.strip()):
         f = repo / rel
@@ -83,37 +90,39 @@ def _src_state(repo: Path):
 
 
 def _repo_states(workspace: Path | None = None) -> dict:
-    """Commit + dirty state per repository. `dirty` is None when git could not
-    be run, so "unknown" never reads as "clean"."""
+    """Return commit and dirty state per repository; ``dirty`` is None when git could not run."""
     workspace = WORKSPACE if workspace is None else Path(workspace)
-    out = {}
+    out: dict[str, Any] = {}
     for name, directory_names in REPOSITORIES.items():
-        repo = next((workspace / directory for directory in directory_names
-                     if _git(workspace / directory, "rev-parse", "HEAD")),
-                    None)
+        repo = next(
+            (
+                workspace / directory
+                for directory in directory_names
+                if _git(workspace / directory, "rev-parse", "HEAD")
+            ),
+            None,
+        )
         head = _git(repo, "rev-parse", "HEAD") if repo is not None else None
-        if head is None:
+        if head is None or repo is None:
             out[name] = None
             continue
         dirty = _git_raw(repo, "status", "--porcelain")
-        failed = dirty is _GIT_FAILED
-        # Content hash of the uncommitted SOURCE state, scoped to src/: an
-        # uncommitted solver edit is a different target and must move the
-        # digest, while editing a PBS or plotting script mid-campaign must not
-        # break a chained resume. Untracked src files are hashed too: a new
-        # imported module is invisible to `git diff HEAD`.
+        # Scoped to src/: an uncommitted solver edit is a different target, while editing a PBS script must not break a
+        # chained resume. Untracked src files count: a new module is invisible to `git diff HEAD`.
         diff = _src_state(repo)
-        out[name] = {"commit": head,
-                     "dirty": None if failed else bool(dirty),
-                     "dirty_files": [] if failed else dirty.splitlines()[:20],
-                     "src_diff": (None if diff is _GIT_FAILED else
-                                  hashlib.sha256(diff.encode()).hexdigest()),
-                     "checkout": repo.name}
+        out[name] = {
+            "commit": head,
+            "dirty": None if dirty is None else bool(dirty),
+            "dirty_files": [] if dirty is None else dirty.splitlines()[:20],
+            "src_diff": (None if diff is None else hashlib.sha256(diff.encode()).hexdigest()),
+            "checkout": repo.name,
+        }
     return out
 
 
 def _versions() -> dict:
-    out = {"python": platform.python_version(), "platform": platform.platform()}
+    """Return the interpreter, platform and package versions."""
+    out: dict[str, str | None] = {"python": platform.python_version(), "platform": platform.platform()}
     for mod in ("jax", "jaxlib", "numpy", "scipy", "exojax"):
         try:
             out[mod] = __import__(mod).__version__
@@ -131,76 +140,96 @@ CIA_TABLES = ("H2-H2_2011.cia", "H2-He_2011.cia")
 
 
 def _cia_identity() -> dict:
-    """Exact hashes of the two CIA tables, at the paths the engine reads.
+    """Return exact hashes of the two CIA tables, at the paths the engine reads.
 
-    They are direct radiative-transfer inputs, small enough to hash exactly and
-    too important to hide inside a directory file-count: a swapped H2-He table
-    leaves the tree summary unchanged while changing the continuum the retrieval
-    fits. With the ExoMolOP k-tables and a path-style case's inputs
-    (`case_inputs`) they are the target-affecting inputs that no commit binds;
-    a named vulcan3 case (network, baseline T-P, Kzz, elemental abundances) is
-    vendored in vulcan3 and bound by its commit.
+    A swapped H2-He table leaves a tree summary unchanged while changing the continuum the retrieval fits.
     """
     try:
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import paths as _fwd_paths
-        files = dict(zip(CIA_TABLES, (_fwd_paths.cia_h2h2_file(),
-                                      _fwd_paths.cia_h2he_file())))
-    except (ImportError, RuntimeError):                     # pragma: no cover
+
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
+
+        files = dict(zip(CIA_TABLES, (_fwd_paths.cia_h2h2_file(), _fwd_paths.cia_h2he_file()), strict=True))
+    except (ImportError, RuntimeError):  # pragma: no cover
         files = {}
     out = {}
     for name in CIA_TABLES:
         p = files.get(name)
-        out[name] = ({"path": str(p.resolve()), "sha256": _sha256(p),
-                      "bytes": p.stat().st_size}
-                     if p is not None and p.is_file() else None)
+        out[name] = (
+            {"path": str(p.resolve()), "sha256": _sha256(p), "bytes": p.stat().st_size}
+            if p is not None and p.is_file()
+            else None
+        )
     return out
 
 
-def science_data_identity(molecules) -> dict:
-    """CONTENT identity of the data inputs that define the radiative model.
+def science_data_identity(molecules: Iterable[str]) -> dict[str, Any]:
+    """Return the content identity of the data that defines the radiative model, by sha256.
 
-    The per-molecule k-tables plus the two CIA tables, by sha256. This is the
-    part of the target manifest a validation artifact can also record -- an
-    artifact has no observations or priors, but it reads exactly these files, so
-    binding them is what tells a ladder measured against different opacity data
-    from the run's. Tree summaries (counts, mtimes) are not used: they churn on
-    any cache write.
+    The part of the target manifest a validation artifact can also record: it binds which opacity data a ladder
+    measured.
+
+    Parameters
+    ----------
+    molecules : iterable of str
+        The species with a k-table.
+
+    Returns
+    -------
+    dict
+        ``opacity_sha256`` and ``cia_sha256``.
     """
-    opa = {}
+    opa: dict[str, str | None] = {}
     try:
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import exomolop as _exo
+
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
+
         for m in molecules:
             f = _exo.table_path(m)
             opa[str(m)] = _sha256(f) if f.is_file() else None
     # broad: a provenance collector records any failure instead of raising
-    except Exception as exc:                                # pragma: no cover
+    except Exception as exc:  # pragma: no cover
         opa["error"] = f"{type(exc).__name__}: {exc}"
-    return {"opacity_sha256": opa,
-            "cia_sha256": {k: (v or {}).get("sha256")
-                           for k, v in _cia_identity().items()}}
+    return {"opacity_sha256": opa, "cia_sha256": {k: (v or {}).get("sha256") for k, v in _cia_identity().items()}}
 
 
 def _vulcan3_root() -> Path:
-    """The installed vulcan3 package directory, by find_spec: importing vulcan3
-    parses and import-locks its reaction network."""
+    """Return the installed vulcan3 package directory, by find_spec: importing vulcan3 import-locks its network."""
     import importlib.util
+
     spec = importlib.util.find_spec("vulcan3")
     if spec is None or not spec.origin:
         raise ModuleNotFoundError("vulcan3 is not installed")
     return Path(spec.origin).resolve().parent
 
 
-def _file_identity(path: Path):
+def _file_identity(path: Path) -> dict[str, str] | None:
+    """Return a file's path and sha256, or None when absent."""
     return {"path": str(path), "sha256": _sha256(path)} if path.is_file() else None
 
 
 def case_config(name: str) -> tuple[Path, dict]:
-    """(path, settings) of a vulcan3 case config, resolved as vulcan3 resolves it
-    from the working directory (`config._read_text`: a path or `*.yaml`, else
-    `./configs/<name>.yaml`, else the packaged one), each key the file omits
-    taken from the packaged `default.yaml`."""
+    """Return the path and settings of a vulcan3 case config, resolved as vulcan3 does from the working directory.
+
+    A path or ``*.yaml``, else ``./configs/<name>.yaml``, else the packaged one; each key the file omits comes from the
+    packaged ``default.yaml``.
+
+    Parameters
+    ----------
+    name : str
+        The case's config name or path.
+
+    Returns
+    -------
+    tuple
+        ``(path, settings)``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the config is not found.
+    """
     pkg = _vulcan3_root()
     p = Path(name)
     if not (p.suffix in (".yaml", ".yml") or p.exists()):
@@ -213,18 +242,40 @@ def case_config(name: str) -> tuple[Path, dict]:
     return p.resolve(), {**default, **(yaml.safe_load(p.read_text()) or {})}
 
 
-def case_data_file(rel) -> Path:
-    """A case's data path, resolved as `vulcan3.paths.resolve_data_path` does:
-    absolute, else the working directory, else the package."""
+def case_data_file(rel: str | Path) -> Path:
+    """Return a case's data path, resolved as ``vulcan3.paths.resolve_data_path`` does.
+
+    Parameters
+    ----------
+    rel : str or pathlib.Path
+        The path in the config.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute, else under the working directory, else under the package.
+    """
     rel = Path(rel)
     return (rel if rel.is_absolute() or rel.exists() else _vulcan3_root() / rel).resolve()
 
 
-def case_inputs(name: str, cfg_overrides: dict) -> dict | None:
-    """sha256 of the case's vulcan3 config file and of the atm and stellar-flux
-    files it names (`cfg_overrides` over the file), None for an unset name. A
-    path-style case (`data/...`) lives outside the trees the code state binds,
-    so these hashes are its only identity."""
+def case_inputs(name: str | None, cfg_overrides: dict) -> dict | None:
+    """Return the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it names.
+
+    A path-style case lives outside the trees the code state binds, so these hashes are its only identity.
+
+    Parameters
+    ----------
+    name : str
+        The case's config name or path; empty returns None.
+    cfg_overrides : dict
+        Overrides of the file's settings.
+
+    Returns
+    -------
+    dict or None
+        ``config``, ``atm_file`` and ``sflux_file`` identities.
+    """
     if not name:
         return None
     path, case = case_config(name)
@@ -235,12 +286,12 @@ def case_inputs(name: str, cfg_overrides: dict) -> dict | None:
 
 
 def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
-    """Hash observations and record the resolved data and VULCAN inputs."""
-    ident = {}
+    """Hash the observations and record the resolved data and VULCAN inputs."""
+    ident: dict[str, Any] = {}
     obs = out_dir / "observations.npz"
-    ident["observations"] = ({"path": str(obs), "sha256": _sha256(obs),
-                              "bytes": obs.stat().st_size}
-                             if obs.is_file() else None)
+    ident["observations"] = (
+        {"path": str(obs), "sha256": _sha256(obs), "bytes": obs.stat().st_size} if obs.is_file() else None
+    )
 
     # Resolve through the engine: paths.set_data_root takes precedence over
     # $VULCAN_FORWARD_DATA. Both are recorded, each under its own name.
@@ -248,10 +299,12 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     root = None
     try:
         # importing this module is what hands the engine this repo's data tree
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401
         from vulcan_forward import paths as _fwd_paths
+
+        from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
+
         root = Path(_fwd_paths.data_root())
-    except Exception as exc:                                # pragma: no cover
+    except Exception as exc:  # pragma: no cover
         # Never silently null: a check that cannot run says why it could not.
         ident["engine_data_error"] = f"{type(exc).__name__}: {exc}"
     ident["data_root_resolved"] = str(root) if root is not None else None
@@ -273,66 +326,78 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
         if npath is not None and npath.is_file():
             ident["network_file"] = {"path": str(npath), "sha256": _sha256(npath)}
     # broad: a provenance collector records any failure instead of raising
-    except Exception as exc:                                # pragma: no cover
+    except Exception as exc:  # pragma: no cover
         ident["network_file_error"] = str(exc)
     return ident
 
 
-# --- target identity ---------------------------------------------------------
-# Keys a CHAINED job may legitimately differ in: none of them changes the target
-# density or the numbers a resume carries. The walltime governor is per JOB;
-# the RT chunk sizes are batch splits that are numerically identical at any
-# width; the rest is bookkeeping. Everything NOT listed here is bound.
-TARGET_FREE_KEYS = frozenset({
-    "out_dir", "run_label", "walltime_seconds",
-    "smc_rt_chunk",
-})
+# Keys a chained job may differ in: the walltime governor is per job, and the RT chunk size is a batch split,
+# numerically
+# identical at any width. Everything else is bound.
+TARGET_FREE_KEYS = frozenset(
+    {
+        "out_dir",
+        "run_label",
+        "walltime_seconds",
+        "smc_rt_chunk",
+    }
+)
 
 
-def target_manifest(cfg, pipe) -> dict:
-    """Everything that defines the TARGET a checkpoint's numbers belong to.
+def target_manifest(cfg: Any, pipe: SimpleNamespace) -> dict[str, Any]:
+    """Return everything that defines the target a checkpoint's numbers belong to.
 
-    A resume that changes any of this splices two different densities into one
-    evidence integral, which nothing downstream can detect.
+    A resume that changes any of this splices two densities into one evidence integral, which nothing downstream can
+    detect.
+
+    Parameters
+    ----------
+    cfg : config_schema.Config
+        The run's configuration.
+    pipe : types.SimpleNamespace
+        The pipeline, with its observations set.
+
+    Returns
+    -------
+    dict
+        The manifest.
     """
     from dataclasses import asdict
+
     cfg_bound = {k: v for k, v in asdict(cfg).items() if k not in TARGET_FREE_KEYS}
 
     # The likelihood's actual inputs, not the file paths that produced them.
     h = hashlib.sha256()
-    for arr in (pipe.obs["wl"], pipe.obs["wl_lo"], pipe.obs["wl_hi"],
-                pipe.obs_depth, pipe.obs_sigma):
+    for arr in (pipe.obs["wl"], pipe.obs["wl_lo"], pipe.obs["wl_hi"], pipe.obs_depth, pipe.obs_sigma):
         h.update(np.ascontiguousarray(np.asarray(arr, np.float64)).tobytes())
     h.update("\x00".join(map(str, pipe.obs.get("group", []))).encode())
 
     return {
-        # bumped when the manifest's fields change, or when the evaluators'
-        # keep/reject or start logic changes the target at a fixed config
+        # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
         "manifest_version": 5,
         "config": cfg_bound,
-        "params": {"names": list(pipe.names),
-                   "prior_types": list(pipe.prior_types),
-                   "prior_lo": np.asarray(pipe.param_prior_lo, float).tolist(),
-                   "prior_hi": np.asarray(pipe.param_prior_hi, float).tolist()},
+        "params": {
+            "names": list(pipe.names),
+            "prior_types": list(pipe.prior_types),
+            "prior_lo": np.asarray(pipe.param_prior_lo, float).tolist(),
+            "prior_hi": np.asarray(pipe.param_prior_hi, float).tolist(),
+        },
         "groups": list(pipe.groups),
         "observations_sha256": h.hexdigest(),
         "n_bin": int(pipe.n_bin),
         **science_data_identity(cfg.molecules),
         "case_inputs": case_inputs(cfg.vulcan_cfg_name, cfg.cfg_overrides),
-        # commit + dirty flag + the src/ diff hash. NOT dirty_files: that list
-        # churns with any scratch edit and would refuse every resume in a
-        # campaign without identifying a different code state, while src_diff
-        # moves only when the code that defines the target actually changes.
-        "code": {r: None if s is None else
-                 {"commit": s.get("commit"), "dirty": s.get("dirty"),
-                  "src_diff": s.get("src_diff")}
-                 for r, s in _repo_states().items()},
+        # Not dirty_files: that list churns with any scratch edit, while src_diff moves only when the code changes.
+        "code": {
+            r: None
+            if s is None
+            else {"commit": s.get("commit"), "dirty": s.get("dirty"), "src_diff": s.get("src_diff")}
+            for r, s in _repo_states().items()
+        },
         "versions": _versions(),
-        # the solver moves every column at the convergence scale (fast vs ffi
-        # agree to residual, not bitwise), so a resume must not switch it. The
-        # chemistry RHS form and the ffi kernel's forced buffer variant are
-        # numerical choices of the same solve, bound the same way (the
-        # defaults: codegen RHS; unset = the kernel chooses per call).
+        # The solver moves every column at the convergence scale, so a resume must not switch it. The RHS form and the
+        # ffi
+        # kernel's forced buffer variant are bound the same way.
         "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
         "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", "codegen"),
         "vulcan3_bt_buffers": os.environ.get("VULCAN3_BT_BUFFERS") or "per-call",
@@ -343,31 +408,48 @@ MANIFEST_FILE = "target_manifest.json"
 
 
 def _canonical(manifest: dict) -> str:
-    """The one serialization the digest is taken over.
-
-    Shared by the live digest and by the re-hash of the ARCHIVED manifest, so
-    the two can never drift into disagreeing about what the digest covers.
-    """
+    """Return the one serialization the digest is taken over, shared by the live digest and the archived re-hash."""
     return json.dumps(manifest, sort_keys=True, default=str)
 
 
-def target_digest(cfg, pipe) -> str:
+def target_digest(cfg: Any, pipe: SimpleNamespace) -> str:
+    """Return the sha256 of the canonical target manifest.
+
+    Parameters
+    ----------
+    cfg : config_schema.Config
+        The run's configuration.
+    pipe : types.SimpleNamespace
+        The pipeline, with its observations set.
+
+    Returns
+    -------
+    str
+        The digest.
+    """
     return hashlib.sha256(_canonical(target_manifest(cfg, pipe)).encode()).hexdigest()
 
 
 def archived_manifest_digest(out_dir: Path) -> str | None:
-    """Digest of the manifest ARCHIVED in a run directory, or None if absent.
+    """Return the digest of the manifest archived in a run directory, or None if absent.
 
-    The run directory is written before the sampler runs, so a run started in
-    an old directory can leave a NEW manifest beside OLD samples. Re-hashing the
-    archived document is what detects that: the samples carry the digest of the
-    run that wrote them, and only the manifest dissents.
+    A run started in an old directory can leave a new manifest beside old samples; re-hashing the archived document
+    detects that.
+
+    Parameters
+    ----------
+    out_dir : pathlib.Path
+        The run's output directory.
+
+    Returns
+    -------
+    str or None
+        The digest, or a message starting ``unreadable:``.
     """
     p = Path(out_dir) / MANIFEST_FILE
     if not p.is_file():
         return None
     try:
-        return hashlib.sha256(
-            _canonical(json.loads(p.read_text())).encode()).hexdigest()
-    except (OSError, ValueError) as exc:                    # pragma: no cover
+        return hashlib.sha256(_canonical(json.loads(p.read_text())).encode()).hexdigest()
+    except (OSError, ValueError) as exc:  # pragma: no cover
         return f"unreadable: {type(exc).__name__}: {exc}"

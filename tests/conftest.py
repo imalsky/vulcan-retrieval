@@ -8,6 +8,7 @@ VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
 Also the real smoke pipeline builder (its capped session fixture is built
 once per session, per xdist worker) and the target-digest stand-in.
 """
+
 import dataclasses
 import os
 from pathlib import Path
@@ -32,13 +33,14 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
     )
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
-CAPPED_COLD_CMAX = 50   # < count_min: no solve can certify, its column stays finite
+CAPPED_COLD_CMAX = 50  # < count_min: no solve can certify, its column stays finite
 
 
 def build_smoke_pipe(**overrides):
     """The REAL smoke pipeline (chemistry + RT, offline) with Config fields
     ``overrides`` replaced and observations set to zeros/ones. Skips only when
-    the stack or its data is absent."""
+    the stack or its data is absent.
+    """
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
     import jax
@@ -46,6 +48,7 @@ def build_smoke_pipe(**overrides):
 
     from retrieval_framework import pipeline as P
     from retrieval_framework import run_setup as R
+
     jax.config.update("jax_enable_x64", True)
 
     try:
@@ -68,9 +71,16 @@ def capped_smoke_pipe():
 # Every v5 model option at once (tests/test_v5_options.py): sulfur free, the
 # Kzz power law, T at 1 bar as the deep parameter with the adiabat below a free
 # boundary, the Gaussian mass nuisance, the grey deck.
-V5_SMOKE = dict(infer_s_o=True, kzz_mode="powerlaw", tp_infer_Tint=True,
-                tp_deep_param="T1bar", prior_T1bar=(600.0, 2500.0), tp_adiabat=True,
-                infer_lnM=True, cloud_model="deck")
+V5_SMOKE = {
+    "infer_s_o": True,
+    "kzz_mode": "powerlaw",
+    "tp_infer_Tint": True,
+    "tp_deep_param": "T1bar",
+    "prior_T1bar": (600.0, 2500.0),
+    "tp_adiabat": True,
+    "infer_lnM": True,
+    "cloud_model": "deck",
+}
 
 
 @pytest.fixture(scope="session")
@@ -89,17 +99,27 @@ def v5_smoke_pipe():
 def digest_pipe(monkeypatch):
     """What provenance.target_manifest reads from a pipeline, with the code
     state and the version record frozen (the version record imports exojax,
-    which must not precede vulcan_chem in a worker)."""
+    which must not precede vulcan_chem in a worker).
+    """
     import numpy as np
 
     from retrieval_framework import provenance
-    monkeypatch.setattr(provenance, "_repo_states",
-                        lambda *a, **k: {"r": {"commit": "c" * 40, "dirty": False}})
+
+    monkeypatch.setattr(provenance, "_repo_states", lambda *_a, **_k: {"r": {"commit": "c" * 40, "dirty": False}})
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
     return SimpleNamespace(
-        obs={"wl": np.array([1.0, 2.0]), "wl_lo": np.array([0.9, 1.9]),
-             "wl_hi": np.array([1.1, 2.1]), "group": ["A", "A"]},
-        obs_depth=np.array([1e-2, 1.1e-2]), obs_sigma=np.array([1e-4, 1e-4]),
-        names=["lnZ", "c_o"], prior_types=["uniform", "uniform"],
-        param_prior_lo=np.array([-1.0, -1.0]), param_prior_hi=np.array([1.0, 1.0]),
-        groups=["A"], n_bin=2)
+        obs={
+            "wl": np.array([1.0, 2.0]),
+            "wl_lo": np.array([0.9, 1.9]),
+            "wl_hi": np.array([1.1, 2.1]),
+            "group": ["A", "A"],
+        },
+        obs_depth=np.array([1e-2, 1.1e-2]),
+        obs_sigma=np.array([1e-4, 1e-4]),
+        names=["lnZ", "c_o"],
+        prior_types=["uniform", "uniform"],
+        param_prior_lo=np.array([-1.0, -1.0]),
+        param_prior_hi=np.array([1.0, 1.0]),
+        groups=["A"],
+        n_bin=2,
+    )

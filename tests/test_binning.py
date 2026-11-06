@@ -1,6 +1,8 @@
 """The binning MATRIX must reproduce the d(lambda)-weighted trapezoidal bin average
 exactly -- that equivalence is what makes the binned
-depth's jvp exact and free."""
+depth's jvp exact and free.
+"""
+
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,10 +11,10 @@ import pytest
 from retrieval_framework import observations as OBS
 
 # np.trapz was renamed np.trapezoid in NumPy 2.0 (and trapz removed); support both.
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz  # noqa: NPY201  # the fallback for NumPy 1
 
-BIN_RTOL, BIN_ATOL = 1e-12, 1e-14   # matrix vs direct trapezoid: round-off only
-ROW_SUM_ATOL = 1e-10                # each averaging row sums to 1
+BIN_RTOL, BIN_ATOL = 1e-12, 1e-14  # matrix vs direct trapezoid: round-off only
+ROW_SUM_ATOL = 1e-10  # each averaging row sums to 1
 
 
 def _reference_bin(wl_model, y, lo_all, hi_all):
@@ -44,7 +46,7 @@ def test_binning_matrix_matches_trapezoid_reference():
     # observed-like bins, mixed widths, some outside the model span
     lo = np.array([1.8, 2.05, 2.5, 3.29, 3.301, 4.0, 5.15, 5.25])
     hi = np.array([2.1, 2.10, 2.9, 3.31, 3.309, 4.4, 5.19, 5.40])
-    obs = dict(wl=0.5 * (lo + hi), wl_lo=lo, wl_hi=hi)
+    obs = {"wl": 0.5 * (lo + hi), "wl_lo": lo, "wl_hi": hi}
 
     # bins crossing the model edge are dropped by the band filter, and refused
     # by the binning operator
@@ -68,14 +70,22 @@ def test_binning_matrix_refuses_duplicate_model_coordinates():
 
 def test_binning_matrix_on_real_cm24_bins():
     """Same equivalence on the actual Carter & May NIRISS+G395H bins, loaded through
-    the framework's config-driven product loader (repo data/cm24_wasp39b)."""
+    the framework's config-driven product loader (repo data/cm24_wasp39b).
+    """
     from retrieval_framework.forward import config as fwd_config
+
     cm24 = fwd_config.DATA_DIR / "cm24_wasp39b"
     cfg = SimpleNamespace(
         obs_dir=cm24,
-        obs_products={"NIRISS": ("NIRISS_O1_R100.csv", "NIRISS_O2_R100.csv"),
-                      "G395H": ("G395H_NRS1_R100.csv", "G395H_NRS2_R100.csv")},
-        combo=("NIRISS", "G395H"), obs_wl_lo=2.02, obs_wl_hi=5.24)
+        obs_products={
+            "NIRISS": ("NIRISS_O1_R100.csv", "NIRISS_O2_R100.csv"),
+            "G395H": ("G395H_NRS1_R100.csv", "G395H_NRS2_R100.csv"),
+        },
+        combo=("NIRISS", "G395H"),
+        obs_max_bin_R=0.0,
+        obs_wl_lo=2.02,
+        obs_wl_hi=5.24,
+    )
     wl_model = np.linspace(2.0, 5.26, 6000)
     obs = OBS.restrict_to_model_band(OBS.load_real_observations(cfg), wl_model)
     y = 0.021 + 1e-3 * np.sin(4.0 * wl_model)
@@ -83,7 +93,8 @@ def test_binning_matrix_on_real_cm24_bins():
     # both instrument groups must survive the band cut (29 NIRISS + 59 G395H bins):
     # NIRISS is the reference group and G395H carries the inter-instrument offset
     g = np.asarray(obs["group"])
-    assert (g == "NIRISS").sum() >= 20 and (g == "G395H").sum() >= 50
+    assert (g == "NIRISS").sum() >= 20
+    assert (g == "G395H").sum() >= 50
     ref = _reference_bin(wl_model, y, np.asarray(obs["wl_lo"]), np.asarray(obs["wl_hi"]))
     assert np.allclose(B @ y, ref, rtol=BIN_RTOL, atol=BIN_ATOL)
     # row weights of a bin average must sum to 1
@@ -98,19 +109,18 @@ def test_binning_matrix_refuses_a_product_near_the_model_resolution():
     A pure cell average is only faithful while the model is smooth across a bin;
     the sibling jwst tool applies an instrument response and this one does not.
     """
-    wl_model = np.exp(np.arange(np.log(2.0), np.log(5.5), 1.0e-3))   # R 1000
-    fine = np.exp(np.arange(np.log(3.0), np.log(4.0), 1.7e-3))       # 1.7 bands per bin
+    wl_model = np.exp(np.arange(np.log(2.0), np.log(5.5), 1.0e-3))  # R 1000
+    fine = np.exp(np.arange(np.log(3.0), np.log(4.0), 1.7e-3))  # 1.7 bands per bin
     obs = {"wl_lo": fine[:-1], "wl_hi": fine[1:]}
     with pytest.raises(ValueError, match="line-spread"):
         OBS.build_binning_matrix(wl_model, obs)
 
-    lo = 2.45 + 0.015 * np.arange(173)                                # R 164-336
+    lo = 2.45 + 0.015 * np.arange(173)  # R 164-336
     OBS.build_binning_matrix(wl_model, {"wl_lo": lo, "wl_hi": lo + 0.015})
 
 
 def test_offset_design_groups():
-    obs = dict(group=np.array(["NIRISS", "NIRISS", "G395H", "G395H", "G395H"]),
-               groups=["NIRISS", "G395H"])
+    obs = {"group": np.array(["NIRISS", "NIRISS", "G395H", "G395H", "G395H"]), "groups": ["NIRISS", "G395H"]}
     design = OBS.build_offset_design(obs)
     assert design.shape == (5, 1)
     assert np.array_equal(design[:, 0], [0.0, 0.0, 1.0, 1.0, 1.0])
@@ -118,14 +128,13 @@ def test_offset_design_groups():
 
 def test_rprs_products_propagate_to_depth(tmp_path):
     """A product row in (Rp/Rs) with errors -e/+e becomes depth (Rp/Rs)^2 with
-    sigma 2 (Rp/Rs) e, first-order propagation; a padding row is dropped."""
+    sigma 2 (Rp/Rs) e, first-order propagation; a padding row is dropped.
+    """
     from retrieval_framework.observations import read_rprs_csv
+
     f = tmp_path / "p.csv"
-    f.write_text("i,wl,wl_lo,wl_hi,rprs,el,eh\n"
-                 "0,1.0,0.99,1.01,0.1,-0.001,0.003\n"
-                 "1,nan,1.01,1.03,0.1,0.001,0.001\n")
-    wl, lo, hi, depth, sigma = read_rprs_csv(f)
+    f.write_text("i,wl,wl_lo,wl_hi,rprs,el,eh\n0,1.0,0.99,1.01,0.1,-0.001,0.003\n1,nan,1.01,1.03,0.1,0.001,0.001\n")
+    wl, _lo, _hi, depth, sigma = read_rprs_csv(f)
     assert wl.tolist() == [1.0]
     np.testing.assert_allclose(depth, [0.01], rtol=1e-15)
     np.testing.assert_allclose(sigma, [2.0 * 0.1 * 0.002], rtol=1e-15)
-

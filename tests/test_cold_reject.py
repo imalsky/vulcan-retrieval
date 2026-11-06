@@ -4,7 +4,9 @@ injection refuses it as a truth spectrum; both apply one certificate, the
 solver's conv_normal (False on every cap exit). Real smoke pipeline at count_max=50
 < count_min (conftest.capped_smoke_pipe), so no cold solve can certify while its
 column, and hence its spectrum, stays finite.
-Slow (full tier): builds and compiles the real chemistry."""
+Slow (full tier): builds and compiles the real chemistry.
+"""
+
 import jax
 import numpy as np
 import pytest
@@ -18,11 +20,12 @@ pytestmark = pytest.mark.slow
 
 def test_every_entry_point_rejects_uncertified_finite_spectrum(capped_smoke_pipe):
     pipe = capped_smoke_pipe
-    u0 = pipe.sample_prior_u(jax.random.PRNGKey(0), 1)[0]      # T-P-valid draw
+    u0 = pipe.sample_prior_u(jax.random.PRNGKey(0), 1)[0]  # T-P-valid draw
     theta = pipe.theta_from_u(u0)
     # precondition: the forward is finite -- the certificate, not a NaN, rejects
     mu, ok = pipe.binned_ok_jit(theta)
-    assert np.all(np.isfinite(np.asarray(mu))) and not bool(ok)
+    assert np.all(np.isfinite(np.asarray(mu)))
+    assert not bool(ok)
     U = pipe.sample_prior_u(jax.random.PRNGKey(1), 2)
     Y0, refs0 = P._blank_state(pipe, 2)
     ev = jax.jit(pipe._make_batch_eval("cold"))
