@@ -113,6 +113,8 @@ def test_a_forward_check_comparison_keeps_what_solved_each_side(scripts, tmp_pat
 
 
 def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypatch):
+    from vulcan_forward import paths as fwd_paths
+
     from retrieval_framework import config_schema as C
 
     monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
@@ -121,7 +123,7 @@ def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypa
     for table in ("exomolop/H2O.ktable.h5", "opacity_cache/H2-H2_2011.cia", "opacity_cache/H2-He_2011.cia"):
         (root / table).parent.mkdir(parents=True, exist_ok=True)
         (root / table).write_bytes(b"table")
-    monkeypatch.setenv("VULCAN_FORWARD_DATA", str(root))
+    monkeypatch.setattr(fwd_paths, "data_root", lambda: root)
     cfg = C.Config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
     path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)})
     with np.load(path) as z:
