@@ -42,7 +42,6 @@ def _log_phi_diff(a: Any, c: Any, xp: ModuleType, log_ndtr: Callable[[Any], Any]
     return lh + xp.log1p(-xp.exp(ll - lh))
 
 
-# size-limit-ok: the closures share one node grid and one group design
 def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: ArrayLike) -> SimpleNamespace:
     """Build the Gaussian likelihood with the offsets and noise inflation(s) integrated out over their priors.
 

@@ -289,7 +289,6 @@ class _ChunkLogs:
             self.tally[key] = self.tally.get(key, 0) + int(v)
 
 
-# size-limit-ok: 44 of its lines are the signature and numpy docs of nine arguments; the rest is one closure
 def make_loglike(
     pipe: SimpleNamespace,
     n_batch: int,

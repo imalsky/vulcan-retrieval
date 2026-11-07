@@ -373,7 +373,6 @@ def chem_extras(cfg: Config) -> tuple[str, ...]:
     return tuple(out)
 
 
-# size-limit-ok: one add per parameter, in theta order
 def specs_from_config(cfg: Config, groups: list[str] | None = None) -> list[ParamSpec]:  # noqa: C901  # one branch per optional parameter
     """Build the ordered active parameter list.
 
@@ -664,7 +663,6 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
         )
 
 
-# size-limit-ok: one banner line per setting
 def describe_config(cfg: Config, name: str = "") -> str:
     """Return the resolved configuration as text: the banner every entry point logs.
 

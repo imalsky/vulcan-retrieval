@@ -78,7 +78,7 @@ repos:
         name: size limits
         language: system
         entry: python3 tools/check_size_limits.py
-        types: [python]
+        types_or: [python, pyi]
       - id: no-sys-path-edits
         name: no sys.path edits
         language: pygrep
