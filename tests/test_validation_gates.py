@@ -116,6 +116,12 @@ def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypa
     from retrieval_framework import config_schema as C
 
     monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
+    # CI has no data folder, and provenance only hashes these tables.
+    root = tmp_path / "data"
+    for table in ("exomolop/H2O.ktable.h5", "opacity_cache/H2-H2_2011.cia", "opacity_cache/H2-He_2011.cia"):
+        (root / table).parent.mkdir(parents=True, exist_ok=True)
+        (root / table).write_bytes(b"table")
+    monkeypatch.setenv("VULCAN_FORWARD_DATA", str(root))
     cfg = C.Config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
     path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)})
     with np.load(path) as z:
