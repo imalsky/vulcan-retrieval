@@ -31,7 +31,9 @@ from retrieval_framework import config_schema as C
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from types import ModuleType, SimpleNamespace
+    from types import ModuleType
+
+    from retrieval_framework.pipeline import Pipeline
 
 __all__ = [
     "Runtime",
@@ -503,14 +505,14 @@ def setup_logging(log_file: Path | None = None, mode: str = "a") -> None:
     )
 
 
-def write_run_identity(cfg: C.Config, pipe: SimpleNamespace, spec: Spec, obs_save: dict) -> None:
+def write_run_identity(cfg: C.Config, pipe: Pipeline, spec: Spec, obs_save: dict) -> None:
     """Write config.json, observations.npz and the target manifest; call only after the resume-identity check.
 
     Parameters
     ----------
     cfg : config_schema.Config
         The run's configuration.
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline.
     spec : Spec
         The specification.
@@ -531,7 +533,7 @@ def write_run_identity(cfg: C.Config, pipe: SimpleNamespace, spec: Spec, obs_sav
     )
 
 
-def _write_config_json(cfg: C.Config, pipe: SimpleNamespace, spec: Spec) -> None:
+def _write_config_json(cfg: C.Config, pipe: Pipeline, spec: Spec) -> None:
     """Write config.json: the Config, the spec, the parameter table and the hardware."""
     d = asdict(cfg)
     d.update(
@@ -558,14 +560,14 @@ def _write_config_json(cfg: C.Config, pipe: SimpleNamespace, spec: Spec) -> None
     (out / "config.json").write_text(json.dumps(d, indent=2, default=str))
 
 
-def set_observations(cfg: C.Config, pipe: SimpleNamespace, P: ModuleType) -> dict[str, Any]:
+def set_observations(cfg: C.Config, pipe: Pipeline, P: ModuleType) -> dict[str, Any]:
     """Load real or synthetic observations into ``pipe``, once, and return the bundle to save; writes nothing.
 
     Parameters
     ----------
     cfg : config_schema.Config
         The run's configuration.
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline.
     P : module
         ``retrieval_framework.pipeline``, which the caller has imported after the runtime export.
@@ -605,7 +607,7 @@ def set_observations(cfg: C.Config, pipe: SimpleNamespace, P: ModuleType) -> dic
     return obs_save
 
 
-def _output_truth(cfg: C.Config, pipe: SimpleNamespace) -> np.ndarray:
+def _output_truth(cfg: C.Config, pipe: Pipeline) -> np.ndarray:
     """Return the truth vector [n_dim] for outputs: the injected values, or NaN for real data."""
     if cfg.generate_synthetic_data:
         return np.asarray(pipe.param_truth, dtype=np.float64)

@@ -11,7 +11,6 @@ import logging
 import math
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import jax
@@ -27,10 +26,13 @@ if TYPE_CHECKING:
     from jax import Array
     from jax.typing import ArrayLike
 
+    from retrieval_framework.retrieval_forward import RetrievalForward
+
 __all__ = [
     "REJECT_BELOW",
     "REJECT_LOGL",
     "EvalStats",
+    "Pipeline",
     "build_pipeline",
     "generate_observations",
     "load_real_into_pipe",
@@ -269,107 +271,132 @@ def _map_chunks_rows(fn: Callable[[Any], Any], args: Any, chunk: int, need: Arra
     return jnp.full((n, *trail), fill, dtype=fill.dtype).at[dst].set(ys.reshape((-1, *trail)), mode="drop")
 
 
-# size-limit-ok: the closures of one pipeline share its operators and its parameter layout
-def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts its closures
-    """Build the forward, observation operators, u-space prior and likelihood and the batched evaluators.
+class Pipeline:
+    """The forward, observation operators, u-space prior and likelihood of one run, and its batched evaluators.
 
-    The likelihood closes over ``pipe.obs_depth_jax`` and ``pipe.obs_sigma_jax``, which the first jitted call bakes in,
-    so call ``pipe.set_observations`` once, before any inference call; a second call raises.
+    The likelihood reads ``obs_depth_jax`` and ``obs_sigma_jax`` at trace time, and the first jitted call bakes them in,
+    so call ``set_observations`` once, before any inference call; a second call raises.
 
     Parameters
     ----------
     cfg : config_schema.Config
         The run's configuration.
+    fwd : retrieval_forward.RetrievalForward
+        Its forward model.
 
-    Returns
-    -------
-    types.SimpleNamespace
-        The pipeline: forward model, observations, parameter layout, prior maps, evaluators.
+    Attributes
+    ----------
+    cfg, fwd, dtype, nuisance
+        The configuration, the forward, the array type and the integrated-nuisance marginal or None.
+    obs, real_bins, groups, B, n_bin
+        The observation grid, whether its bins are real, its groups, the binning matrix and its row count.
+    names, kinds, labels, n_dim, n_chem, n_chem_tp, lnR0_idx, lnM_idx, cloud_idx, n_cloud
+        The parameter layout.
+    prior_types, param_prior_lo, param_prior_hi, param_truth, theta_truth, theta_from_u
+        The priors, the truth and the map from u to theta.
+    y_baseline, observed_depth_from_y_jit, binned_ok_jit
+        The column a rejected solve is pinned to, the ungated binned depth of columns, the certified one of a theta.
+    obs_depth, obs_sigma, obs_depth_jax, obs_sigma_jax, target_digest
+        The observations and the target's fingerprint: None, the digest absent, until ``set_observations``.
 
     Raises
     ------
     RuntimeError
         With fewer than two usable observed bins in the model band.
     """
-    C.validate_config(cfg)
-    from retrieval_framework import retrieval_forward as RF  # lazy: pulls in vulcan_chem -> VULCAN-JAX + exojax
 
-    dtype = jnp.float64  # the import above set x64; chemistry stays f64
+    target_digest: str  # set by set_observations, since observations are the target's last input
 
-    t0 = time.perf_counter()
-    fwd = RF.build_retrieval_forward(cfg)
-    logger.info(
-        "Built forward in %.1fs | native n_nu=%s nz=%s n_tp=%s molecules=%s",
-        time.perf_counter() - t0,
-        fwd.wl_um.size,
-        cfg.nz,
-        fwd.n_tp,
-        list(cfg.molecules),
-    )
+    def __init__(self, cfg: C.Config, fwd: RetrievalForward) -> None:
+        self.cfg = cfg
+        self.fwd = fwd
+        self.dtype = dtype = jnp.float64  # the forward's import set x64; chemistry stays f64
 
-    # A draw whose raw T-P leaves [T_min, T_max] anywhere on the ART grid or the chemistry grid (which reaches below the
-    # RT bottom) is rejected, not bent into range: redrawn at the prior and given REJECT_LOGL by every evaluator. A NaN
-    # profile (a T1bar draw with no Guillot solution) goes the same way.
-    n_tp = int(fwd.n_tp)
-    n_chem = int(fwd.n_chem)
-    p_check_j = jnp.asarray(
-        np.concatenate([np.asarray(fwd.p_art_bar, np.float64), np.asarray(fwd.p_chem_bar, np.float64)]), dtype=dtype
-    )
-    tp_eval = fwd.tp_model.eval
-    tp_T_min = jnp.asarray(fwd.tp_model.T_min, dtype)
-    tp_T_max = jnp.asarray(fwd.tp_model.T_max, dtype)
+        # A draw whose raw T-P leaves [T_min, T_max] anywhere on the ART grid or the chemistry grid (which reaches below
+        # the RT bottom) is rejected, not bent into range: redrawn at the prior and given REJECT_LOGL by every
+        # evaluator. A NaN profile (a T1bar draw with no Guillot solution) goes the same way.
+        self.n_chem = int(fwd.n_chem)
+        self._n_tp = int(fwd.n_tp)
+        self._p_check_j = jnp.asarray(
+            np.concatenate([np.asarray(fwd.p_art_bar, np.float64), np.asarray(fwd.p_chem_bar, np.float64)]), dtype=dtype
+        )
+        self._tp_eval = fwd.tp_model.eval
+        self._tp_T_min = jnp.asarray(fwd.tp_model.T_min, dtype)
+        self._tp_T_max = jnp.asarray(fwd.tp_model.T_max, dtype)
 
-    def tp_valid(theta: Array) -> Array:
+        self.obs, self.real_bins = OBS.get_observation_grid(cfg, fwd.wl_um)  # bins inside the model band
+        self.B = OBS.build_binning_matrix(fwd.wl_um, self.obs)
+        O_np = OBS.build_offset_design(self.obs)
+        self.groups = list(self.obs["groups"])
+        self.n_bin = int(self.B.shape[0])
+        logger.info(
+            "Observations: %s | %s bins | groups=%s | offset cols=%s",
+            "REAL product bins" if self.real_bins else "synthetic grid",
+            self.n_bin,
+            self.groups,
+            O_np.shape[1],
+        )
+        if self.n_bin < 2:
+            raise RuntimeError(f"only {self.n_bin} usable observed bins in the model band; widen the band")
+
+        self._B_jax = jnp.asarray(self.B, dtype=dtype)
+        self._O_jax = jnp.asarray(O_np, dtype=dtype)
+
+        # Any: consumers read it only on a run with integrate_nuisance.
+        self.nuisance: Any = None
+        if cfg.integrate_nuisance:
+            self.nuisance = make_nuisance_marginal(cfg, self.groups, self.obs["group"])
+
+        specs = C.specs_from_config(cfg, groups=self.groups)
+        self.names = [s.name for s in specs]
+        self.kinds = [s.kind for s in specs]
+        self.labels = [s.label for s in specs]
+        self.n_dim = len(specs)
+        self.n_chem_tp = self.n_chem + fwd.n_tp
+        self.lnR0_idx = self.names.index("lnR0")
+        self.lnM_idx = self.names.index("lnM") if "lnM" in self.names else None
+        self._s_o_idx = self.names.index("s_o") if "s_o" in self.names else None
+        self.cloud_idx = [i for i, k in enumerate(self.kinds) if k == "cloud"]
+        off_idx = [i for i, k in enumerate(self.kinds) if k == "offset"]
+        self._off_lo = off_idx[0] if off_idx else 0
+        self._n_off = len(off_idx)
+        self._cloud_lo = self.cloud_idx[0]
+        self.n_cloud = len(self.cloud_idx)
+
+        self.prior_types = [s.prior_type for s in specs]
+        self.param_prior_lo = np.asarray([s.lo for s in specs], np.float64)
+        self.param_prior_hi = np.asarray([s.hi for s in specs], np.float64)
+        self.param_truth = np.asarray([s.truth for s in specs], dtype=np.float64)
+
+        self.theta_from_u, self._sample_box_u = make_uspace(specs, dtype)
+        self.theta_truth = jnp.asarray(self.param_truth, dtype=dtype)
+
+        # The effective prior is the box intersected with the T-P window.
+        self._tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: self.tp_valid(self.theta_from_u(u)))(U))  # noqa: PLW0108  # a fresh trace
+
+        self.binned_ok_jit = jax.jit(self._binned_ok)
+
+        self._sigma_for = make_noise_model(self.names, self.obs["group"], lambda: self.obs_sigma_jax, dtype)
+        self._reject = jnp.asarray(REJECT_LOGL, dtype=dtype)
+
+        self._rt_chunk = int(cfg.smc_rt_chunk)
+        self.y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)  # (nz, ni)
+
+        self.observed_depth_from_y_jit = jax.jit(
+            lambda Y, Theta: _map_chunks(jax.vmap(self._mu_from_column), (Y, Theta), self._rt_chunk)
+        )
+
+        self.obs_depth_jax: Any = None
+        self.obs_sigma_jax: Any = None
+        self.obs_depth: np.ndarray | None = None
+        self.obs_sigma: np.ndarray | None = None
+
+    def tp_valid(self, theta: Array) -> Array:
         """Say whether the drawn T-P lies inside [T_min, T_max] on the ART grid and the chemistry grid."""
-        T_all = tp_eval(jnp.asarray(theta)[n_chem : n_chem + n_tp], p_check_j)
-        return jnp.all(jnp.isfinite(T_all) & (T_all >= tp_T_min) & (T_all <= tp_T_max))
+        T_all = self._tp_eval(jnp.asarray(theta)[self.n_chem : self.n_chem + self._n_tp], self._p_check_j)
+        return jnp.all(jnp.isfinite(T_all) & (T_all >= self._tp_T_min) & (T_all <= self._tp_T_max))
 
-    obs, real_bins = OBS.get_observation_grid(cfg, fwd.wl_um)  # bins inside the model band
-    B = OBS.build_binning_matrix(fwd.wl_um, obs)
-    O_np = OBS.build_offset_design(obs)
-    groups = list(obs["groups"])
-    n_bin = int(B.shape[0])
-    logger.info(
-        "Observations: %s | %s bins | groups=%s | offset cols=%s",
-        "REAL product bins" if real_bins else "synthetic grid",
-        n_bin,
-        groups,
-        O_np.shape[1],
-    )
-    if n_bin < 2:
-        raise RuntimeError(f"only {n_bin} usable observed bins in the model band; widen the band")
-
-    B_jax = jnp.asarray(B, dtype=dtype)
-    O_jax = jnp.asarray(O_np, dtype=dtype)
-
-    nuisance = make_nuisance_marginal(cfg, groups, obs["group"]) if cfg.integrate_nuisance else None
-
-    specs = C.specs_from_config(cfg, groups=groups)
-    names = [s.name for s in specs]
-    kinds = [s.kind for s in specs]
-    labels = [s.label for s in specs]
-    n_dim = len(specs)
-    n_chem_tp = n_chem + fwd.n_tp
-    lnR0_idx = names.index("lnR0")
-    lnM_idx = names.index("lnM") if "lnM" in names else None
-    s_o_idx = names.index("s_o") if "s_o" in names else None
-    cloud_idx = [i for i, k in enumerate(kinds) if k == "cloud"]
-    off_idx = [i for i, k in enumerate(kinds) if k == "offset"]
-    off_lo = off_idx[0] if off_idx else 0
-    n_off = len(off_idx)
-    cloud_lo = cloud_idx[0]
-    n_cloud = len(cloud_idx)
-
-    prior_types = [s.prior_type for s in specs]
-    param_truth = np.asarray([s.truth for s in specs], dtype=np.float64)
-
-    theta_from_u, sample_prior_u = make_uspace(specs, dtype)
-    theta_truth = jnp.asarray(param_truth, dtype=dtype)
-
-    # The effective prior is the box intersected with the T-P window.
-    _tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: tp_valid(theta_from_u(u)))(U))  # noqa: PLW0108  # a fresh trace
-
-    def sample_prior_u_valid(rng_key: Array, n_particles: int) -> Array:
+    def sample_prior_u(self, rng_key: Array, n_particles: int) -> Array:
         """Draw u from the box prior, redrawing any particle whose T-P leaves the window; raises at a candidate cap."""
         n_particles = int(n_particles)
         key = rng_key
@@ -379,8 +406,8 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
         max_draw = max(_TP_DRAW_CAP_FACTOR * n_particles, _TP_DRAW_CAP_MIN)
         while have < n_particles:
             key, sub = jax.random.split(key)
-            cand = sample_prior_u(sub, over)
-            good = np.asarray(jax.device_get(_tp_valid_batch(cand)))
+            cand = self._sample_box_u(sub, over)
+            good = np.asarray(jax.device_get(self._tp_valid_batch(cand)))
             drawn += over
             if good.any():
                 kept.append(np.asarray(jax.device_get(cand))[good])
@@ -390,7 +417,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
                     f"prior T-P rejection: only {have}/{n_particles} valid draws after "
                     f"{drawn} candidates (accept frac {have / max(drawn, 1):.1%}). The "
                     "T-P prior puts most of its mass outside the modelable window "
-                    f"[{float(tp_T_min):.0f}, {float(tp_T_max):.0f}] K -- tighten "
+                    f"[{float(self._tp_T_min):.0f}, {float(self._tp_T_max):.0f}] K -- tighten "
                     "prior_Tirr / prior_log10gamma in the run spec so realistic W39b profiles "
                     "dominate instead of being redrawn away."
                 )
@@ -404,77 +431,67 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
                 n_cand,
                 format(n_particles / n_cand, ".1%"),
             )
-        return jnp.asarray(U, dtype)
+        return jnp.asarray(U, self.dtype)
 
-    pipe = SimpleNamespace()
-
-    def _cloud_from(theta: Array) -> Array:
+    def _cloud_from(self, theta: Array) -> Array:
         """Return the cloud block of theta."""
-        return theta[cloud_lo : cloud_lo + n_cloud]
+        return theta[self._cloud_lo : self._cloud_lo + self.n_cloud]
 
-    def _lnM_from(theta: Array) -> Array:
+    def _lnM_from(self, theta: Array) -> Array:
         """Return lnM of theta, or 0."""
-        return theta[lnM_idx] if lnM_idx is not None else jnp.asarray(0.0, dtype)
+        return theta[self.lnM_idx] if self.lnM_idx is not None else jnp.asarray(0.0, self.dtype)
 
-    def _comp_refs(C_: Array) -> Array:
+    def _comp_refs(self, C_: Array) -> Array:
         """Return the composition references (lnZ, c_o, s_o) of a chemistry block, [N, 3]; s_o is 0 if not inferred."""
-        s = C_[:, s_o_idx] if s_o_idx is not None else jnp.zeros(C_.shape[0], dtype)
+        s = C_[:, self._s_o_idx] if self._s_o_idx is not None else jnp.zeros(C_.shape[0], self.dtype)
         return jnp.stack([C_[:, 0], C_[:, 1], s], axis=1)
 
-    def _mu_from_depth(depth: Any, theta: Array) -> Array:
+    def _mu_from_depth(self, depth: Any, theta: Array) -> Array:
         """Return the binned model depth: B @ native depth + O @ offsets."""
-        mu = B_jax @ depth
-        if n_off > 0:
-            mu = mu + O_jax @ (theta[off_lo : off_lo + n_off] * OBS.PPM)
+        mu = self._B_jax @ depth
+        if self._n_off > 0:
+            mu = mu + self._O_jax @ (theta[self._off_lo : self._off_lo + self._n_off] * OBS.PPM)
         return mu
 
-    def _binned_ok(theta: Array) -> tuple[Array, Array]:
+    def _binned_ok(self, theta: Array) -> tuple[Array, Array]:
         """Return (binned model depth, the cold certificate bit); a truth without it is refused."""
-        theta = jnp.asarray(theta, dtype=dtype)
-        native, _aux, ok = fwd.native_depth_aux(
-            theta[:n_chem_tp], theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta)
+        theta = jnp.asarray(theta, dtype=self.dtype)
+        native, _aux, ok = self.fwd.native_depth_aux(
+            theta[: self.n_chem_tp], theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta)
         )
-        return _mu_from_depth(native, theta), ok > 0.5
+        return self._mu_from_depth(native, theta), ok > 0.5
 
-    binned_ok_jit = jax.jit(_binned_ok)
-
-    _sigma_for = make_noise_model(names, obs["group"], lambda: pipe.obs_sigma_jax, dtype)
-
-    def _gauss_loglik(mu: Any, theta: Array) -> Array:
+    def _gauss_loglik(self, mu: Any, theta: Array) -> Array:
         """Return the finite-branch Gaussian log-likelihood of the batched evaluators."""
-        sig = _sigma_for(theta)
-        r = (pipe.obs_depth_jax - mu) / sig
+        sig = self._sigma_for(theta)
+        r = (self.obs_depth_jax - mu) / sig
         n = mu.size
         return (
-            -0.5 * jnp.sum(r * r) - jnp.sum(jnp.log(sig)) - 0.5 * n * jnp.log(jnp.asarray(2.0 * math.pi, dtype=dtype))
+            -0.5 * jnp.sum(r * r)
+            - jnp.sum(jnp.log(sig))
+            - 0.5 * n * jnp.log(jnp.asarray(2.0 * math.pi, dtype=self.dtype))
         )
 
-    _REJECT = jnp.asarray(REJECT_LOGL, dtype=dtype)
-
-    rt_chunk = int(cfg.smc_rt_chunk)
-    y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)  # (nz, ni)
-
-    def _rt_val(args: Any) -> Array:
+    def _rt_val(self, args: Any) -> Array:
         """Return one particle's log L from its profiles; with integrated nuisances [log L, R, S]."""
         aux, theta = args
-        depth = fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta))
-        mu = _mu_from_depth(depth, theta)
+        depth = self.fwd.rt_depth(aux, theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta))
+        mu = self._mu_from_depth(depth, theta)
         finite = jnp.all(jnp.isfinite(depth))
-        if nuisance is None:
-            return jnp.where(finite, _gauss_loglik(mu, theta), _REJECT)
-        st = nuisance.stats(mu, pipe.obs_depth_jax, pipe.obs_sigma_jax)
-        val = jnp.where(finite, nuisance.log_marginal(st, pipe.obs_sigma_jax), _REJECT)
+        if self.nuisance is None:
+            return jnp.where(finite, self._gauss_loglik(mu, theta), self._reject)
+        st = self.nuisance.stats(mu, self.obs_depth_jax, self.obs_sigma_jax)
+        val = jnp.where(finite, self.nuisance.log_marginal(st, self.obs_sigma_jax), self._reject)
         return jnp.concatenate([val[None], st])
 
-    def _mu_from_column(args: Any) -> Array:
+    def _mu_from_column(self, args: Any) -> Array:
         """Return one particle's binned depth from a converged column, ungated: a plotting interface."""
         y, theta = args
-        aux = fwd.aux_from_y(y, theta[:n_chem_tp])
-        return _mu_from_depth(fwd.rt_depth(aux, theta[lnR0_idx], _cloud_from(theta), _lnM_from(theta)), theta)
+        aux = self.fwd.aux_from_y(y, theta[: self.n_chem_tp])
+        depth = self.fwd.rt_depth(aux, theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta))
+        return self._mu_from_depth(depth, theta)
 
-    observed_depth_from_y_jit = jax.jit(lambda Y, Theta: _map_chunks(jax.vmap(_mu_from_column), (Y, Theta), rt_chunk))
-
-    def _make_batch_eval(mode: str) -> Callable[..., tuple[Array, Array, Array, EvalStats]]:
+    def _make_batch_eval(self, mode: str) -> Callable[..., tuple[Array, Array, Array, EvalStats]]:
         """Build ``eval(U, Y, refs, active) -> (L, Y_new, refs_new, EvalStats)``, all batched over N.
 
         "warm": each particle re-converges by continuation from its carried column Y with incremental composition
@@ -484,39 +501,35 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
         active.
         """
         warm = mode == "warm"
-
-        def _chem_primal(C_: Array, Y: Array, refs: Array, active: ArrayLike) -> tuple[Any, Array, Any]:
-            """Return (AUX, Y_new, ConvDiag) for the whole batch, in one call on the lane queue."""
-            if warm:
-                Y_new, CD = fwd.chem_solve_warm_diag_full_batch(
-                    C_, Y, refs[:, 0], refs[:, 1], refs[:, 2], active=active
-                )
-            else:
-                Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, active=active)
-            return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
+        fwd = self.fwd
 
         def eval_batch(U: Array, Y: Array, refs: Array, active: ArrayLike) -> tuple[Array, Array, Array, EvalStats]:
             """Evaluate one batch."""
             active = jnp.asarray(active, bool)
-            U = jnp.asarray(U, dtype)
-            Theta = jax.vmap(theta_from_u)(U)
-            C_ = Theta[:, :n_chem_tp]
-            valid = jax.vmap(tp_valid)(Theta)
-            AUX, Ynew, CD = _chem_primal(C_, Y, refs, active)
+            U = jnp.asarray(U, self.dtype)
+            Theta = jax.vmap(self.theta_from_u)(U)
+            C_ = Theta[:, : self.n_chem_tp]
+            valid = jax.vmap(self.tp_valid)(Theta)
+            # The whole batch, in one call on the lane queue.
+            if warm:
+                Ynew, CD = fwd.chem_solve_warm_diag_full_batch(C_, Y, refs[:, 0], refs[:, 1], refs[:, 2], active=active)
+            else:
+                Ynew, CD = fwd.chem_solve_cold_diag_batch(C_, active=active)
+            AUX = jax.vmap(fwd.aux_from_y)(Ynew, C_)
             conv_ok = CD.conv_normal > 0.5
             # The solver's verdict alone: a certified solve can exit at cap or cap + 1, and conv_normal is False on
             # every cap exit. Only these rows get an RT; the rest hold the reject sentinel.
             usable = valid & active & conv_ok
-            vals = _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk, usable, _REJECT)
+            vals = _map_chunks_rows(jax.vmap(self._rt_val), (AUX, Theta), self._rt_chunk, usable, self._reject)
             nuis = None
-            if nuisance is not None:
+            if self.nuisance is not None:
                 vals, nuis = vals[:, 0], vals[:, 1:]
             ACC = CD.accept_count.astype(jnp.int32)
-            L = jnp.where(jnp.isfinite(vals), vals, _REJECT)
+            L = jnp.where(jnp.isfinite(vals), vals, self._reject)
             # A rejected solve must not poison the carried state: pin it to the baseline column.
             ok = jnp.all(jnp.isfinite(Ynew), axis=(1, 2)) & usable
-            Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])
-            comp = _comp_refs(C_)
+            Ynew = jnp.where(ok[:, None, None], Ynew, self.y_baseline[None])
+            comp = self._comp_refs(C_)
             refs_new = jnp.where(ok[:, None], comp, jnp.zeros_like(comp))
             reason, last_delta = _exit_state(CD)
             return (
@@ -528,69 +541,66 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
 
         return eval_batch
 
-    pipe.__dict__.update(
-        {
-            "cfg": cfg,
-            "dtype": dtype,
-            "fwd": fwd,
-            "obs": obs,
-            "real_bins": real_bins,
-            "groups": groups,
-            "B": B,
-            "n_bin": n_bin,
-            "names": names,
-            "kinds": kinds,
-            "labels": labels,
-            "n_dim": n_dim,
-            "n_chem": n_chem,
-            "n_chem_tp": n_chem_tp,
-            "lnR0_idx": lnR0_idx,
-            "lnM_idx": lnM_idx,
-            "cloud_idx": cloud_idx,
-            "n_cloud": n_cloud,
-            "nuisance": nuisance,
-            "param_prior_lo": np.asarray([s.lo for s in specs], np.float64),
-            "param_prior_hi": np.asarray([s.hi for s in specs], np.float64),
-            "param_truth": param_truth,
-            "prior_types": prior_types,
-            # sample_prior_u is the T-P-window-restricted (redraw) sampler; the validity
-            # predicate is exposed for diagnostics/calibration.
-            "theta_from_u": theta_from_u,
-            "sample_prior_u": sample_prior_u_valid,
-            "tp_valid": tp_valid,
-            "theta_truth": theta_truth,
-            "observed_depth_from_y_jit": observed_depth_from_y_jit,
-            "binned_ok_jit": binned_ok_jit,
-            "y_baseline": y_baseline,
-            "_make_batch_eval": _make_batch_eval,
-            "obs_depth_jax": None,
-            "obs_sigma_jax": None,
-            "obs_depth": None,
-            "obs_sigma": None,
-        }
-    )
+    def set_observations(self, depth: Any, sigma: ArrayLike) -> None:
+        """Bake the observed depth and sigma into the pipeline, once, and fingerprint the target.
 
-    def set_observations(depth: Any, sigma: ArrayLike) -> None:
-        """Bake the observed depth and sigma into the pipeline, once, and fingerprint the target."""
-        if pipe.obs_depth is not None:
+        Parameters
+        ----------
+        depth : array-like [n_bin]
+            Observed depths.
+        sigma : array-like [n_bin]
+            Observed sigmas.
+
+        Raises
+        ------
+        RuntimeError
+            On a second call.
+        """
+        if self.obs_depth is not None:
             raise RuntimeError(
                 "set_observations was already called on this pipeline. Observations "
                 "are trace-time constants baked into the compiled likelihood, so "
                 "swapping them in-process would silently keep the old data. Build a "
                 "fresh pipeline (build_pipeline) for a different dataset."
             )
-        depth, sigma = validate_observations(depth, sigma, n_bin)
-        pipe.obs_depth = depth
-        pipe.obs_sigma = sigma
-        pipe.obs_depth_jax = jnp.asarray(depth, dtype=dtype)
-        pipe.obs_sigma_jax = jnp.asarray(sigma, dtype=dtype)
+        depth, sigma = validate_observations(depth, sigma, self.n_bin)
+        self.obs_depth = depth
+        self.obs_sigma = sigma
+        self.obs_depth_jax = jnp.asarray(depth, dtype=self.dtype)
+        self.obs_sigma_jax = jnp.asarray(sigma, dtype=self.dtype)
         # Observations are the target's last input: fingerprint it here, so every checkpoint carries its identity.
         from retrieval_framework import provenance
 
-        pipe.target_digest = provenance.target_digest(cfg, pipe)
+        self.target_digest = provenance.target_digest(self.cfg, self)
 
-    pipe.set_observations = set_observations
-    return pipe
+
+def build_pipeline(cfg: C.Config) -> Pipeline:
+    """Build the pipeline of one run, on its forward model.
+
+    Parameters
+    ----------
+    cfg : config_schema.Config
+        The run's configuration.
+
+    Returns
+    -------
+    Pipeline
+        The pipeline, with no observations yet.
+    """
+    C.validate_config(cfg)
+    from retrieval_framework import retrieval_forward as RF  # lazy: pulls in vulcan_chem -> VULCAN-JAX + exojax
+
+    t0 = time.perf_counter()
+    fwd = RF.build_retrieval_forward(cfg)
+    logger.info(
+        "Built forward in %.1fs | native n_nu=%s nz=%s n_tp=%s molecules=%s",
+        time.perf_counter() - t0,
+        fwd.wl_um.size,
+        cfg.nz,
+        fwd.n_tp,
+        list(cfg.molecules),
+    )
+    return Pipeline(cfg, fwd)
 
 
 def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int) -> tuple[np.ndarray, np.ndarray]:
@@ -639,12 +649,12 @@ def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int) -> tuple[np.
     return depth, sigma
 
 
-def load_real_into_pipe(pipe: SimpleNamespace) -> dict[str, np.ndarray]:
+def load_real_into_pipe(pipe: Pipeline) -> dict[str, np.ndarray]:
     """Inject the real observed depths and sigmas already attached to ``pipe.obs``.
 
     Parameters
     ----------
-    pipe : types.SimpleNamespace
+    pipe : Pipeline
         The pipeline.
 
     Returns
@@ -659,14 +669,14 @@ def load_real_into_pipe(pipe: SimpleNamespace) -> dict[str, np.ndarray]:
     return {"depth": depth, "sigma": sigma}
 
 
-def generate_observations(pipe: SimpleNamespace, seed: int) -> dict[str, np.ndarray]:
+def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
     """Inject a synthetic spectrum: the model at truth plus Gaussian noise at the per-bin sigma.
 
     An uncertified truth column would inject a spectrum no certified draw can reproduce, so it is refused.
 
     Parameters
     ----------
-    pipe : types.SimpleNamespace
+    pipe : Pipeline
         The pipeline.
     seed : int
         The noise seed.
@@ -701,7 +711,7 @@ def generate_observations(pipe: SimpleNamespace, seed: int) -> dict[str, np.ndar
     return {"depth": depth, "sigma": sigma, "flux_true": mu_true}
 
 
-def _blank_state(pipe: SimpleNamespace, N: int) -> tuple[Array, Array]:
+def _blank_state(pipe: Pipeline, N: int) -> tuple[Array, Array]:
     """Return (Y0, refs0) placeholders for a fresh batch: the baseline column, with references 0."""
     dtype = pipe.dtype
     Y0 = jnp.broadcast_to(pipe.y_baseline[None], (N, *tuple(pipe.y_baseline.shape))).astype(dtype)

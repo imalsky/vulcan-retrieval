@@ -36,10 +36,11 @@ from retrieval_framework.run_setup import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
-    from types import SimpleNamespace
 
     import nautilus
     from jax.typing import ArrayLike
+
+    from retrieval_framework.pipeline import Pipeline
 
 __all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
 
@@ -290,7 +291,7 @@ class _ChunkLogs:
 
 
 def make_loglike(
-    pipe: SimpleNamespace,
+    pipe: Pipeline,
     n_batch: int,
     tally: dict,
     anchors: Anchors | None = None,
@@ -307,7 +308,7 @@ def make_loglike(
 
     Parameters
     ----------
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline.
     n_batch : int
         The evaluator's width.
@@ -410,7 +411,7 @@ def make_loglike(
 
 
 def nuisance_posterior(
-    pipe: SimpleNamespace, folder: Path, queries: Iterable[tuple[np.ndarray, np.ndarray]], rng: np.random.Generator
+    pipe: Pipeline, folder: Path, queries: Iterable[tuple[np.ndarray, np.ndarray]], rng: np.random.Generator
 ) -> list[np.ndarray]:
     """Return the integrated nuisances' posterior, one conditional draw per row of each query.
 
@@ -419,7 +420,7 @@ def nuisance_posterior(
 
     Parameters
     ----------
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline.
     folder : pathlib.Path
         The run's nuisance/ directory.
@@ -557,7 +558,7 @@ def _log_settings(spec: Any, cfg: C.Config, n_batch: int) -> None:
 
 
 def _saved_loglike(
-    pipe: SimpleNamespace, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
+    pipe: Pipeline, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return the run's log-likelihood, which saves the tally after each call, atomically."""
     from retrieval_framework.nautilus_report import _kzz_at_ref
@@ -592,7 +593,7 @@ def _saved_loglike(
     return loglike_saved
 
 
-def _write_posterior(sampler: nautilus.Sampler, pipe: SimpleNamespace, out: Path, want: str, seed: int) -> None:
+def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want: str, seed: int) -> None:
     """Write nautilus_posterior.npz: the weighted points, the equal-weight samples and any integrated nuisances."""
     import jax
 
@@ -628,9 +629,7 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: SimpleNamespace, out: Path
     )
 
 
-def _write_summary(
-    sampler: nautilus.Sampler, pipe: SimpleNamespace, spec: Any, out: Path, n_batch: int, tally: dict
-) -> None:
+def _write_summary(sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, n_batch: int, tally: dict) -> None:
     """Write nautilus_summary.json."""
     import nautilus
 

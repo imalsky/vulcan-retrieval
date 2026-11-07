@@ -21,9 +21,9 @@ import yaml
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from types import SimpleNamespace
 
     from retrieval_framework import config_schema as C
+    from retrieval_framework.pipeline import Pipeline
 
 __all__ = [
     "MANIFEST_FILE",
@@ -318,7 +318,7 @@ TARGET_FREE_KEYS = frozenset(
 )
 
 
-def target_manifest(cfg: C.Config, pipe: SimpleNamespace) -> dict[str, Any]:
+def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
     """Return everything that defines the target a checkpoint's numbers belong to.
 
     A resume that changes any of this splices two densities into one evidence integral, which nothing downstream can
@@ -328,7 +328,7 @@ def target_manifest(cfg: C.Config, pipe: SimpleNamespace) -> dict[str, Any]:
     ----------
     cfg : config_schema.Config
         The run's configuration.
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline, with its observations set.
 
     Returns
@@ -394,14 +394,14 @@ def _canonical(manifest: dict) -> str:
     return json.dumps(manifest, sort_keys=True, default=str)
 
 
-def target_digest(cfg: C.Config, pipe: SimpleNamespace) -> str:
+def target_digest(cfg: C.Config, pipe: Pipeline) -> str:
     """Return the sha256 of the canonical target manifest.
 
     Parameters
     ----------
     cfg : config_schema.Config
         The run's configuration.
-    pipe : types.SimpleNamespace
+    pipe : pipeline.Pipeline
         The pipeline, with its observations set.
 
     Returns

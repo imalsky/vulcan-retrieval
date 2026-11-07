@@ -139,7 +139,7 @@ The maintainer runs these; give the exact commands and run none of them unasked.
 
 - Every chemistry batch runs on the lane queue at `cold_lanes` lanes (`validate_config` refuses 0); under `ffi`,
   `run_nautilus` runs `cold_lanes` x `FFI_BLOCKS_PER_SM` lanes.
-- One route: every batch, cold or warm, goes through `retrieval_forward._chem_batch_route`, never a per-row `vmap` of
+- One route: every batch, cold or warm, goes through `RetrievalForward._chem_batch_route`, never a per-row `vmap` of
   solves.
 - A refilled draw moves at the convergence scale, so a lane-count change is a target change: regenerate, never resume.
 - A run's solver is its spec's `runtime.solver` (`run_setup.export_runtime`, before the first jax import; a disagreeing
@@ -198,9 +198,9 @@ The maintainer runs these; give the exact commands and run none of them unasked.
   the spec format is `run_setup`'s docstring and `wasp39_test1.yaml`'s comments. NAS launch: `tools/submit.py`,
   `tools/run_nas.pbs`.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup` (`load_spec`, `export_runtime`),
-  `pipeline` (evaluators, T-P window), `nuisance` (the integrated offsets and inflations), `retrieval_forward` (chemistry
-  + RT, lane route), `run_nautilus` (sampler, anchors, resume refusal), `provenance` (target digest), `nautilus_report`
-  (certificate), `report_figures` (figures), `validate_env`.
+  `pipeline` (`Pipeline`: evaluators, T-P window), `nuisance` (the integrated offsets and inflations), `retrieval_forward`
+  (`RetrievalForward`: chemistry + RT, lane route), `run_nautilus` (sampler, anchors, resume refusal), `provenance`
+  (target digest), `nautilus_report` (certificate), `report_figures` (figures), `validate_env`.
 - `docs/method.md`: the methods, their sources, the validation scripts' rungs and variants, the glossary.
 - notes: "Current state" (versions, pins, production setup, next run), "Runs", "Design records", "HPC (NAS GH200) and
   daw", "Superseded designs".
