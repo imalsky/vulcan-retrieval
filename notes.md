@@ -1,6 +1,6 @@
 # vulcan-retrieval notes
 
-What is true in this repo and why, written for Claude: the results of the WASP-39b
+What is true in this repo and why: the results of the WASP-39b
 runs and studies, each keyed by its name with its settings and numbers, the measured
 evidence behind the CLAUDE.md rules, design records, superseded designs, ideas not
 adopted and a do-not-retry register; git history is the log. Open items are in
@@ -63,9 +63,10 @@ sigma = posterior standard deviation, L = log-likelihood.
   (`-m "slow or not slow"`; slow: `test_cold_reject`, `test_condensation_live_tp`,
   `test_set_observations`' production-case likelihood and `test_v5_options`, every v5 option
   on the real smoke pipeline, the production case's build, and the job path end to end
-  on the smoke case). Counts [M], daw CPU `-n 8` (cores 64-79): normal 115 passed in
-  32 s (the laptop the same); full 127 passed / 1 xfailed (the x86 condensation tangent)
-  in 76 min, the job-path test most of it (12 min alone on the laptop).
+  on the smoke case). Counts [M], daw CPU `-n 1`: normal 192 passed; CI's stack-free unit
+  job (`fail_under` 80) enforces the coverage floor. A column frozen
+  at `dt_min` raises (the abort test pins that at a floor of 1e-14 s). Before `e32dc86`: full 127 passed / 1 xfailed (the x86 condensation tangent) in 76 min, the
+  job-path test most of it (12 min alone on the laptop).
 
 ## Runs
 
@@ -164,8 +165,7 @@ unless stated.
   `protos` file under `$VULCAN_SCRATCH/tmp`); `logs/nsys_94946/pipeline_gh200_jax_profile.zip`
   was written, the job exited 0 and the retrieval output is unaffected [M].
 - Report [M]: `nautilus_report --spectra 128` (125 of 128 weighted draws certified cold)
-  rewrote the certificate and drew its three figures in `plots/` next to the run. A copy
-  of the run without `anchors/` (20 GB) is at `~/Desktop/w39b/_build/runs/` on the laptop.
+  rewrote the certificate and drew its three figures in `plots/` next to the run.
 
 ### v4_nopresolve_test (jobs 95161 + 95569, resumed)
 - The v4 target with the presolve chain OFF: one program at rtol 0.05, cap 5000
@@ -534,7 +534,7 @@ unless stated.
   (editable installs); a version, dependency or entry-point change needs the bootstrap
   (`tools/bootstrap_nas_env.pbs`).
   A new run writes to `vulcan-retrieval/output/w39b_smc_retrieval/<name>_nautilus/` with
-  its logs in `output/w39b_smc_retrieval/logs/`; the v4-era outputs (the old
+  its job logs in that directory's `jobs/`; the v4-era outputs (the old
   convention, `runs/w39b_smc_retrieval/data/` and `logs/`) are deleted. Copy a run home with rsync, excluding
   `anchors/` (gigabytes) and, unless the conditioning map needs it, the checkpoint.
 - Queues: the GH200 queues (`gpu_long` 120 h, `gpu_normal` 24 h, `gpu_devel` 2 h) are
@@ -570,7 +570,7 @@ unless stated.
   export, which `export_runtime` refuses, so it could not start). One batch by hand on a
   GH200 node in the job's environment: nsys first on PATH (a one-file bin dir linking
   `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys`; cuda-12.6's nsys
-  wrapper is not on the nodes), `VULCAN_PROFILE_BATCH=k` (`run_nautilus.BatchProfiler`:
+  wrapper is not on the nodes), `VULCAN_PROFILE_BATCH=k` (`batch_profiler.BatchProfiler`:
   cudaProfilerStart before likelihood batch k; 3 is a fresh run's first steady warm
   batch), `JAX_TRACEBACK_IN_LOCATIONS_LIMIT=10` (nsys-jax sets -1 only when unset, which
   changes the programs), then `nsys-jax --trace=cuda,nvtx,osrt --sample=cpu
@@ -885,7 +885,7 @@ HPC
   digest plus the sampler string, never a byte compare of the file. `tools/submit.py`
   validates the spec, builds the qsub line (`gpu_long`, one GH200 node, the allocation
   in `$PBS_GROUP`, the wall 2 h past the governor, so the two cannot disagree), passes
-  three comma-free values (spec, out dir, resume flag) to the generic
+  four comma-free values (spec, spec digest, out dir, resume flag) to the generic
   `tools/run_nas.pbs`, records each submission under `<out dir>/jobs/` and chains a
   `--resume` after a still-active job. Replaced: case.py presets, JSON override files
   with `_comment` keys, the `SMC_RETRIEVAL_*` / `NAUTILUS_*` / `SMC_RESUME` environment,
@@ -922,16 +922,43 @@ HPC
   both at their gate step counts (1202, 1495). The rest of the ladder (the
   one-at-a-time GPU rung, the daw CPU rungs, a replay of row 1352 under ffi and fast) is
   not run (the maintainer decided).
-- Cold certification of in-window v5 prior draws at count_max 5000 [M]: 57% (885-908
+- Cold certification of in-window v5 prior draws at count_max 5000 [M], measured before
+  vulcan3 `e32dc86` and not remeasured since (`todo.md`): 57% (885-908
   of 1584); every failure is a cap exit, worst where the column is cool and metal-rich
   and weakly mixed (lowest T1bar quintile 21%, highest lnZ quintile 24%, lowest lnKzz
   quintile 36%, against 81-86% at the other ends). 81% of uniform v5 box draws leave
   the T-P window (v5's first nautilus batch: 1277 of 1584), against ~4% for v4. The
-  first 16 in-window draws of `sample_prior_u(PRNGKey(0))` [M] (cold, `fast`, daw CPU):
-  5 certify on the 2021 file and 6 on the 2025 file, the same draws within 3% in steps
-  (the extra one at 4997); every failure is a cap exit on both, so the network is not
-  the cause. The production-case test (`test_set_observations`, slow) evaluates the
-  most strongly mixed of those 16.
+  first 16 in-window draws of `sample_prior_u(PRNGKey(0))` [M] (cold, `fast`, daw CPU),
+  also before `e32dc86`: 5 certify on the 2021 file and 6 on the 2025 file, the same
+  draws within 3% in steps (the extra one at 4997); every failure is a cap exit on both,
+  so the network is not the cause. The production-case test (`test_set_observations`,
+  slow) evaluates draw 3 and draw 7, the most strongly mixed of those 16, which certify in both stages.
+- The step floor and the frozen draws. Same 16 draws, stage 2 from the same stage 1 column,
+  `fast`, CPU, one thread, rtol 0.05, solved solo [M]. vulcan3's floor, `dt_min`, is 1e-15 s; at 1e-14 s
+  a stage 2 column froze on 5 of them (draws 0, 5, 7, 13, 14), since a force-accept keeps the
+  state (VULCAN3 notes "Parity ledger"). Cause, on all five: `_guess_y0` scales S2 and S4
+  by one factor f = e^(lnZ + s_o), but S4 balances S2^2, so it starts f times below balance
+  in the bottom layer, and S4 + M -> S2 + S2 + M lives 4e-14 to 8e-14 s there (J_ii -1.3e13 to
+  -2.5e13 s^-1; the next eigenvalue 2e10 to 3e10 on draws 5 and 7). Putting S4 alone at balance, or removing the pair of
+  slots, takes the ratio at 1e-14 s from 0.069-0.155 to under 0.005. The estimate does scale as
+  dt^2 (slope 2.00 at 1e-18 s), and saturates at 0.37 by 1e-11 s; the first passing halving was
+  6.1e-15 s on four draws and 1.5e-15 s on draw 14 (f 43), so the floor stopped the step, not
+  the masks (S4 at vmr 2e-18 to 9e-18, y 47-160 cm^-3). VULCAN3 notes "Differences from VULCAN master"
+  has the closed form. At 1e-15 s and the top of the window (2979 K, L 2.5e13) it passes at any f, with L 1.9 times to spare.
+- What that floor does [M]: no draw freezes; draw 7 certifies in 543 steps at log L -1413.461
+  (HPC pins 547, -1413.46), so 6 of 16 certify as before `e32dc86`; 0, 5, 13, 14 exit at the cap
+  (long dy 2.6e6, 0.40, 0.071, 0.094). Of the 11 others 10 are bitwise, and draw 12, which had
+  force-accepted once, moves |dlogL| 8e-8, |dln y| 7e-6 (here and below, cells with vmr above 1e-12). Queue (3 lanes, refill), batch and the jitted
+  evaluator agree: draw 7 574 and 551 steps, log L within 0.003. A warm jump from draw 12 to lnZ =
+  s_o = 2.3 freezes at 1e-14 s (ratio 0.174), not at 1e-15 s, and back returns within 2.5e-2 in ln y.
+  `jvp` runs on all five, finite, with the primal's exit: it certifies draw 7 at h 0.01, where it reads a median 2 %
+  from FD and a free draw 0.25 %; the same draw at s_o 0, never near the floor, reads 63 %, and at h 1 neither settles in
+  5001 steps (a free draw does, in 2890): so the floor is not the only cause [I], and the tangent certificate scales with h. Gradient accuracy on that column is not shown. GPU `ffi` not run.
+- The reach of the gate [M]: restarting a certified column at its own theta moves it |dlogL| up to
+  0.10, |dln y| up to 2.4e-2; 3000 more steps move it up to 1.41 and 0.28, so two certified paths
+  to one draw can differ by this much. The survey at rtol 0.2 and 1e-14 s would have cleared by 1 %
+  at its hot, sulfur-rich corner (`runs/survey/wasp39b.yaml`: lnZ 3.40, s_o 2.30, 2976 K, 10 bar: ratio
+  0.198); its 3 draws solved did not freeze.
 - Launch guards (the maintainer decided: no check or pre-run a user must know to run;
   errors as early as possible). `submit.py` and `validate_env --spec` refuse missing
   inputs (`run_setup.check_inputs`: network, case config, atm and stellar-flux files,
@@ -1147,7 +1174,7 @@ HPC
     its CH4 depletion meets the 10 bar bottom). GO 5924 (the Grand Tour, 25 giants, one
     homogeneous reduction) would replace the per-paper products once its spectra are
     public.
-  - A Codex review of the setup found no conversion or unit error. Kept and disclosed:
+  - An independent review of the setup found no conversion or unit error. Kept and disclosed:
     the archive's a/R* disagrees with the transit fits (WASP-96b 9.28 against 8.989,
     WASP-166b 11.30 against 11.83): R*/a sets the UV dilution (6-10%) and R* moves rp_cm
     3-5%, inside the lnR0 prior; the solar flux keeps the solar UV shape for F/G hosts
@@ -1168,7 +1195,7 @@ HPC
     (all certified); on WASP-107b 8 of 17 certified, every low-Kzz corner and the C/O
     0.027 corner exhausting the cap (the origin is now an in-window draw, "Launch
     guards").
-  - Full review (two Opus reviewers, one Fable, one Codex), beyond the fix above. Code,
+  - Full independent review, beyond the fix above. Code,
     fixed: a path-style case config (this case, WASP-107b) recorded no config hash and
     no hash of its atm or flux file (now `provenance.case_inputs`, "Evidence behind the
     rules"); `nautilus_report`'s Kzz block used v5's x0.15 / x0.2 / x10 factors, not the
@@ -1262,17 +1289,12 @@ HPC
 - Known and deliberately untracked:
   - Anchors and tallies are written before nautilus checkpoints the batch: a crash
     between them redraws that batch, which then starts from its own columns, and the
-    tally counts it twice (`run_nautilus` module docstring).
+    tally counts it twice (`docs/method.md`, "Warm starts").
   - `opacity_leave_one_out.py` reads an archived run through the current names and
     priors: use it on the run it came from.
   - The ladder scripts build the RT inputs by hand (no `gas_mask`, `_artifact.bin_trapz`).
   - `validate_env` lets exogibbs 0.6.0rc1 pass the 0.6.0 floor; `tools/gpu_kernel_test.pbs`
-    installs on the shared userbase with no lock; the likelihood's -sum(log sigma) term is
-    pinned by slow tests only.
-  - `provenance` reads the named config YAML for `network`; the named configs now set
-    only what differs from `default.yaml` (VULCAN3 `2216219`), so only W39b carries the
-    key and an HD189 or HD209 run would record no network-file hash. Resolve it through
-    `vulcan3.config.load_config` when such a run exists.
+    installs on the shared userbase with no lock.
 
 ## Literature (WASP-39b comparison set)
 
@@ -1355,8 +1377,7 @@ data with AD gradients: no precedent found (searches through 2026-09, not exhaus
   (0.26.0, 75cceff). Block-MALA schedule (0d56afa, deleted d549f34); `Stage1Cache`
   (removed cd96136); `warm_extrapolate`; single-stage cold solve (removed 7a1c2e1).
 - Sampled line-by-line opacity and the Mie deck: retired with vulcan-forward 0.11.0.
-- Route B smooth open-system rainout: NO-GO; the code is in
-  `~/VULCAN_Project/.backup/git_tags_2026-09-26/vulcan-retrieval-smooth-rainout-b0c-no-go-2026-07-14.bundle`.
+- Route B smooth open-system rainout: NO-GO.
 
 ## Ideas not adopted
 
@@ -1458,7 +1479,7 @@ Sampling (nautilus and stand-ins)
 - A nautilus warm cap below 5000: 1 certified column in (3000, 5000], 2 in [5000, 10000), 15 never by 10,000; the refilling queue removes the wait instead.
 - Longest-first batch order by a pre-solve predictor: the anchor distance (rank correlation with the steps 0.13-0.23) and the mean steps of the 10 nearest earlier draws (0.57-0.66) both replay at 0.99x on v5 (known lengths 1.16x): a batch ends with its worst-placed long draw.
 - Seeding a new run's anchors from 90302's 213k columns: no measurable gain (0.79 s per call in exploration, 0.77 in sampling) and a different box and geometry.
-- A learned initializer (an emulator of y*(theta) as the warm start): the draw's own converged column still costs 191-1321 steps, so no start beats cold by more than 4.4x; the nearest anchor gives 2.13x, PCA+GP 2.05x; no start rescues a censored draw (record: `~/VULCAN_Project/.backup/speed_studies_2026-09/emulator_ideas/results.txt`).
+- A learned initializer (an emulator of y*(theta) as the warm start): the draw's own converged column still costs 191-1321 steps, so no start beats cold by more than 4.4x; the nearest anchor gives 2.13x, PCA+GP 2.05x; no start rescues a censored draw.
 - A spectrum emulator with nested sampling and an importance correction: not pursued, the maintainer's decision (the forward model is too complicated to emulate).
 - Importance sampling from a log L emulator (off by 0.79 nats out of sample, efficiency 0.000) or from Gaussian, Student-t or mixture fits to the 81542 posterior (~0): the posterior is far from Gaussian and piles against prior walls.
 - MCMC on a fitted stand-in without bounding its inputs: walkers ran to |logit z| ~ 37 where the MLP extrapolates to log L 1304; truncate any sampler on a stand-in to its training range.
@@ -1481,3 +1502,9 @@ Operations
 - A 24 h multi-arm calibration chain as a profiling vehicle: a MALA calibrate arm costs ~11 h, so the profiling arms never ran; profile in short bounded jobs.
 - Expecting `LuPivotsToPermutation` count 0 as the perm-cache check: `lax.linalg.lu` reports its permutation through that kernel; 1:1 with getrf is correct.
 - Shrinking the slow tests' memory (2 probe particles, `jax.clear_caches()` between compiles): wall -13% or peak 28.6 -> 23.9 GB in one file only; the peaks are single XLA CPU compiles.
+- Curing the frozen draws in the guess, S species at f^(n_S): moves certified draws by up to 2.1 in log L and 0.34 in ln y, draw 7
+  takes 1215 steps, and S2 reaches a vmr of 0.15 at f 43. Stage 2 in two sub-stages: draw 14 still freezes, 1.5x the steps on
+  certified draws, 0.38 in log L. One relaxation of the fast cells: cures them, moves free draws 1e-4 in log L, adds a Jacobian and
+  a cutoff to every prep. S4 under the collision limit: VULCAN3 `todo.md`.
+- Taking a failed trial at the floor when it is non-negative and conserves: cures the same draws, but the estimate stops bounding
+  the step there, and it also fires above the floor on an exhausted retry. The lower floor stands instead.

@@ -47,11 +47,9 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     """Build the Gaussian likelihood with the offsets and noise inflation(s) integrated out over their priors.
 
     Group g's bins see the offset o_g, uniform on ``prior_offset_ppm`` (none for the reference group or with
-    infer_offsets off), and sigma0 b, with b log10-uniform on ``prior_noise_inflation`` (per group, for every bin, or b
-    = 1). From
-    R_g = sum r / s0^2 and S_g = sum r^2 / s0^2, the o integral is closed form and the b integral a normalized
-    trapezoid over
-    ``NUISANCE_NODES`` nodes in log10 b; the groups multiply.
+    infer_offsets off), and sigma0 b, with b log10-uniform on ``prior_noise_inflation`` (per group, for every bin, or
+    b = 1). From R_g = sum r / s0^2 and S_g = sum r^2 / s0^2, the o integral is closed form and the b integral a
+    normalized trapezoid over ``NUISANCE_NODES`` nodes in log10 b; the groups multiply.
 
     Parameters
     ----------

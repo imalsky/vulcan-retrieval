@@ -9,7 +9,7 @@ must come first. docs/method.md states what the parameters mean and what they do
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 from vulcan_forward.constants import BAR_CGS, T_OPA_MAX_K, T_OPA_MIN_K
@@ -20,17 +20,18 @@ if TYPE_CHECKING:
     from jax import Array
     from jax.typing import ArrayLike
 
-__all__ = ["T_EDGE_INSET_K", "build_tp_model", "guillot_terms", "tint_from_deep"]
+    from retrieval_framework.config_schema import Config
+
+__all__ = ["T_EDGE_INSET_K", "build_tp_model", "tint_from_deep"]
 
 # The profile is not clipped, since a clip invents an isothermal wall; the pipeline rejects a profile with a layer
-# outside
-# the engine's valid RT window inset by this, [320, 2980] K (pipeline.tp_valid).
+# outside the engine's valid RT window inset by this, [320, 2980] K (pipeline.tp_valid).
 T_EDGE_INSET_K = 20.0
 _T_MIN = float(T_OPA_MIN_K) + T_EDGE_INSET_K
 _T_MAX = float(T_OPA_MAX_K) - T_EDGE_INSET_K
 
 
-def guillot_terms(
+def _guillot_terms(
     p_bar: ArrayLike, g: float, kappa: Array | float, gamma: Array | float, f: float
 ) -> tuple[Array, Array]:
     """Return Guillot (2010) Eq. 29 split as T^4 = a Tint^4 + b Tirr^4, the algebra of exojax's ``atmprof_Guillot``.
@@ -94,12 +95,12 @@ def tint_from_deep(
     jax.Array
         Tint, K.
     """
-    a, b = guillot_terms(p_deep_bar, g, kappa, gamma, f)
+    a, b = _guillot_terms(p_deep_bar, g, kappa, gamma, f)
     tint4 = (jnp.asarray(T_deep) ** 4 - b * jnp.asarray(Tirr) ** 4) / a
     return jnp.where(tint4 > 0.0, jnp.abs(tint4), jnp.nan) ** 0.25
 
 
-def build_tp_model(cfg: Any) -> SimpleNamespace:
+def build_tp_model(cfg: Config) -> SimpleNamespace:
     """Build the T-P evaluator for this Config.
 
     The entries are ``[Tirr, log10kappa, (log10gamma), (Tint | T1bar), (log10P_rcb)]``, the order of

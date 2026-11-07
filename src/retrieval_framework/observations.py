@@ -1,8 +1,8 @@
 """Observed spectra: read the product CSVs and build the linear operators the likelihood needs.
 
 ``B`` [n_bin, n_native] is the d(lambda)-weighted trapezoidal bin average, so a binned depth's JVP is exact. ``O``
-[n_bin,
-G-1] gives each non-reference group a flat offset; ``N`` [n_bin, G] is the group indicator behind per-group noise.
+[n_bin, G-1] gives each non-reference group a flat offset; ``N`` [n_bin, G] is the group indicator behind per-group
+noise.
 
 A product CSV follows the Carter & May (2024) convention: one header line, then ``index, wave, wave_low, wave_hig,
 rp/rs, rp/rs_err_low, rp/rs_err_hih``. depth = (rp/rs)^2 and sigma = 2 (rp/rs) sigma_rprs, the two errors averaged. A
@@ -22,9 +22,10 @@ if TYPE_CHECKING:
 
     from jax.typing import ArrayLike
 
+    from retrieval_framework import config_schema as C
+
 __all__ = [
     "MIN_REAL_BINS",
-    "NOISE_PREFIX",
     "PPM",
     "build_binning_matrix",
     "build_group_design",
@@ -40,8 +41,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 PPM = 1.0e-6  # one part per million of the transit depth (offsets, sigmas)
-# The scalar noise-inflation parameter's name; the per-group ones are f"{NOISE_PREFIX}_{group}".
-NOISE_PREFIX = "noise_inflation"
+# The scalar noise-inflation parameter's name; the per-group ones are f"{_NOISE_PREFIX}_{group}".
+_NOISE_PREFIX = "noise_inflation"
 # A real-data run needs at least this many observed bins inside the model band.
 MIN_REAL_BINS = 4
 # Synthetic bin grid: resolving power, per-bin sigma, and the fractional inset from the model band edges.
@@ -86,10 +87,15 @@ def read_rprs_csv(path: Path) -> tuple[np.ndarray, ...]:
     lo = np.minimum(wlo, whi)
     hi = np.maximum(wlo, whi)
     good = np.isfinite(wl) & np.isfinite(sigma) & (sigma > 0) & (hi > lo)
+    swapped = int(np.sum(good & (wlo > whi)))
+    if swapped or not good.all():
+        logger.info(
+            "%s: dropped %d of %d rows, repaired %d swapped wl edges", path, int((~good).sum()), good.size, swapped
+        )
     return wl[good], lo[good], hi[good], depth[good], sigma[good]
 
 
-def load_real_observations(cfg: Any) -> dict[str, Any]:
+def load_real_observations(cfg: C.Config) -> dict[str, Any]:
     """Concatenate the case's product CSVs into one spectrum, clipped to the fit window.
 
     Parameters
@@ -106,8 +112,10 @@ def load_real_observations(cfg: Any) -> dict[str, Any]:
     Raises
     ------
     ValueError
-        If ``combo`` names a group not in ``obs_products``.
+        If ``obs_dir`` is unset, or ``combo`` names a group not in ``obs_products``.
     """
+    if cfg.obs_dir is None:
+        raise ValueError("load_real_observations needs obs_dir: this Config has none")
     obs_dir = Path(cfg.obs_dir)
     products = dict(cfg.obs_products)
     missing = [g for g in cfg.combo if g not in products]
@@ -207,7 +215,7 @@ def restrict_to_model_band(obs: dict[str, Any], wl_model_um: np.ndarray) -> dict
     return out
 
 
-def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> tuple[dict[str, Any], bool]:
+def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[str, Any], bool]:
     """Return the observed or synthetic bins inside the model band.
 
     Parameters
@@ -256,8 +264,7 @@ def get_observation_grid(cfg: Any, wl_model_um: np.ndarray) -> tuple[dict[str, A
 
 
 # A cell average is a faithful binning operator only when a data bin spans at least this many R1000 model bands. Two
-# admits
-# Welbanks et al. (2024)'s native 0.015 um NIRCam bins (R up to 336, about three bands).
+# admits Welbanks et al. (2024)'s native 0.015 um NIRCam bins (R up to 336, about three bands).
 _LSF_R_SAFETY = 2.0
 
 
@@ -422,9 +429,9 @@ def noise_map(names: Iterable[str], group_per_bin: ArrayLike) -> tuple[int, np.n
         If the per-group parameters are not contiguous, or a bin's group has none.
     """
     names = list(names)
-    if NOISE_PREFIX in names:
-        return names.index(NOISE_PREFIX), None
-    per = [(i, n[len(NOISE_PREFIX) + 1 :]) for i, n in enumerate(names) if n.startswith(NOISE_PREFIX + "_")]
+    if _NOISE_PREFIX in names:
+        return names.index(_NOISE_PREFIX), None
+    per = [(i, n[len(_NOISE_PREFIX) + 1 :]) for i, n in enumerate(names) if n.startswith(_NOISE_PREFIX + "_")]
     if not per:
         return None
     idx = [i for i, _ in per]

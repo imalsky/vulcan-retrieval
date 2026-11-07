@@ -42,9 +42,11 @@ export PIP_CACHE_DIR="${VULCAN_SCRATCH}/cache/pip"
 export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg"
 export TMPDIR="${VULCAN_SCRATCH}/tmp"
 mkdir -p "${PIP_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TMPDIR}"
-module purge 2>/dev/null || true
-module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
-module load miniconda3/gh2 2>/dev/null || true
+set +u   # the module scripts read unset variables; a failing module command still stops the job
+module purge
+module use -a /swbuild/analytix/tools/modulefiles
+module load miniconda3/gh2
+set -u
 CONDA_BASE="$(conda info --base)"
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-pyt2_8_gh}"
@@ -65,8 +67,11 @@ python -c "import pandas" 2>/dev/null || python -m pip install --user -q pandas
 # statically.
 (
   export JAX_PLATFORMS=cpu   # the build imports jax for its include dir only
-  module load gcc 2>/dev/null || true
-  module load cuda 2>/dev/null || true
+  set +u
+  # A node may already have nvcc: the check below decides, and a failed load says so.
+  module load gcc || echo "WARNING: module load gcc failed" >&2
+  module load cuda || echo "WARNING: module load cuda failed" >&2
+  set -u
   command -v nvcc >/dev/null || { echo "ERROR: no nvcc. Pick a toolkit: module avail cuda"; exit 1; }
   which nvcc; nvcc --version | tail -1
   # Both twins: the ffi test fixture and VULCAN3_SOLVER=ffi load the CPU

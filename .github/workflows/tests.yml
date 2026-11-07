@@ -61,7 +61,7 @@ jobs:
         run: |
           # pyyaml: vulcan3 is installed --no-deps below but its
           # config loader imports yaml at collection time
-          pip install "jax>=0.6" numpy scipy pytest pyyaml
+          pip install "jax>=0.6" numpy scipy pytest pytest-cov pyyaml
           # tests/test_run_nautilus.py; h5py is nautilus's checkpoint format (the
           # nautilus extra), which nautilus-sampler does not install itself
           pip install "nautilus-sampler==1.0.6" "h5py>=3"
@@ -71,5 +71,7 @@ jobs:
           pip install --no-deps "vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@main"
           pip install --no-deps "vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@main"
           pip install --no-deps -e .
-      - name: Run stub-pipeline unit tests
-        run: python -m pytest tests -q -ra
+      # The 80 % floor is pyproject's fail_under. retrieval_forward and most of tp_profile need exojax and count as
+      # uncovered here; nothing is omitted.
+      - name: Run stub-pipeline unit tests, with the coverage floor
+        run: python -m pytest tests -q -ra --cov --cov-report=term

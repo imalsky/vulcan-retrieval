@@ -12,9 +12,12 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `tp_profile` | The Guillot T-P evaluator |
 | `retrieval_forward` | theta to the native transit depth, on the engine in `vulcan-forward` |
 | `pipeline` | The u-space posterior and the batched likelihood evaluators |
+| `nuisance` | The integrated offsets and inflations |
 | `provenance` | Code and data identity, the target manifest and digest |
 | `run_nautilus` | The sampler driver |
-| `nautilus_report` | Certificate and figures of a finished run |
+| `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
+| `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
+| `report_figures` | The three figures |
 | `validate_env` | Environment validation, run first by every job |
 | `forward/config` | This repository's paths; importing it hands the engine its data root |
 
@@ -59,6 +62,11 @@ and the inflation(s) out at the same priors: the offset integral is closed form,
 
 ## Sampler
 
+A draw that does not certify within `count_max` is rejected, with log L = -inf. A column frozen at `dt_min` is different:
+each chunk's `termination_reason` is checked right after the evaluator and the run stops with `DtMinFrozenError`, since it
+is a solver failure rather than a verdict on the draw. `nautilus_report` and the forward checks re-solve finished runs'
+draws and stop the same way; `nautilus_report --spectra 0` still writes the certificate and the figures that need no solve.
+
 Stock nautilus-sampler 1.0.6 (Lange 2023) with its default networks, `N_NETWORKS` ReLU MLPs, $n_{\rm update} = n_{\rm live}/2$,
 exploration until `f_live = F_LIVE`, bounds enlarged by `ENLARGE_PER_DIM`, and the exploration phase discarded
 (`DISCARD_EXPLORATION`, the unbiased estimator; keeping it biased log Z by about -0.2 on surrogates of the W39b posterior).
@@ -79,7 +87,7 @@ Every certified column becomes an anchor keyed by its unit-cube chemistry and T-
 from its nearest anchor; batches before the first certified column run cold. The certified state and which draws are rejected
 then depend on the evaluation order at the convergence tolerance. Anchors are written inside the likelihood call, before
 nautilus checkpoints the batch, so a job killed in between resumes by redrawing that batch, and the tally counts it twice.
-The set is never pruned: 44 KB per certified column, on disk and in memory.
+The set is never pruned: `8 nz ni` bytes per certified column (74 KB at `nz` 100 and 93 species), on disk and in memory.
 
 ### Startup check
 
@@ -101,7 +109,7 @@ warm-start counts summed over jobs. A finished run adds `nautilus_posterior.npz`
 `derived_quantities` gives weighted 16/50/84% quantiles of: metallicity as O/H and as total metals (C and S at their own
 knobs, with the Lodders 2020 photospheric abundances), C/O, S/O, the Kzz factor and the absolute log10 Kzz at 1 mbar, the
 weight near the prior floor, on a case with a ceiling the weight above it and the posterior truncated at it, T at the deep
-level and $T_{\rm int}$, and the integrated offsets and inflations. `conditioning_map` shows where the rejected draws sit.
+level and $T_{\rm int}$, and the integrated offsets and inflations. `_conditioning_map` shows where the rejected draws sit.
 
 Model spectra (`--spectra N`) cost the pipeline build and compile plus one batched cold two-stage solve of N columns and N RTs,
 about one likelihood batch of the run at width N. A draw whose cold solve does not certify is left out of the bands and counted

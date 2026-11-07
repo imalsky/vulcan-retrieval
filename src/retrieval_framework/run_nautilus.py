@@ -13,20 +13,17 @@ lanes.
 from __future__ import annotations
 
 import argparse
-import atexit
-import ctypes
 import json
 import logging
-import os
 import shutil
 import time
 from dataclasses import replace
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
 from retrieval_framework import config_schema as C
+from retrieval_framework.batch_profiler import BatchProfiler
 from retrieval_framework.run_setup import (
     check_run_dir,
     export_runtime,
@@ -38,12 +35,13 @@ from retrieval_framework.run_setup import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from pathlib import Path
     from types import SimpleNamespace
 
     import nautilus
     from jax.typing import ArrayLike
 
-__all__ = ["Anchors", "BatchProfiler", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
+__all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
 
 log = logging.getLogger("retrieval")
 
@@ -57,6 +55,15 @@ FFI_BLOCKS_PER_SM = 3
 # In-window cold draws a log10 Kzz decade needs before none certifying refuses the
 # run: 0 of 30 bounds that decade's certified fraction below 10% (95%).
 STARTUP_MIN_DRAWS = 30
+TALLY_FILE = "nautilus_tally.json"
+
+
+def _atomic_savez(path: Path, **arrays: Any) -> None:
+    """Write an npz under a temporary name and rename it, so a kill leaves no partial file."""
+    tmp = path.with_name(f".{path.name}.part")
+    with tmp.open("wb") as fh:
+        np.savez(fh, **arrays)
+    tmp.replace(path)
 
 
 def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray, counts: dict) -> list[str]:
@@ -111,8 +118,8 @@ def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray,
 class Anchors:
     """The certified columns so far: unit-cube coordinates, the column and its reference composition.
 
-    One npz per added batch in ``folder``; an existing folder is reloaded on resume. A file with two-wide references,
-    written before the sulfur knob, reads as s_o = 0.
+    One npz per added batch in ``folder``; an existing folder is reloaded on resume. A file with two-wide references
+    reads as s_o = 0.
     """
 
     N_REF = 3
@@ -156,11 +163,7 @@ class Anchors:
             The reference compositions.
         """
         if len(z):
-            f = self.folder / f"anchors_{len(self.parts):05d}.npz"
-            tmp = f.with_name(f".{f.name}.part")
-            with tmp.open("wb") as fh:
-                np.savez(fh, z=z, Y=Y, refs=refs)
-            tmp.replace(f)
+            _atomic_savez(self.folder / f"anchors_{len(self.parts):05d}.npz", z=z, Y=Y, refs=refs)
             self._append(z, Y, refs)
 
     def nearest(self, zq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -203,63 +206,91 @@ class Anchors:
         )
 
 
-class BatchProfiler:
-    """Environment-gated profiling hook, inert unless VULCAN_PROFILE_BATCH is set.
+class _Rejections(NamedTuple):
+    """A chunk's rejected rows, one mask per class."""
 
-    VULCAN_PROFILE_BATCH=k calls cudaProfilerStart just before likelihood batch k of this process and
-    cudaProfilerStop when batch
-    k+1 starts or at exit. Batch 1 compiles the cold evaluator and the first warm batch compiles the warm one, so k =
-    3 is the
-    first steady warm batch of a fresh run. Meant for nsys --capture-range=cudaProfilerApi --capture-range-end=stop.
+    tp_out: np.ndarray
+    exhausted: np.ndarray
+    stalled: np.ndarray
+    nonfinite: np.ndarray
+
+    @property
+    def dead(self) -> np.ndarray:
+        """Return the rows of any class."""
+        return self.tp_out | self.exhausted | self.stalled | self.nonfinite
+
+    def code(self) -> np.ndarray:
+        """Return each row's class: 0 T-P out, 1 exhausted, 2 stalled, 3 otherwise."""
+        return np.where(self.tp_out, 0, np.where(self.exhausted, 1, np.where(self.stalled, 2, 3)))
+
+
+def _classify(
+    tp_in: np.ndarray, conv: np.ndarray, acc: np.ndarray, L: np.ndarray, count_max: int, reject_below: float
+) -> _Rejections:
+    """Sort a chunk's rows into the rejection classes.
+
+    Solver state first: the warm evaluator already floors L on a stalled or exhausted exit, which is not a non-finite
+    forward. A solve certified at cap or cap + 1 is kept.
     """
-
-    def __init__(self) -> None:
-        self.k = int(os.environ.get("VULCAN_PROFILE_BATCH", "0") or 0)
-        self.n = 0
-        self.active = False
-        if self.k <= 0:
-            return
-        self._rt = self._cudart()
-        atexit.register(self.stop)
-        log.info("profile: capture batch %s (cudaProfilerStart/Stop)", self.k)
-
-    @staticmethod
-    def _cudart() -> ctypes.CDLL:
-        """Load the CUDA runtime of the jax wheels, or the system's."""
-        paths = []
-        try:
-            import nvidia.cuda_runtime as m  # the CUDA runtime of the jax wheels
-
-            paths = [str(Path(p) / "lib" / "libcudart.so.12") for p in m.__path__]
-        except ImportError:
-            pass
-        for p in [*paths, "libcudart.so.12", "libcudart.so"]:
-            try:
-                return ctypes.CDLL(p)
-            except OSError:
-                continue
-        raise OSError("VULCAN_PROFILE_BATCH: no libcudart to call cudaProfilerStart from")
-
-    def stop(self) -> None:
-        """Stop the profiler if it is running."""
-        if self.active:
-            rc = int(self._rt.cudaProfilerStop())
-            self.active = False
-            log.info("profile: cudaProfilerStop after batch %s (rc %s)", self.k, rc)
-
-    def batch_begin(self) -> None:
-        """Count one evaluator call; the previous batch's device work is complete here."""
-        self.n += 1
-        if self.k and self.n == self.k + 1:
-            self.stop()
-        if self.k and self.n == self.k:
-            rc = int(self._rt.cudaProfilerStart())
-            self.active = True
-            log.info("profile: cudaProfilerStart before batch %s (rc %s)", self.k, rc)
+    tp_out = ~tp_in
+    exhausted = ~tp_out & ~conv & (acc >= count_max)
+    stalled = ~tp_out & ~exhausted & ~conv
+    nonfinite = ~tp_out & ~exhausted & conv & (~np.isfinite(L) | (L <= reject_below))
+    return _Rejections(tp_out, exhausted, stalled, nonfinite)
 
 
-# size-limit-ok: one chunk's bookkeeping, in the order a rejection is classified and logged
-def make_loglike(  # noqa: C901  # one branch per log the run keeps
+class _ChunkLogs:
+    """What a run keeps per chunk: the tally, the batch log, and the rejected and nuisance files."""
+
+    def __init__(self, tally: dict, batch_log: Path | None, rejects: Path | None, nuisance: Path | None) -> None:
+        self.tally, self.batch_log, self.rejects, self.nuisance = tally, batch_log, rejects, nuisance
+        self.n_rej = self.n_nui = 0
+        if rejects is not None:
+            rejects.mkdir(parents=True, exist_ok=True)
+            self.n_rej = len(list(rejects.glob("rejected_*.npz")))
+        if nuisance is not None:
+            nuisance.mkdir(parents=True, exist_ok=True)
+            self.n_nui = len(list(nuisance.glob("nuisance_*.npz")))
+
+    def write(
+        self, z: np.ndarray, log_l: np.ndarray, rej: _Rejections, acc: np.ndarray, warm: bool, t: float, nuis: Any
+    ) -> None:
+        """Log one chunk of ``len(z)`` rows; ``nuis`` holds the evaluator's group statistics, one row per input row."""
+        dead = rej.dead
+        mode = "warm" if warm else "cold"
+        if self.batch_log is not None:
+            with self.batch_log.open("a") as fh:
+                fh.write(json.dumps({"t": round(t, 2), "mode": mode, "acc": acc.tolist()}) + "\n")
+        if self.rejects is not None and dead.any():
+            _atomic_savez(
+                self.rejects / f"rejected_{self.n_rej:05d}.npz",
+                z=z[dead],
+                cls=rej.code()[dead].astype(np.int8),
+                acc=acc[dead].astype(np.int64),
+                warm=np.int8(warm),
+            )
+            self.n_rej += 1
+        if self.nuisance is not None and not dead.all():
+            stats = np.asarray(nuis, np.float64)[: len(z)]
+            _atomic_savez(
+                self.nuisance / f"nuisance_{self.n_nui:05d}.npz", z=z[~dead], log_l=log_l[~dead], stats=stats[~dead]
+            )
+            self.n_nui += 1
+        for key, v in (
+            ("n_eval", len(z)),
+            ("tp_out", rej.tp_out.sum()),
+            ("exhausted", rej.exhausted.sum()),
+            ("stalled", rej.stalled.sum()),
+            ("nonfinite", rej.nonfinite.sum()),
+            (f"n_{mode}", len(z)),
+            (f"{mode}_certified", (~dead).sum()),
+            (f"{mode}_steps_certified", acc[~dead].sum()),
+        ):
+            self.tally[key] = self.tally.get(key, 0) + int(v)
+
+
+# size-limit-ok: 44 of its lines are the signature and numpy docs of nine arguments; the rest is one closure
+def make_loglike(
     pipe: SimpleNamespace,
     n_batch: int,
     tally: dict,
@@ -312,24 +343,17 @@ def make_loglike(  # noqa: C901  # one branch per log the run keeps
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
-    n_rej = n_nui = None
-    if rejects is not None:
-        rejects.mkdir(parents=True, exist_ok=True)
-        n_rej = [len(list(rejects.glob("rejected_*.npz")))]
-    if nuisance is not None:
-        nuisance.mkdir(parents=True, exist_ok=True)
-        n_nui = [len(list(nuisance.glob("nuisance_*.npz")))]
+    logs = _ChunkLogs(tally, batch_log, rejects, nuisance)
     fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
-    pending = [kzz_ref is not None]
-    if pending[0]:
+    if kzz_ref is not None:
         theta_of = jax.jit(jax.vmap(pipe.theta_from_u))
         i_kzz = list(pipe.names).index("lnKzz")
 
-    # size-limit-ok: one chunk's bookkeeping, in the order a rejection is classified and logged
     def loglike(Z: np.ndarray) -> np.ndarray:
         """Evaluate unit-cube points in chunks of ``n_batch``."""
+        nonlocal kzz_ref  # cleared once the first chunk has passed the startup check
         Z = np.atleast_2d(np.asarray(Z, np.float64))
         out = np.empty(len(Z))
         for i in range(0, len(Z), n_batch):
@@ -344,82 +368,34 @@ def make_loglike(  # noqa: C901  # one branch per log the run keeps
             if prof is not None:
                 prof.batch_begin()
             t0 = time.perf_counter()
-            warm = anchors is not None and len(anchors) > 0
-            if anchors is not None and warm:
+            warm = False
+            if anchors is not None and len(anchors) > 0:
+                warm = True
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
                 L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype), jnp.asarray(rw, pipe.dtype), act)
             else:
                 L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
+            P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
-            tp_out = ~tp_in[:m]
-            # Solver state first: the warm evaluator already floors L on a stalled or exhausted exit, which is not a
-            # non-finite forward. A solve certified at cap or cap + 1 is kept.
-            exhausted = ~tp_out & ~conv & (acc >= count_max)
-            stalled = ~tp_out & ~exhausted & ~conv
-            nonfinite = ~tp_out & ~exhausted & conv & (~np.isfinite(L) | (L <= P.REJECT_BELOW))
-            dead = tp_out | exhausted | stalled | nonfinite
+            rej = _classify(tp_in[:m], conv, acc, L, count_max, P.REJECT_BELOW)
+            dead = rej.dead
             out[i : i + m] = np.where(dead, -np.inf, L)
-            if pending[0]:
+            if kzz_ref is not None:
                 th = np.asarray(jax.device_get(theta_of(Uj)), np.float64)[:m]
                 counts = {
-                    "T-P out": tp_out.sum(),
-                    "exhausted": exhausted.sum(),
-                    "stalled": stalled.sum(),
-                    "non-finite": nonfinite.sum(),
+                    "T-P out": rej.tp_out.sum(),
+                    "exhausted": rej.exhausted.sum(),
+                    "stalled": rej.stalled.sum(),
+                    "non-finite": rej.nonfinite.sum(),
                 }
-                log10_ref = np.log10(kzz_ref)  # type: ignore[arg-type]  # pending implies kzz_ref
-                for line in startup_check(log10_ref + th[:, i_kzz] / np.log(10.0), ~tp_out, ~dead, counts):
+                log10_kzz = np.log10(kzz_ref) + th[:, i_kzz] / np.log(10.0)
+                for line in startup_check(log10_kzz, ~rej.tp_out, ~dead, counts):
                     log.info(line)
-                pending[0] = False
-            if batch_log is not None:
-                with batch_log.open("a") as fh:
-                    fh.write(
-                        json.dumps(
-                            {
-                                "t": round(time.perf_counter() - t0, 2),
-                                "mode": "warm" if warm else "cold",
-                                "acc": acc.tolist(),
-                            }
-                        )
-                        + "\n"
-                    )
-            if n_rej is not None and rejects is not None and dead.any():
-                cls = np.where(tp_out, 0, np.where(exhausted, 1, np.where(stalled, 2, 3)))
-                f = rejects / f"rejected_{n_rej[0]:05d}.npz"
-                tmp = f.with_name(f".{f.name}.part")
-                with tmp.open("wb") as fh:
-                    np.savez(
-                        fh,
-                        z=Zc[:m][dead],
-                        cls=cls[dead].astype(np.int8),
-                        acc=acc[dead].astype(np.int64),
-                        warm=np.int8(warm),
-                    )
-                tmp.replace(f)
-                n_rej[0] += 1
-            if n_nui is not None and nuisance is not None and not dead.all():
-                stats = np.asarray(jax.device_get(st.nuis), np.float64)[:m]
-                f = nuisance / f"nuisance_{n_nui[0]:05d}.npz"
-                tmp = f.with_name(f".{f.name}.part")
-                with tmp.open("wb") as fh:
-                    np.savez(fh, z=Zc[:m][~dead], log_l=out[i : i + m][~dead], stats=stats[~dead])
-                tmp.replace(f)
-                n_nui[0] += 1
-            mode = "warm" if warm else "cold"
-            for key, v in (
-                ("n_eval", m),
-                ("tp_out", tp_out.sum()),
-                ("exhausted", exhausted.sum()),
-                ("stalled", stalled.sum()),
-                ("nonfinite", nonfinite.sum()),
-                (f"n_{mode}", m),
-                (f"{mode}_certified", (~dead).sum()),
-                (f"{mode}_steps_certified", acc[~dead].sum()),
-            ):
-                tally[key] = tally.get(key, 0) + int(v)
+                kzz_ref = None
+            logs.write(Zc[:m], out[i : i + m], rej, acc, warm, time.perf_counter() - t0, st.nuis if nuisance else None)
             if warm:
                 tally["warm_anchor_dist_sum"] = tally.get("warm_anchor_dist_sum", 0.0) + float(dist[:m].sum())
             if anchors is not None:
@@ -542,117 +518,54 @@ def make_sampler(
     )
 
 
-# size-limit-ok: one run, from the runtime export to the certificate
-def main(argv: list[str] | None = None) -> None:
-    """Run one specification, from the runtime export to the certificate.
+def _check_resume(digest_path: Path, want: str, ckpt_name: str) -> None:
+    """Refuse a resume whose run directory holds another target's identity, or none."""
+    have = digest_path.read_text().strip() if digest_path.exists() else ""
+    if have != want:
+        raise RuntimeError(
+            f"nautilus resume refused: {ckpt_name} belongs to a different "
+            f"target ({have or '<absent>'} vs this run's {want}). Restore "
+            "the original target and settings or use a fresh output "
+            "directory."
+        )
 
-    Parameters
-    ----------
-    argv : list of str, optional
-        The arguments; default ``sys.argv``.
 
-    Raises
-    ------
-    RuntimeError
-        If a resume would cross a change of target or sampler settings.
-    """
-    t_start = time.time()
-    ap = argparse.ArgumentParser(description="nautilus nested sampling of one run specification")
-    ap.add_argument("spec", help="the run specification, runs/<case>/<name>.yaml")
-    ap.add_argument("--resume", action="store_true", help="continue the checkpoint in the run's output directory")
-    ap.add_argument("--dry-run", action="store_true", help="print the resolved settings and exit without importing jax")
-    args = ap.parse_args(argv)
+def _starts(warm: bool) -> str:
+    """Name the start policy."""
+    return "anchored warm (growing)" if warm else "cold"
 
-    spec = load_spec(args.spec)
-    cfg = spec.cfg
-    if args.dry_run:
-        print(C.describe_config(cfg, spec.name))
-        print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
-        return
-    export_runtime(spec.runtime)
-    C.export_network(cfg)
-    lanes = int(cfg.cold_lanes)
-    if spec.runtime.solver == "ffi":
-        lanes *= FFI_BLOCKS_PER_SM
-    cfg = replace(cfg, cold_lanes=lanes)
-    out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
-    ckpt = out / "nautilus_checkpoint.hdf5"
-    resume = bool(args.resume)
-    check_run_dir(out, resume)
-    out.mkdir(parents=True, exist_ok=True)
-    setup_logging(out / "run.log")
+
+def _log_settings(spec: Any, cfg: C.Config, n_batch: int) -> None:
+    """Log the run's sampler settings and the resolved Config."""
     n_live = int(spec.sampler.n_live)
-    n_update = n_live // 2
-    n_eff = int(spec.sampler.n_eff)
-    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * lanes)
-    warm = bool(spec.sampler.warm_starts)
-    log.info("spec=%s out_dir=%s", spec.path, out)
+    log.info("spec=%s out_dir=%s", spec.path, cfg.out_dir)
     log.info(
         "nautilus: n_live=%s n_update=%s n_eff=%s n_batch=%s (cold_lanes=%s) f_live=%s enlarge_per_dim=%s "
         "networks=%sx relu (nautilus default) discard_exploration=%s seed=%s starts=%s",
         n_live,
-        n_update,
-        n_eff,
+        n_live // 2,
+        int(spec.sampler.n_eff),
         n_batch,
-        lanes,
+        cfg.cold_lanes,
         F_LIVE,
         ENLARGE_PER_DIM,
         N_NETWORKS,
         DISCARD_EXPLORATION,
         cfg.seed,
-        "anchored warm (growing)" if warm else "cold",
+        _starts(bool(spec.sampler.warm_starts)),
     )
     log.info(C.describe_config(cfg, spec.name))
 
-    import jax
-    import nautilus
 
-    from retrieval_framework import pipeline as P
+def _saved_loglike(
+    pipe: SimpleNamespace, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Return the run's log-likelihood, which saves the tally after each call, atomically."""
+    from retrieval_framework.nautilus_report import _kzz_at_ref
 
-    log.info(
-        "jax backend=%s devices=%s nautilus %s (stock, %s)",
-        jax.default_backend(),
-        jax.devices(),
-        nautilus.__version__,
-        nautilus.__file__,
-    )
-    log.info("hardware: %s", C.hardware_profile())
-
-    t0 = time.perf_counter()
-    pipe = P.build_pipeline(cfg)
-    log.info("Built pipeline in %.1fs | n_dim=%s: %s", time.perf_counter() - t0, pipe.n_dim, pipe.names)
-    obs_save = set_observations(cfg, pipe, P)
-
-    # Before anything in the run directory is written. The start policy, the batch width and the sampler settings
-    # (nautilus restores none of them) are part of the target, so a resume cannot switch them.
-    digest_path = out / "target_digest.txt"
-    tally_path = out / "nautilus_tally.json"
-    want = (
-        f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
-        f"|n_batch={n_batch}|n_live={n_live}|n_update={n_update}|f_live={F_LIVE}"
-        f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock"
-    )
-    if resume:
-        have = digest_path.read_text().strip() if digest_path.exists() else ""
-        if have != want:
-            raise RuntimeError(
-                f"nautilus resume refused: {ckpt.name} belongs to a different "
-                f"target ({have or '<absent>'} vs this run's {want}). Restore "
-                "the original target and settings or use a fresh output "
-                "directory."
-            )
-    write_run_identity(cfg, pipe, spec, obs_save)
-    shutil.copy(spec.path, out / "spec.yaml")
-    if spec.base is not None:
-        shutil.copy(spec.base, out / "spec_base.yaml")
-    digest_path.write_text(want + "\n")
-
-    tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info("nautilus: %s anchor column(s) loaded", len(anchors))
-    from retrieval_framework.nautilus_report import _kzz_at_ref
-
     kzz_ref = (
         None if resume else _kzz_at_ref({"vulcan_cfg_name": cfg.vulcan_cfg_name, "cfg_overrides": cfg.cfg_overrides})
     )
@@ -667,42 +580,31 @@ def main(argv: list[str] | None = None) -> None:
         nuisance=out / "nuisance" if pipe.nuisance is not None else None,
         kzz_ref=kzz_ref,
     )
+    tally_path = out / TALLY_FILE
 
     def loglike_saved(Z: np.ndarray) -> np.ndarray:
-        """Evaluate and save the tally, atomically."""
+        """Evaluate and save the tally."""
         L = like(Z)
         tmp = tally_path.with_name(f".{tally_path.name}.part")
         tmp.write_text(json.dumps(tally, indent=2) + "\n")
         tmp.replace(tally_path)
         return L
 
-    sampler = make_sampler(loglike_saved, pipe.n_dim, n_live, n_batch, int(cfg.seed), filepath=str(ckpt), resume=resume)
-    budget = float(cfg.walltime_seconds)
-    timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
-    log.info("nautilus: starting at n_like=%s; timeout %.2f h", sampler.n_like, timeout / 3600)
-    t0 = time.perf_counter()
-    done = sampler.run(
-        f_live=F_LIVE, n_eff=n_eff, discard_exploration=DISCARD_EXPLORATION, timeout=timeout, verbose=True
-    )
-    log.info(
-        "nautilus: %s after %.2f h | n_like=%s | log_z=%.3f | n_eff=%.0f | tally=%s",
-        "finished" if done else "stopped at the wall budget",
-        (time.perf_counter() - t0) / 3600,
-        sampler.n_like,
-        sampler.log_z,
-        sampler.n_eff,
-        tally,
-    )
-    if not done:
-        log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is %s).", ckpt)
-        return
+    return loglike_saved
+
+
+def _write_posterior(sampler: nautilus.Sampler, pipe: SimpleNamespace, out: Path, want: str, seed: int) -> None:
+    """Write nautilus_posterior.npz: the weighted points, the equal-weight samples and any integrated nuisances."""
+    import jax
+
+    from retrieval_framework import pipeline as P
 
     z, log_w, log_l = sampler.posterior()
     z_eq, _, log_l_eq = sampler.posterior(equal_weight=True)
     extra = {}
     if pipe.nuisance is not None:
         nu, nu_eq = nuisance_posterior(
-            pipe, out / "nuisance", [(z, log_l), (z_eq, log_l_eq)], np.random.default_rng(int(cfg.seed) + 2)
+            pipe, out / "nuisance", [(z, log_l), (z_eq, log_l_eq)], np.random.default_rng(seed + 2)
         )
         extra = {
             "nuisance_names": np.asarray(pipe.nuisance.names, dtype="<U64"),
@@ -725,22 +627,32 @@ def main(argv: list[str] | None = None) -> None:
         n_like=np.asarray(sampler.n_like),
         **extra,
     )
+
+
+def _write_summary(
+    sampler: nautilus.Sampler, pipe: SimpleNamespace, spec: Any, out: Path, n_batch: int, tally: dict
+) -> None:
+    """Write nautilus_summary.json."""
+    import nautilus
+
+    n_live = int(spec.sampler.n_live)
+    warm = bool(spec.sampler.warm_starts)
     summary = {
         "logZ_box": float(sampler.log_z),
         "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff),
         "n_live": n_live,
         "n_batch": n_batch,
-        "n_update": n_update,
+        "n_update": n_live // 2,
         "f_live": F_LIVE,
         "enlarge_per_dim": ENLARGE_PER_DIM,
         "networks": f"{N_NETWORKS}x relu (nautilus default)",
         "discard_exploration": DISCARD_EXPLORATION,
         "nautilus": f"{nautilus.__version__} (stock)",
-        "starts": "anchored warm (growing)" if warm else "cold",
+        "starts": _starts(warm),
         "rejections_and_starts": tally,
         "spec": spec.name,
-        "seed": int(cfg.seed),
+        "seed": int(spec.cfg.seed),
         "chem_rtol": pipe.fwd.chem_rtol,
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
         + (
@@ -751,6 +663,128 @@ def main(argv: list[str] | None = None) -> None:
         ),
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+
+def _log_versions() -> None:
+    """Log the backend, the sampler and the hardware; the first import of jax, so after the runtime export."""
+    import jax
+    import nautilus
+
+    log.info(
+        "jax backend=%s devices=%s nautilus %s (stock, %s)",
+        jax.default_backend(),
+        jax.devices(),
+        nautilus.__version__,
+        nautilus.__file__,
+    )
+    log.info("hardware: %s", C.hardware_profile())
+
+
+def _copy_specs(spec: Any, out: Path) -> None:
+    """Keep the run's spec, and its base if any, in the run directory."""
+    shutil.copy(spec.path, out / "spec.yaml")
+    if spec.base is not None:
+        shutil.copy(spec.base, out / "spec_base.yaml")
+
+
+def _sample(sampler: nautilus.Sampler, n_eff: int, timeout: float, tally: dict) -> bool:
+    """Run the sampler to its stopping rule or the timeout, and log where it ended; True if it finished."""
+    log.info("nautilus: starting at n_like=%s; timeout %.2f h", sampler.n_like, timeout / 3600)
+    t0 = time.perf_counter()
+    done = sampler.run(
+        f_live=F_LIVE, n_eff=n_eff, discard_exploration=DISCARD_EXPLORATION, timeout=timeout, verbose=True
+    )
+    log.info(
+        "nautilus: %s after %.2f h | n_like=%s | log_z=%.3f | n_eff=%.0f | tally=%s",
+        "finished" if done else "stopped at the wall budget",
+        (time.perf_counter() - t0) / 3600,
+        sampler.n_like,
+        sampler.log_z,
+        sampler.n_eff,
+        tally,
+    )
+    return bool(done)
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the command line."""
+    ap = argparse.ArgumentParser(description="nautilus nested sampling of one run specification")
+    ap.add_argument("spec", help="the run specification, runs/<case>/<name>.yaml")
+    ap.add_argument("--resume", action="store_true", help="continue the checkpoint in the run's output directory")
+    ap.add_argument("--dry-run", action="store_true", help="print the resolved settings and exit without importing jax")
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Run one specification, from the runtime export to the certificate.
+
+    Refuses a resume across a change of target or sampler settings.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        The arguments; default ``sys.argv``.
+    """
+    t_start = time.time()
+    args = _parse_args(argv)
+    spec = load_spec(args.spec)
+    cfg = spec.cfg
+    if args.dry_run:
+        print(C.describe_config(cfg, spec.name))
+        print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
+        return
+    export_runtime(spec.runtime)
+    C.export_network(cfg)
+    lanes = int(cfg.cold_lanes)
+    if spec.runtime.solver == "ffi":
+        lanes *= FFI_BLOCKS_PER_SM
+    cfg = replace(cfg, cold_lanes=lanes)
+    out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
+    ckpt = out / "nautilus_checkpoint.hdf5"
+    resume = bool(args.resume)
+    check_run_dir(out, resume)
+    out.mkdir(parents=True, exist_ok=True)
+    setup_logging(out / "run.log")
+    n_live = int(spec.sampler.n_live)
+    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * lanes)
+    warm = bool(spec.sampler.warm_starts)
+    _log_settings(spec, cfg, n_batch)
+    _log_versions()
+
+    from retrieval_framework import pipeline as P
+
+    t0 = time.perf_counter()
+    pipe = P.build_pipeline(cfg)
+    log.info("Built pipeline in %.1fs | n_dim=%s: %s", time.perf_counter() - t0, pipe.n_dim, pipe.names)
+    obs_save = set_observations(cfg, pipe, P)
+
+    # Before anything in the run directory is written. The start policy, the batch width and the sampler settings
+    # (nautilus restores none of them) are part of the target, so a resume cannot switch them.
+    digest_path = out / "target_digest.txt"
+    want = (
+        f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
+        f"|n_batch={n_batch}|n_live={n_live}|n_update={n_live // 2}|f_live={F_LIVE}"
+        f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock"
+    )
+    if resume:
+        _check_resume(digest_path, want, ckpt.name)
+    write_run_identity(cfg, pipe, spec, obs_save)
+    _copy_specs(spec, out)
+    digest_path.write_text(want + "\n")
+
+    tally_path = out / TALLY_FILE
+    tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
+    like = _saved_loglike(pipe, cfg, out, n_batch, warm, resume, tally)
+    sampler = make_sampler(like, pipe.n_dim, n_live, n_batch, int(cfg.seed), filepath=str(ckpt), resume=resume)
+    budget = float(cfg.walltime_seconds)
+    timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
+    done = _sample(sampler, int(spec.sampler.n_eff), timeout, tally)
+    if not done:
+        log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is %s).", ckpt)
+        return
+
+    _write_posterior(sampler, pipe, out, want, int(cfg.seed))
+    _write_summary(sampler, pipe, spec, out, n_batch, tally)
     log.info("wrote %s and nautilus_summary.json", out / "nautilus_posterior.npz")
     from retrieval_framework.nautilus_report import write_certificate
 

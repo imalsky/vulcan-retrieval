@@ -43,12 +43,10 @@ __all__ = [
     "load_spec",
     "main",
     "output_base",
-    "output_truth",
     "runtime_env_updates",
     "set_observations",
     "setup_logging",
     "spec_digest",
-    "write_config_json",
     "write_run_identity",
 ]
 
@@ -521,7 +519,7 @@ def write_run_identity(cfg: C.Config, pipe: SimpleNamespace, spec: Spec, obs_sav
     """
     from retrieval_framework import pipeline as P, provenance
 
-    write_config_json(cfg, pipe, spec)
+    _write_config_json(cfg, pipe, spec)
     out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
     P.save_npz(out / "observations.npz", **obs_save)
     # The canonical manifest, not only its hash: a refused resume names the
@@ -533,18 +531,8 @@ def write_run_identity(cfg: C.Config, pipe: SimpleNamespace, spec: Spec, obs_sav
     )
 
 
-def write_config_json(cfg: C.Config, pipe: SimpleNamespace, spec: Spec) -> None:
-    """Write config.json: the Config, the spec, the parameter table and the hardware.
-
-    Parameters
-    ----------
-    cfg : config_schema.Config
-        The run's configuration.
-    pipe : types.SimpleNamespace
-        The pipeline.
-    spec : Spec
-        The specification.
-    """
+def _write_config_json(cfg: C.Config, pipe: SimpleNamespace, spec: Spec) -> None:
+    """Write config.json: the Config, the spec, the parameter table and the hardware."""
     d = asdict(cfg)
     d.update(
         {
@@ -558,7 +546,7 @@ def write_config_json(cfg: C.Config, pipe: SimpleNamespace, spec: Spec) -> None:
             "inferred_param_prior_types": pipe.prior_types,
             "inferred_param_prior_lo": pipe.param_prior_lo.tolist(),
             "inferred_param_prior_hi": pipe.param_prior_hi.tolist(),
-            "inferred_param_truth": output_truth(cfg, pipe).tolist(),
+            "inferred_param_truth": _output_truth(cfg, pipe).tolist(),
             "instrument_groups": pipe.groups,
             "n_obs_bins": int(pipe.n_bin),
             "real_bins": bool(pipe.real_bins),
@@ -617,21 +605,8 @@ def set_observations(cfg: C.Config, pipe: SimpleNamespace, P: ModuleType) -> dic
     return obs_save
 
 
-def output_truth(cfg: C.Config, pipe: SimpleNamespace) -> np.ndarray:
-    """Return the truth vector for outputs: the injected values, or NaN for real data.
-
-    Parameters
-    ----------
-    cfg : config_schema.Config
-        The run's configuration.
-    pipe : types.SimpleNamespace
-        The pipeline.
-
-    Returns
-    -------
-    numpy.ndarray [n_dim]
-        The vector.
-    """
+def _output_truth(cfg: C.Config, pipe: SimpleNamespace) -> np.ndarray:
+    """Return the truth vector [n_dim] for outputs: the injected values, or NaN for real data."""
     if cfg.generate_synthetic_data:
         return np.asarray(pipe.param_truth, dtype=np.float64)
     return np.full(pipe.n_dim, np.nan, dtype=np.float64)

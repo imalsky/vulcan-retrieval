@@ -10,6 +10,7 @@ once per session, per xdist worker) and the target-digest stand-in.
 """
 
 import dataclasses
+import importlib.util
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,25 +40,28 @@ CAPPED_COLD_CMAX = 50  # < count_min: no solve can certify, its column stays fin
 def build_smoke_pipe(**overrides):
     """The REAL smoke pipeline (chemistry + RT, offline) with Config fields
     ``overrides`` replaced and observations set to zeros/ones. Skips only when
-    the stack or its data is absent.
+    exojax or a table the case reads is absent; any other failure of the build fails the test.
     """
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
+    if importlib.util.find_spec("exojax") is None:
+        pytest.skip("exojax not installed")
     import jax
     import numpy as np
 
     from retrieval_framework import pipeline as P
     from retrieval_framework import run_setup as R
+    from retrieval_framework.forward import config as _config  # noqa: F401  # hands the engine its data root
+    from vulcan_forward import exomolop, paths
 
     jax.config.update("jax_enable_x64", True)
 
-    try:
-        cfg = R.load_spec(RUN_DIR / "smoke.yaml").cfg
-        pipe = P.build_pipeline(dataclasses.replace(cfg, **overrides))
-    # Skip ONLY on a missing-data or missing-dependency environment; a broader
-    # handler reports a real forward-model break as a green skip.
-    except (FileNotFoundError, OSError, ImportError) as e:
-        pytest.skip(f"cannot build real smoke pipeline ({type(e).__name__}: {e})")
+    cfg = dataclasses.replace(R.load_spec(RUN_DIR / "smoke.yaml").cfg, **overrides)
+    needed = [exomolop.table_path(m) for m in cfg.molecules] + [paths.cia_h2h2_file(), paths.cia_h2he_file()]
+    missing = [str(p) for p in needed if not p.is_file()]
+    if missing:
+        pytest.skip(f"data absent: {missing}")
+    pipe = P.build_pipeline(cfg)
     pipe.set_observations(np.zeros(pipe.n_bin), np.ones(pipe.n_bin))
     return pipe
 
@@ -107,6 +111,7 @@ def digest_pipe(monkeypatch):
 
     monkeypatch.setattr(provenance, "_repo_states", lambda *_a, **_k: {"r": {"commit": "c" * 40, "dirty": False}})
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    monkeypatch.setattr(provenance, "science_data_identity", lambda _m: {"opacity_sha256": {}, "cia_sha256": {}})
     return SimpleNamespace(
         obs={
             "wl": np.array([1.0, 2.0]),

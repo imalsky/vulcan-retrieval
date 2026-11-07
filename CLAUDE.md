@@ -8,34 +8,9 @@ engine live upstream; this repo holds the likelihood, the sampler driver, the ca
 Generic rules (code, docs, git, reviews, jobs) are in the maintainer's global rules, and the shared policy is in the
 project-root `CLAUDE.md`. This file holds only what is unique to this repo.
 
-## Maintainer rules (all repos)
+## Maintainer rules
 
-These five rules are identical in the project-root CLAUDE.md and every repo's; change
-them together.
-
-- **Layout.** Keep code, data and generated files apart. Shipped code, tests, inputs,
-  fixtures and validation assets stay where the repo's CLAUDE.md puts them. Work asked
-  for outside the product (analysis, one-off scripts and checks, their figures and
-  results) goes to `scratch/<topic>/`, one folder per question; run results go to
-  `output/`, and vulcan3's own figures to `plot/`. Keep these three top-level folders
-  gitignored and never commit their contents; never put such work in `src/`, `tests/`,
-  `tools/`, `validation/`, `data/` or the repo root. A durable conclusion goes to
-  notes.md; a reusable check becomes a tracked test or validation script.
-- **Figures.** An ad hoc plot request gets 1 to 3 figures, more only when asked, from one
-  script in `scratch/<topic>/`: no helper module, style layer or extra variants.
-- **Branches.** Work in the existing checkout on `main`. Create no branch, worktree or
-  copy of the repo, and switch no branch, unless the maintainer asks.
-- **Behind main.** At the start of work in a checkout, `git fetch origin`, then
-  `git rev-list --count HEAD..origin/main`. If the count is above 0, tell the
-  maintainer at once; if the fetch fails, say the state is unknown. This alerts and does
-  not block; never pull, rebase or reset unasked. Check again before a commit, a push or
-  a job on daw or NAS.
-- **Tests.** After a change, run the tests that cover it (a file or `-k`). Before a
-  push, run the normal tier (under 10 minutes on daw; CI runs it too). Anything longer
-  (the full tier, oracle comparisons, regenerating validation data or figures) runs
-  only before a release or a production run, or when the maintainer asks. When a change
-  touches what such a run covers, name the run and its rough cost in the report; do not
-  start it unasked.
+Layout, Figures, Branches, Behind main and Tests are in the project-root `CLAUDE.md`, under "Maintainer rules".
 
 ## Docs
 
@@ -75,7 +50,7 @@ Name a notes section by its heading. Before proposing a solver, sampler or speed
 - Mark a test `slow` if it builds a real pipeline (`build_pipeline` on a real config); claims that share one heavy build
   stay in one test (xdist builds a fixture per worker).
 - Lint and types: `uvx pre-commit run --all-files`; size limits: `python3 tools/check_size_limits.py`. CI runs both and
-  the normal tier; lint before a push.
+  the normal tier, with the 80 % coverage floor; lint before a push.
 - On daw: tests and single chemistry runs on CPU. A batched run uses one GPU with the `fast` solver, so the lanes are
   `cold_lanes` as given: use the daw variant spec in notes "HPC (NAS GH200) and daw".
 
@@ -123,7 +98,9 @@ The maintainer runs these; give the exact commands and run none of them unasked.
   accepted steps, and only its VULCAN certificate keeps a draw. A second program (a presolve chain) needs a full-run A/B
   first (notes "Design records").
 - `count_max` is the certifying cap: a draw that does not certify within it is rejected (log L = -inf), never extended.
-  Do not raise the cap without a measured reason.
+  Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection: `run_nautilus` checks each chunk's
+  `termination_reason` right after the jitted evaluator and aborts (notes "Design records"); so do `nautilus_report` and the forward
+  checks on the draws they re-solve.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
   `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start policy and the nautilus settings. Changing any needs a new spec
   file; `run_nautilus` refuses a resume across it.
@@ -148,8 +125,8 @@ The maintainer runs these; give the exact commands and run none of them unasked.
   cold start. Stage 2's ConvDiag is the certificate; stage 1 (baseline composition) is not gated. Composition knobs act
   on a T-converged column (the two-stage solve), never on the cold equilibrium start.
 - Chemistry stays f64.
-- Never clip the T-P profile: a draw whose profile leaves the window on the ART grid is rejected (`pipeline.tp_valid` /
-  `sample_prior_u`; window: `tp_profile.T_EDGE_INSET_K` inside the opacity tables' range).
+- Never clip the T-P profile: a draw whose profile leaves the window on the ART or chemistry grid is rejected
+  (`pipeline.tp_valid` / `sample_prior_u`; window: `tp_profile.T_EDGE_INSET_K` inside the opacity tables' range).
 - The elemental map is the only abundance map; do not add another. Keep `prior_c_o`'s upper edge below the b_z bound
   (`build_retrieval_forward` raises).
 - No minichem and no self-made or pruned network; any published upstream network may be used (notes "Design records").
@@ -184,7 +161,8 @@ The maintainer runs these; give the exact commands and run none of them unasked.
 - `logZ_box` is the zero-filled box evidence (every rejected draw has log L = -inf), so it depends on `count_max` and
   the rtol: cross-model Bayes factors only at matched solver settings, with the rejection fractions shown. No evidence
   field "corrected" for the T-P window (notes "Do not retry").
-- nautilus reports no logZ error: quote logZ with the spread over >= 3 independent seeds (`SEED=<n>` in the PBS).
+- nautilus reports no logZ error: quote logZ with the spread over >= 3 independent seeds, one spec file per seed
+  (`config.seed`).
 - Condensation works in T-varying forward models through the engine (`vulcan_forward.vulcan_chem.build_chem_model`), but
   a retrieval with condensation is refused twice (`validate_config`, `retrieval_forward._refuse_condense_inference`)
   because none has been validated; the only opt-in is `allow_condense_inference=True` after validating it on the case.
@@ -220,8 +198,9 @@ The maintainer runs these; give the exact commands and run none of them unasked.
   the spec format is `run_setup`'s docstring and `wasp39_test1.yaml`'s comments. NAS launch: `tools/submit.py`,
   `tools/run_nas.pbs`.
 - `src/retrieval_framework/`: `config_schema` (Config, `validate_config`), `run_setup` (`load_spec`, `export_runtime`),
-  `pipeline` (evaluators, T-P window), `nuisance` (the integrated offsets and inflations), `retrieval_forward` (chemistry + RT, lane route), `run_nautilus` (sampler,
-  anchors, resume refusal), `provenance` (target digest), `nautilus_report` (certificate, figures), `validate_env`.
+  `pipeline` (evaluators, T-P window), `nuisance` (the integrated offsets and inflations), `retrieval_forward` (chemistry
+  + RT, lane route), `run_nautilus` (sampler, anchors, resume refusal), `provenance` (target digest), `nautilus_report`
+  (certificate), `report_figures` (figures), `validate_env`.
 - `docs/method.md`: the methods, their sources, the validation scripts' rungs and variants, the glossary.
 - notes: "Current state" (versions, pins, production setup, next run), "Runs", "Design records", "HPC (NAS GH200) and
   daw", "Superseded designs".

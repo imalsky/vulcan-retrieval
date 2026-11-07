@@ -73,6 +73,17 @@ def bin_trapz(wl, y, edges):
     return out
 
 
+def worst_ppm(a, b) -> float:
+    """Return max|a - b| of two binned spectra, ppm: inf if a bin is finite on one side only, or if none is finite.
+
+    A bin empty on both sides is a bin the model does not cover. Dropping a bin finite on one side would pass a NaN.
+    """
+    fa, fb = np.isfinite(a), np.isfinite(b)
+    if np.any(fa != fb) or not fa.any():
+        return float("inf")
+    return float(1e6 * np.max(np.abs(a[fa] - b[fa])))
+
+
 def _devices() -> list[str]:
     """JAX devices, if jax is already imported. Never imports it."""
     jax = sys.modules.get("jax")
@@ -121,7 +132,10 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         # CONTENT identity of the opacity/CIA files this measurement read, in
         # the same shape the run's target manifest records, so an artifact
         # measured against different data can be told apart from the run's.
-        prov["science_data"] = science_data_identity(rc.get("molecules") or ())
+        # A comparison of saved results names no molecules and reads no table;
+        # its solves' own provenance is in resolved_config.
+        if rc.get("molecules"):
+            prov["science_data"] = science_data_identity(rc["molecules"])
     return prov
 
 
@@ -134,7 +148,7 @@ def emit(
     resolved_config: dict | None = None,
     out_dir: Path | None = None,
 ) -> Path:
-    """Write `<name>.json` under validation/results/.
+    """Write `<name>.json` under ``out_dir``, by default ``RESULTS``.
 
     `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate).
     Returns the JSON path.

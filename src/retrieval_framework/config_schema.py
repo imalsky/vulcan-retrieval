@@ -21,9 +21,7 @@ from typing import Any
 from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR
 
 __all__ = [
-    "FFI_COMPUTE_CAPABILITY",
     "GUILLOT_F",
-    "OFF_GPU_LANES",
     "UNDERFLOW_DENOM",
     "Config",
     "ParamSpec",
@@ -37,7 +35,7 @@ __all__ = [
 ]
 
 # Default lane count, the smoke spec's; the production spec sets cold_lanes itself.
-OFF_GPU_LANES = 144
+_OFF_GPU_LANES = 144
 
 
 @dataclass(frozen=True)
@@ -260,7 +258,7 @@ class Config:
     # The production spec sets it (one kernel wave of a GH200 is 132 SMs;
     # run_nautilus multiplies it by FFI_BLOCKS_PER_SM under the ffi solver).
     # The schema default is the off-GPU width.
-    cold_lanes: int = OFF_GPU_LANES
+    cold_lanes: int = _OFF_GPU_LANES
     # Lanes refilled per refill pass. Bigger amortizes the refill over more
     # lanes; it is capped at cold_lanes.
     cold_refill_chunk: int = 8
@@ -317,7 +315,7 @@ GUILLOT_F = 0.25  # Guillot f: 1/4 = whole-planet average irradiation
 # Floor for a denominator or log argument that may be exactly zero.
 UNDERFLOW_DENOM = 1e-300
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
-FFI_COMPUTE_CAPABILITY = "9.0"
+_FFI_COMPUTE_CAPABILITY = "9.0"
 # Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
 # only the banner's C/O range uses it.
 _BASELINE_C_TO_O = 0.549
@@ -571,15 +569,15 @@ def choose_solver() -> str:
     cc = str(getattr(dev, "compute_capability", ""))
     spec = importlib.util.find_spec("vulcan3")
     lib = Path(spec.submodule_search_locations[0]) / "csrc" / "libblock_thomas_cuda.so"  # type: ignore[union-attr, index]  # a dependency
-    if jax.default_backend() in ("gpu", "cuda") and cc == FFI_COMPUTE_CAPABILITY and lib.is_file():
+    if jax.default_backend() in ("gpu", "cuda") and cc == _FFI_COMPUTE_CAPABILITY and lib.is_file():
         os.environ["VULCAN3_SOLVER"] = "ffi"
         return f"ffi (compute capability {cc}, {lib.name} built)"
     os.environ["VULCAN3_SOLVER"] = "fast"
     why = (
         "not a CUDA device"
         if jax.default_backend() not in ("gpu", "cuda")
-        else f"compute capability {cc} is not {FFI_COMPUTE_CAPABILITY}"
-        if cc != FFI_COMPUTE_CAPABILITY
+        else f"compute capability {cc} is not {_FFI_COMPUTE_CAPABILITY}"
+        if cc != _FFI_COMPUTE_CAPABILITY
         else f"{lib} is not built (python -c 'from vulcan3 import solver_fast; "
         "solver_fast.build(cuda=True)' on the GPU host)"
     )

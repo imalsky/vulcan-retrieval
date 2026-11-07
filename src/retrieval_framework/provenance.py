@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from types import SimpleNamespace
 
+    from retrieval_framework import config_schema as C
+
 __all__ = [
     "MANIFEST_FILE",
     "REPOSITORIES",
@@ -139,35 +141,12 @@ def _versions() -> dict:
 CIA_TABLES = ("H2-H2_2011.cia", "H2-He_2011.cia")
 
 
-def _cia_identity() -> dict:
-    """Return exact hashes of the two CIA tables, at the paths the engine reads.
-
-    A swapped H2-He table leaves a tree summary unchanged while changing the continuum the retrieval fits.
-    """
-    try:
-        from vulcan_forward import paths as _fwd_paths
-
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
-
-        files = dict(zip(CIA_TABLES, (_fwd_paths.cia_h2h2_file(), _fwd_paths.cia_h2he_file()), strict=True))
-    except (ImportError, RuntimeError):  # pragma: no cover
-        files = {}
-    out = {}
-    for name in CIA_TABLES:
-        p = files.get(name)
-        out[name] = (
-            {"path": str(p.resolve()), "sha256": _sha256(p), "bytes": p.stat().st_size}
-            if p is not None and p.is_file()
-            else None
-        )
-    return out
-
-
 def science_data_identity(molecules: Iterable[str]) -> dict[str, Any]:
     """Return the content identity of the data that defines the radiative model, by sha256.
 
     The part of the target manifest a validation artifact can also record: it binds which opacity data a ladder
-    measured.
+    measured. The CIA tables are outside git, and a swapped H2-He table changes the continuum a retrieval fits. An
+    absent table raises from its read: a run read these tables, so a target that cannot name them is not that run's.
 
     Parameters
     ----------
@@ -179,19 +158,15 @@ def science_data_identity(molecules: Iterable[str]) -> dict[str, Any]:
     dict
         ``opacity_sha256`` and ``cia_sha256``.
     """
-    opa: dict[str, str | None] = {}
-    try:
-        from vulcan_forward import exomolop as _exo
+    from vulcan_forward import exomolop as _exo, paths as _fwd_paths
 
-        from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
+    from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
 
-        for m in molecules:
-            f = _exo.table_path(m)
-            opa[str(m)] = _sha256(f) if f.is_file() else None
-    # broad: a provenance collector records any failure instead of raising
-    except Exception as exc:  # pragma: no cover
-        opa["error"] = f"{type(exc).__name__}: {exc}"
-    return {"opacity_sha256": opa, "cia_sha256": {k: (v or {}).get("sha256") for k, v in _cia_identity().items()}}
+    cia = (_fwd_paths.cia_h2h2_file(), _fwd_paths.cia_h2he_file())
+    return {
+        "opacity_sha256": {str(m): _sha256(_exo.table_path(m)) for m in molecules},
+        "cia_sha256": {name: _sha256(p) for name, p in zip(CIA_TABLES, cia, strict=True)},
+    }
 
 
 def _vulcan3_root() -> Path:
@@ -304,7 +279,7 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root
 
         root = Path(_fwd_paths.data_root())
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         # Never silently null: a check that cannot run says why it could not.
         ident["engine_data_error"] = f"{type(exc).__name__}: {exc}"
     ident["data_root_resolved"] = str(root) if root is not None else None
@@ -326,14 +301,13 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
         if npath is not None and npath.is_file():
             ident["network_file"] = {"path": str(npath), "sha256": _sha256(npath)}
     # broad: a provenance collector records any failure instead of raising
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         ident["network_file_error"] = str(exc)
     return ident
 
 
 # Keys a chained job may differ in: the walltime governor is per job, and the RT chunk size is a batch split,
-# numerically
-# identical at any width. Everything else is bound.
+# numerically identical at any width. Everything else is bound.
 TARGET_FREE_KEYS = frozenset(
     {
         "out_dir",
@@ -344,7 +318,7 @@ TARGET_FREE_KEYS = frozenset(
 )
 
 
-def target_manifest(cfg: Any, pipe: SimpleNamespace) -> dict[str, Any]:
+def target_manifest(cfg: C.Config, pipe: SimpleNamespace) -> dict[str, Any]:
     """Return everything that defines the target a checkpoint's numbers belong to.
 
     A resume that changes any of this splices two densities into one evidence integral, which nothing downstream can
@@ -374,7 +348,7 @@ def target_manifest(cfg: Any, pipe: SimpleNamespace) -> dict[str, Any]:
 
     return {
         # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
-        "manifest_version": 5,
+        "manifest_version": 6,
         "config": cfg_bound,
         "params": {
             "names": list(pipe.names),
@@ -396,8 +370,7 @@ def target_manifest(cfg: Any, pipe: SimpleNamespace) -> dict[str, Any]:
         },
         "versions": _versions(),
         # The solver moves every column at the convergence scale, so a resume must not switch it. The RHS form and the
-        # ffi
-        # kernel's forced buffer variant are bound the same way.
+        # ffi kernel's forced buffer variant are bound the same way.
         "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
         "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", "codegen"),
         "vulcan3_bt_buffers": os.environ.get("VULCAN3_BT_BUFFERS") or "per-call",
@@ -408,11 +381,20 @@ MANIFEST_FILE = "target_manifest.json"
 
 
 def _canonical(manifest: dict) -> str:
-    """Return the one serialization the digest is taken over, shared by the live digest and the archived re-hash."""
+    """Return the one serialization the digest is taken over, shared by the live digest and the archived re-hash.
+
+    From version 6 a repository's ``dirty`` is recorded but not hashed: editing a PBS script must not break a chained
+    resume, and ``src_diff`` binds the source. An older archived manifest hashes as it was written.
+    """
+    if manifest.get("manifest_version", 0) >= 6:
+        code = {
+            r: s if s is None else {k: v for k, v in s.items() if k != "dirty"} for r, s in manifest["code"].items()
+        }
+        manifest = {**manifest, "code": code}
     return json.dumps(manifest, sort_keys=True, default=str)
 
 
-def target_digest(cfg: Any, pipe: SimpleNamespace) -> str:
+def target_digest(cfg: C.Config, pipe: SimpleNamespace) -> str:
     """Return the sha256 of the canonical target manifest.
 
     Parameters
@@ -451,5 +433,5 @@ def archived_manifest_digest(out_dir: Path) -> str | None:
         return None
     try:
         return hashlib.sha256(_canonical(json.loads(p.read_text())).encode()).hexdigest()
-    except (OSError, ValueError) as exc:  # pragma: no cover
+    except (OSError, ValueError, KeyError, AttributeError) as exc:
         return f"unreadable: {type(exc).__name__}: {exc}"

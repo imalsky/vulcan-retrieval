@@ -18,13 +18,13 @@ import pytest
 
 # Import order: vulcan_chem must precede exojax, so check availability with
 # find_spec; importorskip("exojax") would import it first and break collection.
-if importlib.util.find_spec("exojax") is None:  # pragma: no cover
+if importlib.util.find_spec("exojax") is None:
     pytest.skip(
         "chemistry/RT stack (exojax) not installed; the CI here is stack-free. Run this integration test locally.",
         allow_module_level=True,
     )
 
-from retrieval_framework.retrieval_forward import _refuse_condense_inference
+from retrieval_framework.retrieval_forward import _refuse_c_o_bound, _refuse_condense_inference, _rtol_accept
 
 
 @pytest.mark.parametrize(
@@ -43,3 +43,28 @@ def test_gate_reads_the_resolved_conden_spec(conden, allow, refused):
             _refuse_condense_inference(chem, cfg)
     else:
         _refuse_condense_inference(chem, cfg)
+
+
+@pytest.mark.parametrize(
+    ("co_mode", "hi", "refused"),
+    [
+        ("fixed_O", 0.9, False),
+        ("fixed_O", 1.0, True),  # at the b_z positivity bound
+        ("fixed_O", 1.1, True),
+        ("proxy", 1.1, False),  # no b_z compensation, so no bound
+    ],
+)
+def test_c_o_prior_reaching_the_positivity_bound_is_refused(co_mode, hi, refused):
+    chem = SimpleNamespace(co_bz_bound=1.0)
+    cfg = SimpleNamespace(co_mode=co_mode, prior_c_o=(-1.0, hi))
+    if refused:
+        with pytest.raises(ValueError, match="positivity"):
+            _refuse_c_o_bound(chem, cfg)
+    else:
+        _refuse_c_o_bound(chem, cfg)
+
+
+def test_chem_rtol_reads_the_baked_acceptance_tolerance():
+    """Vulcan3's own tests pin the private `_statics` this reads."""
+    chem = SimpleNamespace(_integ=SimpleNamespace(_statics=SimpleNamespace(rtol_accept=0.05)))
+    assert _rtol_accept(chem) == 0.05

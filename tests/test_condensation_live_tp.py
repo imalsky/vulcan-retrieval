@@ -14,14 +14,13 @@ models, 1-2 min each.
 
 from __future__ import annotations
 
+import importlib.util
 import platform
 
 import numpy as np
 import pytest
 
-# SLOW (full tier only): this module builds a REAL chemistry + RT pipeline
-# (ExoJAX RT model, k-tables, chemistry converged to steady state), so it
-# costs minutes, not seconds.
+# Full tier: builds real chemistry models and converges them to steady state.
 pytestmark = [pytest.mark.slow, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
 
 # Structural/thermal setup: T where the S8 saturation boundary sits inside the
@@ -121,13 +120,13 @@ def _const_mix(chem):
 
 @pytest.fixture(scope="module")
 def stack():
-    """Import the chem stack (vulcan_chem BEFORE jax/exojax) or skip."""
-    try:
-        from vulcan_forward import vulcan_chem
-        import jax
-        import jax.numpy as jnp
-    except ImportError as e:
-        pytest.skip(f"chem stack unavailable: {e}")
+    """Import the chem stack (vulcan_chem BEFORE jax/exojax), or skip if vulcan3 is not installed."""
+    if importlib.util.find_spec("vulcan3") is None:
+        pytest.skip("vulcan3 not installed")
+    from vulcan_forward import vulcan_chem
+    import jax
+    import jax.numpy as jnp
+
     return vulcan_chem, jax, jnp
 
 
@@ -139,12 +138,7 @@ def chem_iso(stack):
     def tp_eval(tp, p_bar):
         return jnp.zeros_like(jnp.asarray(p_bar)) + tp[0]
 
-    # Skip only on missing data; a broader handler would report a real
-    # forward-model break (e.g. a changed private-API signature) as a green skip.
-    try:
-        return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval, n_tp_params=1)
-    except (FileNotFoundError, OSError) as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"chem model data unavailable: {e}")
+    return vulcan_chem.build_chem_model(_profile(), tp_eval=tp_eval, n_tp_params=1)
 
 
 def _theta(T):
@@ -242,10 +236,9 @@ def chem_guillot(stack):
     theta = [lnZ, c_o, lnKzz, Tirr, Tint, log_kappa, log_gamma].
     """
     vulcan_chem, _jax, jnp = stack
-    try:
-        from exojax.atm.atmprof import atmprof_Guillot
-    except Exception as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"exojax unavailable: {e}")
+    if importlib.util.find_spec("exojax") is None:
+        pytest.skip("exojax not installed")
+    from exojax.atm.atmprof import atmprof_Guillot
     from vulcan3.phy_const import G_grav
 
     from retrieval_framework.forward.config import RP_CM
@@ -257,24 +250,21 @@ def chem_guillot(stack):
         kappa, gamma = 10.0 ** tp[2], 10.0 ** tp[3]
         return atmprof_Guillot(p, gs_cgs, kappa, gamma, tp[1], tp[0], 0.25)
 
-    try:
-        return vulcan_chem.build_chem_model(
-            _profile(
-                cfg_overrides=dict(
-                    _CFG_OVERRIDES,
-                    # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
-                    # to reproduce gs_cgs at the W39b radius.
-                    Rp=RP_CM,
-                    Mp=gs_cgs * RP_CM**2 / G_grav,
-                    runtime=GUILLOT_RUNTIME,
-                ),
-                count_max=GUILLOT_COUNT_MAX,
+    return vulcan_chem.build_chem_model(
+        _profile(
+            cfg_overrides=dict(
+                _CFG_OVERRIDES,
+                # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
+                # to reproduce gs_cgs at the W39b radius.
+                Rp=RP_CM,
+                Mp=gs_cgs * RP_CM**2 / G_grav,
+                runtime=GUILLOT_RUNTIME,
             ),
-            tp_eval=tp_eval,
-            n_tp_params=4,
-        )
-    except Exception as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"chem model build failed: {e}")
+            count_max=GUILLOT_COUNT_MAX,
+        ),
+        tp_eval=tp_eval,
+        n_tp_params=4,
+    )
 
 
 def test_guillot_condensation_end_to_end(stack, chem_guillot):

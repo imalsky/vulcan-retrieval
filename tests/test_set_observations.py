@@ -7,6 +7,8 @@ silently produce NaN/Inf likelihoods. Pure-numpy except for the production
 case at the bottom (slow), which builds the real forward.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -15,34 +17,37 @@ from retrieval_framework import pipeline as P
 
 
 N = 5
+# Of sample_prior_u(PRNGKey(0), 16) on the production case. Stage 2 starts draw 7 with S4 far below its balance with S2,
+# and its first step must be shorter than 1e-14 s.
+CERTIFYING_DRAWS, FROZEN_DRAW = [3, 7], 7
 GOOD_DEPTH = np.linspace(0.01, 0.02, N)
 GOOD_SIGMA = np.full(N, 1e-4)
 
 
 def test_valid_vector_is_preserved_exactly():
-    d, s = P.validate_observations(GOOD_DEPTH, GOOD_SIGMA, N, np.float64)
+    d, s = P.validate_observations(GOOD_DEPTH, GOOD_SIGMA, N)
     assert np.array_equal(d, GOOD_DEPTH)
     assert np.array_equal(s, GOOD_SIGMA)
     assert d.shape == (N,)
     assert s.shape == (N,)
     # tiny but positive-finite sigmas are legal
-    _, out = P.validate_observations(GOOD_DEPTH, np.full(N, 1e-30), N, np.float64)
+    _, out = P.validate_observations(GOOD_DEPTH, np.full(N, 1e-30), N)
     assert np.all(out > 0.0)
 
 
 def test_invalid_observations_raise():
     with pytest.raises(ValueError, match="length must be n_bin"):
-        P.validate_observations(GOOD_DEPTH[:-1], GOOD_SIGMA[:-1], N, np.float64)
+        P.validate_observations(GOOD_DEPTH[:-1], GOOD_SIGMA[:-1], N)
     for bad in (np.nan, np.inf, -np.inf):
         d = GOOD_DEPTH.copy()
         d[2] = bad
         with pytest.raises(ValueError, match="depths must all be finite"):
-            P.validate_observations(d, GOOD_SIGMA, N, np.float64)
+            P.validate_observations(d, GOOD_SIGMA, N)
     for bad in (0.0, -1e-4, np.nan, np.inf, -np.inf):
         s = GOOD_SIGMA.copy()
         s[1] = bad
         with pytest.raises(ValueError, match="sigmas must all be finite and strictly"):
-            P.validate_observations(GOOD_DEPTH, s, N, np.float64)
+            P.validate_observations(GOOD_DEPTH, s, N)
 
 
 # --- the production case -------------------------------------------------------
@@ -71,17 +76,12 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
     assert pipe.n_bin == obs["wl"].size >= 4
     assert pipe.target_digest, "the run carries no target identity"
 
-    # A cold solve certifies only about half of the prior draws within count_max,
-    # every failure a cap exit in a cool, metal-rich or weakly mixed column (notes
-    # "Design records"), so the check takes the most strongly mixed of 16 draws.
-    U16 = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)
-    lnkzz = np.asarray(jax.vmap(pipe.theta_from_u)(U16))[:, list(pipe.names).index("lnKzz")]
-    k = int(np.argmax(lnkzz))
-    U = U16[k : k + 1]
-    Y0, refs0 = P._blank_state(pipe, 1)
-    logl = float(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(1, bool))[0][0])
-    assert np.isfinite(logl), f"non-finite likelihood: {logl}"
-    assert logl > P.REJECT_BELOW, f"rejected likelihood: {logl}"
+    # Each certifies in both stages. Some others of the 16 exit at the cap.
+    U = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)[np.asarray(CERTIFYING_DRAWS)]
+    Y0, refs0 = P._blank_state(pipe, len(CERTIFYING_DRAWS))
+    logl = np.asarray(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(len(CERTIFYING_DRAWS), bool))[0])
+    assert np.all(np.isfinite(logl)), f"non-finite likelihood: {logl}"
+    assert np.all(logl > P.REJECT_BELOW), f"rejected likelihood: {logl}"
 
     # The opacity leave-one-out screen selects its states from this same pipe;
     # prove the selection on the real object before a GPU run.
@@ -107,3 +107,35 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
     )
     with pytest.raises(RuntimeError, match="different target"):
         states_for(pipe, 2, post)
+
+
+@pytest.mark.slow
+def test_a_column_frozen_at_dt_min_aborts_the_run_rather_than_rejecting_the_draw(tmp_path):
+    """At a floor of 1e-14 s draw 7 of the first 16 freezes on stage 2. The raise reaches the sampler through the job's
+    own likelihood: no rejection is logged and no tally is kept for it. Needs a vulcan3 with the guard;
+    requirements-hpc.txt's pin predates it.
+    """
+    if not RUN_DIR.exists():
+        pytest.skip(f"run dir {RUN_DIR} not present")
+    from vulcan_forward import vulcan_chem  # noqa: F401  # before vulcan3, which it configures
+    import vulcan3
+
+    if not hasattr(vulcan3, "DtMinFrozenError"):
+        pytest.skip("this vulcan3 has no dt_min guard")
+    import jax
+
+    from retrieval_framework import run_setup as R
+    from retrieval_framework.run_nautilus import make_loglike
+
+    cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg
+    cfg = dataclasses.replace(cfg, cfg_overrides={**cfg.cfg_overrides, "dt_min": 1e-14})
+    pipe = P.build_pipeline(cfg)
+    P.load_real_into_pipe(pipe)
+    u = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)[FROZEN_DRAW : FROZEN_DRAW + 1]
+    tally = {}
+    rejects = tmp_path / "rejected"
+    like = make_loglike(pipe, 1, tally, rejects=rejects)
+    with pytest.raises(vulcan3.DtMinFrozenError, match="froze at dt_min"):
+        like(np.asarray(jax.nn.sigmoid(u), np.float64))
+    assert tally == {}
+    assert list(rejects.iterdir()) == []

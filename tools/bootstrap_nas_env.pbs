@@ -63,9 +63,11 @@ export TMPDIR="${VULCAN_SCRATCH}/tmp"
 mkdir -p "${PIP_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TMPDIR}"
 
 # --- conda env, then the PER-INTERPRETER userbase -------------------------------
-module purge 2>/dev/null || true
-module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
-module load miniconda3/gh2 2>/dev/null || true
+set +u   # the module scripts read unset variables; a failing module command still stops the job
+module purge
+module use -a /swbuild/analytix/tools/modulefiles
+module load miniconda3/gh2
+set -u
 CONDA_BASE="$(conda info --base)"
 # shellcheck disable=SC1091
 source "${CONDA_BASE}/etc/profile.d/conda.sh"

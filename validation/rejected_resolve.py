@@ -1,14 +1,12 @@
 """The solver-cut test: a finished run's rejected in-window draws below a Kzz cut, re-solved cold with a longer cap.
 
-    python validation/rejected_resolve.py select <out_dir> --results <dir> [--log10kzz-max 8.1] [--per-bin N] python
-    validation/e2e_check.py solve <cut spec> --rung production --u-from <dir>/rejected_draws.npz --results <dir> python
-    validation/rejected_resolve.py compare <out_dir> <dir>/e2e_production.npz
+    python validation/rejected_resolve.py select <out_dir> --results <dir> [--log10kzz-max 8.1] [--per-bin N]
+    python validation/e2e_check.py solve <cut spec> --rung production --u-from <dir>/rejected_draws.npz --results <dir>
+    python validation/rejected_resolve.py compare <out_dir> <dir>/e2e_production.npz
 
 ``select`` keeps the in-window rejections below the cut. The cut spec is the run's with only count_max raised.
-``compare``
-refuses a solve of other draws, another network or other priors, then reports per log10 Kzz bin the certified draws'
-log L
-against the posterior rows' there.
+``compare`` refuses a solve of other draws, another network or other priors, then reports per log10 Kzz bin the
+certified draws' log L against the posterior rows' there.
 """
 
 from __future__ import annotations
@@ -103,13 +101,8 @@ def select(args) -> int:
     return 0
 
 
-# size-limit-ok: one report, refusals first
-def compare(args) -> int:
-    from retrieval_framework.pipeline import REJECT_LOGL
-
-    out = Path(args.out_dir).resolve()
-    cfg, names, j = _run(out)
-    e = np.load(args.solved)
+def _refuse_foreign_solve(args, out, cfg, names, e):
+    """Refuse a solve of other draws, another network or other priors than the run's."""
     if list(e["names"]) != names:
         raise RuntimeError(f"the solve's parameters {list(e['names'])} are not the run's {names}")
     lo, hi = np.asarray(cfg["inferred_param_prior_lo"]), np.asarray(cfg["inferred_param_prior_hi"])
@@ -119,14 +112,6 @@ def compare(args) -> int:
         raise RuntimeError(
             f"{args.solved}: theta is not the run's prior map of u: the spec's priors differ from the run's"
         )
-    ok = e["certified"] & (e["logL"] > REJECT_LOGL / 2)
-    lk_r, L, acc = _log10kzz(e["theta"][:, j]), e["logL"], e["acc"]
-    post = np.load(out / "nautilus_posterior.npz")
-    w = np.exp(post["log_w"] - np.max(post["log_w"]))
-    w = w / w.sum()
-    Lp = post["log_l"]
-    fin = np.isfinite(Lp)
-    lk_p = _log10kzz(post["theta"][:, j])
     meta = json.loads(str(e["meta"]))
     if not cfg.get("network"):
         raise RuntimeError(
@@ -142,14 +127,23 @@ def compare(args) -> int:
     sel = np.load(Path(args.solved).resolve().parent / "rejected_draws.npz")
     if not np.array_equal(sel["u"][e["rows"]], e["u"]):
         raise RuntimeError(f"{args.solved} does not hold the draws of rejected_draws.npz beside it")
-    sel_meta = json.loads(str(sel["meta"]))
-    edges = np.asarray(sel_meta["bin_edges"])
+    return meta, json.loads(str(sel["meta"]))
+
+
+def _rows_by_bin(edges, j, e, ok, post):
+    """One row per log10 Kzz bin: the certified draws of the solve ``e`` there against the posterior rows there."""
+    lk_r, L, acc = _log10kzz(e["theta"][:, j]), e["logL"], e["acc"]
+    w = np.exp(post["log_w"] - np.max(post["log_w"]))
+    w = w / w.sum()
+    logl_post = post["log_l"]
+    fin = np.isfinite(logl_post)
+    lk_p = _log10kzz(post["theta"][:, j])
     rows = []
     for a, b in itertools.pairwise(edges):
         r = (lk_r >= a) & (lk_r < b)
         p = fin & (lk_p >= a) & (lk_p < b)
         Lc = L[r & ok]
-        med = _wmedian(Lp[p], w[p]) if p.any() else None
+        med = _wmedian(logl_post[p], w[p]) if p.any() else None
         rows.append(
             {
                 "log10kzz": [round(float(a), 3), round(float(b), 3)],
@@ -162,10 +156,25 @@ def compare(args) -> int:
                 "posterior_rows": int(p.sum()),
                 "posterior_weight": float(w[p].sum()),
                 "posterior_logL_wmedian": med,
-                "posterior_logL_max": float(Lp[p].max()) if p.any() else None,
+                "posterior_logL_max": float(logl_post[p].max()) if p.any() else None,
             }
         )
-    best = float(Lp[fin].max())
+    return rows
+
+
+def compare(args) -> int:
+    from retrieval_framework.pipeline import REJECT_LOGL
+
+    out = Path(args.out_dir).resolve()
+    cfg, names, j = _run(out)
+    e = np.load(args.solved)
+    meta, sel_meta = _refuse_foreign_solve(args, out, cfg, names, e)
+    ok = e["certified"] & (e["logL"] > REJECT_LOGL / 2)
+    post = np.load(out / "nautilus_posterior.npz")
+    edges = np.asarray(sel_meta["bin_edges"])
+    rows = _rows_by_bin(edges, j, e, ok, post)
+    Lp, L = post["log_l"], e["logL"]
+    best = float(Lp[np.isfinite(Lp)].max())
     print(
         f"{out.name}: {int(ok.sum())}/{len(ok)} rejected draws certify cold "
         f"(spec {Path(meta['spec']).name}); the run's best log L {best:.2f}"

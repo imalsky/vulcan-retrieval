@@ -35,7 +35,6 @@ __all__ = [
     "generate_observations",
     "load_real_into_pipe",
     "make_noise_model",
-    "make_nuisance_marginal",
     "make_uspace",
     "save_npz",
     "validate_observations",
@@ -48,6 +47,10 @@ logger = logging.getLogger("retrieval")
 # REJECT_BELOW is a rejection.
 REJECT_LOGL = -1.0e30
 REJECT_BELOW = -1.0e29
+
+# vulcan3's TERM_DT_MIN_FROZEN. A local value: the commit requirements-hpc.txt pins does not define it, and has no
+# raise_if_frozen. tests/test_run_nautilus_main.py compares it with vulcan3's where vulcan3 has one.
+_TERM_DT_MIN_FROZEN = 4
 
 # sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
 _PRIOR_Z_EPS = 1e-6
@@ -81,13 +84,49 @@ class EvalStats(NamedTuple):
         accept_count at exit.
     conv_ok : jax.Array [N], bool
         The certification bit at exit.
+    reason : jax.Array [N], int32
+        Why the solve stopped, a ``vulcan3.state.TERM_*`` code; a freeze in either cold stage reads as frozen.
+    last_delta : jax.Array [N]
+        The frozen trial's error ratio, to compare with ``rtol``.
     nuis : jax.Array [N, 2 G], optional
         The integrated nuisances' group statistics [R, S] from the RT that gave log L; None when they are sampled.
     """
 
     acc: jnp.ndarray
     conv_ok: jnp.ndarray
+    reason: jnp.ndarray
+    last_delta: jnp.ndarray
     nuis: Any = None
+
+
+def _exit_state(cd: Any) -> tuple[Array, Array]:
+    """Return a batch solve's (termination reason, last error ratio) per row, from its ``ConvDiag``.
+
+    The forward that requirements-hpc.txt pins has no such fields, and the vulcan3 pinned with it has no dt_min guard: a
+    column there runs to its cap instead of stopping frozen, so reason 0 (never frozen) is what is true of it.
+    ``retrieval_forward`` refuses a guarded vulcan3 under a forward that cannot report it.
+    """
+    if "termination_reason" in cd._fields:
+        return cd.termination_reason, cd.last_delta
+    return jnp.zeros_like(cd.accept_count), jnp.full(cd.accept_count.shape, jnp.nan)
+
+
+def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: float) -> None:
+    """Stop if a row of a batch's ``z`` froze at dt_min: a solver failure, not a verdict on the draw.
+
+    Nothing can raise inside the jitted evaluator, which keeps it in JAX's persistent compile cache, so the check sits
+    right after it. The message carries the first frozen row's point, since the job loses the batch's inputs.
+    """
+    rows = np.flatnonzero(np.asarray(jax.device_get(reason))[: len(z)] == _TERM_DT_MIN_FROZEN)
+    if rows.size:
+        from vulcan3 import DtMinFrozenError  # only a vulcan3 with the guard writes this reason
+
+        ratio = np.asarray(jax.device_get(last_delta))[: len(z)][rows]
+        raise DtMinFrozenError(
+            f"{rows.size} of {len(z)} columns froze at dt_min, at rows {rows[:8].tolist()} of this batch: largest last "
+            f"error ratio {float(np.max(ratio)):.3g} against rtol {rtol:g}. Point of row {rows[0]}: "
+            f"{np.asarray(z[rows[0]]).tolist()}. How to solve such a column is open (todo.md)."
+        )
 
 
 def make_uspace(
@@ -96,9 +135,8 @@ def make_uspace(
     """Build the map between the prior and an unconstrained u-space.
 
     z = sigmoid(u) in (0,1); "uniform" -> lo + (hi-lo) z, "log10_uniform" -> 10**(log lo + (log hi - log lo) z),
-    "gaussian" ->
-    lo + hi Phi^-1(z) with lo the mean and hi the sigma, so u = logit(z) of a uniform z draws theta exactly from its
-    prior.
+    "gaussian" -> lo + hi Phi^-1(z) with lo the mean and hi the sigma, so u = logit(z) of a uniform z draws theta
+    exactly from its prior.
 
     Parameters
     ----------
@@ -256,8 +294,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
     C.validate_config(cfg)
     from retrieval_framework import retrieval_forward as RF  # lazy: pulls in vulcan_chem -> VULCAN-JAX + exojax
 
-    dtype = jnp.float64 if bool(jax.config.jax_enable_x64) else jnp.float32  # type: ignore[attr-defined]  # declared at run time
-    npdtype = np.float64
+    dtype = jnp.float64  # the import above set x64; chemistry stays f64
 
     t0 = time.perf_counter()
     fwd = RF.build_retrieval_forward(cfg)
@@ -271,8 +308,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
     )
 
     # A draw whose raw T-P leaves [T_min, T_max] anywhere on the ART grid or the chemistry grid (which reaches below the
-    # RT
-    # bottom) is rejected, not bent into range: redrawn at the prior and given REJECT_LOGL by every evaluator. A NaN
+    # RT bottom) is rejected, not bent into range: redrawn at the prior and given REJECT_LOGL by every evaluator. A NaN
     # profile (a T1bar draw with no Guillot solution) goes the same way.
     n_tp = int(fwd.n_tp)
     n_chem = int(fwd.n_chem)
@@ -325,7 +361,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
     n_cloud = len(cloud_idx)
 
     prior_types = [s.prior_type for s in specs]
-    param_truth = np.asarray([s.truth for s in specs], dtype=npdtype)
+    param_truth = np.asarray([s.truth for s in specs], dtype=np.float64)
 
     theta_from_u, sample_prior_u = make_uspace(specs, dtype)
     theta_truth = jnp.asarray(param_truth, dtype=dtype)
@@ -459,11 +495,6 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
                 Y_new, CD = fwd.chem_solve_cold_diag_batch(C_, active=active)
             return jax.vmap(fwd.aux_from_y)(Y_new, C_), Y_new, CD
 
-        def _rt_vals(AUX: Any, Theta: Array, CD: Any, valid: Array, active: ArrayLike) -> Array:
-            """Return the RT log L of the rows that can be kept."""
-            need = valid & (CD.conv_normal > 0.5) & active
-            return _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk, need, _REJECT)
-
         def eval_batch(U: Array, Y: Array, refs: Array, active: ArrayLike) -> tuple[Array, Array, Array, EvalStats]:
             """Evaluate one batch."""
             active = jnp.asarray(active, bool)
@@ -472,23 +503,28 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
             C_ = Theta[:, :n_chem_tp]
             valid = jax.vmap(tp_valid)(Theta)
             AUX, Ynew, CD = _chem_primal(C_, Y, refs, active)
-            vals = _rt_vals(AUX, Theta, CD, valid, active)
+            conv_ok = CD.conv_normal > 0.5
+            # The solver's verdict alone: a certified solve can exit at cap or cap + 1, and conv_normal is False on
+            # every cap exit. Only these rows get an RT; the rest hold the reject sentinel.
+            usable = valid & active & conv_ok
+            vals = _map_chunks_rows(jax.vmap(_rt_val), (AUX, Theta), rt_chunk, usable, _REJECT)
             nuis = None
             if nuisance is not None:
                 vals, nuis = vals[:, 0], vals[:, 1:]
             ACC = CD.accept_count.astype(jnp.int32)
-            conv_ok = CD.conv_normal > 0.5
-            # The solver's verdict alone: a certified solve can exit at cap or cap + 1, and conv_normal is False on
-            # every
-            # cap exit.
-            usable = valid & active & conv_ok
-            L = jnp.where(jnp.isfinite(vals) & usable, vals, _REJECT)
+            L = jnp.where(jnp.isfinite(vals), vals, _REJECT)
             # A rejected solve must not poison the carried state: pin it to the baseline column.
             ok = jnp.all(jnp.isfinite(Ynew), axis=(1, 2)) & usable
             Ynew = jnp.where(ok[:, None, None], Ynew, y_baseline[None])
             comp = _comp_refs(C_)
             refs_new = jnp.where(ok[:, None], comp, jnp.zeros_like(comp))
-            return L, Ynew, refs_new, EvalStats(acc=ACC, conv_ok=conv_ok, nuis=nuis)
+            reason, last_delta = _exit_state(CD)
+            return (
+                L,
+                Ynew,
+                refs_new,
+                EvalStats(acc=ACC, conv_ok=conv_ok, reason=reason, last_delta=last_delta, nuis=nuis),
+            )
 
         return eval_batch
 
@@ -496,7 +532,6 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
         {
             "cfg": cfg,
             "dtype": dtype,
-            "npdtype": npdtype,
             "fwd": fwd,
             "obs": obs,
             "real_bins": real_bins,
@@ -514,8 +549,8 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
             "cloud_idx": cloud_idx,
             "n_cloud": n_cloud,
             "nuisance": nuisance,
-            "param_prior_lo": np.asarray([s.lo for s in specs], npdtype),
-            "param_prior_hi": np.asarray([s.hi for s in specs], npdtype),
+            "param_prior_lo": np.asarray([s.lo for s in specs], np.float64),
+            "param_prior_hi": np.asarray([s.hi for s in specs], np.float64),
             "param_truth": param_truth,
             "prior_types": prior_types,
             # sample_prior_u is the T-P-window-restricted (redraw) sampler; the validity
@@ -544,7 +579,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
                 "swapping them in-process would silently keep the old data. Build a "
                 "fresh pipeline (build_pipeline) for a different dataset."
             )
-        depth, sigma = validate_observations(depth, sigma, n_bin, npdtype)
+        depth, sigma = validate_observations(depth, sigma, n_bin)
         pipe.obs_depth = depth
         pipe.obs_sigma = sigma
         pipe.obs_depth_jax = jnp.asarray(depth, dtype=dtype)
@@ -558,7 +593,7 @@ def build_pipeline(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts it
     return pipe
 
 
-def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int, npdtype: Any) -> tuple[np.ndarray, np.ndarray]:
+def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int) -> tuple[np.ndarray, np.ndarray]:
     """Coerce and check an injected (depth, sigma) pair for n_bin spectral bins.
 
     The Gaussian likelihood divides by sigma and logs it, so a bad value would poison every likelihood. Mask invalid
@@ -572,8 +607,6 @@ def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int, npdtype: Any
         Observed sigmas.
     n_bin : int
         The expected length.
-    npdtype : numpy.dtype
-        The array type.
 
     Returns
     -------
@@ -585,8 +618,8 @@ def validate_observations(depth: Any, sigma: ArrayLike, n_bin: int, npdtype: Any
     ValueError
         On a wrong length, a non-finite depth or a non-positive or non-finite sigma.
     """
-    depth = np.asarray(depth, npdtype).reshape(-1)
-    sigma = np.asarray(sigma, npdtype).reshape(-1)
+    depth = np.asarray(depth, np.float64).reshape(-1)
+    sigma = np.asarray(sigma, np.float64).reshape(-1)
     if depth.shape[0] != n_bin or sigma.shape[0] != n_bin:
         raise ValueError(f"obs depth/sigma length must be n_bin={n_bin}")
     if not np.all(np.isfinite(depth)):
@@ -620,8 +653,8 @@ def load_real_into_pipe(pipe: SimpleNamespace) -> dict[str, np.ndarray]:
         ``depth`` and ``sigma``.
     """
     obs = pipe.obs
-    depth = np.asarray(obs["depth"], pipe.npdtype)
-    sigma = np.asarray(obs["sigma"], pipe.npdtype)
+    depth = np.asarray(obs["depth"], np.float64)
+    sigma = np.asarray(obs["sigma"], np.float64)
     pipe.set_observations(depth, sigma)
     return {"depth": depth, "sigma": sigma}
 
@@ -648,15 +681,15 @@ def generate_observations(pipe: SimpleNamespace, seed: int) -> dict[str, np.ndar
     RuntimeError
         If the truth chemistry does not certify or the truth forward is non-finite.
     """
-    sigma = np.asarray(pipe.obs["sigma"], pipe.npdtype)
+    sigma = np.asarray(pipe.obs["sigma"], np.float64)
     mu, ok = pipe.binned_ok_jit(pipe.theta_truth)
-    mu_true = np.asarray(mu, pipe.npdtype)
+    mu_true = np.asarray(mu, np.float64)
     if pipe.nuisance is not None and pipe.cfg.infer_offsets:
         off = OBS.build_offset_design(pipe.obs)
         mu_true = mu_true + off @ np.full(off.shape[1], pipe.cfg.truth_offset_ppm * OBS.PPM)
     if not bool(ok):
         raise RuntimeError(
-            "the truth chemistry does not certify (VULCAN's certificate under "
+            "the truth chemistry does not certify or froze at dt_min (VULCAN's certificate under "
             f"count_max={int(pipe.fwd.chem.count_max)}): refusing the synthetic "
             "injection; move truth_* or the solver settings"
         )

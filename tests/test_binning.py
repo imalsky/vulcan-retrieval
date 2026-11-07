@@ -138,3 +138,38 @@ def test_rprs_products_propagate_to_depth(tmp_path):
     assert wl.tolist() == [1.0]
     np.testing.assert_allclose(depth, [0.01], rtol=1e-15)
     np.testing.assert_allclose(sigma, [2.0 * 0.1 * 0.002], rtol=1e-15)
+
+
+def test_bins_narrower_than_the_resolving_cap_are_dropped(monkeypatch):
+    """A truncation remnant would be fitted as if a cell average could resolve it; 0 turns the cap off."""
+    wl = np.array([3.0, 3.5, 4.0])
+    half = np.array([0.015, 0.002, 0.02])  # R 100, 875, 100
+    monkeypatch.setattr(OBS, "read_rprs_csv", lambda _f: (wl, wl - half, wl + half, 0.02 + 0 * wl, 1e-4 + 0 * wl))
+    cfg = SimpleNamespace(
+        obs_dir="x", obs_products={"G": ("f.csv",)}, combo=("G",), obs_wl_lo=1.0, obs_wl_hi=9.0, obs_max_bin_R=200.0
+    )
+    assert OBS.load_real_observations(cfg)["wl"].tolist() == [3.0, 4.0]
+    assert (
+        OBS.load_real_observations(SimpleNamespace(**{**vars(cfg), "obs_max_bin_R": 0.0}))["wl"].tolist() == wl.tolist()
+    )
+
+
+def test_a_product_file_says_what_it_lost(tmp_path, caplog):
+    """Padding rows are dropped and swapped edges repaired, by count and file name; a clean file says nothing."""
+    f = tmp_path / "p.csv"
+    f.write_text(
+        "i,wl,lo,hi,rprs,el,eh\n"
+        "0,3.0,2.99,3.01,0.1,1e-4,1e-4\n"
+        "1,3.5,3.51,3.49,0.1,1e-4,1e-4\n"  # swapped edges
+        "2,4.0,3.99,4.01,0.1,nan,nan\n"  # a padding row
+    )
+    with caplog.at_level("INFO", logger=OBS.logger.name):
+        wl, lo, hi, *_ = OBS.read_rprs_csv(f)
+    assert wl.tolist() == [3.0, 3.5]
+    assert lo[1] < hi[1]
+    assert f"{f}: dropped 1 of 3 rows, repaired 1 swapped wl edges" in caplog.text
+    caplog.clear()
+    f.write_text("i,wl,lo,hi,rprs,el,eh\n0,3.0,2.99,3.01,0.1,1e-4,1e-4\n1,3.5,3.49,3.51,0.1,1e-4,1e-4\n")
+    with caplog.at_level("INFO", logger=OBS.logger.name):
+        OBS.read_rprs_csv(f)
+    assert caplog.text == ""

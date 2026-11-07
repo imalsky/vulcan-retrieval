@@ -2,7 +2,7 @@
 
 Stack-free: the layout with it off and on; ``observations.build_group_design`` and ``noise_scale_per_bin`` in all three
 modes; ``pipeline.make_noise_model`` is sigma0 times ``noise_scale_per_bin`` in every mode; and
-``nautilus_report.predictive_replicates`` with one b and per group. The production case (slow): the real three-group
+``report_figures.predictive_replicates`` with one b and per group. The production case (slow): the real three-group
 spectrum gets three inflations, in the pipeline's group order.
 """
 
@@ -121,7 +121,7 @@ def test_replicates_carry_the_likelihood_sigma(names, b, want_b):
     """The predictive band is replicated data, mu + N(0, (sigma b)^2) with the
     run's own inflation, centred on the latent model.
     """
-    from retrieval_framework.nautilus_report import predictive_replicates
+    from retrieval_framework.report_figures import predictive_replicates
 
     rng, n = np.random.default_rng(0), 20000
     gpb = np.array(["A", "A", "B"])

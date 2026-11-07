@@ -204,3 +204,25 @@ def test_one_run_directory_check_for_submit_and_the_runner(tmp_path):
         R.check_run_dir(tmp_path, resume=False)
     (tmp_path / "nautilus_checkpoint.hdf5").write_bytes(b"")
     R.check_run_dir(tmp_path, resume=True)
+
+
+def test_dry_run_prints_the_resolved_settings_and_touches_nothing(capsys, monkeypatch):
+    """What a user checks before submitting: the production spec's parameters, priors and output directory, with no
+    run directory written.
+    """
+    from retrieval_framework.run_nautilus import main
+
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    spec = R.load_spec(RUN_DIR / "wasp39_test1.yaml")
+    existed = spec.cfg.out_dir.exists()
+    main([str(spec.path), "--dry-run"])
+    out = capsys.readouterr().out
+    assert f"nz={spec.cfg.nz}" in out
+    assert f"count_max={spec.cfg.count_max}" in out
+    assert f"out_dir: {spec.cfg.out_dir}" in out
+    assert "REAL observed spectrum" in out
+    specs = C.specs_from_config(spec.cfg, groups=list(spec.cfg.combo))
+    assert f"parameters ({len(specs)})" in out
+    for s in specs:
+        assert f"    {s.name:<17s} " in out, s.name
+    assert spec.cfg.out_dir.exists() == existed

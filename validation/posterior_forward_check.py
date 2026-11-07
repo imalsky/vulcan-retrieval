@@ -4,10 +4,8 @@
     python validation/posterior_forward_check.py compare <base.npz> <variant.npz>
 
 ``run`` solves seeded weighted posterior rows cold on the run's own pipeline with the variant's change. ``compare``
-reports
-the worst per-bin |shift| / sigma and the band-mean shifts in the SO2 and CO2 bands. One variant per process, since
-vulcan3
-freezes the network at import. The variants are in docs/method.md.
+reports the worst per-bin |shift| / sigma and the band-mean shifts in the SO2 and CO2 bands. One variant per process,
+since vulcan3 freezes the network at import. The variants are in docs/method.md.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ import logging
 import math
 import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -62,24 +60,50 @@ def _solve(pipe, theta):
     """
     import jax
     import jax.numpy as jnp
+    from retrieval_framework import pipeline as P
 
     th = jnp.asarray(theta, pipe.dtype)
     C = th[:, : pipe.n_chem_tp]
     Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(C)
+    P._abort_if_frozen(*P._exit_state(cd), theta, pipe.fwd.chem_rtol)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
     ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
     return Y, mu, ok
 
 
-# size-limit-ok: one variant per branch, in order
+def _twolimb(pipe, theta, names):
+    """The two limbs' mean depth at Tirr +- TWO_LIMB_DTIRR_K, certified where both certify."""
+    i = names.index("Tirr")
+    th_m, th_e = theta.copy(), theta.copy()
+    th_m[:, i] -= TWO_LIMB_DTIRR_K
+    th_e[:, i] += TWO_LIMB_DTIRR_K
+    _, mu_m, ok_m = _solve(pipe, th_m)
+    _, mu_e, ok_e = _solve(pipe, th_e)
+    return {"model": 0.5 * (mu_m + mu_e), "certified": ok_m & ok_e, "model_morning": mu_m, "model_evening": mu_e}
+
+
+def _mass(pipe, theta):
+    """The depth at lnM +- MASS_SIGMA on the base columns: the offsets match on both sides, so the shift is the RT's."""
+    import jax.numpy as jnp
+
+    Y, mu, ok = _solve(pipe, theta)
+    th = jnp.asarray(theta, pipe.dtype)
+
+    def at(lnM):
+        rows = []
+        for k in range(theta.shape[0]):
+            aux = pipe.fwd.aux_from_y(Y[k], th[k, : pipe.n_chem_tp])
+            cloud = th[k, pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
+            base_lnM = th[k, pipe.lnM_idx] if pipe.lnM_idx is not None else 0.0
+            d = pipe.fwd.rt_depth(aux, th[k, pipe.lnR0_idx], cloud, base_lnM + lnM)
+            rows.append(np.asarray(pipe.B, np.float64) @ np.asarray(d, np.float64))
+        return np.asarray(rows)
+
+    return {"model": mu + (at(+MASS_SIGMA) - at(0.0)), "certified": ok, "model_minus": mu + (at(-MASS_SIGMA) - at(0.0))}
+
+
 def run(args) -> int:
     out = Path(args.out_dir).resolve()
-    # a presolve-chain run (v4) certified at a second program this tree no longer
-    # builds; its config.json would load without it (unknown keys are dropped)
-    if json.loads((out / "config.json").read_text()).get("chem_presolve"):
-        raise RuntimeError(
-            f"{out} ran the presolve chain, removed after vulcan-retrieval 0a2dbf3: check its draws at that commit"
-        )
     from retrieval_framework import config_schema as C
     from retrieval_framework.nautilus_report import _config_from_json
 
@@ -109,34 +133,10 @@ def run(args) -> int:
         "sigma": np.asarray(pipe.obs["sigma"]),
     }
     if args.variant == "twolimb":
-        i = names.index("Tirr")
-        th_m, th_e = theta.copy(), theta.copy()
-        th_m[:, i] -= TWO_LIMB_DTIRR_K
-        th_e[:, i] += TWO_LIMB_DTIRR_K
-        _, mu_m, ok_m = _solve(pipe, th_m)
-        _, mu_e, ok_e = _solve(pipe, th_e)
-        payload.update(model=0.5 * (mu_m + mu_e), certified=ok_m & ok_e, model_morning=mu_m, model_evening=mu_e)
+        payload.update(_twolimb(pipe, theta, names))
         settings.update(dTirr_K=TWO_LIMB_DTIRR_K)
     elif args.variant == "mass":
-        import jax.numpy as jnp
-
-        Y, mu, ok = _solve(pipe, theta)
-        th = jnp.asarray(theta, pipe.dtype)
-
-        def at(lnM):
-            rows = []
-            for k in range(theta.shape[0]):
-                aux = pipe.fwd.aux_from_y(Y[k], th[k, : pipe.n_chem_tp])
-                cloud = th[k, pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
-                base_lnM = th[k, pipe.lnM_idx] if pipe.lnM_idx is not None else 0.0
-                d = pipe.fwd.rt_depth(aux, th[k, pipe.lnR0_idx], cloud, base_lnM + lnM)
-                rows.append(np.asarray(pipe.B, np.float64) @ np.asarray(d, np.float64))
-            return np.asarray(rows)
-
-        # offsets are the same on both sides, so the shift is the binned RT shift
-        payload.update(
-            model=mu + (at(+MASS_SIGMA) - at(0.0)), certified=ok, model_minus=mu + (at(-MASS_SIGMA) - at(0.0))
-        )
+        payload.update(_mass(pipe, theta))
         settings.update(lnM_sigma=MASS_SIGMA)
     elif args.variant == "spot":
         _, mu, ok = _solve(pipe, theta)
@@ -152,15 +152,63 @@ def run(args) -> int:
         len(theta),
         time.perf_counter() - t0,
     )
-    _artifact.RESULTS.mkdir(parents=True, exist_ok=True)
-    path = _artifact.RESULTS / f"forward_check_{args.variant}.npz"
-    np.savez(path, settings=np.asarray(str(settings)), **payload)
-    print(f"wrote {path}")
+    print(f"wrote {_save_spectra(args.variant, cfg, settings, payload)}")
     return 0
+
+
+def _save_spectra(variant, cfg, settings, payload):
+    """Save one variant's solve with the state that produced it: compare runs later, and can only record its own."""
+    _artifact.RESULTS.mkdir(parents=True, exist_ok=True)
+    path = _artifact.RESULTS / f"forward_check_{variant}.npz"
+    provenance = json.dumps(_artifact.collect_provenance(asdict(cfg)), default=str)
+    np.savez(path, settings=np.asarray(str(settings)), provenance=np.asarray(provenance), **payload)
+    return path
+
+
+def _solve_provenance(z):
+    """The provenance a solve saved; a file from before it was recorded says so."""
+    return json.loads(str(z["provenance"])) if "provenance" in z.files else "not recorded"
 
 
 def _band(wl, lo, hi):
     return (wl >= lo) & (wl <= hi)
+
+
+def _shift_measurements(worst, rows):
+    """The artifact's report-only rows: the worst per-bin shift and each band's mean shift."""
+    return [
+        {
+            "name": "worst per-bin |shift| / sigma over the compared draws",
+            "value": f"{worst.max():.3f}",
+            "value_raw": float(worst.max()),
+            "unit": "sigma",
+            "gate": "report",
+            "decisive": False,
+            "passed": True,
+        },
+        {
+            "name": "median over draws of the worst per-bin |shift| / sigma",
+            "value": f"{np.median(worst.max(axis=1)):.3f}",
+            "value_raw": float(np.median(worst.max(axis=1))),
+            "unit": "sigma",
+            "gate": "report",
+            "decisive": False,
+            "passed": True,
+        },
+    ] + [
+        {
+            "name": f"{name} band mean shift (median over draws)",
+            "value": f"{med:+.1f} ppm",
+            "value_raw": med,
+            "unit": "ppm",
+            "gate": "report",
+            "decisive": False,
+            "passed": True,
+            "band_sigma_units": sig,
+            "max_abs_ppm": mx,
+        }
+        for name, med, mx, sig in rows
+    ]
 
 
 def compare(args) -> int:
@@ -197,39 +245,7 @@ def compare(args) -> int:
             f"{name} band mean shift: median {med:+.1f} ppm, max |{mx:.1f}| ppm, "
             f"median {sig:.2f} sigma of the band mean"
         )
-    measurements = [
-        {
-            "name": "worst per-bin |shift| / sigma over the compared draws",
-            "value": f"{worst.max():.3f}",
-            "value_raw": float(worst.max()),
-            "unit": "sigma",
-            "gate": "report",
-            "decisive": False,
-            "passed": True,
-        },
-        {
-            "name": "median over draws of the worst per-bin |shift| / sigma",
-            "value": f"{np.median(worst.max(axis=1)):.3f}",
-            "value_raw": float(np.median(worst.max(axis=1))),
-            "unit": "sigma",
-            "gate": "report",
-            "decisive": False,
-            "passed": True,
-        },
-    ] + [
-        {
-            "name": f"{name} band mean shift (median over draws)",
-            "value": f"{med:+.1f} ppm",
-            "value_raw": med,
-            "unit": "ppm",
-            "gate": "report",
-            "decisive": False,
-            "passed": True,
-            "band_sigma_units": sig,
-            "max_abs_ppm": mx,
-        }
-        for name, med, mx, sig in rows
-    ]
+    measurements = _shift_measurements(worst, rows)
     variant = Path(args.variant).stem.replace("forward_check_", "")
     _artifact.emit(
         f"forward_check_{variant}",
@@ -238,7 +254,12 @@ def compare(args) -> int:
         "REPORT",
         f"{int(ok.sum())} draws; worst per-bin shift {worst.max():.2f} sigma; "
         f"SO2 band {rows[0][1]:+.1f} ppm, CO2 band {rows[1][1]:+.1f} ppm (medians)",
-        resolved_config={"base": str(a["settings"]), "variant": label},
+        resolved_config={
+            "base": str(a["settings"]),
+            "variant": label,
+            "base_solve_provenance": _solve_provenance(a),
+            "variant_solve_provenance": _solve_provenance(b),
+        },
     )
     return 0
 

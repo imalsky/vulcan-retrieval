@@ -20,9 +20,12 @@ pytestmark = pytest.mark.slow
 
 
 def test_v5_options_build_sample_and_evaluate(v5_smoke_pipe, smoke_pipe):
+    import vulcan3
+
     pipe = v5_smoke_pipe
     cfg = pipe.cfg
-    assert pipe.fwd.chem_rtol > 0.0  # the solver statics field
+    # the tolerance baked into the program is the case's, not any positive number
+    assert pipe.fwd.chem_rtol == cfg.cfg_overrides.get("rtol", vulcan3.load_config(cfg.vulcan_cfg_name).rtol)
     # the layout: the engine's chemistry block, then the T-P block with T1bar and
     # the boundary, lnR0, the Gaussian lnM, the deck
     assert pipe.n_chem == 5
@@ -53,21 +56,24 @@ def test_v5_options_build_sample_and_evaluate(v5_smoke_pipe, smoke_pipe):
         assert np.all(np.isfinite(T))
         assert T.min() >= pipe.fwd.tp_model.T_min
         assert T.max() <= pipe.fwd.tp_model.T_max
-    # the cold batched evaluator: finite or the reject sentinel, references
-    # (lnZ, c_o, s_o) of the kept rows, zeros elsewhere
+    # the cold batched evaluator keeps both of these draws, which certify with every option on (657 and 761 steps), with
+    # the references (lnZ, c_o, s_o) of each; a padding row is the reject sentinel with references zero
     Y0, refs0 = P._blank_state(pipe, 2)
     assert refs0.shape == (2, 3)
     ev = jax.jit(pipe._make_batch_eval("cold"))
-    L, _Ynew, refs, _st = ev(U[:2], Y0, refs0, np.ones(2, bool))
+    L, _Ynew, refs, st = ev(U[:2], Y0, refs0, np.ones(2, bool))
     L, refs = np.asarray(L), np.asarray(refs)
-    assert L.shape == (2,)
-    assert refs.shape == (2, 3)
-    kept = L > P.REJECT_BELOW
-    assert np.all(np.isfinite(L[kept]))
+    assert np.all(np.asarray(st.conv_ok))
+    assert np.all(np.isfinite(L))
+    assert np.all(L > P.REJECT_BELOW)
     i_s = pipe.names.index("s_o")
     # the jitted transform and the eager one differ by an ulp
-    np.testing.assert_allclose(refs[kept], Theta[:2][kept][:, [0, 1, i_s]], rtol=1e-12, atol=0)
-    assert np.all(refs[~kept] == 0.0)
+    np.testing.assert_allclose(refs, Theta[:2][:, [0, 1, i_s]], rtol=1e-12, atol=0)
+    L, _Ynew, refs, _st = ev(U[:2], Y0, refs0, np.array([True, False]))
+    L, refs = np.asarray(L), np.asarray(refs)
+    assert L[0] > P.REJECT_BELOW
+    assert L[1] == P.REJECT_LOGL
+    assert np.all(refs[1] == 0.0)
     # with every option off the v4 layout is unchanged
     base = smoke_pipe
     assert base.n_chem == 3

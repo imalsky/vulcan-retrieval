@@ -56,7 +56,42 @@ def _last_active_job(jobs_txt: Path) -> str | None:
     return ids[-1] if any(st in ACTIVE_STATES for st in states) else None
 
 
-# size-limit-ok: one submission, each refusal in order
+def _walltime(governor_s: float) -> str:
+    """Return the job's HH:MM:SS walltime for a governor in seconds, refusing one past the queue's limit."""
+    h, rest = divmod(math.ceil(governor_s + JOB_HEADROOM_S), 3600)
+    walltime = f"{h:02d}:{rest // 60:02d}:{rest % 60:02d}"
+    if h * 3600 + rest > QUEUE_WALL_H * 3600:
+        sys.exit(
+            f"walltime {walltime} (the governor + {JOB_HEADROOM_S} s) is past {QUEUE}'s "
+            f"{QUEUE_WALL_H} h: lower config.walltime_seconds"
+        )
+    return walltime
+
+
+def _qsub_command(name: str, walltime: str, jobs: Path, attrs: list[str], env: list[str]) -> list[str]:
+    """Return the qsub command line."""
+    return [
+        "qsub",
+        "-N",
+        name,
+        "-q",
+        QUEUE,
+        "-l",
+        f"select={SELECT}",
+        "-l",
+        f"walltime={walltime}",
+        "-j",
+        "oe",
+        "-o",
+        f"{jobs}/",
+        "-W",
+        ",".join(attrs),
+        "-v",
+        ",".join(env),
+        str(PBS_SCRIPT),
+    ]
+
+
 def main(argv: list[str] | None = None) -> None:
     """Submit the spec on the command line.
 
@@ -86,13 +121,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(
             f"{spec.path.name}: config.walltime_seconds is not set: a PBS run must checkpoint and exit before the wall"
         )
-    h, rest = divmod(math.ceil(spec.cfg.walltime_seconds + JOB_HEADROOM_S), 3600)
-    walltime = f"{h:02d}:{rest // 60:02d}:{rest % 60:02d}"
-    if h * 3600 + rest > QUEUE_WALL_H * 3600:
-        sys.exit(
-            f"walltime {walltime} (the governor + {JOB_HEADROOM_S} s) is past {QUEUE}'s "
-            f"{QUEUE_WALL_H} h: lower config.walltime_seconds"
-        )
+    walltime = _walltime(spec.cfg.walltime_seconds)
     out = spec.cfg.out_dir
     jobs = out / "jobs"
     try:
@@ -112,26 +141,7 @@ def main(argv: list[str] | None = None) -> None:
         f"VR_RESUME={int(args.resume)}",
     ]
     env += [f"{k}={_safe(os.environ[k], k)}" for k in PASS_THROUGH if k in os.environ]
-    cmd = [
-        "qsub",
-        "-N",
-        spec.name,
-        "-q",
-        QUEUE,
-        "-l",
-        f"select={SELECT}",
-        "-l",
-        f"walltime={walltime}",
-        "-j",
-        "oe",
-        "-o",
-        f"{jobs}/",
-        "-W",
-        ",".join(attrs),
-        "-v",
-        ",".join(env),
-        str(PBS_SCRIPT),
-    ]
+    cmd = _qsub_command(spec.name, walltime, jobs, attrs, env)
     print(shlex.join(cmd))
     if args.dry_run:
         return

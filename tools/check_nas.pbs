@@ -39,9 +39,11 @@ export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${VULCAN_SCRATCH}
 export XDG_CACHE_HOME="${VULCAN_SCRATCH}/cache/xdg" MPLCONFIGDIR="${VULCAN_SCRATCH}/cache/mpl"
 export TMPDIR="${VULCAN_SCRATCH}/tmp"
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" "${TMPDIR}"
-module purge 2>/dev/null || true
-module use -a /swbuild/analytix/tools/modulefiles 2>/dev/null || true
-module load miniconda3/gh2 2>/dev/null || true
+set +u   # the module scripts read unset variables; a failing module command still stops the job
+module purge
+module use -a /swbuild/analytix/tools/modulefiles
+module load miniconda3/gh2
+set -u
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-pyt2_8_gh}"

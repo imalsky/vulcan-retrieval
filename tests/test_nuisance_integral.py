@@ -22,6 +22,7 @@ jax.config.update("jax_enable_x64", True)
 from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
 from retrieval_framework import pipeline as P
+from retrieval_framework.nuisance import make_nuisance_marginal
 from retrieval_framework.run_nautilus import make_loglike, nuisance_posterior
 
 GROUPS = ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
@@ -54,7 +55,7 @@ def test_a_single_row_chunk_draws_like_any_other():
     truncnorm returns a scalar for one-element arguments.
     """
     grp, s0, d, mu = _data("realistic", np.random.default_rng(0))
-    nm = P.make_nuisance_marginal(BASE, GROUPS, grp)
+    nm = make_nuisance_marginal(BASE, GROUPS, grp)
     st = np.asarray(nm.stats(jnp.asarray(mu), jnp.asarray(d), jnp.asarray(s0)))
     one = nm.draw(st[None], s0, np.random.default_rng(1))
     assert one.shape == (1, len(nm.names))
@@ -106,7 +107,7 @@ def _brute(cfg, grp, s0, d, mu, n_t=4001, n_o=8001):
 def test_marginal_matches_brute_force(case, mode):
     cfg = replace(BASE, **mode)
     grp, s0, d, mu = _data(case, np.random.default_rng(0))
-    nm = P.make_nuisance_marginal(cfg, GROUPS, grp)
+    nm = make_nuisance_marginal(cfg, GROUPS, grp)
     st = nm.stats(jnp.asarray(mu), jnp.asarray(d), jnp.asarray(s0))
     got = float(nm.log_marginal(st, jnp.asarray(s0)))
     tol = 1e-4 if case == "realistic" else 2e-3  # the floor case is the quadrature's worst
@@ -115,7 +116,7 @@ def test_marginal_matches_brute_force(case, mode):
 
 def test_layout_and_draws():
     grp, s0, d, mu = _data("realistic", np.random.default_rng(1))
-    nm = P.make_nuisance_marginal(BASE, GROUPS, grp)
+    nm = make_nuisance_marginal(BASE, GROUPS, grp)
     assert nm.names == [
         "offset_G395H_NRS1",
         "offset_G395H_NRS2",
@@ -172,6 +173,14 @@ class _Stats(NamedTuple):
     conv_ok: Any
     nuis: Any
 
+    @property
+    def reason(self):
+        return jnp.zeros_like(self.acc)
+
+    @property
+    def last_delta(self):
+        return jnp.zeros_like(self.acc, dtype=float)
+
 
 def test_run_logs_and_joins_the_statistics(tmp_path):
     """Certified rows' statistics are logged with the log L nautilus sees; the join
@@ -196,7 +205,7 @@ def test_run_logs_and_joins_the_statistics(tmp_path):
         y_baseline=jnp.zeros((1, 1)),
         nuisance=nuis,
         obs_sigma=None,
-        fwd=SimpleNamespace(chem=SimpleNamespace(count_max=10)),
+        fwd=SimpleNamespace(chem=SimpleNamespace(count_max=10), chem_rtol=0.05),
     )
     like = make_loglike(pipe, 8, {}, nuisance=tmp_path / "nuisance")
     z = np.array([[0.2, 0.3], [0.7, 0.1], [0.4, 0.4]])

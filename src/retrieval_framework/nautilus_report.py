@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from vulcan_forward.constants import KZZ_P_REF_BAR
 
-from retrieval_framework import config_schema as C, observations as OBS, provenance
+from retrieval_framework import config_schema as C, provenance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,61 +32,15 @@ if TYPE_CHECKING:
 __all__ = [
     "CERT_FILE",
     "certificate",
-    "conditioning_map",
     "derived_quantities",
     "main",
-    "model_spectra",
-    "plot",
-    "predictive_replicates",
     "write_certificate",
 ]
 
 log = logging.getLogger("retrieval")
 
 CERT_FILE = "nautilus_certificate.json"
-DPI = 300
-_TO_PPM = 1.0 / OBS.PPM
 _BAR_TO_CGS = 1.0e6  # dyn cm^-2 per bar
-# T-P band: log10 of its top (bar), its points down to ART_PBTM_BAR, and the weighted draws it is taken over.
-TP_PLOT_LOG10_P_TOP = -8
-TP_PLOT_N_P = 120
-TP_PLOT_DRAWS = 300
-# corner contour levels, in sigma; corner's own default stops at 2.
-CORNER_SIGMAS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
-
-# Figure style: serif, ticks in on all four sides, no grid, frameless legend,
-# square panels; Okabe-Ito blue for the model, charcoal for data.
-STYLE = {
-    "font.family": "serif",
-    "font.serif": ["Times New Roman", "Palatino", "DejaVu Serif"],
-    "mathtext.fontset": "stix",
-    "font.size": 12,
-    "axes.labelsize": "large",
-    "axes.linewidth": 1.5,
-    "axes.xmargin": 0,
-    "legend.frameon": False,
-    "legend.fontsize": 10,
-    "xtick.direction": "in",
-    "ytick.direction": "in",
-    "xtick.top": True,
-    "ytick.right": True,
-    "xtick.minor.visible": True,
-    "ytick.minor.visible": True,
-    "xtick.labelsize": "large",
-    "ytick.labelsize": "large",
-    "savefig.bbox": "tight",
-}
-MODEL = "#0072B2"
-INK = "#2b2b2b"
-TRUTH = "#CC3311"
-MARKERS = "os^Dv"  # one data-point shape per instrument group
-
-
-def _pastel(c: str, keep: float) -> tuple:
-    """Return ``c`` blended toward white (keep = 1 is the colour itself)."""
-    from matplotlib.colors import to_rgb
-
-    return tuple(1 - keep + keep * v for v in to_rgb(c))
 
 
 def _read(out: Path, name: str) -> Any:
@@ -122,7 +76,11 @@ COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
 
 
 def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[float, float, float, float]:
-    """Return (Tirr, kappa, gamma, Tint) of one posterior row; Tint follows from a retrieved deep temperature."""
+    """Return (Tirr, kappa, gamma, Tint) of one posterior row; Tint follows from a retrieved deep temperature.
+
+    This and ``_tp_curve`` are numpy twins of ``tp_profile``'s evaluator, so the report reads a finished run's rows
+    without building the model; tests/test_nautilus_report.py holds them to it on every option.
+    """
     g = float(cfgj["tp_gravity_cgs"])
     Tirr = float(t[names.index("Tirr")])
     kappa = 10.0 ** float(t[names.index("log10kappa")])
@@ -130,11 +88,11 @@ def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[f
     if "T1bar" in names:
         from retrieval_framework.tp_profile import tint_from_deep
 
-        T_inv, p_inv = float(t[names.index("T1bar")]), float(cfgj.get("tp_deep_p_bar", 1.0))
+        T_inv, p_inv = float(t[names.index("T1bar")]), float(cfgj["tp_deep_p_bar"])
         if "log10P_rcb" in names:
             # the deep level may sit on the adiabat (tp_profile._phys)
             p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
-            T_inv = T_inv * (min(p_rcb, p_inv) / p_inv) ** float(cfgj.get("tp_nabla_ad", 0.29))
+            T_inv = T_inv * (min(p_rcb, p_inv) / p_inv) ** float(cfgj["tp_nabla_ad"])
             p_inv = min(p_rcb, p_inv)
         Tint = float(np.asarray(tint_from_deep(T_inv, Tirr, kappa, gamma, g, C.GUILLOT_F, p_inv)))
     elif "Tint" in names:
@@ -152,18 +110,18 @@ def _tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: Arra
     if "log10P_rcb" in names:
         p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
         T_rcb = _guillot_T(p_rcb, g, kappa, gamma, Tint, Tirr, C.GUILLOT_F)
-        nabla = float(cfgj.get("tp_nabla_ad", 0.29))
+        nabla = float(cfgj["tp_nabla_ad"])
         T = np.where(np.asarray(p_bar) > p_rcb, T_rcb * (np.asarray(p_bar) / p_rcb) ** nabla, T)
     return T
 
 
-def _kzz_at_ref(cfgj: dict[str, Any]) -> float:
-    """Return the case's base Kzz (cm^2/s) at KZZ_P_REF_BAR, the value e^lnKzz scales.
+def _kzz_at_ref(cfgj: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
+    """Return the case's base Kzz (cm^2/s) at ``p_bar``, by default KZZ_P_REF_BAR, the value e^lnKzz scales.
 
     vulcan3's ``const_Kzz``, or its atm file's Kzz column interpolated linearly in pressure, as the case's
     ``Kzz_prof`` says.
     """
-    over = cfgj.get("cfg_overrides") or {}
+    over = cfgj["cfg_overrides"]
     _, case = provenance.case_config(cfgj["vulcan_cfg_name"])
     prof = over.get("Kzz_prof", case["Kzz_prof"])
     if prof == "const":
@@ -173,10 +131,24 @@ def _kzz_at_ref(cfgj: dict[str, Any]) -> float:
     atm = provenance.case_data_file(over.get("atm_file", case["atm_file"]))
     t = np.genfromtxt(atm, names=True, dtype=None, skip_header=1)
     p = np.asarray(t["Pressure"], np.float64) / 1e6  # dyne/cm^2 -> bar
-    if not p.min() <= KZZ_P_REF_BAR <= p.max():
-        raise ValueError(f"{atm} does not span {KZZ_P_REF_BAR} bar")
+    if not p.min() <= p_bar <= p.max():
+        raise ValueError(f"{atm} does not span {p_bar} bar")
     o = np.argsort(p)
-    return float(np.interp(KZZ_P_REF_BAR, p[o], np.asarray(t["Kzz"], np.float64)[o]))
+    return float(np.interp(p_bar, p[o], np.asarray(t["Kzz"], np.float64)[o]))
+
+
+def _log10_kzz_at_report_level(cfgj: dict[str, Any], lnkzz: np.ndarray, slope: np.ndarray | None) -> np.ndarray:
+    """Return log10 Kzz (cm^2/s) at KZZ_P_REF_BAR of each row, on the engine's profile.
+
+    ``kzz_mode="powerlaw"`` anchors the base at ``kzz_p_ref_bar`` and tilts it as (P / P_anchor)^-slope; at the default
+    anchor the tilt is 1. Otherwise e^lnKzz scales the case's profile.
+    """
+    kzz = np.exp(lnkzz)
+    if cfgj["kzz_mode"] != "powerlaw":
+        return np.log10(_kzz_at_ref(cfgj) * kzz)
+    anchor = float(cfgj["kzz_p_ref_bar"])
+    tilt = (KZZ_P_REF_BAR / anchor) ** (-(0.0 if slope is None else slope))
+    return np.log10(_kzz_at_ref(cfgj, anchor) * kzz * tilt)
 
 
 def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
@@ -205,7 +177,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         """Return one parameter's column of theta."""
         return theta[:, names.index(n)]
 
-    base = float(cfgj.get("baseline_metallicity_solar", 10.0))
+    base = float(cfgj["baseline_metallicity_solar"])
     eps = {k: 10.0 ** (v - 12.0) for k, v in LODDERS2020_LOG_EPS.items()}
     lnZ, c_o = col("lnZ"), col("c_o")
     s_o = col("s_o") if "s_o" in names else np.zeros_like(lnZ)
@@ -221,7 +193,9 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         "S_to_O_solar": _wquant(np.exp(s_o), w) if "s_o" in names else None,
         "kzz_factor": _wquant(kzz, w),
         "kzz_ref_p_bar": KZZ_P_REF_BAR,
-        "log10_kzz_ref_cgs": _wquant(np.log10(_kzz_at_ref(cfgj) * kzz), w),
+        "log10_kzz_ref_cgs": _wquant(
+            _log10_kzz_at_report_level(cfgj, col("lnKzz"), col("kzz_slope") if "kzz_slope" in names else None), w
+        ),
         "kzz_prior_floor_factor": floor,
         **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in KZZ_FLOOR_MULTIPLES},
     }
@@ -237,7 +211,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
             "kzz_factor": _wquant(kzz[keep], wt),
         }
     if "Tirr" in names:
-        p_deep = np.array([float(cfgj.get("tp_deep_p_bar", 1.0))])
+        p_deep = np.array([float(cfgj["tp_deep_p_bar"])])
         # the full profile (adiabat included) at the deep level, and the Tint
         # behind it
         T_deep = np.asarray([_tp_curve(t, names, cfgj, p_deep)[0] for t in theta])
@@ -252,21 +226,12 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
     return d
 
 
-def conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
+def _conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
     """Return where the rejections sit, for lnKzz, the deep T-P parameter and lnZ, one at a time.
 
     ``COND_BINS`` equal bins over the prior box, each with the in-window proposals evaluated, the rejected fraction and
-    the posterior weight. A batch redrawn after a resume counts twice.
-
-    Parameters
-    ----------
-    out_dir : str or pathlib.Path
-        The run's output directory.
-
-    Returns
-    -------
-    dict or None
-        None without anchors/ (a cold run keeps no certified points) or rejected/.
+    the posterior weight. A batch redrawn after a resume counts twice. None without anchors/ (a cold run keeps no
+    certified points) or rejected/.
     """
     out = Path(out_dir).resolve()
     afiles = sorted((out / "anchors").glob("anchors_*.npz"))
@@ -311,7 +276,113 @@ def conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
     return m
 
 
-# size-limit-ok: one caveat per condition, then one record
+def _rejection_fractions(tally: dict) -> dict[str, Any]:
+    """Return the certificate's rejection block from the tally."""
+
+    def frac(key: str, denom: int | None) -> float | None:
+        """Return one tally count over ``denom``, or None with no denominator."""
+        return tally.get(key, 0) / denom if denom else None
+
+    n = tally.get("n_eval", 0)
+    in_window = n - tally.get("tp_out", 0)
+    return {
+        "n_eval": n,
+        "tp_out_of_n_eval": frac("tp_out", n),
+        "rejected_of_in_window": _n_rejected(tally) / in_window if in_window else None,
+        "exhausted_of_in_window": frac("exhausted", in_window),
+        "stalled_of_in_window": frac("stalled", in_window),
+        "nonfinite_of_in_window": frac("nonfinite", in_window),
+        "cold_certified_of_cold": frac("cold_certified", tally.get("n_cold")),
+        "warm_certified_of_warm": frac("warm_certified", tally.get("n_warm")),
+    }
+
+
+def _n_rejected(tally: dict) -> int:
+    """Return the in-window rejections in the tally."""
+    return sum(tally.get(k, 0) for k in ("exhausted", "stalled", "nonfinite"))
+
+
+def _model_caveats(cfg: dict, summ: dict, tally: dict, rejections: dict, cond: dict | None) -> list[str]:
+    """Return the caveats on what the run's numbers mean, from its settings, tally and conditioning map."""
+    rejected = _n_rejected(tally)
+    caveats = [
+        (
+            f"{rejections['rejected_of_in_window'] or 0.0:.1%} of the draws with a T-P "
+            "profile in the window were rejected (chemistry not certified within its cap, "
+            "or a non-finite forward). Rejected draws have zero likelihood, so logZ_box is "
+            "the box-prior evidence with those regions removed and depends on count_max "
+            "and the rtol."
+        ),
+        "nautilus reports no logZ error: quote the spread over independent seeds.",
+    ]
+    if summ["starts"] != "cold":
+        caveats.append(
+            "Warm starts: each solve continued from the nearest certified column, so the "
+            "likelihood and which draws were rejected depend on the evaluation order. The "
+            "posterior and logZ_box are approximate; an evidence claim needs a cold run "
+            "(warm_starts: false in the spec)."
+        )
+    if cond is None:
+        caveats.append("No conditioning map: the run kept no anchors/ or no rejected/ log.")
+    elif "lnKzz" in cond:
+        k = cond["lnKzz"]
+        f0 = k["rejected_frac"][0]
+        caveats.append(
+            f"Rejections by Kzz: {'no' if f0 is None else f'{f0:.1%} of the'} in-window "
+            f"draws in the lowest bin (lnKzz {k['edges'][0]:.2f} to {k['edges'][1]:.2f}) "
+            f"{'were evaluated' if f0 is None else 'were rejected'}, against "
+            f"{cond['rejected_of_in_window']:.1%} overall; that bin holds "
+            f"{k['posterior_weight'][0]:.3f} of the posterior weight (evaluated proposals; "
+            f"{cond['rejected_in_log']} in the rejected log against {rejected} in the tally)."
+        )
+    if cfg["integrate_nuisance"]:
+        caveats.append(
+            "The offsets and noise inflations were integrated out of the likelihood "
+            "(the evidence and the other parameters' posterior are those of the sampled "
+            "model); their posteriors are one conditional draw per row from the statistics "
+            "the run logged, on the log10-b quadrature grid."
+        )
+    if cfg["infer_lnM"]:
+        caveats.append(
+            "lnM moves the planet mass in the RT only: the chemistry column keeps the "
+            "baseline mass M0, so its gravity does not vary with lnM."
+        )
+    if int(cfg["cold_lanes"]) > 0:
+        caveats.append(
+            "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
+            "column and likelihood move with its batch at the convergence scale."
+        )
+    n = tally.get("n_eval", 0)
+    if n > int(summ["n_like"]):
+        caveats.append(
+            f"The tally counts {n - int(summ['n_like'])} more evaluations than nautilus "
+            "(n_like): a batch redrawn after a resume is counted twice, so the fractions "
+            "are approximate."
+        )
+    return caveats
+
+
+def _identity_caveats(manifest: dict, manifest_digest: str | None, digest: str, code_now: dict) -> list[str]:
+    """Return the caveats on whether the identity files and the code are the run's."""
+    caveats = []
+    run_code = manifest.get("code") or {}
+    if manifest_digest != digest.split("|", maxsplit=1)[0]:
+        caveats.append(
+            "target_manifest.json does not hash to this run's target digest: the identity "
+            "files in this directory belong to a different run."
+        )
+    dirty = sorted(r for r, s in run_code.items() if (s or {}).get("dirty"))
+    if dirty:
+        caveats.append(f"The run's {', '.join(dirty)} tree(s) had uncommitted changes.")
+    moved = sorted(r for r, s in run_code.items() if (s or {}).get("commit") != (code_now.get(r) or {}).get("commit"))
+    if moved:
+        caveats.append(
+            f"code_now differs from the run's code for {', '.join(moved)}: "
+            "this certificate was written at another commit."
+        )
+    return caveats
+
+
 def certificate(out_dir: str | Path) -> dict[str, Any]:
     """Return the certificate of the finished run in ``out_dir``.
 
@@ -335,93 +406,12 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
     run_code = manifest.get("code") or {}
     code_now = provenance._repo_states()
 
-    def frac(key: str, denom: int | None) -> float | None:
-        """Return one tally count over ``denom``, or None with no denominator."""
-        return tally.get(key, 0) / denom if denom else None
-
     n = tally.get("n_eval", 0)
-    in_window = n - tally.get("tp_out", 0)
-    rejected = sum(tally.get(k, 0) for k in ("exhausted", "stalled", "nonfinite"))
     warm = summ["starts"] != "cold"
-    rejections = {
-        "n_eval": n,
-        "tp_out_of_n_eval": frac("tp_out", n),
-        "rejected_of_in_window": rejected / in_window if in_window else None,
-        "exhausted_of_in_window": frac("exhausted", in_window),
-        "stalled_of_in_window": frac("stalled", in_window),
-        "nonfinite_of_in_window": frac("nonfinite", in_window),
-        "cold_certified_of_cold": frac("cold_certified", tally.get("n_cold")),
-        "warm_certified_of_warm": frac("warm_certified", tally.get("n_warm")),
-    }
-
-    caveats = [
-        (
-            f"{rejections['rejected_of_in_window'] or 0.0:.1%} of the draws with a T-P "
-            "profile in the window were rejected (chemistry not certified within its cap, "
-            "or a non-finite forward). Rejected draws have zero likelihood, so logZ_box is "
-            "the box-prior evidence with those regions removed and depends on count_max "
-            "and the rtol."
-        ),
-        "nautilus reports no logZ error: quote the spread over independent seeds.",
-    ]
-    if warm:
-        caveats.append(
-            "Warm starts: each solve continued from the nearest certified column, so the "
-            "likelihood and which draws were rejected depend on the evaluation order. The "
-            "posterior and logZ_box are approximate; an evidence claim needs a cold run "
-            "(warm_starts: false in the spec)."
-        )
-    cond = conditioning_map(out)
-    if cond is None:
-        caveats.append("No conditioning map: the run kept no anchors/ or no rejected/ log.")
-    elif "lnKzz" in cond:
-        k = cond["lnKzz"]
-        f0 = k["rejected_frac"][0]
-        caveats.append(
-            f"Rejections by Kzz: {'no' if f0 is None else f'{f0:.1%} of the'} in-window "
-            f"draws in the lowest bin (lnKzz {k['edges'][0]:.2f} to {k['edges'][1]:.2f}) "
-            f"{'were evaluated' if f0 is None else 'were rejected'}, against "
-            f"{cond['rejected_of_in_window']:.1%} overall; that bin holds "
-            f"{k['posterior_weight'][0]:.3f} of the posterior weight (evaluated proposals; "
-            f"{cond['rejected_in_log']} in the rejected log against {rejected} in the tally)."
-        )
-    if cfg.get("integrate_nuisance"):
-        caveats.append(
-            "The offsets and noise inflations were integrated out of the likelihood "
-            "(the evidence and the other parameters' posterior are those of the sampled "
-            "model); their posteriors are one conditional draw per row from the statistics "
-            "the run logged, on the log10-b quadrature grid."
-        )
-    if cfg.get("infer_lnM"):
-        caveats.append(
-            "lnM moves the planet mass in the RT only: the chemistry column keeps the "
-            "baseline mass M0, so its gravity does not vary with lnM."
-        )
-    if int(cfg.get("cold_lanes") or 0) > 0:
-        caveats.append(
-            "Lane queue: a draw that starts in a freed lane starts at that tick, so its "
-            "column and likelihood move with its batch at the convergence scale."
-        )
-    if n > int(summ["n_like"]):
-        caveats.append(
-            f"The tally counts {n - int(summ['n_like'])} more evaluations than nautilus "
-            "(n_like): a batch redrawn after a resume is counted twice, so the fractions "
-            "are approximate."
-        )
-    if manifest_digest != digest.split("|")[0]:
-        caveats.append(
-            "target_manifest.json does not hash to this run's target digest: the identity "
-            "files in this directory belong to a different run."
-        )
-    dirty = sorted(r for r, s in run_code.items() if (s or {}).get("dirty"))
-    if dirty:
-        caveats.append(f"The run's {', '.join(dirty)} tree(s) had uncommitted changes.")
-    moved = sorted(r for r, s in run_code.items() if (s or {}).get("commit") != (code_now.get(r) or {}).get("commit"))
-    if moved:
-        caveats.append(
-            f"code_now differs from the run's code for {', '.join(moved)}: "
-            "this certificate was written at another commit."
-        )
+    rejections = _rejection_fractions(tally)
+    cond = _conditioning_map(out)
+    caveats = _model_caveats(cfg, summ, tally, rejections, cond)
+    caveats += _identity_caveats(manifest, manifest_digest, digest, code_now)
 
     return {
         "certificate_version": 1,
@@ -456,15 +446,15 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
         "result": {"logZ_box": summ["logZ_box"], "logZ_err": None, "n_eff": summ["n_eff"], "n_like": summ["n_like"]},
         "starts": {
             "mode": "warm" if warm else "cold",
-            "warm_of_n_eval": frac("n_warm", n),
-            "cold_of_n_eval": frac("n_cold", n),
+            "warm_of_n_eval": tally.get("n_warm", 0) / n if n else None,
+            "cold_of_n_eval": tally.get("n_cold", 0) / n if n else None,
         },
         "rejections": rejections,
         "chemistry": {
             "rtol": summ.get("chem_rtol"),
             # A presolve-chain run: its certifying rtol and cap.
             **({"chem_retry": summ["chem_retry"]} if "chem_retry" in summ else {}),
-            **{k: cfg.get(k) for k in ("count_max", "yconv_cri", "dt_max", "nz", "cold_lanes", "cfg_overrides")},
+            **{k: cfg[k] for k in ("count_max", "yconv_cri", "dt_max", "nz", "cold_lanes", "cfg_overrides")},
         },
         "derived": derived_quantities(out),
         "conditioning": cond,
@@ -490,35 +480,6 @@ def write_certificate(out_dir: str | Path) -> Path:
     return path
 
 
-def predictive_replicates(
-    mu_draws: np.ndarray, obs_sigma: ArrayLike, infl: ArrayLike, rng: np.random.Generator
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return replicated observations under the run's own likelihood.
-
-    The likelihood is diagonal Gaussian with sigma_eff = obs_sigma * noise_inflation and mu already carries the offsets,
-    so a replicate is mu + N(0, sigma_eff^2). The spread of ``mu_draws`` alone is the latent band, not comparable to
-    data.
-
-    Parameters
-    ----------
-    mu_draws : numpy.ndarray [n_draw, n_bin]
-        The model depths.
-    obs_sigma : array-like [n_bin]
-        The observed sigmas.
-    infl : array-like [n_draw, 1] or [n_draw, n_bin]
-        The sigma multiplier.
-    rng : numpy.random.Generator
-        The generator.
-
-    Returns
-    -------
-    tuple of numpy.ndarray
-        ``(y_rep, sigma_eff)``.
-    """
-    sig_eff = np.asarray(obs_sigma)[None, :] * np.asarray(infl)
-    return mu_draws + rng.normal(size=mu_draws.shape) * sig_eff, sig_eff
-
-
 def _guillot_T(
     p_bar: ArrayLike, gravity: float, kappa: float, gamma: float, Tint: float, Tirr: float, f: float
 ) -> np.ndarray:
@@ -532,6 +493,11 @@ def _guillot_T(
 def _config_from_json(path: Path) -> C.Config:
     """Return the run's Config from its config.json, dropping keys that are not Config fields."""
     d = json.loads(Path(path).read_text())
+    if d.get("chem_presolve") or d.get("chem_retry"):
+        raise RuntimeError(
+            f"{path} ran the presolve chain or its retry pass, a second program this tree no longer builds: re-solve "
+            "its draws at vulcan-retrieval 0a2dbf3"
+        )
     names = {f.name for f in fields(C.Config)}
     kw: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in d.items() if k in names}
     if not kw.get("network"):
@@ -545,7 +511,7 @@ def _config_from_json(path: Path) -> C.Config:
     return C.Config(**kw)
 
 
-def model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     """Re-solve ``n`` weighted posterior draws cold.
 
     With integrated nuisances the depth carries each row's drawn offsets and the multiplier its drawn inflations;
@@ -590,6 +556,7 @@ def model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray, 
     th = jnp.asarray(theta, pipe.dtype)
     t0 = time.perf_counter()
     Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(th[:, : pipe.n_chem_tp])
+    P._abort_if_frozen(*P._exit_state(cd), theta, pipe.fwd.chem_rtol)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
     # the runs' certificate: conv_normal alone (a solve can certify at cap + 1)
     ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
@@ -607,146 +574,6 @@ def model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray, 
     return theta, mu, ok, mult
 
 
-# size-limit-ok: the three figures, in order, on one set of inputs
-def plot(out_dir: str | Path, spectra: tuple[Any, ...] | None = None) -> list[Path]:
-    """Draw corner.png and tp_posterior.png in ``out_dir/plots``, and spectrum_fit.png with ``spectra``.
-
-    Parameters
-    ----------
-    out_dir : str or pathlib.Path
-        The run's output directory.
-    spectra : tuple, optional
-        ``model_spectra``'s result.
-
-    Returns
-    -------
-    list of pathlib.Path
-        The files written.
-
-    Raises
-    ------
-    ValueError
-        If the posterior's parameters are not config.json's.
-    RuntimeError
-        If no model spectrum certified.
-    """
-    import matplotlib as mpl
-
-    mpl.use("Agg")
-    import corner as corner_mod
-    import matplotlib.pyplot as plt
-    from vulcan_forward.constants import ART_PBTM_BAR
-
-    out = Path(out_dir).resolve()
-    plots = out / "plots"
-    plots.mkdir(exist_ok=True)
-    cfgj = _read(out, "config.json")
-    post = np.load(out / "nautilus_posterior.npz")
-    names = [str(s) for s in post["param_names"]]
-    if names != list(cfgj["inferred_param_names"]):
-        raise ValueError(
-            f"nautilus_posterior.npz parameters {names} are not config.json's {cfgj['inferred_param_names']}"
-        )
-    theta = np.asarray(post["theta"], np.float64)
-    w = _weights(post["log_w"])
-    truth = np.asarray(cfgj["inferred_param_truth"], np.float64)
-    synthetic = bool(cfgj.get("generate_synthetic_data", False))
-    show_truth = synthetic and np.isfinite(truth).any()
-    written = []
-    plt.rcParams.update(STYLE)
-
-    fig = corner_mod.corner(
-        # An unweighted scatter of weighted points would show the low-weight shells as posterior mass.
-        theta,
-        weights=w,
-        plot_datapoints=False,
-        color=INK,
-        levels=[1.0 - np.exp(-0.5 * s * s) for s in CORNER_SIGMAS],
-        labels=list(cfgj["inferred_param_labels"]),
-        quantiles=[0.16, 0.5, 0.84],
-        truths=(truth if show_truth else None),
-        truth_color=TRUTH,
-    )
-    fig.savefig(plots / "corner.png", dpi=DPI)
-    plt.close(fig)
-    written.append(plots / "corner.png")
-
-    rng = np.random.default_rng(3)
-    sel = theta[rng.choice(len(theta), size=TP_PLOT_DRAWS, p=w)]
-    p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(ART_PBTM_BAR), TP_PLOT_N_P)
-
-    def T_of(t: np.ndarray) -> np.ndarray:
-        """Return T on the band's pressure grid for one row."""
-        return _tp_curve(t, names, cfgj, p_bar)
-
-    qs = np.nanpercentile(np.stack([T_of(t) for t in sel]), [5, 50, 95], axis=0)
-    fig, ax = plt.subplots(figsize=(6.5, 6.5))
-    ax.fill_betweenx(p_bar, qs[0], qs[2], color=_pastel(MODEL, 0.3), lw=0, label="5-95% interval")
-    ax.plot(qs[1], p_bar, color=MODEL, lw=1.5, label="median")
-    if show_truth:
-        ax.plot(T_of(truth), p_bar, color=TRUTH, ls="--", lw=1.2, label="truth")
-    ax.set_yscale("log")
-    ax.set_ylim(p_bar.max(), p_bar.min())
-    ax.set_xlabel("temperature (K)")
-    ax.set_ylabel("pressure (bar)")
-    ax.legend(loc="best")
-    fig.savefig(plots / "tp_posterior.png", dpi=DPI)
-    plt.close(fig)
-    written.append(plots / "tp_posterior.png")
-
-    if spectra is not None:
-        th_s, mu, ok, mult = spectra if len(spectra) == 4 else (*spectra, None)
-        if not np.any(ok):
-            raise RuntimeError("no model-spectrum draw certified cold: nothing to plot")
-        log.info("spectrum fit: %s/%s draws certified cold", int(ok.sum()), len(ok))
-        obs = np.load(out / "observations.npz")
-        wl = np.asarray(obs["wl"], np.float64)
-        sigma = np.asarray(obs["sigma"], np.float64)
-        group = np.asarray(obs["group"]).astype(str)
-        infl = OBS.noise_scale_per_bin(th_s[ok], names, group) if mult is None else mult[ok]
-        y_rep, _ = predictive_replicates(mu[ok], sigma, infl, np.random.default_rng(4))
-        o = np.argsort(wl)
-        fig, ax = plt.subplots(figsize=(6.5, 6.5))
-        pred = _TO_PPM * np.percentile(y_rep, [5, 95], axis=0)[:, o]
-        band = _TO_PPM * np.percentile(mu[ok], [5, 95], axis=0)[:, o]
-        ax.fill_between(
-            wl[o], pred[0], pred[1], color=_pastel(MODEL, 0.15), lw=0, label="posterior predictive 5-95%", zorder=1
-        )
-        ax.fill_between(wl[o], band[0], band[1], color=_pastel(MODEL, 0.3), lw=0, label="model 5-95%", zorder=2)
-        ax.plot(wl[o], _TO_PPM * np.median(mu[ok], axis=0)[o], color=MODEL, lw=1.5, label="median model", zorder=3)
-        for g, mk in zip(dict.fromkeys(group.tolist()), MARKERS * len(group), strict=False):
-            m = group == g
-            ax.errorbar(
-                wl[m],
-                _TO_PPM * np.asarray(obs["depth"], np.float64)[m],
-                yerr=_TO_PPM * sigma[m],
-                fmt=mk,
-                ms=3.5,
-                elinewidth=0.8,
-                capsize=0,
-                color=INK,
-                label=g,
-                zorder=4,
-            )
-        if synthetic and "flux_true" in obs.files:
-            ax.plot(
-                wl[o],
-                _TO_PPM * np.asarray(obs["flux_true"], np.float64)[o],
-                color=TRUTH,
-                ls="--",
-                lw=1.2,
-                label="injected truth",
-                zorder=5,
-            )
-        ax.set_xlabel("wavelength ($\\mu$m)")
-        ax.set_ylabel("transit depth (ppm)")
-        ax.legend(loc="best")
-        fig.savefig(plots / "spectrum_fit.png", dpi=DPI)
-        plt.close(fig)
-        written.append(plots / "spectrum_fit.png")
-    return written
-
-
 def main(argv: list[str] | None = None) -> None:
     """Run the command line.
 
@@ -755,6 +582,7 @@ def main(argv: list[str] | None = None) -> None:
     argv : list of str, optional
         The arguments; default ``sys.argv``.
     """
+    from retrieval_framework.report_figures import plot
     from retrieval_framework.run_setup import setup_logging
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -763,14 +591,15 @@ def main(argv: list[str] | None = None) -> None:
         "--spectra",
         type=int,
         default=32,
-        help="posterior draws to re-solve for the spectrum figure (0: no forward model, no spectrum figure)",
+        help="posterior draws to re-solve for the spectrum figure (0: no forward model, no spectrum figure; "
+        "a draw frozen at dt_min stops the report, and 0 still gives the certificate and the other figures)",
     )
     args = ap.parse_args(argv)
     setup_logging()
     out = Path(args.out_dir).resolve()
     # the forward build comes first: the certificate's version record imports
     # exojax, which must not precede vulcan_chem
-    spectra = model_spectra(out, args.spectra) if args.spectra > 0 else None
+    spectra = _model_spectra(out, args.spectra) if args.spectra > 0 else None
     log.info("wrote %s", write_certificate(out))
     for p in plot(out, spectra):
         log.info("wrote %s", p)

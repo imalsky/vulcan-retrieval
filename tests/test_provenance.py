@@ -13,6 +13,9 @@ import pytest
 from retrieval_framework import config_schema as C
 from retrieval_framework import provenance
 
+# digest_pipe stubs this, so that a test without the data tree can build a manifest.
+SCIENCE_DATA_IDENTITY = provenance.science_data_identity
+
 
 def test_data_identity_never_reports_null_opacity_without_saying_why(tmp_path, monkeypatch):
     """The data identity must not silently claim a run read no opacity data.
@@ -95,6 +98,8 @@ def _repo(**over):
     ("state", "moves"),
     [
         ({"dirty_files": ["a.py", "b.py"]}, False),  # the LIST churns; not an identity
+        ({"dirty": False}, False),  # a PBS edit: the same commit and the same source
+        ({"dirty": True}, False),
         ({"dirty": False, "dirty_files": [], "src_diff": None}, True),
         ({"src_diff": "e" * 64}, True),  # a DIFFERENT uncommitted src edit
         ({"commit": "b" * 40}, True),  # a different commit
@@ -114,20 +119,20 @@ def test_target_digest_binds_code_state_not_file_churn(state, moves, digest_pipe
     assert (provenance.target_digest(cfg, digest_pipe) != d0) is moves
 
 
-def test_target_digest_binds_the_cia_tables(digest_pipe, monkeypatch):
+def test_target_digest_binds_the_cia_tables(digest_pipe, monkeypatch, tmp_path):
     """The CIA tables are outside git, so nothing else can notice a swapped continuum."""
-    cfg = C.Config(molecules=("H2O",))
-    monkeypatch.setattr(
-        provenance, "_cia_identity", lambda *_a, **_k: {n: {"sha256": "1" * 64} for n in provenance.CIA_TABLES}
-    )
+    from vulcan_forward import paths
+
+    monkeypatch.setattr(provenance, "science_data_identity", SCIENCE_DATA_IDENTITY)
+    a, b = tmp_path / "a.cia", tmp_path / "b.cia"
+    a.write_text("a")
+    b.write_text("b")
+    monkeypatch.setattr(paths, "cia_h2h2_file", lambda: a)
+    monkeypatch.setattr(paths, "cia_h2he_file", lambda: a)
+    cfg = C.Config(molecules=())
     d0 = provenance.target_digest(cfg, digest_pipe)
-    monkeypatch.setattr(
-        provenance, "_cia_identity", lambda *_a, **_k: {n: {"sha256": "2" * 64} for n in provenance.CIA_TABLES}
-    )
+    monkeypatch.setattr(paths, "cia_h2he_file", lambda: b)
     assert provenance.target_digest(cfg, digest_pipe) != d0
-
-
-# --- run-directory identity: a refused resume must not rewrite it -------------
 
 
 def test_untracked_source_moves_the_code_state(tmp_path, monkeypatch):
@@ -181,3 +186,42 @@ def test_target_digest_binds_a_path_style_case_and_its_files(digest_pipe, tmp_pa
     for name in ("W39b", "data/survey/w107b/W107b.yaml"):
         got = provenance.case_inputs(name, {})
         assert all(got[k] for k in ("config", "atm_file", "sflux_file")), (name, got)
+
+
+@pytest.mark.parametrize("absent", ["cia", "opacity"])
+def test_a_target_manifest_refuses_a_table_it_cannot_hash(digest_pipe, monkeypatch, tmp_path, absent):
+    """A run read these tables: a manifest that says nothing about one would bind nothing."""
+    from vulcan_forward import exomolop, paths
+
+    monkeypatch.setattr(provenance, "science_data_identity", SCIENCE_DATA_IDENTITY)
+    table = tmp_path / "table"
+    table.write_text("x")
+    missing = tmp_path / "absent.dat"
+    monkeypatch.setattr(paths, "cia_h2h2_file", lambda: table)
+    monkeypatch.setattr(paths, "cia_h2he_file", lambda: missing if absent == "cia" else table)
+    monkeypatch.setattr(exomolop, "table_path", lambda _m: missing if absent == "opacity" else table)
+    with pytest.raises(FileNotFoundError, match=r"absent\.dat"):
+        provenance.target_manifest(C.Config(molecules=("H2O",)), digest_pipe)
+
+
+def test_an_archived_manifest_hashes_as_it_was_written(tmp_path):
+    """Version 5 hashed `dirty`; its stored digest must still match, or every old certificate calls itself foreign."""
+    import hashlib
+    import json
+
+    old = {"manifest_version": 5, "code": {"r": {"commit": "c", "dirty": True, "src_diff": None}}}
+    new = {"manifest_version": 6, "code": {"r": {"commit": "c", "dirty": True, "src_diff": None}, "q": None}}
+    (tmp_path / provenance.MANIFEST_FILE).write_text(json.dumps(old))
+    want = hashlib.sha256(json.dumps(old, sort_keys=True).encode()).hexdigest()
+    assert provenance.archived_manifest_digest(tmp_path) == want
+    (tmp_path / provenance.MANIFEST_FILE).write_text(json.dumps(new))
+    clean = {"manifest_version": 6, "code": {"r": {"commit": "c", "dirty": False, "src_diff": None}, "q": None}}
+    d_new = provenance.archived_manifest_digest(tmp_path)
+    (tmp_path / provenance.MANIFEST_FILE).write_text(json.dumps(clean))
+    assert provenance.archived_manifest_digest(tmp_path) == d_new
+
+
+@pytest.mark.parametrize("manifest", ['{"manifest_version": 6}', '{"manifest_version": 6, "code": {"r": 3}}'])
+def test_a_damaged_manifest_reads_as_unreadable(tmp_path, manifest):
+    (tmp_path / provenance.MANIFEST_FILE).write_text(manifest)
+    assert provenance.archived_manifest_digest(tmp_path).startswith("unreadable: ")

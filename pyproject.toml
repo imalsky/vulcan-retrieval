@@ -207,7 +207,7 @@ omit = []
 [tool.coverage.report]
 fail_under = 80
 exclude_also = [
-    '\.\.\.',
+    '^\s*\.\.\.\s*$',
     'if typing.TYPE_CHECKING:',
     'if TYPE_CHECKING:',
 ]

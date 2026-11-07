@@ -8,7 +8,8 @@ certified columns become anchors. Padding and T-P-invalid rows are masked: a
 short chunk's filler rows and its out-of-window rows reach the evaluator as
 ``active`` False. The first chunk's startup check refuses a run whose Kzz
 decade is solver-cut or whose first chunk kept nothing; the real job path runs
-end to end on the smoke case (slow). Last, every config refusal of validate_config.
+end to end on the smoke case (slow). A resume across a changed target is refused. Last, the config refusals of
+validate_config that a case's identity and options can hit.
 """
 
 import json
@@ -37,6 +38,7 @@ from retrieval_framework.run_nautilus import (
     N_NETWORKS,
     STARTUP_MIN_DRAWS,
     Anchors,
+    _check_resume,
     make_loglike,
     make_sampler,
     startup_check,
@@ -50,6 +52,14 @@ EXACT_LOGZ = math.log(ndtr(1.0) - ndtr(-5.0)) + math.log(ndtr(5.0) - ndtr(-1.5))
 class _Stats(NamedTuple):
     acc: jnp.ndarray
     conv_ok: jnp.ndarray
+
+    @property
+    def reason(self):
+        return jnp.zeros_like(self.acc)
+
+    @property
+    def last_delta(self):
+        return jnp.zeros_like(self.acc, dtype=float)
 
 
 def _masked(name, seen, active, L, acc, conv):
@@ -100,7 +110,7 @@ def _stub_pipe(seen=None):
         dtype=jnp.float64,
         n_chem_tp=2,
         y_baseline=jnp.zeros((1, 1)),
-        fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX)),
+        fwd=SimpleNamespace(chem=SimpleNamespace(count_max=COUNT_MAX), chem_rtol=0.05),
     )
 
 
@@ -277,6 +287,10 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
         ({"cloud_model": "patchy"}, "cloud_model"),
         ({"infer_lnM": True, "prior_lnM_sigma": 0.0}, "prior_lnM_sigma"),
         ({"network": ""}, "network is unset"),  # no default network
+        ({"vulcan_cfg_name": " "}, "vulcan_cfg_name is unset"),  # no default planet
+        ({"rp_cm": None}, "rp_cm"),
+        ({"rstar_cm": None}, "rstar_cm"),
+        ({"integrate_nuisance": True, "infer_offsets": False, "infer_noise_inflation": False}, "integrate_nuisance"),
         # accepted: condensation with its explicit opt-in, and the v5 model choices
         ({"cfg_overrides": {"use_condense": True}, "allow_condense_inference": True}, None),
         (
@@ -294,10 +308,22 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
     ],
 )
 def test_validate_config_refusals(over, msg):
-    """Every refusal a case preset or an override file can hit (msg None: accepted)."""
+    """The refusals a spec can hit (msg None: accepted); the Fail fast list of CLAUDE.md is pinned here."""
     cfg = C.Config(**{**VALID, **over})
     if msg is None:
         C.validate_config(cfg)
     else:
         with pytest.raises(ValueError, match=msg):
             C.validate_config(cfg)
+
+
+def test_resume_refuses_a_changed_target(tmp_path):
+    """A checkpoint continues only with its own target string; an absent identity file is refused too."""
+    digest = tmp_path / "target_digest.txt"
+    with pytest.raises(RuntimeError, match="absent"):
+        _check_resume(digest, "abc|warm|n_batch=8", "ckpt.hdf5")
+    digest.write_text("abc|warm|n_batch=8\n")
+    _check_resume(digest, "abc|warm|n_batch=8", "ckpt.hdf5")
+    for changed in ("xyz|warm|n_batch=8", "abc|cold|n_batch=8", "abc|warm|n_batch=16"):
+        with pytest.raises(RuntimeError, match="resume refused"):
+            _check_resume(digest, changed, "ckpt.hdf5")

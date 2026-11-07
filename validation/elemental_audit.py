@@ -22,11 +22,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 
 # gates: the projection is exact up to the fixed-iteration
-# residual; see vulcan_chem._ELEMENTAL_REPAIR_ITERS
+# residual; see vulcan_forward._elemental._ELEMENTAL_REPAIR_ITERS
 GATE_RATIO = 1.0e-6
 GATE_DENSITY = 1.0e-10
 GATE_ATOM_INI = 1.0e-10
 GATE_REPAIR_POSITIVE = 0.0
+
+
+def _report_drift(chem, th) -> None:
+    """Re-converge one draw and print the runner's conservation metric, atom_loss = (atoms - atom_ini) / atom_ini."""
+    final, _init = chem.run_diag(np.asarray(th, np.float64))
+    a_run = np.asarray(final.atom_loss, np.float64)
+    print(
+        f"      converged: accept={int(final.accept_count)} "
+        f"max|atom_loss|={np.max(np.abs(a_run)):.3e} "
+        f"(runner drift metric vs exact atom_ini)",
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -83,16 +95,7 @@ def main() -> int:
         print(line, flush=True)
 
         if args.converge:
-            final, _init = chem.run_diag(np.asarray(th, np.float64))
-            # drift of the converged column totals vs the anchor --
-            # the runner's own conservation metric atom_loss = (atoms - atom_ini)/atom_ini
-            a_run = np.asarray(final.atom_loss, np.float64)
-            print(
-                f"      converged: accept={int(final.accept_count)} "
-                f"max|atom_loss|={np.max(np.abs(a_run)):.3e} "
-                f"(runner drift metric vs exact atom_ini)",
-                flush=True,
-            )
+            _report_drift(chem, th)
 
     print("\n==== elemental audit summary ====")
     print(
@@ -101,10 +104,19 @@ def main() -> int:
         f"atom_ini={worst['atom']:.3e} min_repair={worst['repair']:.4f}"
     )
     verdict = fails == 0
-    print(
-        f"VERDICT: {'PASS' if verdict else f'FAIL ({fails}/{args.n} draws)'} "
+    summary = (
+        f"{'PASS' if verdict else f'FAIL ({fails}/{args.n} draws)'} "
         f"(gates: ratio<{GATE_RATIO:g}, density<{GATE_DENSITY:g}, "
         f"atom_ini<{GATE_ATOM_INI:g}, repair>{GATE_REPAIR_POSITIVE:g})"
+    )
+    print(f"VERDICT: {summary}")
+    _artifact.emit(
+        name="elemental_audit",
+        title="Elemental inventory of the abundance map over prior draws",
+        measurements=[{"draws": args.n, "seed": args.seed, "failed": fails, "worst": worst}],
+        status="PASS" if verdict else "FAIL",
+        summary=summary,
+        resolved_config=profile,
     )
     return 0 if verdict else 1
 

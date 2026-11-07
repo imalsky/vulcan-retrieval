@@ -77,7 +77,7 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
 
 
 def _aux_for(pipe, theta):
-    """(aux, lnR0, cloud) at one state -- the chemistry solve, done ONCE."""
+    """(aux, lnR0, cloud, lnM, certified) at one state -- the chemistry solve, done ONCE."""
     import jax.numpy as jnp
 
     th = jnp.asarray(theta)
@@ -85,25 +85,95 @@ def _aux_for(pipe, theta):
     lnR0 = th[pipe.lnR0_idx]
     cloud = th[pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
     y, diag = pipe.fwd.chem_solve_cold_diag(chem_theta)
-    return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud, bool(diag.conv_normal)
+    lnM = th[pipe.lnM_idx] if pipe.lnM_idx is not None else 0.0
+    return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud, lnM, bool(diag.conv_normal)
 
 
 def deltas_at(pipe, theta, candidates):
     """(n_cand, n_bin) |binned depth with each candidate removed - full|, or None
     when the state's chemistry does not certify cold (not a model state).
     """
-    aux, lnR0, cloud, certified = _aux_for(pipe, theta)
+    aux, lnR0, cloud, lnM, certified = _aux_for(pipe, theta)
     if not certified:
         return None
     vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
     full, wo = pipe.fwd.rt.transmission_depth_r(
-        vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=vmr_he, cloud=cloud, wo_mols=list(candidates)
+        vmr, vmr_h2, T_art, mmw_art, lnR0, vmr_he=vmr_he, wo_mols=list(candidates), **pipe.fwd.rt_kwargs(cloud, lnM)
     )
     B = np.asarray(pipe.B, np.float64)
     return np.abs(np.asarray(wo, np.float64) @ B.T - (B @ np.asarray(full, np.float64))[None, :])
 
 
-# size-limit-ok: one measurement, in order
+def _screen(pipe, states, candidates):
+    """(worst over the certified states, per candidate and bin; how many certified): one solve and RT per state."""
+    per_state = []
+    for i, th in enumerate(states):
+        t0 = time.time()
+        d = deltas_at(pipe, th, candidates)
+        if d is None:
+            print(f"[loo] state {i}: chemistry not certified cold, skipped", flush=True)
+            continue
+        if not np.all(np.isfinite(d)):
+            # max() would carry the NaN and `NaN > gate` reads as a pass
+            raise RuntimeError(f"state {i} {th.tolist()}: certified but a non-finite leave-one-out spectrum")
+        per_state.append(d)
+        print(f"[loo] state {i}: {len(candidates)} rungs ({time.time() - t0:.0f}s)", flush=True)
+    if not per_state:
+        raise RuntimeError("no screened state certified: nothing to gate")
+    return np.max(per_state, axis=0), len(per_state)
+
+
+def _measure(worst_over_states, n_screened, candidates, omitted, gate, sigma, wl_bin):
+    """(table rows, artifact measurements, omitted candidates over the gate), printing one line per candidate."""
+    rows, measurements, worst = [], [], []
+    for c, m in enumerate(candidates):
+        d = worst_over_states[c]
+        i = int(np.argmax(d))
+        over = int(np.sum(d > gate))
+        rows.append((m, 1e6 * d[i], wl_bin[i], d[i] / sigma[i], 1e6 * float(np.sqrt(np.mean(d**2))), over))
+        print(
+            f"[loo] {m:5s} max {1e6 * d[i]:8.3f} ppm @ {wl_bin[i]:.5f} um  "
+            f"{d[i] / sigma[i]:.3f} sigma  rms {1e6 * np.sqrt(np.mean(d**2)):7.3f} ppm  "
+            f"{over}/{d.size} bins over gate",
+            flush=True,
+        )
+        measurements.append(
+            {
+                "name": f"omit {m}: max |Delta binned depth| over {n_screened} state(s)",
+                "value": f"{1e6 * d[i]:.3f} ppm",
+                "value_raw": float(1e6 * d[i]),
+                "unit": "ppm",
+                "gate": "< min(5 ppm, 0.1 sigma) in every bin",
+                # only an OMITTED absorber over the gate is a failure
+                "decisive": bool(m in omitted),
+                "passed": not bool(over and m in omitted),
+            }
+        )
+        if over and m in omitted:
+            worst.append(m)
+    return rows, measurements, worst
+
+
+def _verdict(rows, worst, omitted, n_screened):
+    """The summary: which omitted absorbers are required, and which production ones carry no measurable effect."""
+    idle = [m for m, _, _, _, _, over in rows if not over and m not in omitted]
+    msg = (
+        f"Every OMITTED absorber tested is below the per-bin gate across "
+        f"{n_screened} state(s); none is required beyond the production list."
+        if not worst
+        else f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
+        "molecule list and rerun the posterior -- their opacity is currently "
+        "absorbed by the fitted parameters."
+    )
+    if idle:
+        msg += (
+            f" Production absorbers under the gate at this state set "
+            f"({', '.join(idle)}) are carried without measurable effect -- "
+            "informational, not a failure; the gate only refuses OMISSIONS."
+        )
+    return msg
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
@@ -155,70 +225,15 @@ def main() -> int:
     )
 
     # one chemistry solve + one folded RT pass per state gives every candidate
-    per_state = []
-    for i, th in enumerate(states):
-        t0 = time.time()
-        d = deltas_at(pipe, th, candidates)
-        if d is None:
-            print(f"[loo] state {i}: chemistry not certified cold, skipped", flush=True)
-            continue
-        if not np.all(np.isfinite(d)):
-            # max() would carry the NaN and `NaN > gate` reads as a pass
-            raise RuntimeError(f"state {i} {th.tolist()}: certified but a non-finite leave-one-out spectrum")
-        per_state.append(d)
-        print(f"[loo] state {i}: {len(candidates)} rungs ({time.time() - t0:.0f}s)", flush=True)
-    if not per_state:
-        raise RuntimeError("no screened state certified: nothing to gate")
-    worst_over_states = np.max(per_state, axis=0)  # (n_cand, n_bin)
-    n_screened = len(per_state)
-
-    rows, measurements, worst = [], [], []
-    for c, m in enumerate(candidates):
-        d = worst_over_states[c]
-        i = int(np.argmax(d))
-        over = int(np.sum(d > gate))
-        rows.append((m, 1e6 * d[i], wl_bin[i], d[i] / sigma[i], 1e6 * float(np.sqrt(np.mean(d**2))), over))
-        print(
-            f"[loo] {m:5s} max {1e6 * d[i]:8.3f} ppm @ {wl_bin[i]:.5f} um  "
-            f"{d[i] / sigma[i]:.3f} sigma  rms {1e6 * np.sqrt(np.mean(d**2)):7.3f} ppm  "
-            f"{over}/{d.size} bins over gate",
-            flush=True,
-        )
-        measurements.append(
-            {
-                "name": f"omit {m}: max |Delta binned depth| over {n_screened} state(s)",
-                "value": f"{1e6 * d[i]:.3f} ppm",
-                "value_raw": float(1e6 * d[i]),
-                "unit": "ppm",
-                "gate": "< min(5 ppm, 0.1 sigma) in every bin",
-                # only an OMITTED absorber over the gate is a failure
-                "decisive": bool(m in omitted),
-                "passed": not bool(over and m in omitted),
-            }
-        )
-        if over and m in omitted:
-            worst.append(m)
+    worst_over_states, n_screened = _screen(pipe, states, candidates)
+    rows, measurements, worst = _measure(worst_over_states, n_screened, candidates, omitted, gate, sigma, wl_bin)
 
     print(f"\n{'species':>8} {'max ppm':>10} {'at um':>10} {'/sigma':>8} {'rms ppm':>9} {'bins over':>10}")
     for m, mx, w, s, rms, over in sorted(rows, key=lambda r: -r[1]):
         print(f"{m:>8} {mx:10.3f} {w:10.5f} {s:8.3f} {rms:9.3f} {over:10d}")
 
-    idle = [m for m, _, _, _, _, over in rows if not over and m not in omitted]
     ok = not worst
-    msg = (
-        f"Every OMITTED absorber tested is below the per-bin gate across "
-        f"{n_screened} state(s); none is required beyond the production list."
-        if ok
-        else f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
-        "molecule list and rerun the posterior -- their opacity is currently "
-        "absorbed by the fitted parameters."
-    )
-    if idle:
-        msg += (
-            f" Production absorbers under the gate at this state set "
-            f"({', '.join(idle)}) are carried without measurable effect -- "
-            "informational, not a failure; the gate only refuses OMISSIONS."
-        )
+    msg = _verdict(rows, worst, omitted, n_screened)
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} -- {msg}")
     _artifact.emit(
         name="opacity_leave_one_out",

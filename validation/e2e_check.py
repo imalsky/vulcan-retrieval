@@ -1,8 +1,9 @@
 """End-to-end check of the production forward map: the same seeded draws through a ladder of rungs.
 
-    python validation/e2e_check.py solve <spec> --rung production [--rows a:b --part k] [--posterior <out_dir> --draws
-    n] python validation/e2e_check.py compare <a.npz> <b.npz> [<b_part2.npz> ...] python validation/e2e_check.py
-    warmcold <e2e_production_posterior.npz> [<part2.npz> ...] [--results <dir>]
+    python validation/e2e_check.py solve <spec> --rung production [--rows a:b --part k]
+    python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws n
+    python validation/e2e_check.py compare <a.npz> <b.npz> [<b_part2.npz> ...]
+    python validation/e2e_check.py warmcold <e2e_production_posterior.npz> [<part2.npz> ...] [--results <dir>]
 
 Each rung is one change from the rung above, compared per draw on the certificate, log L, the binned depth against the
 data's sigma and the photosphere column of six species, so a disagreement names the change that made it. ``compare`` and
@@ -105,7 +106,49 @@ def _corners(pipe, names, origin):
     return np.asarray(out)
 
 
-# size-limit-ok: one measurement, in order
+def _draw_set(args, pipe, names):
+    """(U, corners, extra columns): a finished run's weighted rows, another machine's set, or seeded prior draws."""
+    import jax
+
+    if args.posterior:
+        post = np.load(Path(args.posterior) / "nautilus_posterior.npz")
+        if list(post["param_names"]) != names:
+            raise RuntimeError(f"the posterior's parameters {list(post['param_names'])} are not the spec's {names}")
+        w = np.exp(post["log_w"] - np.max(post["log_w"]))
+        idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w / w.sum())
+        return np.array(post["u"][idx], np.float64), (), {"post_row": idx, "logL_run": post["log_l"][idx]}
+    if args.u_from:  # another machine's draw set, row for row
+        z = np.load(args.u_from)
+        if not np.array_equal(z["rows"], np.arange(len(z["rows"]))):
+            raise RuntimeError(f"{args.u_from} holds a slice; pass the full set")
+        return np.array(z["u"], np.float64), np.zeros(int(json.loads(str(z["meta"]))["n_corners"])), {}
+    U = np.array(pipe.sample_prior_u(jax.random.PRNGKey(args.seed), args.draws), np.float64)
+    corners = _corners(pipe, names, U[np.argmin((U**2).sum(axis=1))])[: len(U)]
+    U[: len(corners)] = corners
+    return U, corners, {}
+
+
+def _solve_rows(pipe, u_rows, batched):
+    """(log L, columns, accepted steps, certified) of the rows ``u_rows``, in one batch or one row at a time."""
+    import jax
+    import jax.numpy as jnp
+    from retrieval_framework import pipeline as P
+
+    ev = jax.jit(pipe._make_batch_eval("cold"))
+
+    def run(u):
+        n = int(u.shape[0])
+        Y0, R0 = P._blank_state(pipe, n)
+        L, Y, _, st = ev(u, Y0, R0, jnp.ones((n,), bool))
+        P._abort_if_frozen(st.reason, st.last_delta, np.asarray(u), pipe.fwd.chem_rtol)
+        return L, Y, st.acc, st.conv_ok
+
+    if batched:
+        return run(u_rows)
+    parts = [run(u_rows[i : i + 1]) for i in range(int(u_rows.shape[0]))]
+    return tuple(jnp.concatenate([p[k] for p in parts]) for k in range(4))
+
+
 def solve(args) -> int:
     from retrieval_framework.run_setup import load_spec, set_observations
 
@@ -125,44 +168,15 @@ def solve(args) -> int:
     pipe = P.build_pipeline(cfg)
     set_observations(cfg, pipe, P)
     names = list(pipe.names)
-    extra = {}
-    if args.posterior:
-        post = np.load(Path(args.posterior) / "nautilus_posterior.npz")
-        if list(post["param_names"]) != names:
-            raise RuntimeError(f"the posterior's parameters {list(post['param_names'])} are not the spec's {names}")
-        w = np.exp(post["log_w"] - np.max(post["log_w"]))
-        idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w / w.sum())
-        U, extra = np.array(post["u"][idx], np.float64), {"post_row": idx, "logL_run": post["log_l"][idx]}
-        C = ()
-    elif args.u_from:  # another machine's draw set, row for row
-        z = np.load(args.u_from)
-        if not np.array_equal(z["rows"], np.arange(len(z["rows"]))):
-            raise RuntimeError(f"{args.u_from} holds a slice; pass the full set")
-        U, C = np.array(z["u"], np.float64), np.zeros(int(json.loads(str(z["meta"]))["n_corners"]))
-    else:
-        U = np.array(pipe.sample_prior_u(jax.random.PRNGKey(args.seed), args.draws), np.float64)
-        C = _corners(pipe, names, U[np.argmin((U**2).sum(axis=1))])[: len(U)]
-        U[: len(C)] = C
+    U, C, extra = _draw_set(args, pipe, names)
     lo, hi = (int(x) if x else None for x in args.rows.split(":"))
     rows = np.arange(len(U))[lo:hi]
     order = (
         np.random.default_rng(args.seed + 1).permutation(len(rows)) if args.rung == "shuffled" else np.arange(len(rows))
     )
     Us = jnp.asarray(U[rows][order], pipe.dtype)
-    ev = jax.jit(pipe._make_batch_eval("cold"))
     theta_of = jax.jit(jax.vmap(pipe.theta_from_u))
-
-    def run(u):
-        n = int(u.shape[0])
-        Y0, R0 = P._blank_state(pipe, n)
-        L, Y, _, st = ev(u, Y0, R0, jnp.ones((n,), bool))
-        return L, Y, st.acc, st.conv_ok
-
-    if RUNGS[args.rung][1]:
-        L, Y, acc, ok = run(Us)
-    else:
-        parts = [run(Us[i : i + 1]) for i in range(int(Us.shape[0]))]
-        L, Y, acc, ok = (jnp.concatenate([p[k] for p in parts]) for k in range(4))
+    L, Y, acc, ok = _solve_rows(pipe, Us, RUNGS[args.rung][1])
     inv = np.argsort(order)
     theta = theta_of(Us)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, theta), np.float64)[inv]
@@ -227,7 +241,26 @@ def _load(paths):
     return out
 
 
-# size-limit-ok: one report, gate by gate
+def _over_the_gates(m, mism, both):
+    """The names of the gates a comparison's metrics ``m`` break."""
+    fails = [
+        k
+        for k, v in (
+            ("max_bin_sigma", m["max_bin_sigma"]),
+            ("D_sigma", m["D_sigma_max"]),
+            ("dex_p95", m["dex_p95"]),
+            ("dex_max", m["dex_max"]),
+            ("dlogL", m["dlogL_good_fit_max"]),
+        )
+        if not v <= GATES[k]  # a NaN metric fails
+    ]
+    if mism.size:
+        fails.append("certificate_mismatch")
+    if not both.any():
+        fails.append("no_jointly_certified_draw")
+    return fails
+
+
 def compare(args) -> int:
     from retrieval_framework.pipeline import REJECT_LOGL
 
@@ -265,21 +298,7 @@ def compare(args) -> int:
         "good_fit_rows": int(good.sum()),
         "dlogL_all_median": float(np.median(dL)) if dL.size else 0.0,
     }
-    fails = [
-        k
-        for k, v in (
-            ("max_bin_sigma", m["max_bin_sigma"]),
-            ("D_sigma", m["D_sigma_max"]),
-            ("dex_p95", m["dex_p95"]),
-            ("dex_max", m["dex_max"]),
-            ("dlogL", m["dlogL_good_fit_max"]),
-        )
-        if v > GATES[k]
-    ]
-    if mism.size:
-        fails.append("certificate_mismatch")
-    if not both.any():
-        fails.append("no_jointly_certified_draw")
+    fails = _over_the_gates(m, mism, both)
     # the worst draws, with the parameters a disagreement usually tracks
     names, rows_both = a["names"], common[both]
     worst = np.argsort(-D)[: args.worst]

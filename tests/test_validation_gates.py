@@ -1,0 +1,215 @@
+"""The validation scripts' gates, on arrays and stubs: an invalid number never reads as a pass, a screen runs the
+forward's cloud and mass, and a forward check records the state that solved its spectra.
+"""
+
+import json
+import math
+from pathlib import Path
+from types import SimpleNamespace
+from typing import NamedTuple
+
+import numpy as np
+import pytest
+
+VALIDATION = Path(__file__).resolve().parents[1] / "validation"
+
+
+@pytest.fixture
+def scripts(monkeypatch):
+    monkeypatch.syspath_prepend(str(VALIDATION))
+    import _artifact
+    import e2e_check
+    import opacity_leave_one_out
+    import posterior_forward_check
+    import resolution_ladder
+
+    return SimpleNamespace(
+        artifact=_artifact,
+        e2e=e2e_check,
+        loo=opacity_leave_one_out,
+        check=posterior_forward_check,
+        ladder=resolution_ladder,
+    )
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "want"),
+    [
+        ([0.02, 0.03], [0.02, 0.03], 0.0),
+        ([0.02, 0.03], [0.02, 0.031], 1000.0),
+        ([0.02, np.nan], [0.02, np.nan], 0.0),  # a bin the model does not cover, on both sides
+        ([0.02, np.nan], [0.02, 0.03], math.inf),  # finite on one side: a passing 0 ppm if it were dropped
+        ([np.nan, np.nan], [np.nan, np.nan], math.inf),  # nothing compared
+    ],
+)
+def test_worst_ppm_never_passes_a_nan(scripts, a, b, want):
+    got = scripts.artifact.worst_ppm(np.array(a), np.array(b))
+    assert got == pytest.approx(want)
+
+
+def _metrics(**over):
+    good = {"max_bin_sigma": 0.01, "D_sigma_max": 0.1, "dex_p95": 0.01, "dex_max": 0.01, "dlogL_good_fit_max": 0.1}
+    return {**good, **over}
+
+
+def test_e2e_gates_fail_a_nan_metric(scripts):
+    over = scripts.e2e._over_the_gates
+    both, none = np.array([True]), np.array([], int)
+    assert over(_metrics(), none, both) == []
+    assert over(_metrics(max_bin_sigma=np.nan), none, both) == ["max_bin_sigma"]
+    assert over(_metrics(dlogL_good_fit_max=1.0), none, both) == ["dlogL"]
+    assert over(_metrics(), np.array([3]), both) == ["certificate_mismatch"]
+    assert over(_metrics(), none, np.array([False])) == ["no_jointly_certified_draw"]
+
+
+def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
+    """The deck goes through the forward's keywords with the sampled lnM, as the likelihood's RT does."""
+    seen = {}
+
+    def depth_r(*_a, **kw):
+        seen.update(kw)
+        return np.array([1.0, 2.0]), np.array([[1.5, 2.0]])
+
+    n_chem_tp, i_r0, i_m, i_deck = 2, 2, 3, 4
+    pipe = SimpleNamespace(
+        n_chem_tp=n_chem_tp,
+        lnR0_idx=i_r0,
+        lnM_idx=i_m,
+        cloud_idx=[i_deck],
+        n_cloud=1,
+        B=np.eye(2),
+        fwd=SimpleNamespace(
+            chem_solve_cold_diag=lambda _c: (np.ones(1), SimpleNamespace(conv_normal=True)),
+            aux_from_y=lambda _y, _c: ({"H2O": 1.0}, 2.0, 3.0, 4.0, 5.0),
+            rt_kwargs=lambda cloud, lnM: {"deck": float(cloud[0]), "lnM": float(lnM)},
+            rt=SimpleNamespace(transmission_depth_r=depth_r),
+        ),
+    )
+    d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
+    assert seen["deck"] == pytest.approx(-3.0)
+    assert seen["lnM"] == pytest.approx(0.2)
+    assert seen["wo_mols"] == ["H2O"]
+    assert "cloud" not in seen
+    np.testing.assert_allclose(d, [[0.5, 0.0]])
+
+
+def test_a_forward_check_comparison_keeps_what_solved_each_side(scripts, tmp_path, monkeypatch):
+    monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
+    wl = np.linspace(3.9, 4.5, 8)
+    common = {
+        "theta": np.zeros((3, 2)),
+        "wl": wl,
+        "sigma": np.full(8, 1e-4),
+        "certified": np.ones(3, bool),
+        "model": np.zeros((3, 8)),
+    }
+    base, variant = tmp_path / "forward_check_base.npz", tmp_path / "forward_check_mass.npz"
+    np.savez(base, settings=np.asarray("{}"), provenance=np.asarray(json.dumps({"commit": "base"})), **common)
+    np.savez(variant, settings=np.asarray("{}"), provenance=np.asarray(json.dumps({"commit": "variant"})), **common)
+    scripts.check.compare(SimpleNamespace(base=str(base), variant=str(variant)))
+    got = json.loads((tmp_path / "forward_check_mass.json").read_text())["provenance"]["resolved_config"]
+    assert got["base_solve_provenance"] == {"commit": "base"}
+    assert got["variant_solve_provenance"] == {"commit": "variant"}
+
+
+def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypatch):
+    from retrieval_framework import config_schema as C
+
+    monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
+    cfg = C.Config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
+    path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)})
+    with np.load(path) as z:
+        got = scripts.check._solve_provenance(z)
+    assert got["resolved_config"]["molecules"] == ["H2O"]
+    assert set(got["repos"]) == {"VULCAN3", "vulcan-forward", "vulcan-retrieval"}
+
+
+def test_a_file_from_before_provenance_says_so(scripts, tmp_path):
+    np.savez(tmp_path / "old.npz", settings=np.asarray("{}"))
+    with np.load(tmp_path / "old.npz") as z:
+        assert scripts.check._solve_provenance(z) == "not recorded"
+
+
+def test_the_ladder_gates_fail_a_bin_finite_on_one_side(scripts, capsys):
+    finite = np.array([0.02, 0.03])
+    holed = np.array([0.02, np.nan])
+    knob = "art_nlayer"
+    results = {67: {"binned": finite}, 101: {"binned": finite}}
+    assert scripts.ladder._depth_gates(results, [67, 101], (67, 101), knob)[1]
+    results = {67: {"binned": finite}, 101: {"binned": holed}}
+    measurements, ok = scripts.ladder._depth_gates(results, [67, 101], (67, 101), knob)
+    assert not ok
+    assert measurements[0]["passed"] is False
+    results = {67: {"jac_lnZ": finite}, 101: {"jac_lnZ": finite * 1.001}}
+    assert scripts.ladder._jacobian_gate(results, (67, 101), knob)[1]
+    for ja, jb in ((holed, finite), (finite, holed)):
+        results = {67: {"jac_lnZ": ja}, 101: {"jac_lnZ": jb}}
+        measurement, ok = scripts.ladder._jacobian_gate(results, (67, 101), knob)
+        assert not ok
+        assert measurement["passed"] is False
+    capsys.readouterr()
+
+
+@pytest.mark.skipif("not hasattr(__import__('vulcan3'), 'DtMinFrozenError')", reason="this vulcan3 has no guard")
+def test_the_forward_check_aborts_on_a_frozen_draw(scripts):
+    """A variant's shift is read from its certified draws, so a frozen one must not pass as merely uncertified."""
+    import jax.numpy as jnp
+    from vulcan3 import DtMinFrozenError
+
+    from retrieval_framework import pipeline as P
+
+    class Diag(NamedTuple):
+        conv_normal: jnp.ndarray
+        accept_count: jnp.ndarray
+        termination_reason: jnp.ndarray
+        last_delta: jnp.ndarray
+
+    def solve(c):
+        n = c.shape[0]
+        reason = jnp.zeros(n, int).at[1].set(P._TERM_DT_MIN_FROZEN)
+        return jnp.zeros((n, 1)), Diag(jnp.ones(n), jnp.ones(n, int), reason, jnp.full(n, 0.08))
+
+    pipe = SimpleNamespace(
+        dtype=jnp.float64,
+        n_chem_tp=2,
+        observed_depth_from_y_jit=lambda *_a: pytest.fail("the RT ran after a frozen solve"),
+        fwd=SimpleNamespace(chem_solve_cold_diag_batch=solve, chem_rtol=0.05),
+    )
+    with pytest.raises(DtMinFrozenError, match=r"at rows \[1\] of this batch"):
+        scripts.check._solve(pipe, np.zeros((3, 2)))
+
+
+@pytest.mark.skipif("not hasattr(__import__('vulcan3'), 'DtMinFrozenError')", reason="this vulcan3 has no guard")
+def test_the_e2e_solve_aborts_on_a_frozen_column(scripts):
+    """Its rows carry a certificate and no reason, so a frozen column would read as a plain uncertified draw."""
+    import jax.numpy as jnp
+    from vulcan3 import DtMinFrozenError
+
+    from retrieval_framework import pipeline as P
+
+    def frozen(U, Y, refs, _active):
+        n = U.shape[0]
+        reason = jnp.zeros(n, int).at[1].set(P._TERM_DT_MIN_FROZEN)
+        stats = P.EvalStats(jnp.zeros(n, int), jnp.zeros(n, bool), reason, jnp.full(n, 0.08))
+        return jnp.zeros(n), Y, refs, stats
+
+    pipe = SimpleNamespace(
+        _make_batch_eval=lambda _mode: frozen,
+        y_baseline=jnp.zeros((1, 1)),
+        dtype=jnp.float64,
+        fwd=SimpleNamespace(chem_rtol=0.05),
+    )
+    with pytest.raises(DtMinFrozenError, match=r"at rows \[1\] of this batch"):
+        scripts.e2e._solve_rows(pipe, jnp.zeros((3, 2)), True)
+
+
+def test_an_artifact_hashes_the_tables_of_a_measurement_and_not_of_a_comparison(scripts, monkeypatch):
+    """A comparison of saved results reads no table, so it runs on a machine without them."""
+    hashed = []
+    monkeypatch.setattr(scripts.artifact, "science_data_identity", lambda m: hashed.append(m) or {"opacity_sha256": {}})
+    monkeypatch.setattr(scripts.artifact, "_data_identity", lambda *_a: {})
+    monkeypatch.setattr(scripts.artifact, "_versions", lambda: {})
+    assert "science_data" not in scripts.artifact.collect_provenance({"base": "x", "variant": "y"})
+    assert hashed == []
+    assert "science_data" in scripts.artifact.collect_provenance({"molecules": ["H2O"]})
+    assert hashed == [["H2O"]]

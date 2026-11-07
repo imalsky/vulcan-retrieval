@@ -26,19 +26,22 @@ import jax
 import jax.numpy as jnp
 
 from retrieval_framework import tp_profile
+from retrieval_framework.pipeline import _TERM_DT_MIN_FROZEN
 from vulcan_forward import exojax_rt
 from vulcan_forward import interp_map
+
+# Whether this vulcan-forward reports why a solve stopped: the commit requirements-hpc.txt pins does not.
+_REPORTS_EXIT = "termination_reason" in vulcan_chem.ConvDiag._fields
 
 if TYPE_CHECKING:
     from jax import Array
 
 
-def _refuse_condense_inference(chem: SimpleNamespace, cfg: Any) -> None:
+def _refuse_condense_inference(chem: SimpleNamespace, cfg: C.Config) -> None:
     """Refuse a retrieval through a condensing steady state, on the resolved engine config.
 
-    ``config_schema.validate_config`` catches ``cfg_overrides``; a base VULCAN config can default ``use_condense``
-    too. No
-    retrieval with condensation has been validated.
+    ``config_schema.validate_config`` catches ``cfg_overrides``; a base VULCAN config can default ``use_condense`` too.
+    No retrieval with condensation has been validated.
     """
     if chem.conden_spec is not None and not cfg.allow_condense_inference:
         raise ValueError(
@@ -54,15 +57,59 @@ def _refuse_condense_inference(chem: SimpleNamespace, cfg: Any) -> None:
 
 def _rtol_accept(chem: SimpleNamespace) -> float:
     """Return the step-acceptance tolerance baked into a chemistry program."""
+    # The private name: the vulcan3 commit in requirements-hpc.txt has no public `statics`.
     return float(chem._integ._statics.rtol_accept)
 
 
-def _check_frozen_network(cfg: Any) -> None:
+def _refuse_c_o_bound(chem: SimpleNamespace, cfg: C.Config) -> None:
+    """Refuse a C/O prior that reaches the fixed-O positivity bound; ``co_mode="proxy"`` has no such bound.
+
+    b_z must stay positive, else prior-corner columns get negative O carriers that the runner's clip turns into a
+    wrong-inventory, finite-likelihood state. First order: on the baseline column; hot columns can bind slightly
+    tighter.
+    """
+    if str(cfg.co_mode) == "fixed_O":
+        bound = float(chem.co_bz_bound)
+        hi = float(cfg.prior_c_o[1])
+        if hi >= bound:
+            raise ValueError(
+                f"prior_c_o upper bound {hi:+.3f} reaches the fixed-O b_z positivity "
+                f"bound {bound:+.3f} (baseline column): beyond it the O-only "
+                "compensation goes negative and the solver clips the inventory into "
+                f"silently-wrong states. Lower prior_c_o[1] below {bound:.3f} (with "
+                "margin), or use co_mode='proxy'."
+            )
+
+
+def _refuse_unreported_freezes() -> None:
+    """Refuse a vulcan3 with the dt_min guard under a forward whose ``ConvDiag`` cannot report a frozen column."""
+    import vulcan3
+
+    if hasattr(vulcan3, "DtMinFrozenError") and not _REPORTS_EXIT:
+        raise RuntimeError(
+            "this vulcan3 stops a column frozen at dt_min and this vulcan-forward's ConvDiag has no exit reason, "
+            "so frozen draws would be recorded as rejected: update vulcan-forward"
+        )
+
+
+def _with_stage1_freeze(cd1: Any, cd2: Any) -> Any:
+    """Return stage 2's ``ConvDiag``, reporting a stage 1 freeze: stage 1 is not gated, so it would go unseen."""
+    if not _REPORTS_EXIT:
+        return cd2
+    frozen = cd1.termination_reason == _TERM_DT_MIN_FROZEN
+    return cd2._replace(
+        termination_reason=jnp.where(frozen, cd1.termination_reason, cd2.termination_reason),
+        last_delta=jnp.where(frozen, cd1.last_delta, cd2.last_delta),
+    )
+
+
+def _check_frozen_network(cfg: C.Config) -> None:
     """Refuse an engine frozen on another network than the config's: it would solve other chemistry."""
     import vulcan3
     from vulcan3 import chem_funs
 
-    frozen = Path(chem_funs.NETWORK.network_path).resolve()
+    # The private name: the vulcan3 commit in requirements-hpc.txt has no public `NETWORK`.
+    frozen = Path(chem_funs._NETWORK.network_path).resolve()
     want = (Path(vulcan3.__file__).parent / cfg.network).resolve()
     if frozen != want:
         raise RuntimeError(
@@ -73,7 +120,7 @@ def _check_frozen_network(cfg: Any) -> None:
 
 
 # size-limit-ok: the closures of one forward share its chemistry and RT models
-def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # counts its closures
+def build_retrieval_forward(cfg: C.Config) -> SimpleNamespace:  # noqa: C901  # counts its closures
     """Build the theta-space forward model for a Config.
 
     Parameters
@@ -84,16 +131,12 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     Returns
     -------
     types.SimpleNamespace
-        ``native_depth_aux``, ``rt_depth``, ``aux_from_y``, the chemistry solves (cold single, cold batched, warm
-        batched), ``chem_rtol``, ``y_baseline``, ``wl_um``, ``n_tp``, ``n_chem``, ``chem_extras``, ``tp_model``,
-        ``chem``, ``rt``, ``p_art_bar``, ``p_chem_bar``.
-
-    Raises
-    ------
-    ValueError
-        If the C/O prior reaches the fixed-O positivity bound.
+        ``native_depth_aux``, ``rt_depth``, ``rt_kwargs``, ``aux_from_y``, the chemistry solves (cold single, cold
+        batched, warm batched), ``chem_rtol``, ``y_baseline``, ``wl_um``, ``n_tp``, ``n_chem``, ``chem_extras``,
+        ``tp_model``, ``chem``, ``rt``, ``p_art_bar``, ``p_chem_bar``.
     """
     _check_frozen_network(cfg)
+    _refuse_unreported_freezes()
     profile = cfg.profile()
 
     tpm = tp_profile.build_tp_model(cfg)
@@ -107,20 +150,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
 
     _refuse_condense_inference(chem, cfg)
 
-    # b_z must stay positive, else prior-corner columns get negative O carriers that the runner's clip turns into a
-    # wrong-inventory, finite-likelihood state. First order: on the baseline column; hot columns can bind slightly
-    # tighter.
-    if str(profile["co_mode"]) == "fixed_O":
-        bound = float(chem.co_bz_bound)
-        hi = float(cfg.prior_c_o[1])
-        if hi >= bound:
-            raise ValueError(
-                f"prior_c_o upper bound {hi:+.3f} reaches the fixed-O b_z positivity "
-                f"bound {bound:+.3f} (baseline column): beyond it the O-only "
-                "compensation goes negative and the solver clips the inventory into "
-                f"silently-wrong states. Lower prior_c_o[1] below {bound:.3f} (with "
-                "margin), or use co_mode='proxy'."
-            )
+    _refuse_c_o_bound(chem, cfg)
 
     rt = exojax_rt.build_rt_model(profile)
     to_art = interp_map.make_to_art(chem.p_bar, rt.p_art_bar)
@@ -130,8 +160,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     he_col = chem.sidx["He"]
     species_masses = chem.species_masses
     # Gas-phase normalization: the condensed reservoir columns (*_l_s, *_l, *_s) are particles. Counting them would
-    # dilute
-    # every gas VMR and inflate the mean molecular weight (S8_l_s carries 256 g/mol).
+    # dilute every gas VMR and inflate the mean molecular weight (S8_l_s carries 256 g/mol).
     _gas = np.ones(int(np.asarray(species_masses).size))
     for _sp, _i in chem.sidx.items():
         if _sp.endswith(("_l_s", "_l", "_s")):
@@ -170,28 +199,29 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     lanes = int(cfg.cold_lanes)
     refill_chunk = int(cfg.cold_refill_chunk)
 
-    def _chem_batch_route(C: Array, active: Array | None, **kw: Any) -> tuple[Array, Any]:
+    def _chem_batch_route(C_: Array, active: Array | None, **kw: Any) -> tuple[Array, Any]:
         """Run one batched chemistry stage on the lane queue: the single routing point for every batched solve.
 
         ``min(cold_lanes, draws)`` lanes; at or above the draw count nothing is refilled, so a narrow call takes the
         production route. A False row of ``active`` is a placeholder whose lane starts done.
         """
-        return chem.converged_y_queue(C, min(lanes, int(C.shape[0])), chunk=refill_chunk, active=active, **kw)
+        return chem.converged_y_queue(C_, min(lanes, int(C_.shape[0])), chunk=refill_chunk, active=active, **kw)
 
-    def chem_solve_cold_diag_batch(C: Array, active: Array | None = None) -> tuple[Array, Any]:
+    def chem_solve_cold_diag_batch(C_: Array, active: Array | None = None) -> tuple[Array, Any]:
         """Return ``chem_solve_cold_diag`` for a stack, on the lane queue.
 
         The while loop sits above the lane vmap, so a lane is not bit-identical to its solo solve (agreement at the
         convergence scale). Stage 2's ConvDiag certifies each draw. ``active`` masks padded rows in both stages.
         """
-        Y1, _cd = _chem_batch_route(_baseline_composition(C, 1), active)
-        return _chem_batch_route(C, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, s_o_ref=0.0)
+        Y1, cd1 = _chem_batch_route(_baseline_composition(C_, 1), active)
+        Y2, cd2 = _chem_batch_route(C_, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, s_o_ref=0.0)
+        return Y2, _with_stage1_freeze(cd1, cd2)
 
     def chem_solve_warm_diag_full_batch(
-        C: Array, Y: Array, lnZ_ref: Array, c_o_ref: Array, s_o_ref: Array, active: Array | None = None
+        C_: Array, Y: Array, lnZ_ref: Array, c_o_ref: Array, s_o_ref: Array, active: Array | None = None
     ) -> tuple[Array, Any]:
         """Re-converge every row's carried column at its own theta from its own reference composition."""
-        return _chem_batch_route(C, active, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, s_o_ref=s_o_ref)
+        return _chem_batch_route(C_, active, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, s_o_ref=s_o_ref)
 
     def _rt_kwargs(cloud: Array | None, lnM: Array | float) -> dict[str, Any]:
         """Return the RT's cloud and mass keywords for this Config's cloud model."""
@@ -219,8 +249,8 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     ) -> tuple[Array, tuple[Any, ...], Array]:
         """Return (native depth, aux, ok) through the full chain.
 
-        ``aux`` lets a caller take an RT-only jvp without re-running the while loop. ``ok`` is the cold certificate bit,
-        0 or 1 and stop-gradient: ``conv_normal`` is False on every cap exit, so no accept_count clause is needed.
+        ``aux`` lets a caller re-run the RT alone, without the while loop. ``ok`` is the cold certificate bit, 0 or 1
+        and stop-gradient: ``conv_normal`` is False on every cap exit, so no accept_count clause is needed.
         ``cloud`` is None, or ``[log10 kappac0, alphac]``, or ``[log10 P_deck]`` with ``cloud_model="deck"``; ``lnM`` is
         the RT-only mass nuisance.
         """
@@ -237,7 +267,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     def rt_depth(
         aux: tuple[Any, ...], lnR0: Array | float, cloud: Array | None = None, lnM: Array | float = 0.0
     ) -> Array:
-        """Return the RT-only depth at frozen chemistry and T-P profiles, for the cheap jvps."""
+        """Return the RT-only depth at frozen chemistry and T-P profiles."""
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         return rt.transmission_depth_r(
             vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0), vmr_he=vmr_he, **_rt_kwargs(cloud, lnM)
@@ -246,6 +276,7 @@ def build_retrieval_forward(cfg: Any) -> SimpleNamespace:  # noqa: C901  # count
     return SimpleNamespace(
         native_depth_aux=native_depth_aux,
         rt_depth=rt_depth,
+        rt_kwargs=_rt_kwargs,
         chem_solve_cold_diag=chem_solve_cold_diag,
         chem_solve_cold_diag_batch=chem_solve_cold_diag_batch,
         chem_solve_warm_diag_full_batch=chem_solve_warm_diag_full_batch,

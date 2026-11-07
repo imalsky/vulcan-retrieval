@@ -17,7 +17,10 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from retrieval_framework import config_schema as C
 
 __all__ = ["main"]
 
@@ -65,11 +68,13 @@ def _check_jax(require_gpu: bool) -> None:
     """Check that jax imports, and that it found a GPU when required."""
     try:
         import jax
+
+        backend = jax.default_backend()
+        devices = jax.devices()
     except Exception as e:
-        _err(f"jax failed to import: {e!r}. Re-run the bootstrap.")
+        _err(f"jax failed to import or to start a backend: {e!r}. Re-run the bootstrap.")
         return
-    backend = jax.default_backend()
-    _ok(f"jax {jax.__version__} backend={backend} devices={jax.devices()}")
+    _ok(f"jax {jax.__version__} backend={backend} devices={devices}")
     if require_gpu and backend not in ("gpu", "cuda", "rocm"):
         _err(
             f"JAX backend is '{backend}', not GPU. On NAS: wrong node type, or a "
@@ -96,7 +101,10 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
         return
     installed = getattr(mod, "__version__", None)
     checkout = _repo_version(repo, pkg_dir)
-    if checkout is not None and installed != checkout:
+    if checkout is None:
+        _err(f"no version readable in {repo / 'src' / pkg_dir / '_version.py'}: the checkout cannot be checked.")
+        return
+    if installed != checkout:
         # __version__ is read live from the editable tree, so a mismatch means a half-updated checkout.
         _err(f"{pkg_import} __version__ {installed} != checkout _version.py {checkout}.")
     from importlib import metadata
@@ -106,7 +114,7 @@ def _check_editable(pkg_import: str, dist_name: str, repo: Path, pkg_dir: str) -
     except metadata.PackageNotFoundError:
         _err(f"dist '{dist_name}' has no installed metadata; re-run the bootstrap.")
         return
-    if checkout is not None and dist_version != checkout:
+    if dist_version != checkout:
         _err(
             f"installed dist {dist_name}=={dist_version} but the checkout is at "
             f"{checkout}: the editable install predates a packaging-metadata "
@@ -123,6 +131,7 @@ def _check_cross_repo_pin() -> None:
     try:
         reqs = metadata.requires("vulcan-retrieval") or []
     except metadata.PackageNotFoundError:
+        _err("vulcan-retrieval has no installed metadata, so the sibling-engine requirements cannot be checked.")
         return
     try:
         from packaging.requirements import Requirement
@@ -167,7 +176,7 @@ def _check_exojax() -> None:
 PRODUCTION_SPEC = Path("runs/w39b_smc_retrieval/wasp39_test1.yaml")
 
 
-def _check_spec_inputs(cfg: Any) -> None:
+def _check_spec_inputs(cfg: C.Config) -> None:
     """Check the spec's input files, from the job's working directory."""
     from retrieval_framework.run_setup import check_inputs
 

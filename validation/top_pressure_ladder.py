@@ -88,8 +88,7 @@ def main() -> int:
         flush=True,
     )
 
-    m = np.isfinite(b_prod) & np.isfinite(b_ext)
-    dppm = 1e6 * np.max(np.abs(b_ext[m] - b_prod[m]))
+    dppm = _artifact.worst_ppm(b_ext, b_prod)
     ok = bool(dppm < GATE_PPM)
     msg = (
         f"PASS -- the {p_top:.0e} bar model top is converged at the quoted precision"
