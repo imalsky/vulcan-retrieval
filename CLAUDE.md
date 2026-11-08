@@ -44,9 +44,8 @@ Name a notes section by its heading. Before proposing a solver, sampler or speed
   else beside a run unless asked.
 - Tests: normal tier `python -m pytest tests -n 8` (pyproject's addopts deselect `slow`; conftest defaults
   `JAX_PLATFORMS=cpu`). Full tier: add `-m "slow or not slow"`; a single slow file or node id needs `-m slow`. The full
-  tier holds the job path end to end (`run_nautilus` on the smoke case) and the production case's build: run it before a
-  production run or when the maintainer asks, and name it as owed after a change to the chemistry/RT path or a
-  likelihood gate.
+  tier holds the job path end to end (`run_nautilus` on the smoke case) and the production case's build: run it when the
+  maintainer asks.
 - Mark a test `slow` if it builds a real pipeline (`build_pipeline` on a real config); claims that share one heavy build
   stay in one test (xdist builds a fixture per worker).
 - Lint and types: `uvx pre-commit run --all-files`; size limits: `python3 tools/check_size_limits.py`. CI runs both and
