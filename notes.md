@@ -28,10 +28,10 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   same model at rtol 0.2 on the 2024 JWST and HST data: three runs, finished ("Runs", w107b). Its specs and inputs are
   removed (the maintainer decided; the last commit with them is `f1a881a`), and its certificates are not rewritten with
   the report's fixed Kzz block: the "Runs" Kzz numbers stay hand-derived.
-- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
-  hd209458b; "Design records", sulfur survey case). On NAS: `git pull --ff-only` in all three trees,
+- Next: the sulfur survey, seven runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
+  hd209458b, hatp26b; "Design records", sulfur survey case). On NAS: `git pull --ff-only` in all three trees,
   `tools/bootstrap_nas_env.pbs` (the pins moved), then `PBS_GROUP=<allocation> python tools/submit.py
-  runs/survey/<planet>.yaml` for each; keep that checkout unchanged until all six end. The first job is the first NAS
+  runs/survey/<planet>.yaml` for each; keep that checkout unchanged until all seven end. The first job is the first NAS
   run of the current `run_nas.pbs`.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json carries no
@@ -716,7 +716,7 @@ HPC
   against equilibrium isothermal grids, and PICASO + photochem forward grids at constant Kzz 1e10 for the SO2 trend),
   Gressier+2025 (arXiv:2509.16082, the SO2-metallicity trend, WASP-107b off it), Crossfield+2025 (arXiv:2509.14318, the
   SO2 shoreline: weak Kzz, UV and Tint dependence above ~1000 K). The maintainer decided: one standard for every planet,
-  one JWST observation each, then added HD 189733b and HD 209458b as a NIRCam pair (two visits each).
+  one JWST observation each, then added HD 189733b and HD 209458b as a NIRCam pair (two visits each), and HAT-P-26b.
   - Standard. One NIRSpec transit (G395H; WASP-166b G395M, one group), the authors' R100 product per detector, fitted on
     2.87-5.10 um, `obs_max_bin_R` 200. One model and one prior set in `survey_base.yaml` (never a run: it names no
     planet); a planet file adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and lnM's
@@ -757,8 +757,16 @@ HPC
     overlap that ties the two visits; row 37 is not a 0.02 um depth on 0.04 um edges (its error is a 0.04 um error).
     NIRCam ends at 5.0 um, and the window cuts its 2.4-2.87 um H2O band, the published C/O driver for both NIRCam
     planets.
-  - Left out (the maintainer decided). HAT-P-26b: Gressier+2025's two reductions at R ~400 are the journal's data behind
-    its Figure 2 (wavelength, depth, error; no bin edges or detector column), not yet converted. HAT-P-1b: no public
+  - HAT-P-26b [M] (built by the recipe above, which rebuilds WASP-96b's nominal profile within 0.05 K and its 1-bar
+    radius within 1e-4). Data: Gressier+2025 G395H, the journal's data behind its Fig. 2 (centre, depth, error at R ~400;
+    the "ppm" column is a fraction), the transitspectroscopy reduction, their main-text spectrum (no fiducial is named;
+    ExoTiC-JEDI's errors are ~37% smaller). Split at the 3.7154-3.8281 um gap; native edges at the midpoints; consecutive
+    bins grouped per detector until a group spans lambda/100 (inverse-variance mean depth, total inverse variance
+    kept): 113 + 116 native to 28 + 29 bins, 53 in the window. UV: MUSCLES v24 HAT-P-26 `adapt-const-res-sed`
+    (Behr+2023), the host's own spectrum, which Gressier+2025's photochemistry used; BOLOFLUX x sigma (5079 K)^4 at
+    the stellar surface, as the WASP-107b file. System from the archive: Mp 0.070 +- 0.020 M_J (lnM sigma 0.286;
+    Gressier+2025 used 18.6 M_E), Teq 1080 K, R* 0.87 R_Sun.
+  - Left out (the maintainer decided). HAT-P-1b: no public
     reduced spectrum (MAST raw only). WASP-80b: CS2 (arXiv:2604.13168), no opacity table. WASP-52b: its G395H spectrum
     needs stellar contamination (arXiv:2609.21810). HIP 67522b: young host, disputed mass. Reserves: WASP-127b (~10% of
     the flux in the slit), HAT-P-12b (G395M; its CH4 depletion meets the 10 bar bottom). GO 5924 (the Grand Tour, 25
