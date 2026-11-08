@@ -21,9 +21,6 @@ from retrieval_framework import pipeline as P
 from retrieval_framework import run_nautilus as RN
 from retrieval_framework import run_setup as R
 
-guarded = pytest.mark.skipif(
-    "not hasattr(__import__('vulcan3'), 'DtMinFrozenError')", reason="this vulcan3 has no guard"
-)
 DIGEST = "d" * 64
 N_BATCH, N_LIVE = 8, 16
 IDENTITY = (
@@ -220,7 +217,6 @@ class _FrozenStats(NamedTuple):
     last_delta: jnp.ndarray
 
 
-@guarded
 @pytest.mark.parametrize("frozen_row", [0, 2])
 def test_a_frozen_lane_aborts_the_run_naming_the_row_the_ratio_and_rtol(job, frozen_row):
     """The evaluator returns normally under jit; a row's reason must stop the run before anything is logged of it."""
@@ -250,7 +246,6 @@ def test_a_frozen_lane_aborts_the_run_naming_the_row_the_ratio_and_rtol(job, fro
     assert not (job.out / "nautilus_posterior.npz").exists()
 
 
-@guarded
 def test_the_local_frozen_code_is_vulcan3_s():
     from vulcan3 import state
 

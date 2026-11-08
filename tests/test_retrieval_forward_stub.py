@@ -54,7 +54,7 @@ def _forward(monkeypatch, stage_diag=None, **over):
         sidx=SIDX,
         species_masses=jnp.asarray(MASSES),
         y0=np.ones((5, 4)),
-        _integ=SimpleNamespace(_statics=SimpleNamespace(rtol_accept=0.05)),
+        _integ=SimpleNamespace(statics=SimpleNamespace(rtol_accept=0.05)),
     )
     rt = SimpleNamespace(molecules=("H2O",), p_art_bar=P_GRID, wl_um=np.array([3.0, 4.0]))
     monkeypatch.setattr(RF, "_check_frozen_network", lambda _cfg: None)
@@ -132,10 +132,9 @@ def test_the_rt_keywords_route_the_cloud_block_by_the_cloud_model(monkeypatch, o
     assert float(jnp.ravel(kw[key])[0]) == -2.0
 
 
-@pytest.mark.skipif(not RF._REPORTS_EXIT, reason="this vulcan-forward reports no exit reason")
 def test_a_freeze_in_either_stage_reaches_the_batch_diag(monkeypatch):
     """Stage 1 is not gated, and its diag would be dropped: a freeze there must still read as frozen."""
-    frozen = RF._TERM_DT_MIN_FROZEN
+    frozen = RF.TERM_DT_MIN_FROZEN
 
     def stage_diag(n, k):
         if k == 1:  # stage 1 freezes row 0
@@ -146,12 +145,3 @@ def test_a_freeze_in_either_stage_reaches_the_batch_diag(monkeypatch):
     _, cd = fwd.chem_solve_cold_diag_batch(jnp.stack([THETA, THETA, THETA]))
     assert np.asarray(cd.termination_reason).tolist() == [frozen, frozen, 1]
     np.testing.assert_allclose(np.asarray(cd.last_delta), [0.08, 0.09, 0.01])
-
-
-def test_a_guarded_vulcan3_under_a_silent_forward_is_refused(monkeypatch):
-    import vulcan3
-
-    monkeypatch.setattr(RF, "_REPORTS_EXIT", False)
-    monkeypatch.setattr(vulcan3, "DtMinFrozenError", RuntimeError, raising=False)
-    with pytest.raises(RuntimeError, match="update vulcan-forward"):
-        RF._refuse_unreported_freezes()

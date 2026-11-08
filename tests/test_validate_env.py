@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import NamedTuple
 from types import SimpleNamespace
 
 import pytest
@@ -240,7 +241,7 @@ def _record_checks(monkeypatch, calls):
     def rec(name):
         return lambda *a: calls.append((name, *a))
 
-    for name in ("python", "jax", "editable", "cross_repo_pin", "exojax", "exogibbs", "nautilus"):
+    for name in ("python", "jax", "editable", "cross_repo_pin", "engine_features", "exojax", "exogibbs", "nautilus"):
         monkeypatch.setattr(V, f"_check_{name}", rec(name))
     monkeypatch.setattr(V, "_check_spec_inputs", lambda cfg: calls.append(("spec_inputs", cfg.path)))
     monkeypatch.setattr(V, "_check_data_tree", lambda root, prod: calls.append(("data_tree", root, prod)))
@@ -267,6 +268,7 @@ def test_main_runs_the_checks_in_import_safe_order_on_the_requested_spec(tmp_pat
         "editable",
         "editable",
         "cross_repo_pin",
+        "engine_features",
         "exojax",
         "spec_inputs",
         "data_tree",
@@ -307,3 +309,20 @@ def test_main_refuses_a_root_without_the_checkouts_before_any_check(tmp_path, mo
     assert calls == []
     assert "must contain" in V._ERRORS[0]
     _reset()
+
+
+def test_an_engine_without_the_dt_min_guard_is_refused(monkeypatch):
+    """vulcan3 0.18.0 also names commits without the guard, so the version floor cannot see it."""
+    vulcan_chem = pytest.importorskip("vulcan_forward.vulcan_chem")
+
+    _reset()
+    V._check_engine_features()
+    assert V._ERRORS == []
+
+    class Old(NamedTuple):
+        conv_normal: int
+
+    monkeypatch.setattr(vulcan_chem, "ConvDiag", Old)
+    V._check_engine_features()
+    assert len(V._ERRORS) == 1
+    assert "git pull" in V._ERRORS[0]

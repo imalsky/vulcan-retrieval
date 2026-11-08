@@ -65,6 +65,5 @@ def test_c_o_prior_reaching_the_positivity_bound_is_refused(co_mode, hi, refused
 
 
 def test_chem_rtol_reads_the_baked_acceptance_tolerance():
-    """Vulcan3's own tests pin the private `_statics` this reads."""
-    chem = SimpleNamespace(_integ=SimpleNamespace(_statics=SimpleNamespace(rtol_accept=0.05)))
+    chem = SimpleNamespace(_integ=SimpleNamespace(statics=SimpleNamespace(rtol_accept=0.05)))
     assert _rtol_accept(chem) == 0.05

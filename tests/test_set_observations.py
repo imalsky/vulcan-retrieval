@@ -112,16 +112,12 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
 @pytest.mark.slow
 def test_a_column_frozen_at_dt_min_aborts_the_run_rather_than_rejecting_the_draw(tmp_path):
     """At a floor of 1e-14 s draw 7 of the first 16 freezes on stage 2. The raise reaches the sampler through the job's
-    own likelihood: no rejection is logged and no tally is kept for it. Needs a vulcan3 with the guard;
-    requirements-hpc.txt's pin predates it.
+    own likelihood: no rejection is logged and no tally is kept for it.
     """
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
     from vulcan_forward import vulcan_chem  # noqa: F401  # before vulcan3, which it configures
     import vulcan3
-
-    if not hasattr(vulcan3, "DtMinFrozenError"):
-        pytest.skip("this vulcan3 has no dt_min guard")
     import jax
 
     from retrieval_framework import run_setup as R

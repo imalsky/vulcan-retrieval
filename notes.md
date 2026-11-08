@@ -17,8 +17,8 @@ sigma = posterior standard deviation, L = log-likelihood.
   the adiabat; "Design records"), the rejected-draw log and the certificate's derived
   quantities. 0.27.0 removed the SMC path and added the nautilus report (the last commit
   with SMC is `397d8bb`; "Superseded designs"). pyproject floors: vulcan-forward>=0.30.0,
-  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `2441e6c`, vulcan-forward
-  `0accd36` (the 2025 network; v5 ran on `490e822` / `c5770a4`, v4 on `a420570` /
+  vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `b34597d`, vulcan-forward
+  `5aaa320` (the survey's code; v5 ran on `490e822` / `c5770a4`, v4 on `a420570` /
   `acdf63e`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6; `validate_env`
   refuses the former fork (same version string) and fails on stale metadata after a
   version bump until all three trees are reinstalled editable. TestPyPI releases, tags

@@ -25,12 +25,9 @@ import jax
 import jax.numpy as jnp
 
 from retrieval_framework import tp_profile
-from retrieval_framework.pipeline import _TERM_DT_MIN_FROZEN
+from vulcan3.state import TERM_DT_MIN_FROZEN
 from vulcan_forward import exojax_rt
 from vulcan_forward import interp_map
-
-# Whether this vulcan-forward reports why a solve stopped: the commit requirements-hpc.txt pins does not.
-_REPORTS_EXIT = "termination_reason" in vulcan_chem.ConvDiag._fields
 
 if TYPE_CHECKING:
     from types import SimpleNamespace
@@ -59,8 +56,7 @@ def _refuse_condense_inference(chem: SimpleNamespace, cfg: C.Config) -> None:
 
 def _rtol_accept(chem: SimpleNamespace) -> float:
     """Return the step-acceptance tolerance baked into a chemistry program."""
-    # The private name: the vulcan3 commit in requirements-hpc.txt has no public `statics`.
-    return float(chem._integ._statics.rtol_accept)
+    return float(chem._integ.statics.rtol_accept)
 
 
 def _refuse_c_o_bound(chem: SimpleNamespace, cfg: C.Config) -> None:
@@ -83,22 +79,9 @@ def _refuse_c_o_bound(chem: SimpleNamespace, cfg: C.Config) -> None:
             )
 
 
-def _refuse_unreported_freezes() -> None:
-    """Refuse a vulcan3 with the dt_min guard under a forward whose ``ConvDiag`` cannot report a frozen column."""
-    import vulcan3
-
-    if hasattr(vulcan3, "DtMinFrozenError") and not _REPORTS_EXIT:
-        raise RuntimeError(
-            "this vulcan3 stops a column frozen at dt_min and this vulcan-forward's ConvDiag has no exit reason, "
-            "so frozen draws would be recorded as rejected: update vulcan-forward"
-        )
-
-
 def _with_stage1_freeze(cd1: Any, cd2: Any) -> Any:
     """Return stage 2's ``ConvDiag``, reporting a stage 1 freeze: stage 1 is not gated, so it would go unseen."""
-    if not _REPORTS_EXIT:
-        return cd2
-    frozen = cd1.termination_reason == _TERM_DT_MIN_FROZEN
+    frozen = cd1.termination_reason == TERM_DT_MIN_FROZEN
     return cd2._replace(
         termination_reason=jnp.where(frozen, cd1.termination_reason, cd2.termination_reason),
         last_delta=jnp.where(frozen, cd1.last_delta, cd2.last_delta),
@@ -110,8 +93,7 @@ def _check_frozen_network(cfg: C.Config) -> None:
     import vulcan3
     from vulcan3 import chem_funs
 
-    # The private name: the vulcan3 commit in requirements-hpc.txt has no public `NETWORK`.
-    frozen = Path(chem_funs._NETWORK.network_path).resolve()
+    frozen = Path(chem_funs.NETWORK.network_path).resolve()
     want = (Path(vulcan3.__file__).parent / cfg.network).resolve()
     if frozen != want:
         raise RuntimeError(
@@ -286,7 +268,6 @@ def build_retrieval_forward(cfg: C.Config) -> RetrievalForward:
         The forward.
     """
     _check_frozen_network(cfg)
-    _refuse_unreported_freezes()
     profile = cfg.profile()
 
     tpm = tp_profile.build_tp_model(cfg)

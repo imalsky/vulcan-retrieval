@@ -160,6 +160,20 @@ def _check_cross_repo_pin() -> None:
             _ok(f"{dist} {version} satisfies '{spec}'")
 
 
+def _check_engine_features() -> None:
+    """Check the engine reports a frozen column: vulcan3 0.18.0 also names commits from before that guard."""
+    from vulcan3 import state
+    from vulcan_forward import vulcan_chem
+
+    if not hasattr(state, "TERM_DT_MIN_FROZEN") or "termination_reason" not in vulcan_chem.ConvDiag._fields:
+        _err(
+            "the VULCAN-JAX and vulcan-forward checkouts predate the dt_min guard and the solve's exit reason this "
+            "package reads (requirements-hpc.txt pins the commits): git pull --ff-only in both."
+        )
+    else:
+        _ok("vulcan3 and vulcan-forward report a column frozen at dt_min")
+
+
 def _check_exojax() -> None:
     """Check the exojax pin."""
     try:
@@ -307,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         _check_editable("vulcan_forward", "vulcan-forward", root / "vulcan-forward", "vulcan_forward")
         _check_editable("retrieval_framework", "vulcan-retrieval", root / "vulcan-retrieval", "retrieval_framework")
         _check_cross_repo_pin()
+        _check_engine_features()
         _check_exojax()
         from retrieval_framework.run_setup import load_spec
 
