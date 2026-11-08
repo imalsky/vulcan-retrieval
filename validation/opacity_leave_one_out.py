@@ -80,13 +80,10 @@ def _aux_for(pipe, theta):
     """(aux, lnR0, cloud, lnM, certified) at one state -- the chemistry solve, done ONCE."""
     import jax.numpy as jnp
 
-    th = jnp.asarray(theta)
+    th = jnp.asarray(theta, pipe.dtype)
     chem_theta = th[: pipe.n_chem_tp]
-    lnR0 = th[pipe.lnR0_idx]
-    cloud = th[pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
     y, diag = pipe.fwd.chem_solve_cold_diag(chem_theta)
-    lnM = th[pipe.lnM_idx] if pipe.lnM_idx is not None else 0.0
-    return pipe.fwd.aux_from_y(y, chem_theta), lnR0, cloud, lnM, bool(diag.conv_normal)
+    return pipe.fwd.aux_from_y(y, chem_theta), *pipe.rt_args(th), bool(diag.conv_normal)
 
 
 def deltas_at(pipe, theta, candidates):

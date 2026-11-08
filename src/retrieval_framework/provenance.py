@@ -33,6 +33,7 @@ __all__ = [
     "case_config",
     "case_data_file",
     "case_inputs",
+    "manifest_digest",
     "science_data_identity",
     "target_digest",
     "target_manifest",
@@ -409,7 +410,12 @@ def target_digest(cfg: C.Config, pipe: Pipeline) -> str:
     str
         The digest.
     """
-    return hashlib.sha256(_canonical(target_manifest(cfg, pipe)).encode()).hexdigest()
+    return manifest_digest(target_manifest(cfg, pipe))
+
+
+def manifest_digest(manifest: dict) -> str:
+    """Return the sha256 of a target manifest's canonical form."""
+    return hashlib.sha256(_canonical(manifest).encode()).hexdigest()
 
 
 def archived_manifest_digest(out_dir: Path) -> str | None:
@@ -432,6 +438,6 @@ def archived_manifest_digest(out_dir: Path) -> str | None:
     if not p.is_file():
         return None
     try:
-        return hashlib.sha256(_canonical(json.loads(p.read_text())).encode()).hexdigest()
+        return manifest_digest(json.loads(p.read_text()))
     except (OSError, ValueError, KeyError, AttributeError) as exc:
         return f"unreadable: {type(exc).__name__}: {exc}"

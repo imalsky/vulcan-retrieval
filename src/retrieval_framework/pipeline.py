@@ -50,8 +50,8 @@ logger = logging.getLogger("retrieval")
 REJECT_LOGL = -1.0e30
 REJECT_BELOW = -1.0e29
 
-# vulcan3's TERM_DT_MIN_FROZEN. A local value: the commit requirements-hpc.txt pins does not define it, and has no
-# raise_if_frozen. tests/test_run_nautilus_main.py compares it with vulcan3's where vulcan3 has one.
+# vulcan3.state.TERM_DT_MIN_FROZEN, held here because this module imports no engine: vulcan3's first import must follow
+# the network export. tests/test_run_nautilus_main.py compares the two.
 _TERM_DT_MIN_FROZEN = 4
 
 # sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
@@ -101,18 +101,6 @@ class EvalStats(NamedTuple):
     nuis: Any = None
 
 
-def _exit_state(cd: Any) -> tuple[Array, Array]:
-    """Return a batch solve's (termination reason, last error ratio) per row, from its ``ConvDiag``.
-
-    The forward that requirements-hpc.txt pins has no such fields, and the vulcan3 pinned with it has no dt_min guard: a
-    column there runs to its cap instead of stopping frozen, so reason 0 (never frozen) is what is true of it.
-    ``retrieval_forward`` refuses a guarded vulcan3 under a forward that cannot report it.
-    """
-    if "termination_reason" in cd._fields:
-        return cd.termination_reason, cd.last_delta
-    return jnp.zeros_like(cd.accept_count), jnp.full(cd.accept_count.shape, jnp.nan)
-
-
 def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: float) -> None:
     """Stop if a row of a batch's ``z`` froze at dt_min: a solver failure, not a verdict on the draw.
 
@@ -121,7 +109,7 @@ def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: floa
     """
     rows = np.flatnonzero(np.asarray(jax.device_get(reason))[: len(z)] == _TERM_DT_MIN_FROZEN)
     if rows.size:
-        from vulcan3 import DtMinFrozenError  # only a vulcan3 with the guard writes this reason
+        from vulcan3 import DtMinFrozenError
 
         ratio = np.asarray(jax.device_get(last_delta))[: len(z)][rows]
         raise DtMinFrozenError(
@@ -292,12 +280,15 @@ class Pipeline:
         The observation grid, whether its bins are real, its groups, the binning matrix and its row count.
     names, kinds, labels, n_dim, n_chem, n_chem_tp, lnR0_idx, lnM_idx, cloud_idx, n_cloud
         The parameter layout.
-    prior_types, param_prior_lo, param_prior_hi, param_truth, theta_truth, theta_from_u
-        The priors, the truth and the map from u to theta.
+    prior_types, param_prior_lo, param_prior_hi, param_truth, theta_truth, theta_from_u, theta_batch
+        The priors, the truth, the map from u to theta and its jitted batch [n, n_dim].
+    tp_valid_batch
+        Whether each u of a batch [n, n_dim] has its T-P inside the window, jitted.
     y_baseline, observed_depth_from_y_jit, binned_ok_jit
         The column a rejected solve is pinned to, the ungated binned depth of columns, the certified one of a theta.
-    obs_depth, obs_sigma, obs_depth_jax, obs_sigma_jax, target_digest
-        The observations and the target's fingerprint: None, the digest absent, until ``set_observations``.
+    obs_depth, obs_sigma, obs_depth_jax, obs_sigma_jax, target_manifest, target_digest
+        The observations and the target's manifest and fingerprint: None, the last two absent, until
+        ``set_observations``.
 
     Raises
     ------
@@ -305,7 +296,9 @@ class Pipeline:
         With fewer than two usable observed bins in the model band.
     """
 
-    target_digest: str  # set by set_observations, since observations are the target's last input
+    # set by set_observations, since observations are the target's last input
+    target_manifest: dict[str, Any]
+    target_digest: str
 
     def __init__(self, cfg: C.Config, fwd: RetrievalForward) -> None:
         self.cfg = cfg
@@ -372,7 +365,8 @@ class Pipeline:
         self.theta_truth = jnp.asarray(self.param_truth, dtype=dtype)
 
         # The effective prior is the box intersected with the T-P window.
-        self._tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: self.tp_valid(self.theta_from_u(u)))(U))  # noqa: PLW0108  # a fresh trace
+        self.tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: self.tp_valid(self.theta_from_u(u)))(U))  # noqa: PLW0108  # a fresh trace
+        self.theta_batch = jax.jit(jax.vmap(self.theta_from_u))
 
         self.binned_ok_jit = jax.jit(self._binned_ok)
 
@@ -385,6 +379,7 @@ class Pipeline:
         self.observed_depth_from_y_jit = jax.jit(
             lambda Y, Theta: _map_chunks(jax.vmap(self._mu_from_column), (Y, Theta), self._rt_chunk)
         )
+        self._solve_cold_batch = jax.jit(fwd.chem_solve_cold_diag_batch)
 
         self.obs_depth_jax: Any = None
         self.obs_sigma_jax: Any = None
@@ -407,7 +402,7 @@ class Pipeline:
         while have < n_particles:
             key, sub = jax.random.split(key)
             cand = self._sample_box_u(sub, over)
-            good = np.asarray(jax.device_get(self._tp_valid_batch(cand)))
+            good = np.asarray(jax.device_get(self.tp_valid_batch(cand)))
             drawn += over
             if good.any():
                 kept.append(np.asarray(jax.device_get(cand))[good])
@@ -433,13 +428,35 @@ class Pipeline:
             )
         return jnp.asarray(U, self.dtype)
 
-    def _cloud_from(self, theta: Array) -> Array:
-        """Return the cloud block of theta."""
-        return theta[self._cloud_lo : self._cloud_lo + self.n_cloud]
+    def rt_args(self, theta: Array) -> tuple[Array, Array, Array]:
+        """Return the RT's (lnR0, cloud block, lnM) of one theta; lnM is 0 where it is not sampled."""
+        lnM = theta[self.lnM_idx] if self.lnM_idx is not None else jnp.asarray(0.0, self.dtype)
+        return theta[self.lnR0_idx], theta[self._cloud_lo : self._cloud_lo + self.n_cloud], lnM
 
-    def _lnM_from(self, theta: Array) -> Array:
-        """Return lnM of theta, or 0."""
-        return theta[self.lnM_idx] if self.lnM_idx is not None else jnp.asarray(0.0, self.dtype)
+    def solve_cold(self, theta: ArrayLike) -> tuple[Array, np.ndarray, np.ndarray]:
+        """Re-solve rows cold and certify them as a run does; stop if a column froze at dt_min.
+
+        Parameters
+        ----------
+        theta : array-like [n, n_dim]
+            The rows.
+
+        Returns
+        -------
+        Y : jax.Array [n, nz, ni]
+            The two-stage cold columns.
+        mu : numpy.ndarray [n, n_bin]
+            Their binned depths, ungated.
+        ok : numpy.ndarray [n]
+            The certificate: conv_normal (a solve can certify at cap + 1) and a finite depth.
+        """
+        theta = np.asarray(theta, np.float64)
+        th = jnp.asarray(theta, self.dtype)
+        Y, cd = self._solve_cold_batch(th[:, : self.n_chem_tp])
+        _abort_if_frozen(cd.termination_reason, cd.last_delta, theta, self.fwd.chem_rtol)
+        mu = np.asarray(self.observed_depth_from_y_jit(Y, th), np.float64)
+        ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
+        return Y, mu, ok
 
     def _comp_refs(self, C_: Array) -> Array:
         """Return the composition references (lnZ, c_o, s_o) of a chemistry block, [N, 3]; s_o is 0 if not inferred."""
@@ -456,9 +473,7 @@ class Pipeline:
     def _binned_ok(self, theta: Array) -> tuple[Array, Array]:
         """Return (binned model depth, the cold certificate bit); a truth without it is refused."""
         theta = jnp.asarray(theta, dtype=self.dtype)
-        native, _aux, ok = self.fwd.native_depth_aux(
-            theta[: self.n_chem_tp], theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta)
-        )
+        native, _aux, ok = self.fwd.native_depth_aux(theta[: self.n_chem_tp], *self.rt_args(theta))
         return self._mu_from_depth(native, theta), ok > 0.5
 
     def _gauss_loglik(self, mu: Any, theta: Array) -> Array:
@@ -475,7 +490,7 @@ class Pipeline:
     def _rt_val(self, args: Any) -> Array:
         """Return one particle's log L from its profiles; with integrated nuisances [log L, R, S]."""
         aux, theta = args
-        depth = self.fwd.rt_depth(aux, theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta))
+        depth = self.fwd.rt_depth(aux, *self.rt_args(theta))
         mu = self._mu_from_depth(depth, theta)
         finite = jnp.all(jnp.isfinite(depth))
         if self.nuisance is None:
@@ -488,7 +503,7 @@ class Pipeline:
         """Return one particle's binned depth from a converged column, ungated: a plotting interface."""
         y, theta = args
         aux = self.fwd.aux_from_y(y, theta[: self.n_chem_tp])
-        depth = self.fwd.rt_depth(aux, theta[self.lnR0_idx], self._cloud_from(theta), self._lnM_from(theta))
+        depth = self.fwd.rt_depth(aux, *self.rt_args(theta))
         return self._mu_from_depth(depth, theta)
 
     def _make_batch_eval(self, mode: str) -> Callable[..., tuple[Array, Array, Array, EvalStats]]:
@@ -531,12 +546,11 @@ class Pipeline:
             Ynew = jnp.where(ok[:, None, None], Ynew, self.y_baseline[None])
             comp = self._comp_refs(C_)
             refs_new = jnp.where(ok[:, None], comp, jnp.zeros_like(comp))
-            reason, last_delta = _exit_state(CD)
             return (
                 L,
                 Ynew,
                 refs_new,
-                EvalStats(acc=ACC, conv_ok=conv_ok, reason=reason, last_delta=last_delta, nuis=nuis),
+                EvalStats(acc=ACC, conv_ok=conv_ok, reason=CD.termination_reason, last_delta=CD.last_delta, nuis=nuis),
             )
 
         return eval_batch
@@ -571,7 +585,8 @@ class Pipeline:
         # Observations are the target's last input: fingerprint it here, so every checkpoint carries its identity.
         from retrieval_framework import provenance
 
-        self.target_digest = provenance.target_digest(self.cfg, self)
+        self.target_manifest = provenance.target_manifest(self.cfg, self)
+        self.target_digest = provenance.manifest_digest(self.target_manifest)
 
 
 def build_pipeline(cfg: C.Config) -> Pipeline:

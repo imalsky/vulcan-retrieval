@@ -106,6 +106,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dry-run", action="store_true", help="print the qsub command, submit nothing")
     args = ap.parse_args(argv)
 
+    from retrieval_framework import provenance
     from retrieval_framework.run_setup import check_inputs, check_run_dir, load_spec, spec_digest
 
     spec = load_spec(args.spec.resolve())
@@ -150,12 +151,7 @@ def main(argv: list[str] | None = None) -> None:
     if r.returncode:
         sys.exit(r.stderr.strip() or f"qsub exited {r.returncode}")
     jobid = r.stdout.strip()
-    rev = (
-        subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, check=False
-        ).stdout.strip()
-        or "?"
-    )
+    rev = provenance._git(REPO, "rev-parse", "--short", "HEAD") or "?"
     with (jobs / "jobs.txt").open("a") as f:
         f.write(f"{jobid} resume={int(args.resume)} git={rev} spec={digest} {shlex.join(cmd)}\n")
     print(jobid)

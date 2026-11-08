@@ -130,7 +130,7 @@ def _kzz_at_ref(cfgj: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
         raise ValueError(f"Kzz_prof {prof!r}: the report reads only 'file' or 'const'")
     atm = provenance.case_data_file(over.get("atm_file", case["atm_file"]))
     t = np.genfromtxt(atm, names=True, dtype=None, skip_header=1)
-    p = np.asarray(t["Pressure"], np.float64) / 1e6  # dyne/cm^2 -> bar
+    p = np.asarray(t["Pressure"], np.float64) / _BAR_TO_CGS
     if not p.min() <= p_bar <= p.max():
         raise ValueError(f"{atm} does not span {p_bar} bar")
     o = np.argsort(p)
@@ -537,8 +537,6 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
     out = Path(out_dir).resolve()
     cfg = _config_from_json(out / "config.json")
     C.export_network(cfg)  # before vulcan3 is imported
-    import jax
-    import jax.numpy as jnp
 
     from retrieval_framework import pipeline as P
 
@@ -553,13 +551,8 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
         raise ValueError(
             f"the rebuilt pipeline's parameters {pipe.names} are not the posterior's {list(post['param_names'])}"
         )
-    th = jnp.asarray(theta, pipe.dtype)
     t0 = time.perf_counter()
-    Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(th[:, : pipe.n_chem_tp])
-    P._abort_if_frozen(*P._exit_state(cd), theta, pipe.fwd.chem_rtol)
-    mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
-    # the runs' certificate: conv_normal alone (a solve can certify at cap + 1)
-    ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
+    _, mu, ok = pipe.solve_cold(theta)
     log.info("model spectra: %s/%s draws certified cold in %.0f s", int(ok.sum()), len(ok), time.perf_counter() - t0)
     mult = None
     if pipe.nuisance is not None:

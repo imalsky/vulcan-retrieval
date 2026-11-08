@@ -121,22 +121,12 @@ def load_real_observations(cfg: C.Config) -> dict[str, Any]:
     missing = [g for g in cfg.combo if g not in products]
     if missing:
         raise ValueError(f"combo groups {missing} not in obs_products (known: {sorted(products)})")
-    W, LO, HI, D, S, G = [], [], [], [], [], []
+    rows = []
     for grp in cfg.combo:
         for fname in products[grp]:
-            wl, lo, hi, d, s = read_rprs_csv(obs_dir / fname)
-            W.append(wl)
-            LO.append(lo)
-            HI.append(hi)
-            D.append(d)
-            S.append(s)
-            G.append(np.array([grp] * len(wl)))
-    wl = np.concatenate(W)
-    lo = np.concatenate(LO)
-    hi = np.concatenate(HI)
-    depth = np.concatenate(D)
-    sigma = np.concatenate(S)
-    group = np.concatenate(G)
+            cols = read_rprs_csv(obs_dir / fname)
+            rows.append((*cols, np.array([grp] * len(cols[0]))))
+    wl, lo, hi, depth, sigma, group = map(np.concatenate, zip(*rows, strict=True))
     sel = (wl >= float(cfg.obs_wl_lo)) & (wl <= float(cfg.obs_wl_hi))
     r_max = float(cfg.obs_max_bin_R)
     if r_max > 0.0:

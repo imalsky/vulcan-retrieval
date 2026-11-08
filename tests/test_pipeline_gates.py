@@ -36,10 +36,15 @@ Y_BASELINE = np.full((NZ, NI), 7.0)
 class _Diag(NamedTuple):
     conv_normal: jnp.ndarray
     accept_count: jnp.ndarray
+    termination_reason: jnp.ndarray
+    last_delta: jnp.ndarray
 
 
 def _diag(C_):
-    return _Diag((C_[:, 0] < LNZ_UNCERTIFIED).astype(jnp.float64), jnp.full(C_.shape[0], 11))
+    n = C_.shape[0]
+    return _Diag(
+        (C_[:, 0] < LNZ_UNCERTIFIED).astype(jnp.float64), jnp.full(n, 11), jnp.zeros(n, int), jnp.full(n, 0.01)
+    )
 
 
 def _column(C_):
@@ -95,7 +100,7 @@ def _build(monkeypatch, **over):
     stub = SimpleNamespace(build_retrieval_forward=lambda _cfg: _stub_forward(n_tp))
     monkeypatch.setitem(sys.modules, "retrieval_framework.retrieval_forward", stub)
     monkeypatch.setattr(retrieval_framework, "retrieval_forward", stub, raising=False)
-    monkeypatch.setattr(provenance, "target_digest", lambda _cfg, _pipe: "stub")
+    monkeypatch.setattr(provenance, "target_manifest", lambda _cfg, _pipe: {"stub": True})
     grid = OBS.get_observation_grid
 
     def two_groups(cfg_, wl_um):
@@ -191,23 +196,3 @@ def test_synthetic_truth_must_certify(monkeypatch, truth_lnZ, refused):
     else:
         P.generate_observations(pipe, seed=1)
         assert np.all(np.isfinite(pipe.obs_depth))
-
-
-def test_exit_state_reads_the_reason_where_the_diag_has_one_and_says_never_frozen_where_not():
-    """The commit requirements-hpc.txt pins has no such fields, and no guard: a column there cannot stop frozen."""
-
-    class Pinned(NamedTuple):
-        accept_count: jnp.ndarray
-
-    class Current(NamedTuple):
-        accept_count: jnp.ndarray
-        termination_reason: jnp.ndarray
-        last_delta: jnp.ndarray
-
-    n = jnp.arange(3)
-    reason, delta = P._exit_state(Current(n, jnp.array([1, P._TERM_DT_MIN_FROZEN, 3]), jnp.array([0.1, 0.08, 0.2])))
-    assert reason.tolist() == [1, P._TERM_DT_MIN_FROZEN, 3]
-    assert delta.tolist() == [0.1, 0.08, 0.2]
-    reason, delta = P._exit_state(Pinned(n))
-    assert reason.tolist() == [0, 0, 0]
-    assert np.all(np.isnan(delta))

@@ -47,28 +47,12 @@ def spot_factor(wl_um, t_phot=SPOT_T_PHOT_K, dt=SPOT_DT_K, f=SPOT_F):
 
 
 def _draws(out: Path, n: int, seed: int):
+    from retrieval_framework.nautilus_report import _weights
+
     post = np.load(out / "nautilus_posterior.npz")
-    w = np.exp(post["log_w"] - np.max(post["log_w"]))
-    rng = np.random.default_rng(seed)
-    idx = rng.choice(len(w), size=int(n), p=w / w.sum())
+    w = _weights(post["log_w"])
+    idx = np.random.default_rng(seed).choice(len(w), size=int(n), p=w)
     return np.asarray(post["theta"], np.float64)[idx], [str(s) for s in post["param_names"]]
-
-
-def _solve(pipe, theta):
-    """(column, binned model depth, certified) of the rows ``theta``: the cold
-    two-stage solve, certified as production certifies.
-    """
-    import jax
-    import jax.numpy as jnp
-    from retrieval_framework import pipeline as P
-
-    th = jnp.asarray(theta, pipe.dtype)
-    C = th[:, : pipe.n_chem_tp]
-    Y, cd = jax.jit(pipe.fwd.chem_solve_cold_diag_batch)(C)
-    P._abort_if_frozen(*P._exit_state(cd), theta, pipe.fwd.chem_rtol)
-    mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th), np.float64)
-    ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
-    return Y, mu, ok
 
 
 def _twolimb(pipe, theta, names):
@@ -77,8 +61,8 @@ def _twolimb(pipe, theta, names):
     th_m, th_e = theta.copy(), theta.copy()
     th_m[:, i] -= TWO_LIMB_DTIRR_K
     th_e[:, i] += TWO_LIMB_DTIRR_K
-    _, mu_m, ok_m = _solve(pipe, th_m)
-    _, mu_e, ok_e = _solve(pipe, th_e)
+    _, mu_m, ok_m = pipe.solve_cold(th_m)
+    _, mu_e, ok_e = pipe.solve_cold(th_e)
     return {"model": 0.5 * (mu_m + mu_e), "certified": ok_m & ok_e, "model_morning": mu_m, "model_evening": mu_e}
 
 
@@ -86,20 +70,20 @@ def _mass(pipe, theta):
     """The depth at lnM +- MASS_SIGMA on the base columns: the offsets match on both sides, so the shift is the RT's."""
     import jax.numpy as jnp
 
-    Y, mu, ok = _solve(pipe, theta)
+    Y, mu, ok = pipe.solve_cold(theta)
     th = jnp.asarray(theta, pipe.dtype)
 
     def at(lnM):
         rows = []
         for k in range(theta.shape[0]):
             aux = pipe.fwd.aux_from_y(Y[k], th[k, : pipe.n_chem_tp])
-            cloud = th[k, pipe.cloud_idx[0] : pipe.cloud_idx[0] + pipe.n_cloud]
-            base_lnM = th[k, pipe.lnM_idx] if pipe.lnM_idx is not None else 0.0
-            d = pipe.fwd.rt_depth(aux, th[k, pipe.lnR0_idx], cloud, base_lnM + lnM)
+            lnR0, cloud, base_lnM = pipe.rt_args(th[k])
+            d = pipe.fwd.rt_depth(aux, lnR0, cloud, base_lnM + lnM)
             rows.append(np.asarray(pipe.B, np.float64) @ np.asarray(d, np.float64))
         return np.asarray(rows)
 
-    return {"model": mu + (at(+MASS_SIGMA) - at(0.0)), "certified": ok, "model_minus": mu + (at(-MASS_SIGMA) - at(0.0))}
+    base = at(0.0)
+    return {"model": mu + (at(+MASS_SIGMA) - base), "certified": ok, "model_minus": mu + (at(-MASS_SIGMA) - base)}
 
 
 def run(args) -> int:
@@ -139,11 +123,11 @@ def run(args) -> int:
         payload.update(_mass(pipe, theta))
         settings.update(lnM_sigma=MASS_SIGMA)
     elif args.variant == "spot":
-        _, mu, ok = _solve(pipe, theta)
+        _, mu, ok = pipe.solve_cold(theta)
         payload.update(model=mu * spot_factor(payload["wl"])[None, :], certified=ok, model_unspotted=mu)
         settings.update(t_phot_K=SPOT_T_PHOT_K, dt_K=SPOT_DT_K, f_spot=SPOT_F)
     else:
-        _, mu, ok = _solve(pipe, theta)
+        _, mu, ok = pipe.solve_cold(theta)
         payload.update(model=mu, certified=ok)
     logging.info(
         "%s: %s/%s draws certified in %.0f s",

@@ -75,11 +75,11 @@ class Runtime:
         XLA_FLAGS.
     """
 
-    solver: str = "fast"  # VULCAN3_SOLVER: fast | ffi | reference
-    chem_rhs: str = "codegen"  # VULCAN3_CHEM_RHS: codegen | grouped
-    bt_buffers: int | None = None  # VULCAN3_BT_BUFFERS: 1 | 2 | None (per call)
-    gpu_memory_fraction: float | None = None  # XLA_PYTHON_CLIENT_MEM_FRACTION
-    xla_flags: str | None = None  # XLA_FLAGS
+    solver: str = "fast"
+    chem_rhs: str = "codegen"
+    bt_buffers: int | None = None
+    gpu_memory_fraction: float | None = None
+    xla_flags: str | None = None
 
     def env(self) -> dict[str, str | None]:
         """Return the block as environment values.
@@ -117,8 +117,8 @@ class Sampler:
     """
 
     n_live: int = 1000
-    n_eff: int = 10_000  # effective posterior samples at which nautilus stops
-    n_batch: int | None = None  # None: run_nautilus.BATCH_PER_LANE x the lanes
+    n_eff: int = 10_000
+    n_batch: int | None = None
     warm_starts: bool = True
 
 
@@ -529,7 +529,7 @@ def write_run_identity(cfg: C.Config, pipe: Pipeline, spec: Spec, obs_save: dict
     # binds the checkpoint is the sha256 of this manifest's canonical form
     # (provenance._canonical: compact, sorted keys), not of the indented file.
     (out / provenance.MANIFEST_FILE).write_text(
-        json.dumps(provenance.target_manifest(cfg, pipe), indent=2, sort_keys=True, default=str) + "\n"
+        json.dumps(pipe.target_manifest, indent=2, sort_keys=True, default=str) + "\n"
     )
 
 

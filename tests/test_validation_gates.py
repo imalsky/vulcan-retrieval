@@ -6,7 +6,6 @@ import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
-from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -70,12 +69,17 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
         seen.update(kw)
         return np.array([1.0, 2.0]), np.array([[1.5, 2.0]])
 
+    import jax.numpy as jnp
+
+    from retrieval_framework.pipeline import Pipeline
+
     n_chem_tp, i_r0, i_m, i_deck = 2, 2, 3, 4
     pipe = SimpleNamespace(
         n_chem_tp=n_chem_tp,
+        dtype=jnp.float64,
         lnR0_idx=i_r0,
         lnM_idx=i_m,
-        cloud_idx=[i_deck],
+        _cloud_lo=i_deck,
         n_cloud=1,
         B=np.eye(2),
         fwd=SimpleNamespace(
@@ -85,6 +89,7 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
             rt=SimpleNamespace(transmission_depth_r=depth_r),
         ),
     )
+    pipe.rt_args = lambda th: Pipeline.rt_args(pipe, th)
     d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
     assert seen["deck"] == pytest.approx(-3.0)
     assert seen["lnM"] == pytest.approx(0.2)
@@ -158,36 +163,6 @@ def test_the_ladder_gates_fail_a_bin_finite_on_one_side(scripts, capsys):
     capsys.readouterr()
 
 
-@pytest.mark.skipif("not hasattr(__import__('vulcan3'), 'DtMinFrozenError')", reason="this vulcan3 has no guard")
-def test_the_forward_check_aborts_on_a_frozen_draw(scripts):
-    """A variant's shift is read from its certified draws, so a frozen one must not pass as merely uncertified."""
-    import jax.numpy as jnp
-    from vulcan3 import DtMinFrozenError
-
-    from retrieval_framework import pipeline as P
-
-    class Diag(NamedTuple):
-        conv_normal: jnp.ndarray
-        accept_count: jnp.ndarray
-        termination_reason: jnp.ndarray
-        last_delta: jnp.ndarray
-
-    def solve(c):
-        n = c.shape[0]
-        reason = jnp.zeros(n, int).at[1].set(P._TERM_DT_MIN_FROZEN)
-        return jnp.zeros((n, 1)), Diag(jnp.ones(n), jnp.ones(n, int), reason, jnp.full(n, 0.08))
-
-    pipe = SimpleNamespace(
-        dtype=jnp.float64,
-        n_chem_tp=2,
-        observed_depth_from_y_jit=lambda *_a: pytest.fail("the RT ran after a frozen solve"),
-        fwd=SimpleNamespace(chem_solve_cold_diag_batch=solve, chem_rtol=0.05),
-    )
-    with pytest.raises(DtMinFrozenError, match=r"at rows \[1\] of this batch"):
-        scripts.check._solve(pipe, np.zeros((3, 2)))
-
-
-@pytest.mark.skipif("not hasattr(__import__('vulcan3'), 'DtMinFrozenError')", reason="this vulcan3 has no guard")
 def test_the_e2e_solve_aborts_on_a_frozen_column(scripts):
     """Its rows carry a certificate and no reason, so a frozen column would read as a plain uncertified draw."""
     import jax.numpy as jnp

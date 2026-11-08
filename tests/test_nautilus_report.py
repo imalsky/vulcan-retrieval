@@ -139,9 +139,6 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
 
     from retrieval_framework import pipeline as P
 
-    if not hasattr(vulcan3, "DtMinFrozenError"):
-        pytest.skip("this vulcan3 has no guard")
-
     _run_dir(tmp_path)
     n = 2
 
@@ -161,8 +158,10 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
         n_chem_tp=6,
         nuisance=None,
         observed_depth_from_y_jit=lambda *_a: pytest.fail("the RT ran after a frozen solve"),
-        fwd=SimpleNamespace(chem_solve_cold_diag_batch=solve, chem_rtol=0.05),
+        _solve_cold_batch=solve,
+        fwd=SimpleNamespace(chem_rtol=0.05),
     )
+    pipe.solve_cold = lambda th: P.Pipeline.solve_cold(pipe, th)
     monkeypatch.setattr(C, "export_network", lambda _cfg: None)
     monkeypatch.setattr(C, "choose_solver", lambda: "fast")
     monkeypatch.setattr(P, "build_pipeline", lambda _cfg: pipe)
@@ -237,7 +236,7 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
 
     assert sorted(p.name for p in (tmp_path / "plots").iterdir()) == ["corner.png", "tp_posterior.png"]
     mu = depth + 2e-5 * np.random.default_rng(1).normal(size=(6, depth.size))
-    paths = report_figures.plot(tmp_path, (theta[:6], mu, np.arange(6) < 5))
+    paths = report_figures.plot(tmp_path, (theta[:6], mu, np.arange(6) < 5, None))
     assert [p.name for p in paths] == ["corner.png", "tp_posterior.png", "spectrum_fit.png"]
     assert all(p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" for p in paths)
 

@@ -146,7 +146,7 @@ def _spectrum_figure(path: Path, out: Path, spectra: tuple[Any, ...], names: lis
     """Draw the spectrum fit: the model band, the posterior predictive and the data."""
     import matplotlib.pyplot as plt
 
-    th_s, mu, ok, mult = spectra if len(spectra) == 4 else (*spectra, None)
+    th_s, mu, ok, mult = spectra
     if not np.any(ok):
         raise RuntimeError("no model-spectrum draw certified cold: nothing to plot")
     log.info("spectrum fit: %s/%s draws certified cold", int(ok.sum()), len(ok))

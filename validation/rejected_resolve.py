@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 from e2e_check import _wmedian
 
+from retrieval_framework.nautilus_report import _weights
+
 KZZ0 = 1.0e9  # cm^2/s: the survey's constant Kzz (data/survey/<case>/atm_<case>_Kzz.txt)
 BIN_DEX = 0.35
 
@@ -133,8 +135,7 @@ def _refuse_foreign_solve(args, out, cfg, names, e):
 def _rows_by_bin(edges, j, e, ok, post):
     """One row per log10 Kzz bin: the certified draws of the solve ``e`` there against the posterior rows there."""
     lk_r, L, acc = _log10kzz(e["theta"][:, j]), e["logL"], e["acc"]
-    w = np.exp(post["log_w"] - np.max(post["log_w"]))
-    w = w / w.sum()
+    w = _weights(post["log_w"])
     logl_post = post["log_l"]
     fin = np.isfinite(logl_post)
     lk_p = _log10kzz(post["theta"][:, j])

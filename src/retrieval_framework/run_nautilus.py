@@ -41,8 +41,9 @@ if TYPE_CHECKING:
     from jax.typing import ArrayLike
 
     from retrieval_framework.pipeline import Pipeline
+    from retrieval_framework.run_setup import Spec
 
-__all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
+__all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterior", "run_lanes", "startup_check"]
 
 log = logging.getLogger("retrieval")
 
@@ -279,10 +280,7 @@ class _ChunkLogs:
             self.n_nui += 1
         for key, v in (
             ("n_eval", len(z)),
-            ("tp_out", rej.tp_out.sum()),
-            ("exhausted", rej.exhausted.sum()),
-            ("stalled", rej.stalled.sum()),
-            ("nonfinite", rej.nonfinite.sum()),
+            *((name, mask.sum()) for name, mask in rej._asdict().items()),
             (f"n_{mode}", len(z)),
             (f"{mode}_certified", (~dead).sum()),
             (f"{mode}_steps_certified", acc[~dead].sum()),
@@ -339,7 +337,6 @@ def make_loglike(
 
     from retrieval_framework import pipeline as P
 
-    tp_ok = jax.jit(jax.vmap(lambda u: pipe.tp_valid(pipe.theta_from_u(u))))
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
@@ -348,7 +345,6 @@ def make_loglike(
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
     if kzz_ref is not None:
-        theta_of = jax.jit(jax.vmap(pipe.theta_from_u))
         i_kzz = list(pipe.names).index("lnKzz")
 
     def loglike(Z: np.ndarray) -> np.ndarray:
@@ -363,7 +359,7 @@ def make_loglike(
                 Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
             Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
             # Not bitwise for the kept rows: fewer jobs on the lane queue shift the shared refresh cadence.
-            tp_in = np.asarray(jax.device_get(tp_ok(Uj)), bool)
+            tp_in = np.asarray(jax.device_get(pipe.tp_valid_batch(Uj)), bool)
             act = jnp.asarray((np.arange(n_batch) < m) & tp_in)
             if prof is not None:
                 prof.batch_begin()
@@ -384,7 +380,7 @@ def make_loglike(
             dead = rej.dead
             out[i : i + m] = np.where(dead, -np.inf, L)
             if kzz_ref is not None:
-                th = np.asarray(jax.device_get(theta_of(Uj)), np.float64)[:m]
+                th = np.asarray(jax.device_get(pipe.theta_batch(Uj)), np.float64)[:m]
                 counts = {
                     "T-P out": rej.tp_out.sum(),
                     "exhausted": rej.exhausted.sum(),
@@ -595,8 +591,6 @@ def _saved_loglike(
 
 def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want: str, seed: int) -> None:
     """Write nautilus_posterior.npz: the weighted points, the equal-weight samples and any integrated nuisances."""
-    import jax
-
     from retrieval_framework import pipeline as P
 
     z, log_w, log_l = sampler.posterior()
@@ -611,9 +605,9 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
             "nuisance": nu,
             "samples_nuisance": nu_eq,
         }
-    to_theta = jax.jit(jax.vmap(pipe.theta_from_u))
-    theta = np.asarray(to_theta(np.log(z) - np.log1p(-z)), np.float64)
-    theta_eq = np.asarray(to_theta(np.log(z_eq) - np.log1p(-z_eq)), np.float64)
+    u = np.log(z) - np.log1p(-z)
+    theta = np.asarray(pipe.theta_batch(u), np.float64)
+    theta_eq = np.asarray(pipe.theta_batch(np.log(z_eq) - np.log1p(-z_eq)), np.float64)
     P.save_npz(
         out / "nautilus_posterior.npz",
         param_names=np.asarray(pipe.names, dtype="<U64"),
@@ -622,7 +616,7 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
         log_w=log_w,
         log_l=log_l,
         samples=theta_eq,
-        u=np.log(z) - np.log1p(-z),
+        u=u,
         logZ_box=np.asarray(sampler.log_z),
         n_like=np.asarray(sampler.n_like),
         **extra,
@@ -713,6 +707,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
+def run_lanes(spec: Spec) -> int:
+    """Return the run's lane count: ``cold_lanes``, times ``FFI_BLOCKS_PER_SM`` under the ffi solver."""
+    return int(spec.cfg.cold_lanes) * (FFI_BLOCKS_PER_SM if spec.runtime.solver == "ffi" else 1)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run one specification, from the runtime export to the certificate.
 
@@ -733,10 +732,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     export_runtime(spec.runtime)
     C.export_network(cfg)
-    lanes = int(cfg.cold_lanes)
-    if spec.runtime.solver == "ffi":
-        lanes *= FFI_BLOCKS_PER_SM
-    cfg = replace(cfg, cold_lanes=lanes)
+    cfg = replace(cfg, cold_lanes=run_lanes(spec))
     out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
     ckpt = out / "nautilus_checkpoint.hdf5"
     resume = bool(args.resume)
@@ -744,7 +740,7 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(spec.sampler.n_live)
-    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * lanes)
+    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * cfg.cold_lanes)
     warm = bool(spec.sampler.warm_starts)
     _log_settings(spec, cfg, n_batch)
     _log_versions()

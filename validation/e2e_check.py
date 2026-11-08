@@ -114,8 +114,10 @@ def _draw_set(args, pipe, names):
         post = np.load(Path(args.posterior) / "nautilus_posterior.npz")
         if list(post["param_names"]) != names:
             raise RuntimeError(f"the posterior's parameters {list(post['param_names'])} are not the spec's {names}")
-        w = np.exp(post["log_w"] - np.max(post["log_w"]))
-        idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w / w.sum())
+        from retrieval_framework.nautilus_report import _weights
+
+        w = _weights(post["log_w"])
+        idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w)
         return np.array(post["u"][idx], np.float64), (), {"post_row": idx, "logL_run": post["log_l"][idx]}
     if args.u_from:  # another machine's draw set, row for row
         z = np.load(args.u_from)
@@ -161,9 +163,9 @@ def solve(args) -> int:
     import jax
     import jax.numpy as jnp
     from retrieval_framework import pipeline as P
-    from retrieval_framework.run_nautilus import FFI_BLOCKS_PER_SM
+    from retrieval_framework.run_nautilus import run_lanes
 
-    lanes = int(spec.cfg.cold_lanes) * (FFI_BLOCKS_PER_SM if spec.runtime.solver == "ffi" else 1)
+    lanes = run_lanes(spec)
     cfg = replace(spec.cfg, cold_lanes=lanes)
     pipe = P.build_pipeline(cfg)
     set_observations(cfg, pipe, P)
@@ -175,10 +177,9 @@ def solve(args) -> int:
         np.random.default_rng(args.seed + 1).permutation(len(rows)) if args.rung == "shuffled" else np.arange(len(rows))
     )
     Us = jnp.asarray(U[rows][order], pipe.dtype)
-    theta_of = jax.jit(jax.vmap(pipe.theta_from_u))
     L, Y, acc, ok = _solve_rows(pipe, Us, RUNGS[args.rung][1])
     inv = np.argsort(order)
-    theta = theta_of(Us)
+    theta = pipe.theta_batch(Us)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, theta), np.float64)[inv]
     sidx = pipe.fwd.chem.sidx
     Yn = np.asarray(Y, np.float64)[inv]

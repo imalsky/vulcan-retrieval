@@ -317,7 +317,7 @@ UNDERFLOW_DENOM = 1e-300
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
 _FFI_COMPUTE_CAPABILITY = "9.0"
 # Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
-# only the banner's C/O range uses it.
+# the banner's C/O range and the report's C/O read it.
 _BASELINE_C_TO_O = 0.549
 
 
