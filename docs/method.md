@@ -6,15 +6,15 @@ What the retrieval does, with the source of each method. Results and the reasons
 
 | Module | Job |
 |---|---|
-| `config_schema` | `Config`, the parameter list, `specs_from_config`, the run banner; no jax |
-| `run_setup` | The run specification (`load_spec`), logging, a run's identity files |
+| `config_schema` | `Config` and `validate_config`, the parameter list, `specs_from_config`, the run banner; no jax |
+| `run_setup` | The run specification (`load_spec`, `export_runtime`), logging, a run's identity files |
 | `observations` | The observed spectrum and the exact binning and offset operators |
 | `tp_profile` | The Guillot T-P evaluator |
-| `retrieval_forward` | theta to the native transit depth, on the engine in `vulcan-forward` |
-| `pipeline` | The u-space posterior and the batched likelihood evaluators |
+| `retrieval_forward` | `RetrievalForward`: theta to the native transit depth, on the engine in `vulcan-forward`; the lane route |
+| `pipeline` | `Pipeline`: the u-space posterior, the batched likelihood evaluators, the T-P window |
 | `nuisance` | The integrated offsets and inflations |
 | `provenance` | Code and data identity, the target manifest and digest |
-| `run_nautilus` | The sampler driver |
+| `run_nautilus` | The sampler driver: anchors, the resume refusal |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
 | `report_figures` | The three figures |
