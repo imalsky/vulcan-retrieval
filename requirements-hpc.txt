@@ -4,7 +4,7 @@
 # the validated combination on any interpreter -- on 3.11+ a bare floor would
 # resolve the latest untested jax instead (jax dropped Python 3.10 at 0.7.0).
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
-# TestPyPI; THIS file carries the exact validated chemistry commit -- keep the
+# TestPyPI; THIS file carries the chemistry commits the next NAS run uses -- keep the
 # pins at or above those floors
 # (vulcan3>=0.18.0, vulcan-forward>=0.30.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
@@ -29,6 +29,6 @@ h5py>=3
 # run_nautilus: the stock PyPI release (validate_env checks the version and refuses
 # the former SiLU / spread_batch fork, which carried the same version string)
 nautilus-sampler==1.0.6
-vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@b34597d716088be7f10f74d2a599ff09ed5532ba
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@5aaa32014ff4c7dcd62b9dacb9350e89d32208cc
+vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@1ab5f37f8a98c79143934b715e9ebb66b19cf67e
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@50bef74dc45be38dfaec2fb4b135d8223c1ccf0d
 -e .
