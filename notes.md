@@ -722,8 +722,9 @@ HPC
     2.87-5.10 um, `obs_max_bin_R` 200. One model and one prior set in `survey_base.yaml` (never a run: it names no
     planet); a planet file adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and lnM's
     sigma. Machinery as the WASP-107b case (2025 network, rtol 0.2 within 5000, constant Kzz 1e7-1e13 about 1e9, 10 bar
-    bottom, 83 deg; the maintainer decided the 1e7 floor from the pre-launch check below, run at 1e6); T1bar over the
-    whole window; the schema-default cloud, offset and inflation priors are stated in the base.
+    bottom, 83 deg; the maintainer decided the 1e7 floor from the pre-launch check below, run at 1e6); after a run its
+    posterior rows are re-solved at rtol 0.05 within 15000 steps (the maintainer decided; the postrun_93269 method,
+    "Runs"), the rows that do not certify reported apart; T1bar over the whole window; the schema-default cloud, offset and inflation priors are stated in the base.
   - Rules. System: NASA Exoplanet Archive composite table (`pscomppars`, queried 2026-10-29; R*, a, Mp and its error,
     Teq, Teff). rp_cm = sqrt(median depth in the window) x R*; vulcan3 Rp = R(1 bar), hydrostatic below it on a nominal
     Guillot column (kappa 0.01, gamma 0.4, Tint 300 K, mu 2.4). Stellar flux (the maintainer decided: what each host's
@@ -766,7 +767,9 @@ HPC
     kept): 113 + 116 native to 28 + 29 bins, 53 in the window. UV: MUSCLES v24 HAT-P-26 `adapt-const-res-sed`
     (Behr+2023), the host's own spectrum, which Gressier+2025's photochemistry used; BOLOFLUX x sigma (5079 K)^4 at
     the stellar surface, as the WASP-107b file. System from the archive: Mp 0.070 +- 0.020 M_J (lnM sigma 0.286;
-    Gressier+2025 used 18.6 M_E), Teq 1080 K, R* 0.87 R_Sun.
+    Gressier+2025 used 18.6 M_E; the maintainer decided to keep the archive value: disclose that lnM acts in the RT
+    only, so at this sigma the chemistry's gravity sits up to ~30 % from the RT's at 1 sigma), Teq 1080 K, R* 0.87
+    R_Sun. It was added after the pre-launch check below and has none; its run's startup check is its first.
   - Left out (the maintainer decided). HAT-P-1b: no public
     reduced spectrum (MAST raw only). WASP-80b: CS2 (arXiv:2604.13168), no opacity table. WASP-52b: its G395H spectrum
     needs stellar contamination (arXiv:2609.21810). HIP 67522b: young host, disputed mass. Reserves: WASP-127b (~10% of
@@ -906,6 +909,7 @@ precedent found (searches through 2026-09, not exhaustive).
 
 ## Ideas not adopted
 
+- An injection-recovery test under 10 minutes on daw (inject with `pipeline.generate_observations` on the smoke case, run `run_nautilus`, the truth inside each 95 % interval): not built, the maintainer dropped it; the smoke case's run time was never measured.
 - Abort doomed lanes early (dt < 1e4 s and reject fraction > 0.3 at step 801: 64/75 caught, 1 false positive): a new rejection rule, the maintainer's call.
 - RT overlapped with the retry pass; longest-first ordering (no predictor, "Do not retry"); halving the host update.
 - Refill across batches (a nautilus subclass plus a re-entrant queue, 300-1000 lines [E], up to 1.22x) and a multi-GPU batch split (MPI across nodes, 150-200 lines [E]): declined by the maintainer as not simple enough ("Pipeline speed", v5 queue replay).
