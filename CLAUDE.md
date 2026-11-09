@@ -55,7 +55,7 @@ Name a notes section by its heading. Before proposing a solver, sampler or speed
 
 ### On NAS
 
-The maintainer runs these; give the exact commands and run none of them unasked.
+Run these only when the maintainer explicitly asks for NAS work; otherwise give the exact commands to paste.
 
 - Submit from `cghfe01`/`cghfe02` to `gpu_long`, short jobs too (short walltime); never `-q queue@server`.
 - `PROJECT_ROOT` holds `vulcan-retrieval`, `VULCAN-JAX` (the clone name is load-bearing) and `vulcan-forward`. Update
