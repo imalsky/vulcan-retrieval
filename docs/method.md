@@ -71,8 +71,8 @@ Stock nautilus-sampler 1.0.6 (Lange 2023) with its default networks, `N_NETWORKS
 exploration until `f_live = F_LIVE`, bounds enlarged by `ENLARGE_PER_DIM`, and the exploration phase discarded
 (`DISCARD_EXPLORATION`, the unbiased estimator; keeping it biased log Z by about -0.2 on surrogates of the W39b posterior).
 Each sampling-phase batch goes to one shell, as in stock nautilus. nautilus samples the unit cube; $u = {\rm logit}(z)$ is the
-retrieval's own u-space, so theta follows the box prior exactly. `validate_env` refuses the former fork (SiLU networks,
-spread_batch), which carried the same version string.
+retrieval's own u-space, so theta follows the box prior exactly. `validate_env` refuses a fork (SiLU networks,
+spread_batch) that carried the same version string.
 
 `n_batch` defaults to `BATCH_PER_LANE` times the lanes, so a lane whose column certifies refills from the same batch.
 Padding and out-of-window draws cost no solve: a chunk shorter than `n_batch` is filled with copies of its last row, and the
@@ -97,7 +97,9 @@ none certified, so a prior region the solver cannot certify is refused in minute
 
 ### Output files
 
-In `output/<case>/<name>_nautilus`: `nautilus_checkpoint.hdf5`, rewritten every iteration; `anchors/`, one npz of certified
+In `output/<case>/<name>_nautilus`: the run's identity, written at every start (`config.json`, `observations.npz`,
+`target_manifest.json`, `target_digest.txt`, and the spec as `spec.yaml`, its base as `spec_base.yaml`); `run.log`;
+`nautilus_checkpoint.hdf5`, rewritten every iteration; `anchors/`, one npz of certified
 columns per batch; `rejected/`, one npz per chunk of the rejected draws (`z`, class `cls` 0 T-P out, 1 exhausted, 2 stalled,
 3 non-finite, `acc`, `warm`); with integrated nuisances `nuisance/`, one npz per chunk of the certified rows (`z`, `log_l`,
 `stats`); `batches.jsonl`, each chunk's wall time, start mode and accepted steps; `nautilus_tally.json`, the rejection and
@@ -170,8 +172,9 @@ only after it passes.
 | `P_rcb` | The radiative-convective boundary pressure |
 | `B`, `O_*`, `N`, `Nm` | Binning, offset and group matrices |
 | `R`, `S`, `G`, `W` | The group statistics of the integrated nuisances, the group count, the group weight |
+| `b`, `o_g`, `K` | A noise inflation, group g's offset, the trapezoid node count in $\log_{10} b$ |
 | `U`, `Y`, `Z`, `C_`, `L`, `Theta`, `AUX`, `CD` | Batched u, columns, unit-cube points, chemistry blocks, log L, theta, profiles, `ConvDiag` |
-| `T`, `P`, `M` | Temperature, pressure, number density |
+| `T`, `P`, `M` | Temperature, pressure, planet mass |
 
 ## References
 
