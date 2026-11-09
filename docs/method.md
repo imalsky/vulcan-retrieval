@@ -98,7 +98,7 @@ none certified, so a prior region the solver cannot certify is refused in minute
 ### Output files
 
 In `output/<case>/<name>_nautilus`: the run's identity, written at every start (`config.json`, `observations.npz`,
-`target_manifest.json`, `target_digest.txt`, and the spec as `spec.yaml`, its base as `spec_base.yaml`); `run.log`;
+`target_manifest.json`, `target_digest.txt`, and the spec as `spec.yaml`, its base if any as `spec_base.yaml`); `run.log`;
 `nautilus_checkpoint.hdf5`, rewritten every iteration; `anchors/`, one npz of certified
 columns per batch; `rejected/`, one npz per chunk of the rejected draws (`z`, class `cls` 0 T-P out, 1 exhausted, 2 stalled,
 3 non-finite, `acc`, `warm`); with integrated nuisances `nuisance/`, one npz per chunk of the certified rows (`z`, `log_l`,
