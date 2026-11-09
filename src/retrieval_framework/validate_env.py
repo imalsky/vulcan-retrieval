@@ -315,6 +315,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _check_python()
         _check_jax(args.require_gpu)
+        from retrieval_framework.config_schema import export_network
+        from retrieval_framework.run_setup import load_spec
+
+        cfg = load_spec(spec).cfg
+        # vulcan3 freezes its network at its first import, which the checks below make: without the spec's network
+        # it freezes on its own default, and the engine then refuses to import after it.
+        export_network(cfg)
         # Before exojax: vulcan_chem's import-order guard raises if exojax comes first.
         _check_editable("vulcan3", "vulcan3", root / "VULCAN-JAX", "vulcan3")
         _check_editable("vulcan_forward", "vulcan-forward", root / "vulcan-forward", "vulcan_forward")
@@ -322,9 +329,6 @@ def main(argv: list[str] | None = None) -> int:
         _check_cross_repo_pin()
         _check_engine_features()
         _check_exojax()
-        from retrieval_framework.run_setup import load_spec
-
-        cfg = load_spec(spec).cfg
         os.chdir(root / "vulcan-retrieval")  # the job's working directory
         _check_spec_inputs(cfg)
         _check_data_tree(root, tuple(cfg.molecules))

@@ -6,6 +6,8 @@ The PBS preflight runs the same checks on the real environment.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -236,7 +238,7 @@ def test_an_unreadable_checkout_version_is_an_error_not_an_ok(tmp_path, monkeypa
 
 def _record_checks(monkeypatch, calls):
     """Replace every check with a recorder, and the spec load with a stand-in naming its file."""
-    from retrieval_framework import run_setup
+    from retrieval_framework import config_schema, run_setup
 
     def rec(name):
         return lambda *a: calls.append((name, *a))
@@ -248,6 +250,7 @@ def _record_checks(monkeypatch, calls):
     monkeypatch.setattr(
         run_setup, "load_spec", lambda p: SimpleNamespace(cfg=SimpleNamespace(path=p, molecules=("H2O", "CO")))
     )
+    monkeypatch.setattr(config_schema, "export_network", lambda cfg: calls.append(("network", cfg.path)))
 
 
 def test_main_runs_the_checks_in_import_safe_order_on_the_requested_spec(tmp_path, monkeypatch):
@@ -260,10 +263,12 @@ def test_main_runs_the_checks_in_import_safe_order_on_the_requested_spec(tmp_pat
     spec = tmp_path / "other.yaml"
     assert V.main([str(tmp_path), "--require-gpu", "--spec", str(spec)]) == 0
     names = [c[0] for c in calls]
-    # vulcan_chem's import-order guard raises if exojax comes before the editable checks
+    # the network is selected before the editable checks import vulcan3; vulcan_chem's import-order guard raises if
+    # exojax comes before them
     assert names == [
         "python",
         "jax",
+        "network",
         "editable",
         "editable",
         "editable",
@@ -276,7 +281,7 @@ def test_main_runs_the_checks_in_import_safe_order_on_the_requested_spec(tmp_pat
         "nautilus",
     ]
     assert calls[1] == ("jax", True)
-    assert calls[2] == ("editable", "vulcan3", "vulcan3", tmp_path / "VULCAN-JAX", "vulcan3")
+    assert calls[3] == ("editable", "vulcan3", "vulcan3", tmp_path / "VULCAN-JAX", "vulcan3")
     assert ("spec_inputs", spec.resolve()) in calls
     assert ("data_tree", tmp_path.resolve(), ("H2O", "CO")) in calls
     # the checks run from the job's working directory
@@ -326,3 +331,24 @@ def test_an_engine_without_the_dt_min_guard_is_refused(monkeypatch):
     V._check_engine_features()
     assert len(V._ERRORS) == 1
     assert "git pull" in V._ERRORS[0]
+
+
+def test_main_reaches_the_engine_check_in_a_fresh_interpreter(tmp_path):
+    """As the PBS preflight runs it, with nothing imported and no network in the environment.
+
+    main must select the spec's network before a check imports vulcan3, or the engine refuses to import after it.
+    """
+    pytest.importorskip("vulcan_forward.vulcan_chem")
+    for d in ("vulcan-retrieval", "VULCAN-JAX"):
+        (tmp_path / d).mkdir()
+    spec = Path(__file__).resolve().parents[1] / "runs" / "w39b_smc_retrieval" / "smoke.yaml"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("VULCAN3_")}
+    done = subprocess.run(
+        [sys.executable, "-m", "retrieval_framework.validate_env", str(tmp_path), "--spec", str(spec)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert "Traceback" not in done.stderr, done.stderr[-2000:]
+    assert "report a column frozen at dt_min" in done.stdout
