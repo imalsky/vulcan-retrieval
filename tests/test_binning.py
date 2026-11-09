@@ -10,7 +10,7 @@ import pytest
 
 from retrieval_framework import observations as OBS
 
-# np.trapz was renamed np.trapezoid in NumPy 2.0 (and trapz removed); support both.
+# np.trapz is np.trapezoid from NumPy 2.0; support both.
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz  # noqa: NPY201  # the fallback for NumPy 1
 
 BIN_RTOL, BIN_ATOL = 1e-12, 1e-14  # matrix vs direct trapezoid: round-off only

@@ -1,12 +1,8 @@
-"""Editable-install guard: the suite must exercise THIS checkout's code.
+"""The editable-install guard, the smoke pipeline fixtures and the target-digest stand-in.
 
-Because of the src layout, pytest imports the *installed* retrieval_framework. A
-non-editable install (pip install . or a wheel) shadows the checkout, so the suite
-would silently test stale code. Fail collection loudly instead (same convention as
-VULCAN-JAX's conftest). Fix: pip install --no-deps -e . (from this repo's root)
-
-Also the real smoke pipeline builder (its capped session fixture is built
-once per session, per xdist worker) and the target-digest stand-in.
+With the src layout pytest imports the installed retrieval_framework, so a non-editable install would test stale code:
+collection fails instead. Fix: pip install --no-deps -e . from this repo's root. Session fixtures are built once per
+xdist worker.
 """
 
 import dataclasses
@@ -38,9 +34,9 @@ CAPPED_COLD_CMAX = 50  # < count_min: no solve can certify, its column stays fin
 
 
 def build_smoke_pipe(**overrides):
-    """The REAL smoke pipeline (chemistry + RT, offline) with Config fields
-    ``overrides`` replaced and observations set to zeros/ones. Skips only when
-    exojax or a table the case reads is absent; any other failure of the build fails the test.
+    """Return the real smoke pipeline (chemistry and RT, offline) with ``overrides`` and zero-depth, unit-sigma data.
+
+    Skips only when exojax or a table the case reads is absent; any other failure of the build fails the test.
     """
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")

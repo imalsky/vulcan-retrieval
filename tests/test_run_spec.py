@@ -30,7 +30,7 @@ def _write(path: Path, doc) -> Path:
 
 @pytest.mark.parametrize(
     ("case", "name", "n_dim"),
-    [  # v5 and the survey integrate their nuisances out
+    [  # the WASP-39b case and the survey integrate their nuisances out
         *[
             (RUN_DIR.name, n, d)
             for n, d in (

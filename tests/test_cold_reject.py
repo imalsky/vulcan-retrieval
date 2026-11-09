@@ -1,10 +1,8 @@
-"""No entry point accepts a FINITE spectrum from an uncertified cold solve: the
-batched cold evaluator run_nautilus calls rejects it, and the synthetic
-injection refuses it as a truth spectrum; both apply one certificate, the
-solver's conv_normal (False on every cap exit). Real smoke pipeline at count_max=50
-< count_min (conftest.capped_smoke_pipe), so no cold solve can certify while its
-column, and hence its spectrum, stays finite.
-Slow (full tier): builds and compiles the real chemistry.
+"""No entry point accepts a finite spectrum from an uncertified cold solve.
+
+The batched cold evaluator rejects it and the synthetic injection refuses it as a truth, both on the solver's
+conv_normal (False on every cap exit). The smoke pipeline at count_max=50 < count_min (conftest.capped_smoke_pipe) has
+no solve that can certify, while its column and spectrum stay finite. Slow: builds and compiles the real chemistry.
 """
 
 import jax

@@ -26,7 +26,7 @@ from retrieval_framework.nuisance import make_nuisance_marginal
 from retrieval_framework.run_nautilus import make_loglike, nuisance_posterior
 
 GROUPS = ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
-SIZES = (91, 30, 29)  # v5's bins per group
+SIZES = (91, 30, 29)  # the WASP-39b case's bins per group
 BASE = C.Config(
     molecules=("H2O",),
     vulcan_cfg_name="W39b",

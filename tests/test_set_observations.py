@@ -1,10 +1,7 @@
-"""Observation-injection validation.
+"""Observation injection: ``pipeline.validate_observations`` and the production case's assembly.
 
-pipeline.validate_observations is the API-boundary guard behind
-pipe.set_observations: the Gaussian likelihood divides by sigma and logs it, so
-a non-finite depth or a non-positive/non-finite sigma must RAISE here rather than
-silently produce NaN/Inf likelihoods. Pure-numpy except for the production
-case at the bottom (slow), which builds the real forward.
+The Gaussian likelihood divides by sigma and logs it, so a non-finite depth or a non-positive or non-finite sigma
+raises at the boundary. Pure numpy except the production case's tests (slow), which build the real forward.
 """
 
 import dataclasses
@@ -89,7 +86,7 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
     from opacity_leave_one_out import states_for
 
     st = states_for(pipe, n_prior=2)
-    # the nominal state (u = 0) only when its T-P is in the window (v5's is not)
+    # the nominal state (u = 0) only when its T-P is in the window (the WASP-39b case's is not)
     nominal = int(bool(pipe.tp_valid(pipe.theta_from_u(jax.numpy.zeros(pipe.n_dim)))))
     assert st.shape == (nominal + 2, pipe.n_dim)  # nominal + 2 prior draws
     box = np.asarray(pipe.prior_types) != "gaussian"  # gaussian: lo, hi = mean, sigma

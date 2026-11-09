@@ -1,12 +1,8 @@
-"""Resolved-config condensation inference gate.
+"""The forward build's gates on the resolved engine config: condensation, the C/O prior bound and the baked rtol.
 
-Condensation is an engine (forward-model) capability only: every retrieval
-pipeline evaluates a likelihood, so it refuses condensation unless
-``allow_condense_inference``. The early ``cfg_overrides`` gate
-in ``config_schema.validate_config`` catches the common case, but a base VULCAN
-config can default ``use_condense=True`` (e.g. ``Earth.yaml``) without the flag
-appearing in ``cfg_overrides``. ``retrieval_forward._refuse_condense_inference``
-gates on the RESOLVED ``chem.conden_spec`` instead, closing that bypass.
+``config_schema.validate_config`` sees only ``cfg_overrides``, but a base VULCAN config can default
+``use_condense=True`` (e.g. ``Earth.yaml``), so ``retrieval_forward._refuse_condense_inference`` reads the resolved
+``chem.conden_spec``.
 """
 
 from __future__ import annotations

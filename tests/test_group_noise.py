@@ -140,11 +140,11 @@ def test_production_case_gets_one_inflation_per_group():
     from conftest import RUN_DIR
     from retrieval_framework import run_setup as R
 
-    cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg  # per-group noise inflation is v5's
+    cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg
     pipe = P.build_pipeline(cfg)
     P.load_real_into_pipe(pipe)
     assert list(pipe.groups) == GROUPS
-    # v5 integrates the offsets and the inflations out: 12 sampled parameters
+    # the WASP-39b case integrates the offsets and the per-group inflations out: 12 sampled parameters
     assert pipe.nuisance.names == ([f"offset_{g}" for g in GROUPS[1:]] + [f"noise_inflation_{g}" for g in GROUPS])
     assert not any(k in ("noise", "offset") for k in pipe.kinds)
     assert pipe.n_dim == 12

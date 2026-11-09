@@ -292,7 +292,7 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
         ({"rp_cm": None}, "rp_cm"),
         ({"rstar_cm": None}, "rstar_cm"),
         ({"integrate_nuisance": True, "infer_offsets": False, "infer_noise_inflation": False}, "integrate_nuisance"),
-        # accepted: condensation with its explicit opt-in, and the v5 model choices
+        # accepted: condensation with its explicit opt-in, and every optional model choice
         ({"cfg_overrides": {"use_condense": True}, "allow_condense_inference": True}, None),
         (
             {
@@ -309,7 +309,7 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
     ],
 )
 def test_validate_config_refusals(over, msg):
-    """The refusals a spec can hit (msg None: accepted); the Fail fast list of CLAUDE.md is pinned here."""
+    """The refusals a spec can hit (msg None: accepted), the repository's fail-fast list among them."""
     cfg = C.Config(**{**VALID, **over})
     if msg is None:
         C.validate_config(cfg)
