@@ -387,17 +387,45 @@ class Pipeline:
         self.obs_sigma: np.ndarray | None = None
 
     def tp_valid(self, theta: Array) -> Array:
-        """Say whether the drawn T-P lies inside [T_min, T_max] on the ART grid and the chemistry grid."""
+        """Say whether the drawn T-P lies inside [T_min, T_max] on the ART grid and the chemistry grid.
+
+        Parameters
+        ----------
+        theta : jax.Array [n_dim]
+            One parameter vector.
+
+        Returns
+        -------
+        jax.Array of bool
+            True inside the window; a NaN profile is outside.
+        """
         T_all = self._tp_eval(jnp.asarray(theta)[self.n_chem : self.n_chem + self._n_tp], self._p_check_j)
         return jnp.all(jnp.isfinite(T_all) & (T_all >= self._tp_T_min) & (T_all <= self._tp_T_max))
 
     def sample_prior_u(self, rng_key: Array, n_particles: int) -> Array:
-        """Draw u from the box prior, redrawing any particle whose T-P leaves the window; raises at a candidate cap."""
+        """Draw u from the box prior, redrawing any particle whose T-P leaves the window.
+
+        Parameters
+        ----------
+        rng_key : jax.Array
+            The PRNG key.
+        n_particles : int
+            The draws.
+
+        Returns
+        -------
+        jax.Array [n_particles, n_dim]
+            The u vectors.
+
+        Raises
+        ------
+        RuntimeError
+            If too few candidates land in the window before the candidate cap.
+        """
         n_particles = int(n_particles)
         key = rng_key
         kept, have, drawn = [], 0, 0
         over = max(n_particles, _TP_DRAW_MIN)
-        # loud cap: fail rather than loop forever
         max_draw = max(_TP_DRAW_CAP_FACTOR * n_particles, _TP_DRAW_CAP_MIN)
         while have < n_particles:
             key, sub = jax.random.split(key)

@@ -3,11 +3,11 @@
     python -m retrieval_framework.run_nautilus runs/<case>/<name>.yaml [--resume] [--dry-run]
 
 Every likelihood call goes through the pipeline's batched chemistry and RT on the lane queue. A non-finite forward, a
-T-P draw outside the window, a count_max-exhausted solve or a stall-certified exit gets log L = -inf, so the evidence is
-a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. With ``sampler.warm_starts`` each solve
-continues from its nearest certified column, so the posterior and evidence are approximate; an evidence claim uses
-``warm_starts: false``. docs/method.md describes the output files, the sampler settings, the startup check and the
-lanes.
+T-P draw outside the window, and a solve that does not certify (count_max exhausted or stalled) get log L = -inf, so
+the evidence is a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. With
+``sampler.warm_starts`` each solve continues from its nearest certified column, so the posterior and evidence are
+approximate; an evidence claim uses ``warm_starts: false``. docs/method.md describes the output files, the sampler
+settings, the startup check and the lanes.
 """
 
 from __future__ import annotations
@@ -699,7 +699,6 @@ def _sample(sampler: nautilus.Sampler, n_eff: int, timeout: float, tally: dict) 
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """Parse the command line."""
     ap = argparse.ArgumentParser(description="nautilus nested sampling of one run specification")
     ap.add_argument("spec", help="the run specification, runs/<case>/<name>.yaml")
     ap.add_argument("--resume", action="store_true", help="continue the checkpoint in the run's output directory")

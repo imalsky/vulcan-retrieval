@@ -175,6 +175,18 @@ class RetrievalForward:
         this subproblem bit for bit, and it is not gated. (2) Apply the composition to that column and re-converge warm.
         A one-stage solve loses the lnZ and C/O response under a retrieved T-P. Every ConvDiag field describes the final
         stage.
+
+        Parameters
+        ----------
+        chem_theta : jax.Array [n_chem + n_tp]
+            The chemistry and T-P entries.
+
+        Returns
+        -------
+        y : jax.Array [nz, ni]
+            The converged column, number densities in cm^-3.
+        diag : ConvDiag
+            Stage 2's convergence record.
         """
         y_relaxed = self.chem.converged_y(self._baseline_composition(chem_theta, 0))
         return self.chem.converged_y(
@@ -194,7 +206,21 @@ class RetrievalForward:
         """Return ``chem_solve_cold_diag`` for a stack, on the lane queue.
 
         The while loop sits above the lane vmap, so a lane is not bit-identical to its solo solve (agreement at the
-        convergence scale). Stage 2's ConvDiag certifies each draw. ``active`` masks padded rows in both stages.
+        convergence scale). Stage 2's ConvDiag certifies each draw.
+
+        Parameters
+        ----------
+        C_ : jax.Array [N, n_chem + n_tp]
+            The chemistry and T-P entries of each draw.
+        active : array-like of bool [N], optional
+            False marks a padded row, in both stages.
+
+        Returns
+        -------
+        Y : jax.Array [N, nz, ni]
+            The converged columns, cm^-3.
+        diag : ConvDiag
+            Stage 2's record per row, with a stage 1 freeze carried into its termination reason.
         """
         Y1, cd1 = self._chem_batch_route(self._baseline_composition(C_, 1), active)
         Y2, cd2 = self._chem_batch_route(C_, active, warm_y=Y1, lnZ_ref=0.0, c_o_ref=0.0, s_o_ref=0.0)
@@ -203,7 +229,30 @@ class RetrievalForward:
     def chem_solve_warm_diag_full_batch(
         self, C_: Array, Y: Array, lnZ_ref: Array, c_o_ref: Array, s_o_ref: Array, active: ArrayLike | None = None
     ) -> tuple[Array, Any]:
-        """Re-converge every row's carried column at its own theta from its own reference composition."""
+        """Re-converge every row's carried column at its own theta from its own reference composition.
+
+        Parameters
+        ----------
+        C_ : jax.Array [N, n_chem + n_tp]
+            The chemistry and T-P entries of each draw.
+        Y : jax.Array [N, nz, ni]
+            The carried columns, cm^-3.
+        lnZ_ref : jax.Array [N]
+            The lnZ each carried column was solved at.
+        c_o_ref : jax.Array [N]
+            Its dln(C/O).
+        s_o_ref : jax.Array [N]
+            Its s_o.
+        active : array-like of bool [N], optional
+            False marks a padded row.
+
+        Returns
+        -------
+        Y : jax.Array [N, nz, ni]
+            The converged columns, cm^-3.
+        diag : ConvDiag
+            The convergence record per row.
+        """
         return self._chem_batch_route(C_, active, warm_y=Y, lnZ_ref=lnZ_ref, c_o_ref=c_o_ref, s_o_ref=s_o_ref)
 
     def rt_kwargs(self, cloud: Array | None, lnM: Array | float) -> dict[str, Any]:
@@ -216,7 +265,21 @@ class RetrievalForward:
         return kw
 
     def aux_from_y(self, y: Array, chem_theta: Array) -> tuple[Any, ...]:
-        """Return the ART-grid profiles (vmr, vmr_h2, vmr_he, T_art, mmw_art) from an absolute column."""
+        """Return the ART-grid profiles the RT takes, from a column of number densities.
+
+        Parameters
+        ----------
+        y : jax.Array [nz, ni]
+            The column, cm^-3; the condensed reservoirs are left out of the gas.
+        chem_theta : jax.Array [n_chem + n_tp]
+            The chemistry and T-P entries.
+
+        Returns
+        -------
+        tuple
+            ``(vmr, vmr_h2, vmr_he, T_art, mmw_art)``: a dict of [nlayer] mixing ratios per RT molecule, the H2 and He
+            mixing ratios [nlayer], the temperature [nlayer] in K and the mean molecular weight [nlayer] in amu.
+        """
         to_art = self._to_art
         y_gas = y * self._gas_mask[None, :]
         ymix = y_gas / jnp.sum(y_gas, axis=1, keepdims=True)
@@ -231,12 +294,28 @@ class RetrievalForward:
     def native_depth_aux(
         self, chem_theta: Array, lnR0: Array | float, cloud: Array | None = None, lnM: Array | float = 0.0
     ) -> tuple[Array, tuple[Any, ...], Array]:
-        """Return (native depth, aux, ok) through the full chain.
+        """Return the native depth through the full chain, with the profiles and the cold certificate.
 
-        ``aux`` lets a caller re-run the RT alone, without the while loop. ``ok`` is the cold certificate bit, 0 or 1
-        and stop-gradient: ``conv_normal`` is False on every cap exit, so no accept_count clause is needed.
-        ``cloud`` is None, or ``[log10 kappac0, alphac]``, or ``[log10 P_deck]`` with ``cloud_model="deck"``; ``lnM`` is
-        the RT-only mass nuisance.
+        Parameters
+        ----------
+        chem_theta : jax.Array [n_chem + n_tp]
+            The chemistry and T-P entries.
+        lnR0 : float
+            ln of the radius multiple at ``p_ref_bar``.
+        cloud : jax.Array [2] or [1], optional
+            ``[log10 kappac0, alphac]``, or ``[log10 P_deck]`` with ``cloud_model="deck"``.
+        lnM : float, optional
+            ln of the planet-mass multiple, RT-only.
+
+        Returns
+        -------
+        depth : jax.Array [nband]
+            The transit depth on the native bands.
+        aux : tuple
+            ``aux_from_y``'s profiles, so a caller can re-run the RT alone, without the while loop.
+        ok : jax.Array
+            The cold certificate, 0 or 1 and stop-gradient: ``conv_normal`` is False on every cap exit, so no
+            accept_count clause is needed.
         """
         chem_theta = jnp.asarray(chem_theta)
         y, cd = self.chem_solve_cold_diag(chem_theta)
@@ -247,7 +326,24 @@ class RetrievalForward:
     def rt_depth(
         self, aux: tuple[Any, ...], lnR0: Array | float, cloud: Array | None = None, lnM: Array | float = 0.0
     ) -> Array:
-        """Return the RT-only depth at frozen chemistry and T-P profiles."""
+        """Return the RT-only depth at frozen chemistry and T-P profiles.
+
+        Parameters
+        ----------
+        aux : tuple
+            ``aux_from_y``'s profiles.
+        lnR0 : float
+            ln of the radius multiple at ``p_ref_bar``.
+        cloud : jax.Array [2] or [1], optional
+            The cloud block, as in ``native_depth_aux``.
+        lnM : float, optional
+            ln of the planet-mass multiple.
+
+        Returns
+        -------
+        jax.Array [nband]
+            The transit depth on the native bands.
+        """
         vmr, vmr_h2, vmr_he, T_art, mmw_art = aux
         return self.rt.transmission_depth_r(
             vmr, vmr_h2, T_art, mmw_art, jnp.asarray(lnR0), vmr_he=vmr_he, **self.rt_kwargs(cloud, lnM)

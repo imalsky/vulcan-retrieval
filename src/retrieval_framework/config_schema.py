@@ -50,35 +50,28 @@ class Config:
     # ---- forward-model fidelity: the engine's profile dict ----
     nz: int = 62  # VULCAN vertical layers (62 -> ~1/3 the nz=188 cost; 6.3 layers/decade over 1e-9..7.6 bar)
     use_photo: bool = True  # photochemistry (SO2 is photochemical)
-    # VULCAN-master canonical W39b convergence (yconv_cri=0.01; 1e-3 costs thousands of
-    # steps for no gradient gain). slope_cri / yconv_min / flux_cri are not
-    # overridden: they inherit the vulcan_cfg_name config (vulcan3/configs/W39b.yaml).
+    # VULCAN master's W39b convergence (1e-3 costs thousands of steps for no gradient gain);
+    # slope_cri, yconv_min and flux_cri come from the vulcan_cfg_name config.
     yconv_cri: float = 0.01
     molecules: tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
     nu_min: float = 1923.0  # ~5.2 um
     nu_max: float = 3450.0  # ~2.9 um  (NIRSpec G395H/PRISM red)
-    # Opacity treatment: correlated-k from the published ExoMolOP tables
-    # (ExoMol/HITEMP high-temperature line lists with H2/He broadening already
-    # applied, integrated over each R=1000 band offline; the band grid and the
-    # 16-point quadrature come from the files, so there is no spectral-resolution
-    # knob). This is the only value the engine accepts (build_rt_model refuses
-    # anything else).
+    # Correlated-k from the ExoMolOP R=1000 tables, the only value build_rt_model accepts; the band grid
+    # and quadrature come from the files, so there is no spectral-resolution knob.
     opacity_mode: str = "exomolop"
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR  # model top: chemistry AND RT end here (engine rule)
     use_rayleigh: bool = True  # H2/He Rayleigh scattering (ExoJax; zero free params)
-    co_mode: str = "fixed_O"  # C/O GUESS construction (the engine repairs it exactly)
+    co_mode: str = "fixed_O"  # how the C/O guess is built (the engine repairs it exactly)
     count_min: int | None = None
     count_max: int | None = None
-    # Max integrator step size (s). None inherits the VULCAN default. Cases should cap
-    # physically meaningless large-dt Ros2 oscillations without changing the canonical
-    # convergence criteria.
+    # Largest integrator step, s; None is the VULCAN default. A cap stops large-dt Ros2 oscillations
+    # without touching the convergence criteria.
     dt_max: float | None = None
     cfg_overrides: dict[str, Any] = field(default_factory=dict)
 
     # ---- planet identity: validate_config refuses an unset value ----
-    # VULCAN baseline config name for the chemistry pre-loop, loaded via
-    # vulcan3.load_config (e.g. "W39b").
+    # The VULCAN baseline config, a name or path vulcan3.load_config takes (e.g. "W39b").
     vulcan_cfg_name: str = ""
     # The kinetics network, a vulcan3 path (thermo/...); no default: the spec names it
     # (validate_config). Import-frozen: export_network selects it before vulcan3 is
@@ -89,24 +82,18 @@ class Config:
     # GM = g rp_cm^2 stays fixed when lnR0 scales the radius.
     rp_cm: float | None = None
     rstar_cm: float | None = None
-    # Pressure (bar) at which rp_cm and tp_gravity_cgs are taken to apply.
-    #
-    # Default: the RT grid bottom, where ExoJAX defines radius_btm. lnR0 is the
-    # log radius change at this level, so moving it changes what lnR0 means and
-    # needs a compatible prior_lnR0 (the W39b case anchors at 1 mbar).
+    # Pressure (bar) where rp_cm and tp_gravity_cgs apply; default the RT grid bottom, where ExoJAX
+    # defines radius_btm. lnR0 is the log radius change here, so moving it needs a matching
+    # prior_lnR0 (the W39b case anchors at 1 mbar).
     p_ref_bar: float = ART_PBTM_BAR
 
     # ---- observed spectrum source ----
-    # obs_dir holds per-instrument product CSVs in the (Rp/Rs)-format observations.py
-    # documents; obs_products maps group label -> csv filenames within obs_dir; combo
-    # selects WHICH groups to fit. The offset REFERENCE group is NOT combo[0]: it is
-    # the group of the shortest-wavelength kept bin (observations.load_real_observations
-    # orders groups by first appearance after the wavelength sort). With G groups the
-    # likelihood gets G-1 offset parameters, one per non-reference group.
-    # obs_dir=None (or empty products) -> purely synthetic bin grid (offline smokes).
+    # obs_products maps a group label to its product CSVs in obs_dir; combo selects the groups to
+    # fit. The offset reference is the group of the shortest-wavelength kept bin, not combo[0];
+    # G groups give G-1 offsets. No obs_dir or products: a synthetic bin grid.
     obs_dir: Path | None = None
     obs_products: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    combo: tuple[str, ...] = ("NIRISS", "G395H")  # 2 groups -> ONE offset (on the non-reference group)
+    combo: tuple[str, ...] = ("NIRISS", "G395H")
     obs_wl_lo: float = 1.00  # um (H2-H2 CIA short edge)
     obs_wl_hi: float = 5.28  # um (data-window red edge; bins past the band are dropped)
     # Drop product bins finer than this R before they reach the binning operator.
@@ -116,36 +103,23 @@ class Config:
     # LSF (observations._refuse_unresolved_products). 0 disables the cut.
     obs_max_bin_R: float = 0.0
 
-    # ---- T-P profile: exojax.atm.atmprof.atmprof_Guillot(P, g, kappa, gamma, Tint,
-    #      Tirr, f), the built-in irradiated analytic profile (uses jnp.exp,
-    #      forward-mode-clean); f = GUILLOT_F below --------------------------------
+    # ---- T-P profile: exojax's atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f), f = GUILLOT_F ----
     tp_gravity_cgs: float = 422.0  # WASP-39b surface gravity
     tp_Tint_K: float = 150.0  # interior temperature when tp_infer_Tint=False
     tp_infer_gamma: bool = True  # retrieve log10(gamma); False -> fixed no-inversion
     tp_gamma_fixed: float = 0.4  # used only when tp_infer_gamma=False
-    # Retrieve the deep T-P parameter. It sets the deep profile, and so the
-    # CO/CH4/NH3 quench, through 3/4 Tint^4 tau at large tau; the T-P sub-vector
-    # gains a 4th entry: Tint itself (tp_deep_param="Tint") or the temperature
-    # at tp_deep_p_bar ("T1bar"), from which Tint follows in closed form
-    # (T^4 is linear in Tint^4; a draw whose Tint^4 would be negative is
-    # rejected as an out-of-window profile). The T1bar prior is uniform in a
-    # quantity the window acts on directly, so it does not inherit the
-    # window-shaped Tint prior (tp_profile).
+    # Retrieve the deep T-P parameter, which sets the CO/CH4/NH3 quench: Tint itself
+    # (tp_deep_param="Tint") or the temperature at tp_deep_p_bar ("T1bar"; docs/method.md).
     tp_infer_Tint: bool = False
     tp_deep_param: str = "Tint"  # {"Tint", "T1bar"}, with tp_infer_Tint
     tp_deep_p_bar: float = 1.0  # the level T1bar is quoted at (bar)
-    # An adiabat below a free radiative-convective boundary pressure, matched
-    # to the Guillot profile there (one more T-P entry, log10P_rcb): a
-    # sensitivity model. With constant kappa nothing in the model makes the
-    # column convective, so the join is imposed, and the adiabat (R/cp ~0.29)
-    # is steeper than Guillot's deep 0.25.
+    # A sensitivity model: an adiabat below a free boundary pressure (one more T-P entry,
+    # log10P_rcb), matched to the Guillot profile there; with constant kappa the join is imposed.
     tp_adiabat: bool = False
     tp_nabla_ad: float = 0.29  # dlnT/dlnP of the H2-He adiabat near 1000-2000 K
 
-    # ---- clouds: cloud_model "powerlaw" (ExoJax powerlaw_clouds:
-    #      kappa(nu)=kappac0*(nu/CLOUD_NUC0)^alphac, cm^2 per gram of atmosphere,
-    #      uniformly mixed; alphac=0 -> gray) or "deck" (an opaque grey deck
-    #      below a free pressure, engine constants CLOUD_DECK_*) -------------------
+    # ---- clouds: "powerlaw" is ExoJax's kappa(nu) = kappac0 (nu / CLOUD_NUC0)^alphac, cm^2 per gram
+    #      of atmosphere, uniformly mixed; "deck" is an opaque grey deck below a free pressure ----
     cloud_model: str = "powerlaw"
     prior_log10kappa_cloud: tuple[float, float] = (-7.0, 1.0)  # cm^2/g at 3.5 um
     truth_log10kappa_cloud: float = -6.5  # ~cloud-free injection
@@ -157,13 +131,11 @@ class Config:
     # ---- inference toggles: the chemistry block is always inferred ----
     infer_offsets: bool = True  # one flat depth offset per instrument group beyond the reference
 
-    # ---- priors (all bounded; uniform unless noted). Truth = synthetic-injection
-    #      value, ignored for real-data runs -----------------------------------
-    # lnZ is relative to the case's BASELINE composition (the vulcan cfg's <X>_H,
-    # 10x solar here): lnZ=0 -> that baseline.
+    # ---- priors, bounded and uniform unless noted; truth_* is the synthetic-injection value ----
+    # lnZ is relative to the vulcan cfg's baseline composition (its <X>_H, 10x solar for W39b).
     prior_lnZ: tuple[float, float] = (-math.log(10.0), math.log(10.0))  # 1x-100x solar
     truth_lnZ: float = 0.0
-    # dln(C/O) about the fixed-O baseline. UPPER BOUND CONSTRAINT: the fixed-O knob's
+    # dln(C/O) about the fixed-O baseline. Upper bound: the fixed-O knob's
     # O-only compensation b_z must stay positive, which on the 10x-solar W39b column
     # holds only for c_o < 0.566 (printed at build; retrieval_forward raises if the
     # prior reaches it). 0.45 leaves margin for hotter columns (worst-layer b_z ~ 0.25)
@@ -222,19 +194,12 @@ class Config:
     infer_noise_inflation: bool = False
     prior_noise_inflation: tuple[float, float] = (0.5, 3.0)  # log10_uniform
     truth_noise_inflation: float = 1.0
-    # One inflation per observation group instead of one for every bin: b_g
-    # multiplies the sigmas of group g's bins, every group included (the
-    # offsets' reference group too), each with the prior above. Named
-    # noise_inflation_<group>, in the pipeline's group order, after the
-    # offsets. Needs infer_noise_inflation=True; off keeps the scalar b.
+    # One inflation b_g per observation group, the reference group included, each with the
+    # prior above. Needs infer_noise_inflation=True.
     noise_inflation_per_group: bool = False
-    # Integrate the offsets and the noise inflation(s) out of the likelihood
-    # instead of sampling them: per group the offset integral is closed form and
-    # the inflation one a trapezoid over NUISANCE_NODES nodes in log10 b
-    # (nuisance.make_nuisance_marginal), at the same priors, so the posterior of
-    # the other parameters and the evidence are unchanged. Their posteriors are
-    # drawn after the run from statistics the run logs per certified draw
-    # (run_nautilus). Needs infer_offsets or infer_noise_inflation.
+    # Integrate the offsets and the noise inflation(s) out of the likelihood at the same priors
+    # (nuisance.make_nuisance_marginal); their posteriors are drawn after the run. Needs
+    # infer_offsets or infer_noise_inflation.
     integrate_nuisance: bool = False
 
     # ---- data source ----
@@ -244,28 +209,21 @@ class Config:
     generate_synthetic_data: bool = False
 
     # ---- inference ----
-    # Expert opt-in: a pipeline with condensation ON. Off by default: no
-    # retrieval with condensation has been validated (certification and start
-    # dependence of condensing columns are untested).
-    # A condensation forward model goes through the engine directly
-    # (vulcan_forward.vulcan_chem.build_chem_model), which has no such gate.
+    # Opt in to a retrieval with condensation; none has been validated. A condensation forward
+    # model goes through vulcan_forward.vulcan_chem.build_chem_model instead.
     allow_condense_inference: bool = False
     # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
     smc_rt_chunk: int = 16
-    # Lanes the chemistry batches run on (> 0): min(k, draws) lanes, and a lane
-    # that certifies is refilled with the next draw inside the same while loop
-    # (vulcan_forward.converged_y_queue), so wall time follows total work / k.
-    # The production spec sets it (one kernel wave of a GH200 is 132 SMs;
-    # run_nautilus multiplies it by FFI_BLOCKS_PER_SM under the ffi solver).
-    # The schema default is the off-GPU width.
+    # Lanes of the chemistry queue: a lane that certifies is refilled with the next draw in the same
+    # while loop, so wall time follows total work / lanes. A GH200 runs one kernel wave on 132 SMs;
+    # run_nautilus multiplies the lanes by FFI_BLOCKS_PER_SM under the ffi solver.
     cold_lanes: int = _OFF_GPU_LANES
-    # Lanes refilled per refill pass. Bigger amortizes the refill over more
-    # lanes; it is capped at cold_lanes.
+    # Lanes refilled per pass, capped at cold_lanes; more amortizes the refill.
     cold_refill_chunk: int = 8
 
     # ---- walltime governor ----
-    # Soft wall-clock budget (seconds). run_nautilus stops once this is exceeded,
-    # with its checkpoint written, and exits 0; RESUME=1 continues (0 -> no limit).
+    # Soft wall-clock budget, s (0: none); run_nautilus stops at it with its checkpoint written and
+    # exits 0, and --resume continues.
     walltime_seconds: float = 0.0
 
     def profile(self) -> dict[str, Any]:
@@ -345,11 +303,11 @@ class ParamSpec:
 
     name: str
     label: str
-    prior_type: str  # {"uniform", "log10_uniform", "gaussian"}; gaussian: lo = mean, hi = sigma
+    prior_type: str
     lo: float
     hi: float
     truth: float
-    kind: str  # {"chem", "tp", "lnR0", "lnM", "cloud", "offset", "noise"} -- how the forward consumes it
+    kind: str
 
 
 def chem_extras(cfg: Config) -> tuple[str, ...]:
@@ -679,10 +637,8 @@ def describe_config(cfg: Config, name: str = "") -> str:
         Forward-model fidelity, convergence criteria, T-P handling, data source, run settings and the parameter
         table.
     """
-    # Offsets are named per non-reference group, and the reference is the
-    # wavelength-first group, not combo[0]; read the product CSVs (numpy-only) to
-    # get the pipeline's order. Band-edge drops can still differ; the built
-    # pipeline logs its resolved groups.
+    # The offset reference is the wavelength-first group, not combo[0], so the group order comes from
+    # the product CSVs; band-edge drops can still differ, and the built pipeline logs its groups.
     groups = list(cfg.combo)
     if cfg.obs_dir and cfg.obs_products:
         from retrieval_framework import observations as OBS

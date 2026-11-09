@@ -50,7 +50,6 @@ REPOSITORIES = {
 
 
 def _sha256(path: Path) -> str:
-    """Return the sha256 of one file."""
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -274,7 +273,6 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     ident["VULCAN_FORWARD_DATA"] = os.environ.get("VULCAN_FORWARD_DATA")
     root = None
     try:
-        # importing this module is what hands the engine this repo's data tree
         from vulcan_forward import paths as _fwd_paths
 
         from retrieval_framework.forward import config as _fwd_config  # noqa: F401  # hands the engine its data root

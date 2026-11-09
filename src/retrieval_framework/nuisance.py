@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 
 __all__ = ["NUISANCE_NODES", "make_nuisance_marginal"]
 
-# Trapezoid nodes in log10 b for an integrated noise inflation. On the real v5 bins
-# the error against brute force falls as h^2: 3.6e-3 nats at 513 nodes in the worst
+# Trapezoid nodes in log10 b for an integrated noise inflation. On the WASP-39b case's
+# bins the error against brute force falls as h^2: 3.6e-3 nats at 513 nodes in the worst
 # case tried (b piled at its floor), <= 5e-5 on realistic spectra (notes "Design
 # records", the integrated nuisances).
 NUISANCE_NODES = 2049

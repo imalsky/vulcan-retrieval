@@ -27,8 +27,7 @@ TP_PLOT_DRAWS = 300
 # corner contour levels, in sigma; corner's own default stops at 2.
 CORNER_SIGMAS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
 
-# Figure style: serif, ticks in on all four sides, no grid, frameless legend,
-# square panels; Okabe-Ito blue for the model, charcoal for data.
+# Okabe-Ito blue for the model, charcoal for the data.
 STYLE = {
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Palatino", "DejaVu Serif"],

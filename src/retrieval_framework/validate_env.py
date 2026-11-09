@@ -38,7 +38,6 @@ def _err(msg: str) -> None:
 
 
 def _ok(msg: str) -> None:
-    """Print one passed check."""
     print(f"ok: {msg}")
 
 
@@ -161,7 +160,7 @@ def _check_cross_repo_pin() -> None:
 
 
 def _check_engine_features() -> None:
-    """Check the engine reports a frozen column: vulcan3 0.18.0 also names commits from before that guard."""
+    """Check that the engine reports a column frozen at dt_min; vulcan3 0.18.0 spans commits without that guard."""
     from vulcan3 import state
     from vulcan_forward import vulcan_chem
 

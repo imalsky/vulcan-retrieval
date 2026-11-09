@@ -14,7 +14,7 @@ log = logging.getLogger("retrieval")
 
 
 class BatchProfiler:
-    """Environment-gated profiling hook, inert unless VULCAN_PROFILE_BATCH is set.
+    """Bracket one likelihood batch with cudaProfilerStart and cudaProfilerStop.
 
     VULCAN_PROFILE_BATCH=k calls cudaProfilerStart just before likelihood batch k of this process and cudaProfilerStop
     when batch k+1 starts or at exit. Batch 1 compiles the cold evaluator and the first warm batch compiles the warm
@@ -37,7 +37,7 @@ class BatchProfiler:
         """Load the CUDA runtime of the jax wheels, or the system's."""
         paths = []
         try:
-            import nvidia.cuda_runtime as m  # the CUDA runtime of the jax wheels
+            import nvidia.cuda_runtime as m
 
             paths = [str(Path(p) / "lib" / "libcudart.so.12") for p in m.__path__]
         except ImportError:
