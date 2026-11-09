@@ -136,7 +136,7 @@ def main() -> int:
     from vulcan_forward import vulcan_chem
     import jax.numpy as jnp
 
-    # The production case IS the specification: nz, art_nlayer, art_ptop_bar,
+    # The production case is the specification: nz, art_nlayer, art_ptop_bar,
     # molecules, yconv_cri, count_max and dt_max all come from it. The state is
     # the baseline column at the VULCAN baseline T-P (no Guillot hook).
     profile = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
@@ -172,7 +172,6 @@ def main() -> int:
         + ")"
     )
 
-    # Archive the verdict with its provenance.
     _artifact.emit(
         name="resolution_ladder",
         title="Vertical-grid (art_nlayer) convergence of the binned depth",

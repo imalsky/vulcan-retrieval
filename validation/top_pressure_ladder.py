@@ -2,7 +2,7 @@
 
 Chemistry and RT grids both end at the model top (constants.ART_PTOP_BAR, 1e-9 bar;
 vulcan_chem sets the chemistry P_t from it, interp_map refuses a clamped top).
-This script extends BOTH grids one decade higher at the same layers per decade,
+This script extends both grids one decade higher at the same layers per decade,
 solves the chemistry there, and compares the R=100 binned depth with production.
 
     python validation/top_pressure_ladder.py
@@ -58,7 +58,7 @@ def main() -> int:
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
 
-    # The production case IS the specification (see _artifact.production_profile).
+    # The production case is the specification (_artifact.production_profile).
     prod = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
     edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
 
@@ -69,7 +69,7 @@ def main() -> int:
     b_prod = _artifact.bin_trapz(wl, d, edges)
     print(f"[topP] production: model top {p_top:.0e} bar, nz={prod['nz']}, art_nlayer={prod['art_nlayer']}", flush=True)
 
-    # one decade higher on BOTH grids, same layers per decade
+    # one decade higher on both grids, same layers per decade
     f = (np.log10(p_btm / p_top) + 1.0) / np.log10(p_btm / p_top)
     ext = dict(
         prod,

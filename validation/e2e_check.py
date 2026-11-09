@@ -35,7 +35,7 @@ LOW_KZZ = -0.7
 CORNER_Z = (0.02, 0.98)
 CORNER_PARAMS = ("lnZ", "c_o", "lnKzz", "s_o", "Tirr", "T1bar", "log10kappa")
 LOW_KZZ_WITH = ("lnZ", "c_o", "s_o", "T1bar")
-# rung -> (environment, batched); None leaves the spec's value
+# rung -> (environment, batched); an unlisted variable keeps the spec's value, an empty one is unset
 RUNGS = {
     "production": ({}, True),
     "shuffled": ({}, True),

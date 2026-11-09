@@ -20,7 +20,7 @@
 #
 # Submit (from the vulcan-retrieval repo root, tools/, or the project root), charged to
 # the allocation in $PBS_GROUP:
-#   cd /nobackup/$USER/VULCAN_W39b_HPC/vulcan-retrieval
+#   cd "${PROJECT_ROOT}/vulcan-retrieval"
 #   qsub -W "group_list=${PBS_GROUP:?}" tools/bootstrap_nas_env.pbs
 #
 # Env knobs (-v): CONDA_ENV (default pyt2_8_gh), VULCAN_SCRATCH

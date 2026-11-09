@@ -30,12 +30,10 @@ GATE_SIGMA_FRAC = 0.1
 
 
 def unscreened_candidates(prod_mols):
-    """Every molecule with an INSTALLED k-table that production does not radiate.
+    """Return every molecule with an installed k-table that production does not radiate.
 
-    Inventoried at run time, not listed here: the omitted set must be
-    discovered, and a hard-coded list silently stops testing a species the
-    day someone installs its table. A table whose species the network does not
-    solve makes build_pipeline raise, which is the intended loud failure.
+    Inventoried at run time: a hard-coded list would stop testing a species once its table is installed. A table whose
+    species the network does not solve makes build_pipeline raise.
     """
     from vulcan_forward import constants, exomolop
 
@@ -43,13 +41,11 @@ def unscreened_candidates(prod_mols):
 
 
 def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
-    """(K, n_dim) theta states to screen at.
+    """Return the (K, n_dim) theta states to screen at.
 
-    The nominal state (u=0, the centre of every declared box) when its T-P profile
-    is in the window (v5's is not: its spectrum is NaN). ``n_prior`` adds that many
-    T-P-valid prior draws; ``posterior_path`` adds the SAME number again from a
-    finished run's nautilus_posterior.npz (4 when n_prior is 0). The screen runs
-    over a prior/posterior state set, not one state.
+    The nominal state (u = 0, the centre of every box) when its T-P profile is in the window (the WASP-39b case's is
+    not). ``n_prior`` adds that many T-P-valid prior draws; ``posterior_path`` adds as many again from a finished run's
+    nautilus_posterior.npz (4 when n_prior is 0).
     """
     import jax
     import jax.numpy as jnp
@@ -77,7 +73,7 @@ def states_for(pipe, n_prior=0, posterior_path=None, seed=0):
 
 
 def _aux_for(pipe, theta):
-    """(aux, lnR0, cloud, lnM, certified) at one state -- the chemistry solve, done ONCE."""
+    """Return (aux, lnR0, cloud, lnM, certified) at one state, from its one chemistry solve."""
     import jax.numpy as jnp
 
     th = jnp.asarray(theta, pipe.dtype)
@@ -141,7 +137,7 @@ def _measure(worst_over_states, n_screened, candidates, omitted, gate, sigma, wl
                 "value_raw": float(1e6 * d[i]),
                 "unit": "ppm",
                 "gate": "< min(5 ppm, 0.1 sigma) in every bin",
-                # only an OMITTED absorber over the gate is a failure
+                # only an omitted absorber over the gate is a failure
                 "decisive": bool(m in omitted),
                 "passed": not bool(over and m in omitted),
             }
@@ -199,13 +195,13 @@ def main() -> int:
     named = args.molecules
     extra = [m for m in named if m not in prod_mols] if named is not None else unscreened_candidates(prod_mols)
     baseline_mols = prod_mols + extra
-    # An OMITTED candidate over the gate is a defect; a PRODUCTION one over the
+    # An omitted candidate over the gate is a defect; a production one over the
     # gate is the list working as intended. Screening both is useful, but they
     # are opposite verdicts and must not share one.
     candidates = list(named) if named is not None else (extra or prod_mols)
     omitted = set(extra)
 
-    # The PRODUCTION forward at the augmented molecule list: parametric T-P,
+    # The production forward at the augmented molecule list: parametric T-P,
     # two-stage cold solve, the run's own binning matrix and sigmas.
     pipe = build_pipeline(replace(cfg, molecules=tuple(baseline_mols)))
     profile = pipe.cfg.profile()

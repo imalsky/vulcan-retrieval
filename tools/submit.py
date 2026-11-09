@@ -24,7 +24,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PBS_SCRIPT = REPO / "tools" / "run_nas.pbs"
 # the NAS job every run asks for; the allocation is the submitter's ($PBS_GROUP)
-QUEUE, QUEUE_WALL_H = "gpu_long", 120  # every run's queue and its wall limit
+QUEUE, QUEUE_WALL_H = "gpu_long", 120
 SELECT = "1:ncpus=72:ngpus=1:mem=400gb:model=gh200"
 JOB_HEADROOM_S = 7200  # the PBS wall ends this long after the run's governor
 # infrastructure knobs the job script reads; passed through when set in the caller's shell

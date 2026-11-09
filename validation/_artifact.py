@@ -30,20 +30,17 @@ PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "wasp39_test1.yaml"
 
 
 def production_config():
-    """The Config of the PRODUCTION run (PRODUCTION_SPEC); no jax import."""
+    """Return the Config of the production spec, ``PRODUCTION_SPEC``; no jax import."""
     from retrieval_framework.run_setup import load_spec
 
     return load_spec(PRODUCTION_SPEC).cfg
 
 
 def production_profile(**overrides):
-    """The forward profile the PRODUCTION case actually runs.
+    """Return the production case's forward profile, with ``overrides`` applied.
 
-    A ladder must measure the model production uses, not a hand-copied
-    approximation of it, so the profile comes from the case's own
-    Config.profile().
-
-    jax/chemistry are imported lazily so this module stays cheap at import.
+    A ladder measures the model production uses, so the profile comes from the case's own ``Config.profile()``, not a
+    hand-copied approximation of it.
     """
     prof = production_config().profile()
     prof.update(overrides)
@@ -54,6 +51,7 @@ RESULTS = REPO / "output" / "w39b_smc_retrieval" / "validation"
 
 
 def make_r_bins(wl_lo, wl_hi, R):
+    """Return the edges of constant-resolving-power bins across [wl_lo, wl_hi], um."""
     n = max(2, int(np.ceil(np.log(wl_hi / wl_lo) * R)))
     return np.geomspace(wl_lo, wl_hi, n + 1)
 
@@ -85,7 +83,7 @@ def worst_ppm(a, b) -> float:
 
 
 def _devices() -> list[str]:
-    """JAX devices, if jax is already imported. Never imports it."""
+    """Return the JAX devices if jax is already imported; never imports it."""
     jax = sys.modules.get("jax")
     if jax is None:
         return []
@@ -96,7 +94,7 @@ def _devices() -> list[str]:
 
 
 def collect_provenance(resolved_config: dict | None = None) -> dict:
-    """Everything needed to tie a number to an exact state."""
+    """Return everything needed to tie a number to an exact code, data and machine state."""
     repos = _repo_states(REPO.parent)
     # top_pressure_ladder nests its two grids under "production"/"extended"
     rc = (resolved_config or {}).get("production", resolved_config or {})
@@ -129,11 +127,9 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         blob = json.dumps(resolved_config, sort_keys=True, default=str)
         prov["resolved_config"] = resolved_config
         prov["resolved_config_sha256"] = hashlib.sha256(blob.encode()).hexdigest()
-        # CONTENT identity of the opacity/CIA files this measurement read, in
-        # the same shape the run's target manifest records, so an artifact
-        # measured against different data can be told apart from the run's.
-        # A comparison of saved results names no molecules and reads no table;
-        # its solves' own provenance is in resolved_config.
+        # Content identity of the opacity and CIA files this measurement read, in the shape the run's target
+        # manifest records, so an artifact measured on other data can be told apart. A comparison of saved
+        # results names no molecules and reads no table; its solves' provenance is in resolved_config.
         if rc.get("molecules"):
             prov["science_data"] = science_data_identity(rc["molecules"])
     return prov
@@ -148,10 +144,9 @@ def emit(
     resolved_config: dict | None = None,
     out_dir: Path | None = None,
 ) -> Path:
-    """Write `<name>.json` under ``out_dir``, by default ``RESULTS``.
+    """Write ``<name>.json`` under ``out_dir``, by default ``RESULTS``, and return its path.
 
-    `status` is PASS / FAIL / REPORT (REPORT = a measurement with no pass gate).
-    Returns the JSON path.
+    ``status`` is PASS, FAIL or REPORT, a measurement with no pass gate.
     """
     if status not in ("PASS", "FAIL", "REPORT"):
         raise ValueError(f"status must be PASS/FAIL/REPORT, got {status!r}")
