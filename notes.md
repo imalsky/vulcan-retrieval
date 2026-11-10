@@ -30,10 +30,10 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   removed (the maintainer decided; the last commit with them is `f1a881a`), and its certificates are not rewritten with
   the report's fixed Kzz block: the "Runs" Kzz numbers stay hand-derived.
 - Next: the sulfur survey, seven runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
-  hd209458b, hatp26b; "Design records", sulfur survey case). On NAS: `git pull --ff-only` in all three trees,
-  `tools/bootstrap_nas_env.pbs` (the pins moved), then `PBS_GROUP=<allocation> python tools/submit.py
-  runs/survey/<planet>.yaml` for each; keep that checkout unchanged until all seven end. The first job is the first NAS
-  run of the current `run_nas.pbs`.
+  hd209458b, hatp26b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the
+  kernel test passes there [M]; the end-to-end check on the survey's WASP-39b spec gates the launch (todo). Then
+  `PBS_GROUP=<allocation> python tools/submit.py runs/survey/<planet>.yaml` for each; keep that checkout unchanged until
+  all seven end. The first job is the first NAS run of the current `run_nas.pbs`.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json carries no
   `network`, so the report and the forward checks refuse them until it is added. The maintainer decided against
