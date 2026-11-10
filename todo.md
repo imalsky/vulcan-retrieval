@@ -19,14 +19,15 @@ running, and all seven runs under `output/survey/` ended unfinished. All seven w
 - wasp107b and wasp166b froze with last error ratios 0.45 and 0.38 against rtol 0.2. wasp39b and wasp96b froze with
   ratios 5.5e-10 and 1.3e-10, so the error test did not stop those steps; both sit at unit-cube Tirr 0.004 and 0.021,
   with C/O at 0.95 and 0.99.
-- hd189733b 104990 and hd209458b 104991 were stopped by qdel after 17 and 15 batches, with no freeze; hatp26b 104992
-  never started. Their checkpoints are kept.
+- hd189733b 104990 and hd209458b 104991 were stopped by qdel after 17 and 15 batches, with no freeze; their checkpoints
+  are kept. hatp26b 104992 never started, and the maintainer then dropped HAT-P-26b: the survey is six planets.
 
 Next: reproduce the four frozen columns from their points and their runs' `anchors/`, find why each froze, and take the
 cause and the options to the maintainer before any change to the solver, the abort rule or a run setting. Nothing is
 resubmitted or resumed until the maintainer says so: a plain `--resume` likely redraws the same batch, since the nautilus
-checkpoint restores its random state.
+checkpoint restores its random state. When runs go in again, at most two run at a time (the maintainer
+decided).
 
 After each run: `nautilus_report`, the warm-vs-cold check, and the rtol 0.05 re-solve of the posterior rows within 15000
-steps (notes "Design records", sulfur survey case); its numbers go to notes "Runs". Done when the seven runs are in
+steps (notes "Design records", sulfur survey case); its numbers go to notes "Runs". Done when the six runs are in
 "Runs".

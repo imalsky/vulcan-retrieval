@@ -22,10 +22,10 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   its report, warm-vs-cold and forward checks ("Runs", wasp39_test1). WASP-107b ("Design records"): three finished runs
   ("Runs", w107b), specs and inputs removed (the maintainer decided; last in `f1a881a`); its certificates are not
   rewritten with the report's fixed Kzz block, so the "Runs" Kzz numbers stay hand-derived.
-- Next: the sulfur survey, seven runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
-  hd209458b, hatp26b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the
-  kernel test passes there [M]. WASP-39b is submitted (NAS job 104985, retrieval `49badf9`, the first NAS run of the
-  current `run_nas.pbs`), and the other six after it (todo). Keep that checkout unchanged until all seven end.
+- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
+  hd209458b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the kernel test
+  passes there [M]. The first submissions (retrieval `49badf9`, the first NAS runs of the current `run_nas.pbs`) all
+  ended unfinished (todo). The maintainer decided: at most two survey runs at a time.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json carries no
   `network`, so the report and the forward checks refuse them until it is added. The maintainer decided against
@@ -680,7 +680,7 @@ HPC
   against equilibrium isothermal grids, and PICASO + photochem forward grids at constant Kzz 1e10 for the SO2 trend),
   Gressier+2025 (arXiv:2509.16082, the SO2-metallicity trend, WASP-107b off it), Crossfield+2025 (arXiv:2509.14318, the
   SO2 shoreline: weak Kzz, UV and Tint dependence above ~1000 K). The maintainer decided: one standard for every planet,
-  one JWST observation each, then added HD 189733b and HD 209458b as a NIRCam pair (two visits each), and HAT-P-26b.
+  one JWST observation each, then added HD 189733b and HD 209458b as a NIRCam pair (two visits each).
   - Engine pin [M, daw CPU, `fast`, the first six prior draws of the WASP-39b spec]: with and without VULCAN3's
     collision limit on dissociations the same three draws certify (2112 steps; 1010 against 1026; 703 against 843)
     and the same three end on the cap; certified depths agree to 0.002 ppm, and each certified column, held to 1500
@@ -727,21 +727,11 @@ HPC
     overlap that ties the two visits; row 37 is not a 0.02 um depth on 0.04 um edges (its error is a 0.04 um error).
     NIRCam ends at 5.0 um, and the window cuts its 2.4-2.87 um H2O band, the published C/O driver for both NIRCam
     planets.
-  - HAT-P-26b [M] (built by the recipe above, which rebuilds WASP-96b's nominal profile within 0.05 K and its 1-bar
-    radius within 1e-4). Data: Gressier+2025 G395H, the journal's data behind its Fig. 2 (centre, depth, error at R ~400;
-    the "ppm" column is a fraction), the transitspectroscopy reduction, their main-text spectrum (no fiducial is named;
-    ExoTiC-JEDI's errors are ~37% smaller). Split at the 3.7154-3.8281 um gap; native edges at the midpoints; consecutive
-    bins grouped per detector until a group spans lambda/100 (inverse-variance mean depth, total inverse variance
-    kept): 113 + 116 native to 28 + 29 bins, 53 in the window. UV: MUSCLES v24 HAT-P-26 `adapt-const-res-sed`
-    (Behr+2023), the host's own spectrum, which Gressier+2025's photochemistry used; BOLOFLUX x sigma (5079 K)^4 at
-    the stellar surface, as the WASP-107b file. System from the archive: Mp 0.070 +- 0.020 M_J (lnM sigma 0.286;
-    Gressier+2025 used 18.6 M_E; the maintainer decided to keep the archive value: disclose that lnM acts in the RT
-    only, so at this sigma the chemistry's gravity sits up to ~30 % from the RT's at 1 sigma), Teq 1080 K, R* 0.87
-    R_Sun. It was added after the pre-launch check below and has none; its run's startup check is its first.
   - Left out (the maintainer decided). HAT-P-1b: no public
     reduced spectrum (MAST raw only). WASP-80b: CS2 (arXiv:2604.13168), no opacity table. WASP-52b: its G395H spectrum
-    needs stellar contamination (arXiv:2609.21810). HIP 67522b: young host, disputed mass. Reserves: WASP-127b (~10% of
-    the flux in the slit), HAT-P-12b (G395M; its CH4 depletion meets the 10 bar bottom). GO 5924 (the Grand Tour, 25
+    needs stellar contamination (arXiv:2609.21810). HIP 67522b: young host, disputed mass. HAT-P-26b: added and submitted
+    (104992), then dropped before its run started; its spec and inputs are last in `fc0c838`. Reserves: WASP-127b (~10%
+    of the flux in the slit), HAT-P-12b (G395M; its CH4 depletion meets the 10 bar bottom). GO 5924 (the Grand Tour, 25
     giants, one homogeneous reduction) would replace the per-paper products once its spectra are public.
   - An independent review of the setup found no conversion or unit error. Kept and disclosed: the archive's a/R*
     disagrees with the transit fits (WASP-96b 9.28 against 8.989, WASP-166b 11.30 against 11.83): R*/a sets the UV
