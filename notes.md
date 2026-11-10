@@ -24,9 +24,9 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   rewritten with the report's fixed Kzz block, so the "Runs" Kzz numbers stay hand-derived.
 - Next: the sulfur survey, seven runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
   hd209458b, hatp26b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the
-  kernel test passes there [M]; the end-to-end check on the survey's WASP-39b spec gates the launch (todo). Then
-  `PBS_GROUP=<allocation> python tools/submit.py runs/survey/<planet>.yaml` for each; keep that checkout unchanged until
-  all seven end. The first job is the first NAS run of the current `run_nas.pbs`.
+  kernel test passes there [M]. WASP-39b is submitted (NAS job 104985, retrieval `49badf9`, the first NAS run of the
+  current `run_nas.pbs`); the other six follow its startup check (todo). Keep that checkout unchanged until all seven
+  end.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json carries no
   `network`, so the report and the forward checks refuse them until it is added. The maintainer decided against
@@ -561,6 +561,13 @@ HPC
   under ffi + grouped against the CPU port: W39b 4.6e-8 dex, HD189 1.6e-7 dex, both at their gate step counts (1202,
   1495). The rest of the ladder (the one-at-a-time GPU rung, the daw CPU rungs, a replay of row 1352 under ffi and fast)
   is not run (the maintainer decided).
+  On the survey's WASP-39b spec (NAS job 104972, 1584 in-window prior draws, cold, rtol 0.2, the survey's pins) [M]:
+  1204 certify. The noise floor: 59 certificate flips, worst bin 0.254 sigma, D 0.529, 0.199 dex worst (p95 2.3e-4),
+  good-fit |dlogL| <= 0.039. ffi vs fast: 65 flips, worst bin 0.757 sigma, D 1.73, 0.295 dex worst (p95 2.9e-4),
+  good-fit |dlogL| <= 0.021. Both exceed the bin, D, dex-worst and flip gates. The flipped draws are poor fits (median
+  2000-2500 nats below the best; 2 of the noise floor's and none of ffi-vs-fast's within 50 nats, where 25-26 draws
+  certify on both). Why the flips rose from v5's 4 and 3 is not separated (rtol 0.2 against 0.05, newer engine code).
+  The maintainer decided to launch on this and rely on the after-run re-solve and the warm-vs-cold check.
 - Cold certification of in-window v5 prior draws at count_max 5000 [M], measured before vulcan3 `e32dc86` and not
   remeasured since: 57% (885-908 of 1584); every failure is a cap exit, worst where the column is cool and metal-rich
   and weakly mixed (lowest T1bar quintile 21%, highest lnZ quintile 24%, lowest lnKzz quintile 36%, against 81-86% at
