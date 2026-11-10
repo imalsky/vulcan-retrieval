@@ -948,6 +948,7 @@ SMC path (removed; code at `397d8bb`; the lessons apply to any rebuilt gradient 
 
 Operations
 - `gpu_devel` for short jobs: longer waits than `gpu_long` with a short walltime.
+- A pull or a commit in any of the three trees between a run's jobs: the target digest binds each tree's HEAD commit, so the resumes of hd189733b and hd209458b were refused at startup after docs-only commits (105516, 105517); hold the trees at the run's commits until it ends, or check those commits out again to resume.
 - Comma lists in `qsub -v` (`XLA_FLAGS`): the commas split the variable list; the flags live in the spec's `runtime.xla_flags`, read inside the job.
 - nsys `--cuda-graph-trace=node` under command buffers: `CUDA_ERROR_ILLEGAL_ADDRESS` mid-capture (79666); profile with command buffers off or graph-level tracing.
 - Chaining jobs on `afterok` of a kernel test: one missing module deleted five benches; chain on `afterany` and let `validate_env` refuse.
