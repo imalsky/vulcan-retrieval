@@ -190,6 +190,25 @@ def test_check_inputs_refuses_a_missing_input_before_any_build(broken, msg, tmp_
             R.check_inputs(cfg)
 
 
+@pytest.mark.parametrize(("state", "held"), [("F", None), ("R", "7.srv")])
+def test_resume_chains_only_after_a_job_pbs_still_holds(tmp_path, monkeypatch, state, held):
+    """PBS keeps a finished job in its history, where a plain qstat exits with an error: the resume chain asks with -x
+    and waits only for a job still queued or running.
+    """
+    qstat = tmp_path / "bin" / "qstat"
+    qstat.parent.mkdir()
+    qstat.write_text(
+        "#!/bin/sh\n"
+        f'case "{state}$*" in R*|*-x*) echo \'{{"Jobs": {{"7.srv": {{"job_state": "{state}"}}}}}}\';;\n'
+        '*) echo "qstat: 7.srv Job has finished, use -x or -H to obtain historical job information" >&2; exit 35;;\n'
+        "esac\n"
+    )
+    qstat.chmod(0o755)
+    monkeypatch.setenv("PATH", str(qstat.parent), prepend=":")
+    submit = runpy.run_path(str(Path(__file__).resolve().parents[1] / "tools" / "submit.py"))
+    assert submit["_last_active_job"](_write(tmp_path / "jobs.txt", "7.srv resume=0\n")) == held
+
+
 def test_one_run_directory_check_for_submit_and_the_runner(tmp_path):
     """submit.py and run_nautilus refuse with the same check: a resume needs the
     checkpoint, a fresh run refuses a checkpoint or anchor files, and the empty

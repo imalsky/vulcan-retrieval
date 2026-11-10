@@ -41,12 +41,13 @@ def _safe(value: str, what: str) -> str:
 def _last_active_job(jobs_txt: Path) -> str | None:
     """Return the run's last job id while PBS still holds it, else None.
 
-    A job PBS no longer knows is gone; any other qstat failure stops the submit.
+    A job PBS no longer knows is gone; any other qstat failure stops the submit. ``-x`` reads PBS's history too, where
+    a finished job stays for a while and a plain qstat fails on it.
     """
     ids = [ln.split()[0] for ln in jobs_txt.read_text().splitlines() if ln.strip()] if jobs_txt.exists() else []
     if not ids:
         return None
-    q = subprocess.run(["qstat", "-f", "-F", "json", ids[-1]], capture_output=True, text=True, check=False)
+    q = subprocess.run(["qstat", "-x", "-f", "-F", "json", ids[-1]], capture_output=True, text=True, check=False)
     if q.returncode != 0:
         if "Unknown Job Id" in q.stderr:
             return None
