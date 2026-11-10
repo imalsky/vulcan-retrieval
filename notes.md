@@ -346,9 +346,9 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   too many failed attempts to run" after 21 tries; cgh11n04) holds the job: `qdel` and resubmit pinned.
 - nvcc for the jobs is `/nasa/arm/software/cuda/bin/nvcc` (shared filesystem; what `module load cuda` gives): the
   node-local `/usr/local/cuda-12.6` exists on the front ends and on cgh14n19 but not on cgh23n15 [M], and both print
-  the same compiler build, so the kernel stamp does not move. The kernel test reads VULCAN-JAX's `tests/data`, which
-  a pull does not refresh: after a network change rebuild it on a node first (`JAX_PLATFORMS=cpu python
-  tests/gen_fixtures.py --all --force`, 3 min), or its real-block cases fail on array shapes.
+  the same compiler build, so the kernel stamp does not move. The kernel test reads two converged states in
+  VULCAN-JAX's `tests/data`, which a pull does not refresh; states from older networks failed its real-block cases on
+  array shapes [M], so the job rebuilds both on the CPU at its tree's code each time (all five took 3 min on a node).
 - cghfe01 can lose its route to the internet while cghfe02 keeps it; both share the home folder, so tools installed in
   `~/.local` from cghfe02 serve both.
 - Env `pyt2_8_gh`, caches under `/nobackup/$USER/.vulcan`; jobs are read-only on the env (a per-job `pip install --user

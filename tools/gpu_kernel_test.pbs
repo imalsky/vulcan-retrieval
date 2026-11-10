@@ -91,9 +91,11 @@ python -c "import jax; d = jax.devices(); print(jax.__version__, d); assert d[0]
   echo "ERROR: JAX sees no GPU. Diagnostics:"; env | grep -iE "^(LD_LIBRARY_PATH|CUDA|JAX|XLA)" || true
   python -m pip list 2>/dev/null | grep -iE "^(jax|nvidia)" || true; exit 1; }
 cd "${PROJECT_ROOT}/VULCAN-JAX"
-# The real-block solver test needs the converged HD189 fixture, which the tree
-# does not carry; one HD189 run makes it (a few minutes), once.
-[ -f tests/data/adj_state_hd189.npz ] || python tests/_gen_adj_state.py hd189
+# The real-block tests read two converged states. Rebuild both at this tree's
+# code every time (about 2 minutes): a state left from older code fails them
+# for a reason that is not the kernel.
+env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python tests/gen_fixtures.py --only adj_hd189 --force
+env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python tests/gen_fixtures.py --only adj_w39b --force
 # The suite's oracle gate (tests/conftest.py) wants fixtures this tree does not
 # carry; this job runs one file, so accept the reduced coverage explicitly.
 # -rA: a passing test's captured output too, so the matrix-free check's per-case
