@@ -724,6 +724,11 @@ HPC
   Gressier+2025 (arXiv:2509.16082, the SO2-metallicity trend, WASP-107b off it), Crossfield+2025 (arXiv:2509.14318, the
   SO2 shoreline: weak Kzz, UV and Tint dependence above ~1000 K). The maintainer decided: one standard for every planet,
   one JWST observation each, then added HD 189733b and HD 209458b as a NIRCam pair (two visits each), and HAT-P-26b.
+  - Engine pin [M, daw CPU, `fast`, the first six prior draws of the WASP-39b spec]: with and without VULCAN3's
+    collision limit on dissociations the same three draws certify (2112 steps; 1010 against 1026; 703 against 843)
+    and the same three end on the cap; certified depths agree to 0.002 ppm, and each certified column, held to 1500
+    more steps, certifies again within 0.006 ppm on both. The maintainer decided the survey runs on the pin with the
+    limit. Not covered: `ffi` on a GH200 (the end-to-end check) and more draws.
   - Standard. One NIRSpec transit (G395H; WASP-166b G395M, one group), the authors' R100 product per detector, fitted on
     2.87-5.10 um, `obs_max_bin_R` 200. One model and one prior set in `survey_base.yaml` (never a run: it names no
     planet); a planet file adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and lnM's
