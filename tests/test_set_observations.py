@@ -14,9 +14,10 @@ from retrieval_framework import pipeline as P
 
 
 N = 5
-# Of sample_prior_u(PRNGKey(0), 16) on the production case. Stage 2 starts draw 7 with S4 far below its balance with S2,
-# and its first step must be shorter than 1e-14 s.
-CERTIFYING_DRAWS, FROZEN_DRAW = [3, 7], 7
+# Of sample_prior_u(PRNGKey(0), 16) on the production case.
+CERTIFYING_DRAWS = [3, 7]
+# A step floor far too long for the chemistry, at a tolerance no trial there can meet: the column freezes at dt_min.
+FLOOR_S, TIGHT_RTOL = 1.0e6, 1.0e-12
 GOOD_DEPTH = np.linspace(0.01, 0.02, N)
 GOOD_SIGMA = np.full(N, 1e-4)
 
@@ -108,8 +109,8 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
 
 @pytest.mark.slow
 def test_a_column_frozen_at_dt_min_aborts_the_run_rather_than_rejecting_the_draw(tmp_path):
-    """At a floor of 1e-14 s draw 7 of the first 16 freezes on stage 2. The raise reaches the sampler through the job's
-    own likelihood: no rejection is logged and no tally is kept for it.
+    """A draw of the production case freezes at a step floor too long for its chemistry. The raise reaches the sampler
+    through the job's own likelihood: no rejection is logged and no tally is kept for it.
     """
     if not RUN_DIR.exists():
         pytest.skip(f"run dir {RUN_DIR} not present")
@@ -121,10 +122,10 @@ def test_a_column_frozen_at_dt_min_aborts_the_run_rather_than_rejecting_the_draw
     from retrieval_framework.run_nautilus import make_loglike
 
     cfg = R.load_spec(RUN_DIR / "wasp39_test1.yaml").cfg
-    cfg = dataclasses.replace(cfg, cfg_overrides={**cfg.cfg_overrides, "dt_min": 1e-14})
+    cfg = dataclasses.replace(cfg, cfg_overrides={**cfg.cfg_overrides, "dt_min": FLOOR_S, "rtol": TIGHT_RTOL})
     pipe = P.build_pipeline(cfg)
     P.load_real_into_pipe(pipe)
-    u = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)[FROZEN_DRAW : FROZEN_DRAW + 1]
+    u = pipe.sample_prior_u(jax.random.PRNGKey(0), 16)[:1]
     tally = {}
     rejects = tmp_path / "rejected"
     like = make_loglike(pipe, 1, tally, rejects=rejects)

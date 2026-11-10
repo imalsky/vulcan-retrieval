@@ -44,7 +44,8 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 - Tests [M], daw CPU `-n 1`: normal 192 passed; CI runs it serially on Python 3.10-3.12, and its stack-free unit job
   (`fail_under` 80) enforces the coverage floor. Before `e32dc86` the full tier took 76 min (127 passed / 1 xfailed, the
   x86 condensation tangent), the job-path test most of it (12 min alone on the laptop). A column frozen at `dt_min`
-  raises (the abort test pins that at a floor of 1e-14 s).
+  raises (the abort test pins that with a floor of 1e6 s at rtol 1e-12; draw 7 no longer freezes at 1e-14 s once the
+  collision limit caps S4 + M [M, the full tier on daw]).
 
 ## Runs
 
