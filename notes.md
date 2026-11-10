@@ -1010,7 +1010,7 @@ Operations
 - A 24 h multi-arm calibration chain as a profiling vehicle: a MALA calibrate arm costs ~11 h, so the profiling arms never ran; profile in short bounded jobs.
 - Expecting `LuPivotsToPermutation` count 0 as the perm-cache check: `lax.linalg.lu` reports its permutation through that kernel; 1:1 with getrf is correct.
 - Shrinking the slow tests' memory (2 probe particles, `jax.clear_caches()` between compiles): wall -13% or peak 28.6 -> 23.9 GB in one file only; the peaks are single XLA CPU compiles.
-- Curing the frozen draws in the guess, S species at f^(n_S): moves certified draws by up to 2.1 in log L and 0.34 in ln y, draw 7 takes 1215 steps, and S2 reaches a vmr of 0.15 at f 43 (S4 under the collision limit: VULCAN3 `todo.md`).
+- Curing the frozen draws in the guess, S species at f^(n_S): moves certified draws by up to 2.1 in log L and 0.34 in ln y, draw 7 takes 1215 steps, and S2 reaches a vmr of 0.15 at f 43 (S4 is under the collision limit now: VULCAN3 notes "Parity ledger").
 - Curing the frozen draws with stage 2 in two sub-stages: draw 14 still freezes, 1.5x the steps on certified draws, 0.38 in log L.
 - Curing the frozen draws with one relaxation of the fast cells: cures them, moves free draws 1e-4 in log L, adds a Jacobian and a cutoff to every prep.
 - Taking a failed trial at the floor when it is non-negative and conserves: cures the same draws, but the estimate stops bounding the step there, and it also fires above the floor on an exhausted retry. The lower floor stands instead.

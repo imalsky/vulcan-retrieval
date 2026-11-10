@@ -115,7 +115,7 @@ def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: floa
         raise DtMinFrozenError(
             f"{rows.size} of {len(z)} columns froze at dt_min, at rows {rows[:8].tolist()} of this batch: largest last "
             f"error ratio {float(np.max(ratio)):.3g} against rtol {rtol:g}. Point of row {rows[0]}: "
-            f"{np.asarray(z[rows[0]]).tolist()}. How to solve such a column is open (todo.md)."
+            f'{np.asarray(z[rows[0]]).tolist()}. A solver failure, not a rejected draw (notes "Design records").'
         )
 
 
