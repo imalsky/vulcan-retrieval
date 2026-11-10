@@ -110,9 +110,13 @@ echo "XLA_FLAGS=${XLA_FLAGS:-<unset>}"
 # one not built from the checkout's present sources is refused at the first solve
 # (vulcan3.solver_fast._register). Build them here when stale (a no-op when current),
 # so a pulled kernel change is built in the first minute, not failed hours into the job.
+# nvcc by its path on the shared filesystem, the toolkit `module load cuda` gives the kernel test: a node-local
+# /usr/local/cuda-12.6 is missing on some GH200 nodes, and loading the module here would hide JAX's CUDA plugin.
+NVCC="${NVCC:-/nasa/arm/software/cuda/bin/nvcc}"
 if [ "${VULCAN3_SOLVER}" = "ffi" ]; then
+  [ -x "${NVCC}" ] || { echo "ERROR: no nvcc at ${NVCC} on $(hostname): set NVCC to this node's CUDA 12 compiler"; exit 1; }
   { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan3.solver_fast \
-    && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
+    && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
          python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
 fi
 

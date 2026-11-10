@@ -55,8 +55,10 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 for d in VULCAN-JAX vulcan-forward vulcan-retrieval; do
   echo "${d}: $(git -C "${PROJECT_ROOT}/${d}" log --oneline -1)"
 done
+NVCC="${NVCC:-/nasa/arm/software/cuda/bin/nvcc}"   # the shared toolkit, as tools/run_nas.pbs
+[ -x "${NVCC}" ] || { echo "ERROR: no nvcc at ${NVCC} on $(hostname): set NVCC to this node's CUDA 12 compiler"; exit 1; }
 { env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu python -m vulcan3.solver_fast \
-  && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC:-/usr/local/cuda-12.6/bin/nvcc}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
+  && env -u JAX_PLATFORM_NAME JAX_PLATFORMS=cpu NVCC="${NVCC}" NVCC_ARCH="${NVCC_ARCH:-sm_90}" \
        python -m vulcan3.solver_fast --cuda; } || { echo "ERROR: ffi kernel build failed"; exit 1; }
 python -u -m retrieval_framework.validate_env "${PROJECT_ROOT}" --require-gpu --spec "${VR_SPEC}"
 cd -P "${REPO_DIR}"
