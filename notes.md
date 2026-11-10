@@ -25,8 +25,7 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 - Next: the sulfur survey, seven runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
   hd209458b, hatp26b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the
   kernel test passes there [M]. WASP-39b is submitted (NAS job 104985, retrieval `49badf9`, the first NAS run of the
-  current `run_nas.pbs`); the other six follow its startup check (todo). Keep that checkout unchanged until all seven
-  end.
+  current `run_nas.pbs`), and the other six after it (todo). Keep that checkout unchanged until all seven end.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json carries no
   `network`, so the report and the forward checks refuse them until it is added. The maintainer decided against

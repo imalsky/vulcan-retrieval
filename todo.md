@@ -3,18 +3,16 @@
 The evidence behind each item is in its section or in `notes.md`; solver and engine items live in VULCAN3's and
 vulcan-forward's own `todo.md`.
 
-1. [blocker] The sulfur survey: WASP-39b runs as NAS job 104985; submit the other six when its startup check has passed, then do each run's after-run checks.
+1. [owed] The sulfur survey runs on the NAS (jobs 104985 and 104987-104992): read each run's startup check, then do its after-run checks.
 
-## 1. Survey launch
+## 1. Sulfur survey runs
 
 Evidence: notes "Current state" (Next), "Design records" (the end-to-end check on the survey's spec, the sulfur survey
-case) and "HPC (NAS GH200) and daw". When `output/survey/wasp39b_nautilus/run.log` prints its `startup:` lines with no
-`startup check:` error, submit the other six from the activated environment on a front end, repo root, the checkout
-unchanged at `49badf9`:
-
-    for p in wasp107b wasp96b wasp166b hd189733b hd209458b hatp26b; do
-      PBS_GROUP=<allocation> python tools/submit.py runs/survey/$p.yaml
-    done
+case) and "HPC (NAS GH200) and daw". All seven specs of `runs/survey/` are submitted from the checkout at `49badf9`:
+wasp39b 104985, wasp107b 104987, wasp96b 104988, wasp166b 104989, hd189733b 104990, hd209458b 104991, hatp26b 104992.
+The other six were submitted before WASP-39b's startup check had printed (the maintainer decided), so read each
+`output/survey/<planet>_nautilus/run.log` for its `startup:` lines and for a `startup check:` error. Keep the checkout
+unchanged until all seven end.
 
 After each run: `nautilus_report`, the warm-vs-cold check, and the rtol 0.05 re-solve of the posterior rows within 15000
 steps (notes "Design records", sulfur survey case); its numbers go to notes "Runs". Done when the seven runs are in
