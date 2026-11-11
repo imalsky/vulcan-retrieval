@@ -58,6 +58,7 @@ config:
   # ---- T-P: Guillot profile, f = 1/4 (the planet sets prior_Tirr) --------------------
   tp_infer_Tint: true
   tp_deep_param: T1bar
+  tp_deep_p_bar: 1.0                   # bar
   prior_T1bar: [320.0, 2980.0]         # K, inside the 220-2980 K T-P window; out-of-window profiles are rejected
   prior_log10kappa: [-3.5, 0.5]        # IR opacity, cm^2/g
   prior_log10gamma: [-3.0, 0.3010299956639812]
@@ -72,7 +73,7 @@ config:
   prior_lnR0: [-0.1, 0.1]
   infer_lnM: true                      # lnM ~ N(0, prior_lnM_sigma), RT-only
 
-  # ---- clouds and noise (the schema defaults, stated so the campaign cannot drift) ---
+  # ---- clouds and noise, stated so the campaign cannot drift -------------------------
   cloud_model: powerlaw
   prior_log10kappa_cloud: [-7.0, 1.0]  # cm^2/g at 3.5 um
   prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like

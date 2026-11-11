@@ -83,10 +83,10 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - The refusal points are spec load, `submit.py`, `validate_env` and the run's first chunk. Keep the refusals: missing
   H2-He CIA, an unset planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a named data source
   with too few bins in any mode, RESUME with no checkpoint.
-- A spec states every key of `config_schema.CASE_KEYS`, and the keys its mode reads that have no default
-  (`run_setup._MODE_REQUIRED`); a stated key its mode does not read is refused (`run_setup._MODE_KEYS`). A number that
-  belongs to a case is a spec key, never a value in the code. The synthetic bin grid is only for a spec that names no
-  data source.
+- A spec states every key of `config_schema.CASE_KEYS`, and every prior and truth its mode reads
+  (`run_setup._MODE_REQUIRED`); a stated key its mode does not read is refused (`run_setup._MODE_KEYS`), and a variant
+  removes a key its base states with `unset:`. A number that belongs to a case is a spec key, never a value in the code.
+  The synthetic bin grid is only for a spec that names no data source.
 - The chemistry block `[lnZ, c_o, lnKzz, <extras>]` is positional (`theta[0:n_chem]`, then the T-P entries; the extras
   are `config_schema.chem_extras`: `s_o` with `infer_s_o`, `kzz_slope` with `kzz_mode="powerlaw"`, in that order), and
   the first three are always inferred: never add a drop path. Read the block through `pipe.n_chem` / `pipe.n_chem_tp`,
@@ -107,8 +107,9 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   each chunk's `termination_reason` and aborts on a cold freeze (notes "Design records"); `nautilus_report` and the forward
   checks abort on any freeze in the draws they re-solve.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
-  `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the composition table, the JAX backend, both packages' fixed numbers
-  (`constants.fixed_values`), the start policy and the nautilus settings. Changing any needs a new spec
+  `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`) and the rest of the runtime block, the composition table, the network and
+  its thermo data and abundance preset when they resolve outside vulcan3's package, the JAX backend, both packages'
+  fixed numbers (`constants.fixed_values`), the start policy and the nautilus settings. Changing any needs a new spec
   file; `run_nautilus` refuses a resume across it.
 - After a config or physics change, synthetic observations, `data/*.npz` caches and every checkpoint are stale:
   regenerate, never resume.

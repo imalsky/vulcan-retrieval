@@ -384,6 +384,8 @@ VALID = {
         ({"art_pbtm_bar": 0.0}, "finite and positive"),
         ({"rt_integration": "midpoint"}, "rt_integration"),
         ({"use_rayleigh": False}, "use_rayleigh"),  # Rayleigh is in every retrieval
+        ({"truth_noise_inflation": -2.0}, "truth_noise_inflation"),  # it scales the injected noise
+        ({"truth_noise_inflation": float("nan")}, "truth_noise_inflation"),
         ({"obs_dir": Path("data")}, "obs_products"),  # a data source names both
         ({"report_kzz_ceiling_x": 0.0}, "report_kzz_ceiling_x"),
         ({"cloud_model": "none"}, None),  # a clear atmosphere

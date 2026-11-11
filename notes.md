@@ -33,7 +33,7 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   (the refusal names them: the 2021 network, H,O,C,N,S, 7.0 bar). The maintainer decided against
   rerunning the finished runs on the 2025 file and against the WASP-107b prior-edge rerun (Tirr, C/O and log10 gamma
   edges widened).
-- Tests [M], daw CPU `-n 8`: normal 255 passed in 41 s; CI runs it serially on Python 3.10-3.12, and its stack-free
+- Tests [M], daw CPU `-n 8`: normal 272 passed in 42 s; CI runs it serially on Python 3.10-3.12, and its stack-free
   unit job (`fail_under` 80) enforces the coverage floor. Full tier: the job-path test
   (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 95 min (1 h 35 min, daw load ~20, retrieval
   `33ba761`), inside the maintainer's 100-minute cap: build and the synthetic truth 9.7 min (mostly the first
@@ -42,11 +42,13 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   warm batches. At another load the same first cold batch took 15.8 min and the first warm batch 7.0 min [M, partial runs
   whose resumes the target digest refused because an upstream tree was committed between the legs, the guard
   working]. The other 14 slow tests take 21 min at `-n 8`, the longest
-  `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 8.5 min alone. A cold column
+  `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 12.9 min alone. A cold column
   frozen at `dt_min` raises; a frozen warm one is re-solved cold.
-- Truth test [M] (`tests/test_truth_scores_highest.py`, slow): noise-free synthetic data at the smoke truth (the cloud
-  at log10 kappa -3.0, so cloud_alpha acts), each of the 8 parameters stepped 0.3 prior widths inside the prior, every
-  point solved cold at `count_max` 2000 and certified: the truth scores highest against all 8. With the 120 ppm
+- Truth test [M] (`tests/test_truth_scores_highest.py`, slow): `generate_observations` at the smoke truth with the
+  injected noise scaled to nothing (`truth_noise_inflation` 1e-30, so the data equal the truth spectrum bit for bit; the
+  cloud at log10 kappa -3.0, so cloud_alpha acts), then the run's own cold batched log-likelihood
+  (`run_nautilus.make_loglike`) on the truth and 8 points each stepped 0.3 prior widths inside the prior, all solved
+  cold at `count_max` 2000 and certified: the truth scores highest against all 8. With the 120 ppm
   synthetic noise (`scratch/truth_test/`), chi^2 at the truth 2.790 against 2.794-2.799 for the lnKzz step (a x16 Kzz
   moves the three CO bins by chi^2 0.001-0.002) and 2.789 for cloud_alpha at the smoke cloud (-6.5): a noisy draw
   cannot rank those, so the test uses noise-free data.
@@ -394,10 +396,14 @@ Sampler and policy
   nautilus solves replayed on CPU: "Do not retry". Caps of 3e4 / 1e4 gave open-ended init tails (64073, 64163); 29%
   stayed censored at 20000.
 - Config keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the exceptions): no measurement. The manifest
-  (`manifest_version` 6) also binds `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS` and `VULCAN3_BT_BUFFERS` (design; not every one
+  (`manifest_version` 8) also binds `VULCAN3_SOLVER`, `VULCAN3_CHEM_RHS` and `VULCAN3_BT_BUFFERS` (design; not every one
   moves results), and since version 5 the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it
   names (`provenance.case_inputs`, resolved as vulcan3 resolves them): a path-style case (`data/...`, the survey's)
   lives outside every tree the code state binds. Version 6 records each repository's `dirty` but no longer hashes it.
+  Version 8 adds the rest of the spec's runtime block (`XLA_FLAGS`, `XLA_PYTHON_CLIENT_MEM_FRACTION`), the composition
+  table vulcan3 loaded (its path and sha256), the JAX backend, both packages' `constants.fixed_values()`, and the
+  network file, its NASA9 folder and the abundance preset when they resolve outside vulcan3's package (the packaged ones
+  are bound by its code state). Each field, changed alone, moves the digest (`tests/test_provenance.py`).
 - Quote from the weighted points: `nautilus_posterior.npz`'s `samples` come from `sampler.posterior(equal_weight=True)`
   (`run_nautilus.main`), which draws about sum(w)/max(w) samples (256 for 90302) [M].
 - Report from the certificate and quote the seed spread: nautilus 1.0.6 gives no logZ error; the stock sampler's seed
@@ -815,7 +821,9 @@ HPC
   equilibrium start is known to break down below about 225 K [I, vulcan-forward `constants.T_OPA_MIN_K`], so a draw that cold raises or comes back
   uncertified and is rejected. The shipped `prior_T1bar` lower edges stay at 320 K.
 - Baseline C/O: the report's C/O and the banner's range are e^c_o times the case's C_H / O_H, read from its vulcan3
-  config after `cfg_overrides` (`provenance.baseline_c_to_o`; a case on vulcan3's solar preset is refused). For the
+  config after `cfg_overrides` (`provenance.baseline_c_to_o`). A case on vulcan3's solar preset, or whose start is not
+  the equilibrium one (`ini_mix` other than EQ, whose start column carries its own C/O), is refused; every shipped
+  case is EQ (vulcan3's default). For the
   WASP-39b configs 0.00295 / 0.00537 = 0.54935, where the code held 0.549: a reported C/O moves by +0.063% [M,
   arithmetic]. Every survey config holds the same C_H and O_H [M].
 - He/H fixed at 0.0838 (present-day photospheric; the vulcan3 .dat header cites Lodders 2019 Table 8), not retrieved and
@@ -875,7 +883,12 @@ HPC
   - `opacity_leave_one_out.py` reads an archived run through the current names and priors: use it on the run it came
     from.
   - The ladder scripts build the RT inputs by hand (no `gas_mask`, `_artifact.bin_trapz`).
-  - `forward/config.py` still carries the WASP-39b radius `RP_CM`, read only by `tests/test_condensation_live_tp.py`.
+  - Rebuilding an archived run (`nautilus_report._config_from_json`) fills the Config keys its config.json predates
+    with today's defaults and logs each one, so old runs stay reportable; the keys with no default are refused instead.
+  - The data loader (`observations.read_rprs_csv`) drops rows with a non-finite wavelength or sigma and repairs reversed
+    bin edges, and logs the counts: published products carry padding rows.
+  - The synthetic bin grid's R = 200 and 120 ppm (`constants.SYNTH_R`, `SYNTH_SIGMA_PPM`) are fixed constants of the
+    test grid a spec with no data source runs on, not case settings.
   - `validate_env` lets exogibbs 0.6.0rc1 pass the 0.6.0 floor; `tools/gpu_kernel_test.pbs` installs on the shared
     userbase with no lock.
 

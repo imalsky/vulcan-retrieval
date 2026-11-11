@@ -120,8 +120,10 @@ knobs, with the Lodders 2020 photospheric abundances), C/O (e^c_o times the case
 `provenance.baseline_c_to_o`), S/O, the Kzz factor and the absolute log10 Kzz at 1 mbar, the weight near the prior floor,
 with the spec's `report_kzz_ceiling_x` the weight above it and the posterior truncated at it, T at the deep level and
 $T_{\rm int}$, and the integrated offsets and inflations. `_conditioning_map` shows where the rejected draws sit. The
-certificate's caveats name every network species with no opacity table whose mean VMR over 1e-5 to 1e-2 bar exceeds
-1e-4 in a re-solved draw (`--spectra N`), the rule of jwst-transit-authority's `certify.unmodeled_absorbers`.
+certificate's caveats name every network species with no opacity table whose mean gas VMR (condensed reservoirs left
+out, as in the RT) over 1e-5 to 1e-2 bar exceeds 1e-4 in a re-solved draw (`--spectra N`), the rule of
+jwst-transit-authority's `certify.unmodeled_absorbers`; when no re-solved draw certified, or no layer lies in that band,
+they say the check was not performed and why.
 
 Model spectra (`--spectra N`) cost the pipeline build and compile plus one batched cold two-stage solve of N columns and N RTs,
 about one likelihood batch of the run at width N. A draw whose cold solve does not certify is left out of the bands and counted
@@ -172,7 +174,9 @@ only after it passes.
 
 The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`
 and `opacity_leave_one_out.py` each need `--spec runs/<case>/<name>.yaml` and write to `output/<case>/validation/`. The
-elemental audit draws the case's whole chemistry block, `s_o` and `kzz_slope` included when the case infers them.
+elemental audit draws the case's whole chemistry block, `s_o` and `kzz_slope` included when the case infers them. The
+resolution ladder's rungs are the case's `art_nlayer` times 1, 1.5 and 2.25, rounded up (67, 101, 151 for 67).
+`posterior_forward_check.py` writes its solves and their comparison into the run's own `validation/` folder.
 
 ## Glossary
 

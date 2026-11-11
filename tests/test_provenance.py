@@ -5,8 +5,10 @@ and nothing that churns, and the data identity says why when it cannot resolve.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -83,11 +85,9 @@ def test_target_digest_binds_the_solver_env(var, value, digest_pipe, monkeypatch
     assert provenance.target_digest(cfg, digest_pipe) != d0, f"{var} not bound"
 
 
-def test_target_digest_binds_the_composition_table_the_backend_and_the_fixed_numbers(
-    digest_pipe, monkeypatch, tmp_path
-):
-    """vulcan3 freezes its composition table at import, the backend moves every column at rounding level, and a fixed
-    number of either package moves the model: each must refuse a resume.
+def test_target_digest_binds_each_runtime_input_and_fixed_number_alone(digest_pipe, monkeypatch, tmp_path):
+    """The composition table's content at one path, XLA's flags and memory fraction, the backend, and a fixed number of
+    either package: each, changed alone with everything else held, must move the digest, and restoring it restores it.
     """
     import jax
     from vulcan_forward import constants as engine_constants
@@ -95,24 +95,73 @@ def test_target_digest_binds_the_composition_table_the_backend_and_the_fixed_num
     from retrieval_framework import constants
 
     cfg = C.Config(molecules=("H2O",))
-    monkeypatch.delenv("VULCAN3_COM_FILE", raising=False)
-    m = provenance.target_manifest(cfg, digest_pipe)
-    assert m["manifest_version"] == 7
-    assert m["composition_file"]["path"].endswith("all_compose.txt")
-    assert m["fixed_values"]["vulcan-retrieval"]["T_EDGE_INSET_K"] == constants.T_EDGE_INSET_K
-    assert m["fixed_values"]["vulcan-forward"]["T_OPA_MIN_K"] == engine_constants.T_OPA_MIN_K
-    d0 = provenance.manifest_digest(m)
     table = tmp_path / "compose.txt"
-    table.write_text("x\n")
-    monkeypatch.setenv("VULCAN3_COM_FILE", str(table))
-    assert provenance.target_digest(cfg, digest_pipe) != d0, "composition table not bound"
-    monkeypatch.delenv("VULCAN3_COM_FILE")
-    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    assert provenance.target_digest(cfg, digest_pipe) != d0, "backend not bound"
-    monkeypatch.undo()
-    monkeypatch.delenv("VULCAN3_COM_FILE", raising=False)
-    monkeypatch.setattr(constants, "T_EDGE_INSET_K", 30.0)
-    assert provenance.target_digest(cfg, digest_pipe) != d0, "fixed numbers not bound"
+    table.write_text("a\n")
+    # the solver's loaded table, as once vulcan3 is imported
+    monkeypatch.setitem(sys.modules, "vulcan3.composition", SimpleNamespace(COM_FILE_PATH=str(table)))
+    for var in ("XLA_FLAGS", "XLA_PYTHON_CLIENT_MEM_FRACTION"):
+        monkeypatch.delenv(var, raising=False)
+    m = provenance.target_manifest(cfg, digest_pipe)
+    assert m["manifest_version"] == 8
+    assert m["composition_file"]["path"] == str(table.resolve())
+    d0 = provenance.manifest_digest(m)
+
+    def digest() -> str:
+        return provenance.target_digest(cfg, digest_pipe)
+
+    table.write_text("b\n")
+    assert digest() != d0, "composition table content not bound"
+    table.write_text("a\n")
+    assert digest() == d0
+    for var, value in (("XLA_FLAGS", "--xla_gpu_enable_command_buffer="), ("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")):
+        with monkeypatch.context() as mp:
+            mp.setenv(var, value)
+            assert digest() != d0, f"{var} not bound"
+        assert digest() == d0
+    for module, name, value in (
+        (jax, "default_backend", lambda: "gpu"),
+        (constants, "T_EDGE_INSET_K", 30.0),
+        (engine_constants, "GM_MATCH_RTOL", 0.03),
+    ):
+        with monkeypatch.context() as mp:
+            mp.setattr(module, name, value)
+            assert digest() != d0, f"{name} not bound"
+        assert digest() == d0
+
+
+def test_target_digest_binds_a_network_its_thermo_data_and_a_preset_outside_the_package(
+    digest_pipe, monkeypatch, tmp_path
+):
+    """A network, its NASA9 folder and an abundance preset that resolve outside vulcan3's package are outside every
+    code state, so their content must move the digest.
+    """
+    monkeypatch.chdir(tmp_path)
+    case = tmp_path / "data" / "c"
+    (case / "thermo" / "NASA9").mkdir(parents=True)
+    files = {
+        "atm.txt": "atm\n",
+        "sflux.txt": "flux\n",
+        "thermo/net.txt": "net\n",
+        "thermo/NASA9/H2.txt": "nasa\n",
+        "preset.dat": "preset\n",
+    }
+    for name, text in files.items():
+        (case / name).write_text(text)
+    (case / "C.yaml").write_text("atm_file: data/c/atm.txt\nsflux_file: data/c/sflux.txt\n")
+    cfg = C.Config(
+        molecules=("H2O",),
+        vulcan_cfg_name="data/c/C.yaml",
+        network=str(case / "thermo" / "net.txt"),
+        cfg_overrides={"fastchem_solar_abundance_file": "data/c/preset.dat"},
+    )
+    m = provenance.target_manifest(cfg, digest_pipe)
+    assert set(m["external_chemistry_inputs"]) == {"network", "nasa9", "abundance_preset"}
+    d0 = provenance.manifest_digest(m)
+    for name in ("thermo/net.txt", "thermo/NASA9/H2.txt", "preset.dat"):
+        (case / name).write_text(files[name] + "# edited\n")
+        assert provenance.target_digest(cfg, digest_pipe) != d0, f"{name} not bound"
+        (case / name).write_text(files[name])
+    assert provenance.target_digest(cfg, digest_pipe) == d0
 
 
 def test_the_baseline_c_to_o_is_the_case_s_own():
@@ -121,6 +170,8 @@ def test_the_baseline_c_to_o_is_the_case_s_own():
     assert provenance.baseline_c_to_o("W39b", {"C_H": 0.00537}) == 1.0
     with pytest.raises(ValueError, match="use_solar"):
         provenance.baseline_c_to_o("W39b", {"use_solar": True})
+    with pytest.raises(ValueError, match="ini_mix"):  # another start column, another C/O
+        provenance.baseline_c_to_o("W39b", {"ini_mix": "const_mix"})
 
 
 def test_target_digest_moves_with_the_observations(digest_pipe):

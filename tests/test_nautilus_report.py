@@ -156,29 +156,37 @@ def test_an_archived_config_is_rebuilt_with_every_drop_and_fill_logged(tmp_path,
 
 
 def test_an_abundant_species_with_no_opacity_table_is_reported(tmp_path):
-    """The rule of jwst-transit-authority's certify.unmodeled_absorbers: mean VMR over 1e-5..1e-2 bar above 1e-4, for a
-    network species with no k-table; atoms, H2, He and the tabled species are not reported.
+    """The rule of jwst-transit-authority's certify.unmodeled_absorbers: mean gas VMR over 1e-5..1e-2 bar above 1e-4,
+    for a network species with no k-table; atoms, H2, He, the tabled species and condensed reservoirs are not reported,
+    a condensate does not dilute the gas, and a check that could not run says so.
     """
-    sidx = {"H2": 0, "He": 1, "H2O": 2, "CS2": 3, "C2H6": 4, "S2": 5}
+    sidx = {"H2": 0, "He": 1, "H2O": 2, "CS2": 3, "C2H6": 4, "S2": 5, "S8_l_s": 6}
+    gas = np.array([1, 1, 1, 1, 1, 1, 0], float)
     p_bar = np.array([1e-7, 1e-4, 1e-3, 1.0])
-    y = np.zeros((2, 4, 6))
+    y = np.zeros((2, 4, 7))
     y[:, :, 0], y[:, :, 1], y[:, :, 2] = 0.84, 0.15, 5e-3
-    y[0, 1:3, 3] = 3e-3  # CS2 in the photosphere of one draw: reported at its largest
+    y[0, 1:3, 3] = 3e-4  # CS2 in the photosphere of one draw: reported at its largest
     y[:, 3, 4] = 5e-2  # C2H6 only below the photosphere: not reported
     y[:, 1:3, 5] = 1e-2  # S2: homonuclear, never reported
-    pipe = SimpleNamespace(fwd=SimpleNamespace(chem=SimpleNamespace(sidx=sidx), p_chem_bar=p_bar))
-    got = NR._unmodeled_absorbers(pipe, y)
-    assert list(got) == ["CS2"]
-    assert got["CS2"] == pytest.approx(3e-3 / y[0, 1].sum(), rel=1e-12)
+    y[:, :, 6] = 10.0  # a condensed reservoir, ten times the gas: neither diluting CS2 nor reported
+    fwd = SimpleNamespace(chem=SimpleNamespace(sidx=sidx), p_chem_bar=p_bar, _gas_mask=gas)
+    got, not_run = NR._unmodeled_absorbers(SimpleNamespace(fwd=fwd), y)
+    assert (list(got), not_run) == (["CS2"], "")
+    assert got["CS2"] == pytest.approx(3e-4 / y[0, 1, :6].sum(), rel=1e-12)
+    assert NR._unmodeled_absorbers(SimpleNamespace(fwd=fwd), y[:0])[1] == "no re-solved draw certified"
     _run_dir(tmp_path)
     assert "not checked" in NR._unmodeled_caveat(tmp_path)
+    spectra = {"certified": np.array([True, True]), "unmodeled_species": np.asarray(list(got))}
+    np.savez(tmp_path / "nautilus_spectra.npz", **spectra, unmodeled_vmr=np.asarray(list(got.values())))
+    assert "CS2 at mean VMR up to" in NR._unmodeled_caveat(tmp_path)
     np.savez(
         tmp_path / "nautilus_spectra.npz",
-        certified=np.array([True, True]),
-        unmodeled_species=np.asarray(list(got)),
-        unmodeled_vmr=np.asarray(list(got.values())),
+        certified=np.array([False, False]),
+        unmodeled_species=np.asarray([], dtype="<U16"),
+        unmodeled_vmr=np.asarray([]),
+        unmodeled_not_performed=np.asarray("no re-solved draw certified"),
     )
-    assert "CS2 at mean VMR up to" in NR._unmodeled_caveat(tmp_path)
+    assert "not performed (no re-solved draw certified" in NR._unmodeled_caveat(tmp_path)
 
 
 def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):

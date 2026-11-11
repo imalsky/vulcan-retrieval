@@ -1,10 +1,13 @@
 """The run specification, ``runs/<case>/<name>.yaml``, and a run's identity files.
 
-Sections: ``base`` (one file beside it whose sections it refines), ``runtime`` (the environment the engine is imported
-under), ``sampler`` (nautilus) and ``config`` (fields of ``config_schema.Config``, flat). The run's name is the file
-stem and its output directory ``<repo>/output/<case>/<name>_nautilus``. A variant restates the keys it changes: a key's
-value replaces the base's whole, and a base has no base of its own. Loading writes no environment and imports no jax;
-``export_runtime`` writes the runtime block before the engine is imported and refuses a value that disagrees.
+Sections: ``base`` (one file beside it whose sections it refines), ``unset`` (a variant's list of ``config`` keys its
+base states that it removes), ``runtime`` (the environment the engine is imported under), ``sampler`` (nautilus) and
+``config`` (fields of ``config_schema.Config``, flat). The run's name is the file stem and its output directory
+``<repo>/output/<case>/<name>_nautilus``. A variant restates the keys it changes: a key's value replaces the base's
+whole, and a base has no base of its own. A spec states every key of ``config_schema.CASE_KEYS``, and every key its mode
+reads with no default (``_MODE_KEYS``, ``_MODE_REQUIRED``); a key its mode does not read is refused. Loading writes no
+environment and imports no jax; ``export_runtime`` writes the runtime block before the engine is imported and refuses a
+value that disagrees.
 
     python -m retrieval_framework.run_setup runs/<case>/<name>.yaml   # the runtime as export lines
 """
@@ -54,59 +57,82 @@ __all__ = [
 
 log = logging.getLogger("retrieval")
 
-SECTIONS = ("base", "runtime", "sampler", "config")
+SECTIONS = ("base", "unset", "runtime", "sampler", "config")
+_MAPPINGS = ("runtime", "sampler", "config")
 
-# Keys the run reads in one mode only: (keys, whether the Config's mode reads them, that mode in words). A stated key
-# whose mode is off is refused, since it would change nothing; a key also in _MODE_REQUIRED must be stated when its mode
-# is on. A key in two rows needs both modes.
-_MODE_KEYS: tuple[tuple[tuple[str, ...], Callable[[C.Config], bool], str], ...] = (
-    (("tp_Tint_K",), lambda c: not c.tp_infer_Tint, "tp_infer_Tint: false"),
-    (("tp_deep_param",), lambda c: c.tp_infer_Tint, "tp_infer_Tint: true"),
+# Keys the run reads in one mode only: (keys, whether the Config's mode reads them, that mode in words, whether a stated
+# key is refused while the mode is off). A key in two rows is read only when both modes are on.
+_MODE_KEYS: tuple[tuple[tuple[str, ...], Callable[[C.Config], bool], str, bool], ...] = (
+    (("tp_Tint_K",), lambda c: not c.tp_infer_Tint, "tp_infer_Tint: false", True),
+    (("tp_deep_param",), lambda c: c.tp_infer_Tint, "tp_infer_Tint: true", True),
     (
-        ("prior_T1bar", "truth_T1bar"),  # tp_deep_p_bar: the report's deep level in every mode
+        ("prior_T1bar", "truth_T1bar"),
         lambda c: c.tp_infer_Tint and c.tp_deep_param == "T1bar",
         "tp_infer_Tint: true and tp_deep_param: T1bar",
+        True,
+    ),
+    # The report quotes the deep temperature at tp_deep_p_bar in every mode, so it is never refused.
+    (
+        ("tp_deep_p_bar",),
+        lambda c: c.tp_infer_Tint and c.tp_deep_param == "T1bar",
+        "tp_infer_Tint: true and tp_deep_param: T1bar",
+        False,
     ),
     (
         ("prior_Tint", "truth_Tint"),
         lambda c: c.tp_infer_Tint and c.tp_deep_param == "Tint",
         "tp_infer_Tint: true and tp_deep_param: Tint",
+        True,
     ),
-    (("tp_gamma_fixed",), lambda c: not c.tp_infer_gamma, "tp_infer_gamma: false"),
-    (("prior_log10gamma", "truth_log10gamma"), lambda c: c.tp_infer_gamma, "tp_infer_gamma: true"),
-    (("tp_nabla_ad", "prior_log10P_rcb", "truth_log10P_rcb"), lambda c: c.tp_adiabat, "tp_adiabat: true"),
+    (("tp_gamma_fixed",), lambda c: not c.tp_infer_gamma, "tp_infer_gamma: false", True),
+    (("prior_log10gamma", "truth_log10gamma"), lambda c: c.tp_infer_gamma, "tp_infer_gamma: true", True),
+    (("tp_nabla_ad", "prior_log10P_rcb", "truth_log10P_rcb"), lambda c: c.tp_adiabat, "tp_adiabat: true", True),
     (
         ("prior_log10kappa_cloud", "truth_log10kappa_cloud", "prior_cloud_alpha", "truth_cloud_alpha"),
         lambda c: c.cloud_model == "powerlaw",
         "cloud_model: powerlaw",
+        True,
     ),
-    (("prior_log10P_deck", "truth_log10P_deck"), lambda c: c.cloud_model == "deck", "cloud_model: deck"),
-    (("prior_s_o", "truth_s_o"), lambda c: c.infer_s_o, "infer_s_o: true"),
+    (("prior_log10P_deck", "truth_log10P_deck"), lambda c: c.cloud_model == "deck", "cloud_model: deck", True),
+    (("prior_s_o", "truth_s_o"), lambda c: c.infer_s_o, "infer_s_o: true", True),
     (
         ("kzz_p_ref_bar", "prior_kzz_slope", "truth_kzz_slope"),
         lambda c: c.kzz_mode == "powerlaw",
         "kzz_mode: powerlaw",
+        True,
     ),
-    (("truth_lnM",), lambda c: c.infer_lnM, "infer_lnM: true"),
-    (("prior_offset_ppm", "truth_offset_ppm"), lambda c: c.infer_offsets, "infer_offsets: true"),
+    (("truth_lnM",), lambda c: c.infer_lnM, "infer_lnM: true", True),
+    (("prior_offset_ppm", "truth_offset_ppm"), lambda c: c.infer_offsets, "infer_offsets: true", True),
     (
-        ("prior_noise_inflation", "truth_noise_inflation", "noise_inflation_per_group"),
+        ("prior_noise_inflation", "noise_inflation_per_group"),
         lambda c: c.infer_noise_inflation,
         "infer_noise_inflation: true",
+        True,
     ),
     (
         ("combo", "obs_wl_lo", "obs_wl_hi", "obs_max_bin_R"),
         lambda c: bool(c.obs_dir),
         "a data source (obs_dir and obs_products)",
+        True,
     ),
+    # The injection reads every truth of the sampled parameters and truth_noise_inflation.
     (
         tuple(f.name for f in fields(C.Config) if f.name.startswith("truth_")),
         lambda c: c.generate_synthetic_data,
         "generate_synthetic_data: true",
+        True,
     ),
 )
-# Keys of _MODE_KEYS that have no default for a case whose mode reads them.
-_MODE_REQUIRED = frozenset({"tp_Tint_K", "prior_log10P_rcb", "prior_log10P_deck", "combo", "obs_wl_lo", "obs_wl_hi"})
+# Keys of _MODE_KEYS with no default for a case that reads them: stated whenever every row naming them is on.
+_MODE_REQUIRED = frozenset(
+    {
+        *("tp_Tint_K", "tp_gamma_fixed", "tp_deep_p_bar", "tp_nabla_ad", "kzz_p_ref_bar", "combo", "obs_wl_lo"),
+        *("prior_log10gamma", "prior_T1bar", "prior_Tint", "prior_log10P_rcb", "prior_s_o", "prior_kzz_slope"),
+        *("prior_log10kappa_cloud", "prior_cloud_alpha", "prior_log10P_deck", "prior_offset_ppm", "obs_wl_hi"),
+        "prior_noise_inflation",
+        *(f.name for f in fields(C.Config) if f.name.startswith("truth_")),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -230,9 +256,11 @@ def _read(path: Path) -> dict[str, Any]:
     bad = set(doc) - set(SECTIONS)
     if bad:
         raise ValueError(f"{path}: unknown top-level key(s) {sorted(bad)}; allowed: {SECTIONS}")
-    for s in SECTIONS[1:]:
+    for s in _MAPPINGS:
         if s in doc and not isinstance(doc[s], dict):
             raise ValueError(f"{path}: `{s}:` must be a mapping")
+    if "unset" in doc and not (isinstance(doc["unset"], list) and all(isinstance(k, str) for k in doc["unset"])):
+        raise ValueError(f"{path}: `unset:` must be a list of config keys, got {doc['unset']!r}")
     return doc
 
 
@@ -298,15 +326,19 @@ def _build(cls: Any, mapping: dict[str, Any], where: str) -> Any:
 
 def _check_mode_keys(cfg: C.Config, stated: set[str], where: str) -> None:
     """Refuse a stated key its mode does not read, and an unstated one its mode needs (``_MODE_KEYS``)."""
-    for keys, reads, mode in _MODE_KEYS:
-        on = bool(reads(cfg))
-        dead = sorted(set(keys) & stated) if not on else []
+    for keys, reads, mode, refuse_off in _MODE_KEYS:
+        dead = sorted(set(keys) & stated) if refuse_off and not reads(cfg) else []
         if dead:
             raise ValueError(
                 f"{where}: {dead} are read only with {mode}, which this spec does not set, so they would "
-                "change nothing: drop them"
+                "change nothing: drop them (a variant lists a base's key under `unset:`)"
             )
-        missing = sorted(set(keys) & _MODE_REQUIRED - stated) if on else []
+    for keys, reads, mode, _ in _MODE_KEYS:
+        if not reads(cfg):
+            continue
+        missing = sorted(
+            k for k in set(keys) & _MODE_REQUIRED - stated if all(r(cfg) for ks, r, _m, _o in _MODE_KEYS if k in ks)
+        )
         if missing:
             raise ValueError(
                 f"{where}: {missing} unset: {mode} reads them, and a schema default would not be this "
@@ -356,7 +388,10 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
         raise ValueError(f"{path}: a run specification is a .yaml file")
     doc = _read(path)
     base_path = None
-    sections: dict[str, dict[str, Any]] = {s: {} for s in SECTIONS[1:]}
+    sections: dict[str, dict[str, Any]] = {s: {} for s in _MAPPINGS}
+    dropped = list(doc.get("unset") or [])
+    if dropped and "base" not in doc:
+        raise ValueError(f"{path}: `unset: {dropped}` needs a base: only a variant removes keys it inherits")
     if "base" in doc:
         base_path = (path.parent / str(doc["base"])).resolve()
         base = _read(base_path)
@@ -366,6 +401,14 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
             )
         for s, values in sections.items():
             values.update(base.get(s) or {})
+        inherited = base.get("config") or {}
+        wrong = sorted(set(dropped) - set(inherited)) + sorted(set(dropped) & set(doc.get("config") or {}))
+        if wrong:
+            raise ValueError(
+                f"{path}: `unset:` names {wrong}: each must be a config key the base states and the variant does not"
+            )
+        for k in dropped:
+            del sections["config"][k]
     for s, values in sections.items():
         values.update(doc.get(s) or {})  # the variant's value wins, whole
 

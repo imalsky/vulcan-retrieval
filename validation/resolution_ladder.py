@@ -15,6 +15,7 @@ from __future__ import annotations
 import itertools
 import argparse
 import logging
+import math
 import sys
 import time
 from pathlib import Path
@@ -29,7 +30,8 @@ import _artifact
 GATE_PPM = 5.0
 GATE_JAC_REL = 0.01
 BIN_R = 100.0
-LADDER = (67, 101, 151)  # art_nlayer rungs; the lowest must be the case's
+# The rungs are the case's art_nlayer times these factors, rounded up: 67 gives 67, 101 and 151.
+LADDER_FACTORS = (1.0, 1.5, 2.25)
 
 
 def production_pair(rungs, production_value, knob="art_nlayer"):
@@ -134,7 +136,7 @@ def main() -> int:
 
     from retrieval_framework import config_schema as C
 
-    cfg, results = _artifact.spec_case(args.spec)
+    cfg, out_dir = _artifact.spec_case(args.spec)
     C.export_network(cfg)  # before vulcan3 is imported
     # import order matters: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
@@ -150,7 +152,7 @@ def main() -> int:
     edges = _artifact.make_r_bins(1e4 / cfg.nu_max, 1e4 / cfg.nu_min, BIN_R)
 
     results = {}
-    for rung in LADDER:
+    for rung in (math.ceil(profile[knob] * f) for f in LADDER_FACTORS):
         t0 = time.time()
         prof = dict(profile)
         prof[knob] = int(rung)
@@ -196,7 +198,7 @@ def main() -> int:
             )
         ),
         resolved_config=profile,
-        out_dir=results,
+        out_dir=out_dir,
     )
     return 0 if ok else 1
 

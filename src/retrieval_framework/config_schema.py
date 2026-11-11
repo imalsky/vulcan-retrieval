@@ -48,7 +48,12 @@ CASE_KEYS = frozenset(
         "cloud_model",
         "count_max",
         "cold_lanes",
+        "prior_lnZ",
+        "prior_c_o",
+        "prior_lnKzz",
         "prior_Tirr",
+        "prior_log10kappa",
+        "prior_lnR0",
         "prior_lnM_sigma",
         "baseline_metallicity_solar",
     }
@@ -631,6 +636,10 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
         raise ValueError(
             f"obs_dir={cfg.obs_dir!r}, obs_products={cfg.obs_products!r}: a data source names both, a synthetic grid "
             "neither"
+        )
+    if not (math.isfinite(cfg.truth_noise_inflation) and cfg.truth_noise_inflation > 0.0):
+        raise ValueError(
+            f"truth_noise_inflation must be finite and > 0 (it scales the noise), got {cfg.truth_noise_inflation}"
         )
     if cfg.report_kzz_ceiling_x is not None and not float(cfg.report_kzz_ceiling_x) > 0.0:
         raise ValueError(

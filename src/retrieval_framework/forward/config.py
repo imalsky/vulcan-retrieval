@@ -1,4 +1,4 @@
-"""The repository's filesystem layout and the WASP-39 b radius; importing it hands the engine its data root.
+"""The repository's filesystem layout; importing it hands the engine its data root.
 
 Pure constants and paths, with no jax, vulcan3 or exojax, so it is safe before the environment-order-sensitive setup.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from vulcan_forward import paths as _fwd_paths
 
-__all__ = ["DATA_DIR", "PROJECT_ROOT", "REPO_DIR", "RP_CM"]
+__all__ = ["DATA_DIR", "PROJECT_ROOT", "REPO_DIR"]
 
 # VULCAN_PROJECT_ROOT is the directory containing the vulcan-retrieval/ checkout. Without it the root is inferred from
 # this file inside an editable checkout; a site-packages install must set it.
@@ -33,7 +33,3 @@ DATA_DIR = REPO_DIR / "data"
 
 # Takes precedence over $VULCAN_FORWARD_DATA. The engine owns every path inside that tree: ask paths.
 _fwd_paths.set_data_root(DATA_DIR)
-
-# WASP-39b radius, cm, the Rp of vulcan3/configs/W39b.yaml. The run specs carry the RT geometry with its derivation.
-R_JUP_CM = 7.1492e9  # upstream VULCAN phy_const.r_jup
-RP_CM = 1.279 * R_JUP_CM

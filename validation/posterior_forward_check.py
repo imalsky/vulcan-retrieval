@@ -137,14 +137,15 @@ def run(args) -> int:
         len(theta),
         time.perf_counter() - t0,
     )
-    print(f"wrote {_save_spectra(args.variant, cfg, settings, payload)}")
+    print(f"wrote {_save_spectra(args.variant, cfg, settings, payload, out)}")
     return 0
 
 
-def _save_spectra(variant, cfg, settings, payload):
-    """Save one variant's solve with the state that produced it: compare runs later, and can only record its own."""
-    _artifact.RESULTS.mkdir(parents=True, exist_ok=True)
-    path = _artifact.RESULTS / f"forward_check_{variant}.npz"
+def _save_spectra(variant, cfg, settings, payload, out):
+    """Save one variant's solve beside its run, ``<run>/validation/``, with the state that produced it."""
+    folder = Path(out) / "validation"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"forward_check_{variant}.npz"
     provenance = json.dumps(_artifact.collect_provenance(asdict(cfg)), default=str)
     np.savez(path, settings=np.asarray(str(settings)), provenance=np.asarray(provenance), **payload)
     return path
@@ -245,6 +246,7 @@ def compare(args) -> int:
             "base_solve_provenance": _solve_provenance(a),
             "variant_solve_provenance": _solve_provenance(b),
         },
+        out_dir=Path(args.variant).resolve().parent,  # beside the solves, in their run's validation/
     )
     return 0
 

@@ -131,11 +131,42 @@ def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypa
         (root / table).write_bytes(b"table")
     monkeypatch.setattr(fwd_paths, "data_root", lambda: root)
     cfg = C.Config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
-    path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)})
+    run = tmp_path / "output" / "survey" / "hd189733b_nautilus"
+    path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)}, run)
+    assert path == run / "validation" / "forward_check_base.npz"  # beside its run, never another case's folder
     with np.load(path) as z:
         got = scripts.check._solve_provenance(z)
     assert got["resolved_config"]["molecules"] == ["H2O"]
     assert set(got["repos"]) == {"VULCAN3", "vulcan-forward", "vulcan-retrieval"}
+
+
+def test_the_ladder_writes_its_artifact_beside_the_case_on_rungs_from_its_layers(scripts, tmp_path, monkeypatch):
+    """The ladder's writing path on stub chemistry and RT: rungs from the case's art_nlayer, the artifact in the case's
+    validation folder.
+    """
+    import jax
+    import vulcan_forward
+
+    from retrieval_framework import config_schema as C
+
+    jax.config.update("jax_enable_x64", True)  # what the real vulcan_chem import does
+    # a stub engine module: importing the real vulcan_chem after exojax raises in a worker that imported exojax
+    stub = SimpleNamespace(build_chem_model=lambda _p: SimpleNamespace(converged_y=lambda _t: None))
+    monkeypatch.setitem(sys.modules, "vulcan_forward.vulcan_chem", stub)
+    monkeypatch.setattr(vulcan_forward, "vulcan_chem", stub, raising=False)
+    cfg = C.Config(molecules=("H2O",), art_nlayer=20, nu_min=2000.0, nu_max=3000.0)
+    monkeypatch.setattr(scripts.artifact, "spec_case", lambda _p: (cfg, tmp_path / "validation"))
+    monkeypatch.setattr(scripts.artifact, "collect_provenance", lambda _rc: {})
+    monkeypatch.setattr(C, "export_network", lambda _cfg: None)
+    rungs = []
+    monkeypatch.setattr(
+        scripts.ladder, "_run_rung", lambda prof, *_a: rungs.append(prof["art_nlayer"]) or {"binned": np.ones(4)}
+    )
+    monkeypatch.setattr(sys, "argv", ["resolution_ladder.py", "--spec", "x.yaml"])
+    assert scripts.ladder.main() == 0
+    assert rungs == [20, 30, 45]
+    got = json.loads((tmp_path / "validation" / "resolution_ladder.json").read_text())
+    assert got["verdict"]["status"] == "REPORT"
 
 
 def test_a_file_from_before_provenance_says_so(scripts, tmp_path):

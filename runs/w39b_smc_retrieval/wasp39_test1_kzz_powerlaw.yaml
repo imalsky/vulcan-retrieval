@@ -4,4 +4,6 @@
 base: wasp39_test1.yaml
 
 config:
-  kzz_mode: powerlaw                   # kzz_p_ref_bar and prior_kzz_slope at the schema defaults
+  kzz_mode: powerlaw
+  kzz_p_ref_bar: 1.0e-3                # bar, where Kzz0 is read off the profile
+  prior_kzz_slope: [-1.0, 1.0]

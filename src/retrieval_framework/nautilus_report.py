@@ -373,11 +373,14 @@ def _unmodeled_caveat(out: Path) -> str:
         if "unmodeled_species" not in z.files:
             return f"Species with no opacity table were not checked: {path.name} was written before the check."
         n_ok, n = int(np.sum(z["certified"])), len(z["certified"])
+        not_run = str(z["unmodeled_not_performed"]) if "unmodeled_not_performed" in z.files else ""
         found = dict(zip(z["unmodeled_species"].tolist(), z["unmodeled_vmr"].tolist(), strict=True))
     where = (
         f"in the transmission photosphere ({constants.PHOTOSPHERE_BAR[0]:g}-{constants.PHOTOSPHERE_BAR[1]:g} bar) "
         f"of the {n_ok} of {n} re-solved draws that certified"
     )
+    if not_run:
+        return f"Species with no opacity table: the check was not performed ({not_run}, of {n} re-solved draws)."
     if not found:
         return f"No species without an opacity table reaches a mean VMR of {constants.UNMODELED_VMR:g} {where}."
     return (
@@ -587,7 +590,7 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
     t0 = time.perf_counter()
     Y, mu, ok = pipe.solve_cold(theta)
     log.info("model spectra: %s/%s draws certified cold in %.0f s", int(ok.sum()), len(ok), time.perf_counter() - t0)
-    unmodeled = _unmodeled_absorbers(pipe, np.asarray(Y)[ok])
+    unmodeled, not_run = _unmodeled_absorbers(pipe, np.asarray(Y)[ok])
     mult = None
     if pipe.nuisance is not None:
         mu, mult = pipe.nuisance.apply(mu, np.asarray(post["nuisance"], np.float64)[idx])
@@ -598,16 +601,19 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
         certified=ok,
         unmodeled_species=np.asarray(list(unmodeled), dtype="<U16"),
         unmodeled_vmr=np.asarray(list(unmodeled.values()), np.float64),
+        unmodeled_not_performed=np.asarray(not_run),
         **({} if mult is None else {"sigma_multiplier": mult}),
     )
     return theta, mu, ok, mult
 
 
-def _unmodeled_absorbers(pipe: Any, Y: np.ndarray) -> dict[str, float]:
+def _unmodeled_absorbers(pipe: Any, Y: np.ndarray) -> tuple[dict[str, float], str]:
     """Return the network species with no opacity table that are abundant in the observable layers of columns ``Y``.
 
-    The rule of jwst-transit-authority's ``certify.unmodeled_absorbers``: a species' mean VMR over
+    The rule of jwst-transit-authority's ``certify.unmodeled_absorbers``: a species' mean gas VMR over
     ``constants.PHOTOSPHERE_BAR``, its largest over the columns, above ``constants.UNMODELED_VMR``; most abundant first.
+    The mixing ratio is over the gas only (the RT's gas mask), so a condensed reservoir neither dilutes it nor counts.
+    The second item is why the check could not run, or empty when it ran.
     """
     from vulcan_forward.constants import MOLECULES
 
@@ -616,12 +622,20 @@ def _unmodeled_absorbers(pipe: Any, Y: np.ndarray) -> dict[str, float]:
     sidx = pipe.fwd.chem.sidx
     p = np.asarray(pipe.fwd.p_chem_bar)
     band = (p >= constants.PHOTOSPHERE_BAR[0]) & (p <= constants.PHOTOSPHERE_BAR[1])
-    if not (len(Y) and band.any()):
-        return {}
-    vmr = Y / Y.sum(axis=2, keepdims=True)
+    if not len(Y):
+        return {}, "no re-solved draw certified"
+    if not band.any():
+        return {}, f"no chemistry layer lies in {constants.PHOTOSPHERE_BAR[0]:g}-{constants.PHOTOSPHERE_BAR[1]:g} bar"
+    gas = np.asarray(pipe.fwd._gas_mask, np.float64)
+    y_gas = Y * gas[None, None, :]
+    vmr = y_gas / y_gas.sum(axis=2, keepdims=True)
     peak = vmr[:, band, :].mean(axis=1).max(axis=0)
-    out = {sp: float(peak[i]) for sp, i in sidx.items() if sp not in skip and peak[i] > constants.UNMODELED_VMR}
-    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+    out = {
+        sp: float(peak[i])
+        for sp, i in sidx.items()
+        if gas[i] > 0.0 and sp not in skip and peak[i] > constants.UNMODELED_VMR
+    }
+    return dict(sorted(out.items(), key=lambda kv: -kv[1])), ""
 
 
 def main(argv: list[str] | None = None) -> None:

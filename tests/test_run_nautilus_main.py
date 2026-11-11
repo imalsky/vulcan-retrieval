@@ -3,6 +3,7 @@ is checked against, and the order of that check against everything the run write
 """
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -108,6 +109,20 @@ def test_the_startup_kzz_decades_follow_the_case_s_kzz_mode(job, monkeypatch):
     th = np.array([[0.0, 0.5, np.log(10.0)]])
     # 1e9 at 0.1 bar, x10 by lnKzz, x10^(0.5 x 2) by the slope to 1 mbar
     np.testing.assert_allclose(seen["startup_kzz"](th), [11.0], rtol=1e-12)
+
+
+@pytest.mark.parametrize("solver", ["fast", "ffi"])
+def test_the_run_builds_its_forward_at_the_spec_s_lanes_under_every_solver(job, monkeypatch, solver):
+    """The lane count that reaches the forward model at execution is the spec's cold_lanes, under ffi too (the forward's
+    dispatch width is cold_lanes: tests/test_retrieval_forward_stub.py).
+    """
+    seen = []
+    monkeypatch.setattr(P, "build_pipeline", lambda cfg: seen.append(cfg.cold_lanes) or job.pipe)
+    spec = Path(job.spec).with_name(f"stub_{solver}.yaml")
+    runtime = f"runtime: {{solver: {solver}}}\nconfig: {{cold_lanes: 8}}"
+    spec.write_text(Path(job.spec).read_text().replace("config: {cold_lanes: 8}", runtime))
+    RN.main([str(spec)])
+    assert seen == [8]
 
 
 def test_a_finished_run_writes_its_posterior_summary_and_identity(job):

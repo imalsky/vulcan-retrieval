@@ -93,7 +93,8 @@ config:
 
   # ---- T-P: Guillot profile, f = 1/4 ---------------------------------------------
   tp_infer_Tint: true                  # the deep parameter is free ...
-  tp_deep_param: T1bar                 # ... as T at 1 bar (tp_deep_p_bar); Tint follows in closed form
+  tp_deep_param: T1bar                 # ... as T at tp_deep_p_bar; Tint follows in closed form
+  tp_deep_p_bar: 1.0                   # bar
   prior_T1bar: [320.0, 2980.0]         # K, inside the 220-2980 K T-P window; a draw with no Guillot solution is rejected
   # Tirr: Teq 1100-1166 K, published limbs 889 / 1068 K (Espinoza+2024); 700 K keeps the
   # cool ridge's tail. An out-of-window profile is rejected, never clipped.
@@ -101,6 +102,7 @@ config:
   # gamma down to 1e-3 (the deep temperature saturates at ~(3/16 / (gamma sqrt 3))^(1/4)
   # Tirr); up to 2 lets the data prefer a weak inversion.
   prior_log10gamma: [-3.0, 0.3010299956639812]
+  prior_log10kappa: [-3.5, 0.5]        # IR opacity, cm^2/g
 
   # ---- composition and mixing (lnZ, c_o and lnKzz are always inferred) ----------
   prior_lnZ: [-2.302585092994046, 2.302585092994046]   # 1x-100x solar about the baseline
@@ -120,9 +122,13 @@ config:
   # Report only: the posterior is also quoted truncated at Kzz x10, the Tsai+2023 GCM's full-H w_rms.
   report_kzz_ceiling_x: 10.0
 
-  # ---- clouds and noise (schema defaults: power-law cloud, offsets +-800 ppm) ----
+  # ---- clouds and noise ------------------------------------------------------------
   cloud_model: powerlaw                # stated, not inherited: a uniformly mixed power-law opacity
-  infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform on (0.5, 3)
+  prior_log10kappa_cloud: [-7.0, 1.0]  # cm^2/g at 3.5 um
+  prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like
+  prior_offset_ppm: [-800.0, 800.0]    # per group after the reference
+  infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform
+  prior_noise_inflation: [0.5, 3.0]
   noise_inflation_per_group: true      # one per group: NIRISS, G395H_NRS1, G395H_NRS2
   # Offsets and inflations integrated out (closed form in the offset, 2049 nodes in
   # log10 b; same priors, same evidence): nautilus samples only the 12 physical

@@ -246,9 +246,8 @@ def chem_guillot(stack):
     from exojax.atm.atmprof import atmprof_Guillot
     from vulcan3.phy_const import G_grav
 
-    from retrieval_framework.forward.config import RP_CM
-
     gs_cgs = 1000.0
+    rp_cm = 1.279 * 7.1492e9  # cm, a hot-Jupiter radius; with Mp below it sets gs_cgs
 
     def tp_eval(tp, p_bar):
         p = jnp.asarray(p_bar)
@@ -259,10 +258,9 @@ def chem_guillot(stack):
         _profile(
             cfg_overrides=dict(
                 _CFG_OVERRIDES,
-                # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp
-                # to reproduce gs_cgs at the W39b radius.
-                Rp=RP_CM,
-                Mp=gs_cgs * RP_CM**2 / G_grav,
+                # VULCAN derives gs = G*Mp/Rp^2; set Mp/Rp to reproduce gs_cgs.
+                Rp=rp_cm,
+                Mp=gs_cgs * rp_cm**2 / G_grav,
                 runtime=GUILLOT_RUNTIME,
             ),
             count_max=GUILLOT_COUNT_MAX,

@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -222,7 +223,8 @@ def case_config(name: str) -> tuple[Path, dict]:
 def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
     """Return the C/O of a case's baseline composition, the ratio that ``exp(c_o)`` multiplies.
 
-    Read from the case's vulcan3 config with ``cfg_overrides`` applied, as ``C_H / O_H``.
+    Read from the case's vulcan3 config with ``cfg_overrides`` applied, as ``C_H / O_H``: the elemental inventory of the
+    equilibrium start, which the engine's C/O knob scales.
 
     Parameters
     ----------
@@ -240,7 +242,8 @@ def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
     ------
     ValueError
         If the case takes its abundances from vulcan3's solar preset (``use_solar: true``), whose file this reader does
-        not parse, or if C_H or O_H is not positive.
+        not parse, if its start is not the equilibrium one (``ini_mix`` other than ``EQ``), or if C_H or O_H is not
+        positive.
     """
     path, case = case_config(name)
     case = {**case, **cfg_overrides}
@@ -249,6 +252,11 @@ def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
             f"{path}: use_solar is true, so the baseline C/O is in vulcan3's preset "
             f"{case.get('fastchem_solar_abundance_file')!r}, which the report does not read. State C_H and O_H with "
             "use_solar: false in the case config or cfg_overrides."
+        )
+    if case.get("ini_mix") != "EQ":
+        raise ValueError(
+            f"{path}: ini_mix is {case.get('ini_mix')!r}, so the start column's C/O comes from that column, not from "
+            "C_H / O_H, which this reader uses. Report C/O on an EQ case, or derive it from the start column."
         )
     c_h, o_h = float(case["C_H"]), float(case["O_H"])
     if not (c_h > 0.0 and o_h > 0.0):
@@ -359,12 +367,50 @@ TARGET_FREE_KEYS = frozenset(
 
 
 def _composition_file() -> dict[str, str]:
-    """Return the composition table vulcan3 freezes at its first import: ``VULCAN3_COM_FILE`` or its default."""
-    value = os.environ.get("VULCAN3_COM_FILE")
-    if value is None:
-        value = str(yaml.safe_load((_vulcan3_root() / "configs" / "default.yaml").read_text())["com_file"])
-    path = case_data_file(value)
-    return {"VULCAN3_COM_FILE": os.environ.get("VULCAN3_COM_FILE", ""), "path": str(path), "sha256": _sha256(path)}
+    """Return the composition table vulcan3 freezes at its first import.
+
+    The solver's loaded table once vulcan3 is imported, else ``VULCAN3_COM_FILE`` or its default.
+    """
+    loaded = sys.modules.get("vulcan3.composition")
+    if loaded is not None:
+        path = Path(loaded.COM_FILE_PATH).resolve()
+    else:
+        value = os.environ.get("VULCAN3_COM_FILE")
+        if value is None:
+            value = str(yaml.safe_load((_vulcan3_root() / "configs" / "default.yaml").read_text())["com_file"])
+        path = case_data_file(value)
+    return {"path": str(path), "sha256": _sha256(path)}
+
+
+def _tree_sha256(path: Path) -> str:
+    """Return the sha256 of a file, or of a folder's relative paths and file contents in sorted order."""
+    if path.is_file():
+        return _sha256(path)
+    if not path.is_dir():
+        raise FileNotFoundError(f"{path} does not exist: a run that read it cannot be identified without it")
+    h = hashlib.sha256()
+    for f in sorted(q for q in path.rglob("*") if q.is_file()):
+        h.update(str(f.relative_to(path)).encode())
+        h.update(_sha256(f).encode())
+    return h.hexdigest()
+
+
+def _external_chemistry_inputs(cfg: C.Config) -> dict[str, dict[str, str]]:
+    """Return the network file, its NASA9 folder and the abundance preset that resolve outside vulcan3's package.
+
+    The packaged ones are bound by vulcan3's code state.
+    """
+    if not (cfg.network and cfg.vulcan_cfg_name):
+        return {}
+    pkg = _vulcan3_root()
+    _, case = case_config(cfg.vulcan_cfg_name)
+    net = case_data_file(cfg.network)
+    preset = case_data_file({**case, **cfg.cfg_overrides}["fastchem_solar_abundance_file"])
+    return {
+        label: {"path": str(f), "sha256": _tree_sha256(f)}
+        for label, f in (("network", net), ("nasa9", net.parent / "NASA9"), ("abundance_preset", preset))
+        if not f.is_relative_to(pkg)
+    }
 
 
 def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
@@ -402,7 +448,7 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
 
     return {
         # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
-        "manifest_version": 7,
+        "manifest_version": 8,
         "config": cfg_bound,
         "params": {
             "names": list(pipe.names),
@@ -428,7 +474,10 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
         "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
         "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", "codegen"),
         "vulcan3_bt_buffers": os.environ.get("VULCAN3_BT_BUFFERS") or "per-call",
+        # The rest of the spec's runtime block: XLA's flags and memory fraction move the compiled programs.
+        "runtime": {k: os.environ.get(k) for k in ("XLA_FLAGS", "XLA_PYTHON_CLIENT_MEM_FRACTION")},
         "composition_file": _composition_file(),
+        "external_chemistry_inputs": _external_chemistry_inputs(cfg),
         "jax_backend": jax.default_backend(),
         "fixed_values": {
             "vulcan-retrieval": constants.fixed_values(),
