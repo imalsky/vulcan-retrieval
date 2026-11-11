@@ -61,7 +61,7 @@ the assumptions it rests on.
 
 ### Success: the repository's tests
 
-These decide whether the code is correct. None takes more than 90 minutes on a CPU, and the aim is
+These decide whether the code is correct. None takes more than 100 minutes on a CPU, and the aim is
 under an hour. None runs a production-size retrieval: the job path is tested on a small synthetic
 case.
 
@@ -111,7 +111,7 @@ its hardware.
 - A quoted number from a run that cannot be re-solved, or without its limits.
 - Bayes factors between runs at mismatched solver settings, or a detection claim without its model
   set.
-- A repository test that needs a production-size retrieval, or more than 90 minutes on a CPU.
+- A repository test that needs a production-size retrieval, or more than 100 minutes on a CPU.
 - A cloud, a molecule list or a planet value that the case did not state.
 - A number that changes a result, hidden in the code where the user cannot see or set it.
 - A silent fallback or default where the code should refuse.
