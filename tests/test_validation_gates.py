@@ -79,10 +79,13 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
         seen.update(kw)
         return np.array([1.0, 2.0]), np.array([[1.5, 2.0]])
 
+    import jax
     import jax.numpy as jnp
-    from jax.experimental import enable_x64
 
     from retrieval_framework.pipeline import Pipeline
+
+    # The pipeline's dtype is float64; a process that has not yet imported vulcan3 still runs jax at float32.
+    jax.config.update("jax_enable_x64", True)
 
     n_chem_tp, i_r0, i_m, i_deck = 2, 2, 3, 4
     pipe = SimpleNamespace(
@@ -101,9 +104,7 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
         ),
     )
     pipe.rt_args = lambda th: Pipeline.rt_args(pipe, th)
-    # The pipeline's dtype is float64; a worker that has not yet imported vulcan3 still runs jax at float32.
-    with enable_x64():
-        d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
+    d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
     assert seen["deck"] == pytest.approx(-3.0)
     assert seen["lnM"] == pytest.approx(0.2)
     assert seen["wo_mols"] == ["H2O"]
