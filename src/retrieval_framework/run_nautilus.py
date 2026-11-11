@@ -370,6 +370,11 @@ def make_loglike(
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
                 L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype), jnp.asarray(rw, pipe.dtype), act)
+                # A warm start that froze at dt_min is re-solved cold, alone; a cold freeze still stops the run.
+                fz = act & (st.reason == P._TERM_DT_MIN_FROZEN)
+                if n_fz := int(fz.sum()):
+                    L, Ynew, rnew, st = P._take_rows(fz, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, fz))
+                    tally["warm_frozen_resolved_cold"] = tally.get("warm_frozen_resolved_cold", 0) + n_fz
             else:
                 L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
             P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)

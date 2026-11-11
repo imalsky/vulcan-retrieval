@@ -193,6 +193,86 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
 
 
+class _FrozenStats(NamedTuple):
+    acc: jnp.ndarray
+    conv_ok: jnp.ndarray
+    reason: jnp.ndarray
+    last_delta: jnp.ndarray
+    nuis: None = None
+
+
+def _freezing(fn, where):
+    """Wrap a stub evaluator: rows where ``where(theta)`` holds freeze at dt_min, uncertified at the reject sentinel."""
+
+    def ev(U, Y, refs, active):
+        L, Ynew, rnew, st = fn(U, Y, refs, active)
+        fz = jnp.asarray(active, bool) & where(U)
+        return (
+            jnp.where(fz, P.REJECT_LOGL, L),
+            Ynew,
+            rnew,
+            _FrozenStats(
+                jnp.where(fz, 7, st.acc),
+                st.conv_ok & ~fz,
+                jnp.where(fz, P._TERM_DT_MIN_FROZEN, 1),
+                jnp.where(fz, 0.3, 0.0),
+            ),
+        )
+
+    return ev
+
+
+def _hot(U):
+    return U[:, 1] > 0.0  # theta p1 > 0.5
+
+
+def _never(U):
+    return jnp.zeros(U.shape[0], bool)
+
+
+def test_a_frozen_warm_draw_is_re_solved_cold(tmp_path):
+    """A warm column frozen at dt_min is re-solved cold, alone, and counted; a cold freeze still stops the run."""
+    from vulcan_forward import vulcan_chem  # noqa: F401  # before vulcan3
+
+    import vulcan3
+
+    rng = np.random.default_rng(1)
+    seen = []
+    stub = _stub_pipe(seen)
+    cold, warm = stub._make_batch_eval("cold"), stub._make_batch_eval("warm")
+    stub._make_batch_eval = lambda mode: _freezing(cold, _never) if mode == "cold" else _freezing(warm, _hot)
+    anchors, tally = Anchors(tmp_path, 2), {}
+    like = make_loglike(stub, 16, tally, anchors, tmp_path / "batches.jsonl")
+    like(rng.uniform(0.02, 0.98, (16, D)))
+    n_a = len(anchors)
+    z2 = rng.uniform(0.02, 0.98, (16, D))
+    seen.clear()
+    L2 = like(z2)
+    fz = (z2[:, 1] > 0.5) & (z2[:, 2] <= 0.7)
+    assert 0 < fz.sum() < 16
+    assert [name for name, _ in seen] == ["warm", "cold"]
+    assert seen[1][1] == fz.tolist()  # only the frozen rows take the cold solve
+    assert tally["warm_frozen_resolved_cold"] == fz.sum()
+    want = make_loglike(_stub_pipe(), 16, {})(z2)
+    assert np.array_equal(L2, want)  # the frozen rows take the cold verdict, the others keep the warm one
+    alive = np.isfinite(L2)
+    assert (alive & fz).any()
+    assert (alive & ~fz).any()
+    Yn, rn = anchors.columns(np.arange(n_a, len(anchors)))
+    own = z2[alive][:, 0] + 1000 * z2[alive][:, 1]
+    f = fz[alive]
+    assert np.allclose(Yn[f, 0, 0], own[f])  # its own cold column and references, not the anchor's
+    assert np.allclose(rn[f], np.c_[z2[alive][f, :2], np.zeros(f.sum())])
+    assert not np.isclose(Yn[~f, 0, 0], own[~f]).any()
+    acc = np.array(json.loads((tmp_path / "batches.jsonl").read_text().splitlines()[-1])["acc"])
+    assert (acc != 7).all()  # the frozen rows log the cold step count, not the warm one
+
+    stub._make_batch_eval = lambda mode: _freezing(cold, _hot) if mode == "cold" else _freezing(warm, _hot)
+    like = make_loglike(stub, 16, {}, anchors)
+    with pytest.raises(vulcan3.DtMinFrozenError, match="froze at dt_min"):
+        like(z2)
+
+
 def test_startup_check_refuses_a_solver_cut_decade_and_an_empty_first_chunk():
     """A decade with STARTUP_MIN_DRAWS in-window draws and none kept refuses the
     run, naming it; one kept draw passes it; a sparse decade is reported as too few
@@ -277,6 +357,11 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
     ("over", "msg"),
     [
         ({"cold_lanes": 0}, "cold_lanes"),  # every batch runs on the lane queue
+        ({"tp_gravity_cgs": 0.0}, "finite and positive"),
+        ({"p_ref_bar": -1.0e-3}, "finite and positive"),
+        ({"rstar_cm": float("nan")}, "finite and positive"),
+        ({"molecules": ("H2O", "CO2")}, "needs core absorbers"),  # the engine's refusal, raised at validation
+        ({"nu_max": 12000.0}, "supported band"),
         ({"cold_lanes": -1}, "cold_lanes"),
         ({"cold_refill_chunk": 0}, "cold_refill_chunk"),
         ({"noise_inflation_per_group": True}, "infer_noise_inflation"),

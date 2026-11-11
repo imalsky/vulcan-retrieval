@@ -119,6 +119,15 @@ def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: floa
         )
 
 
+def _take_rows(rows: Array, out: Any, other: Any) -> Any:
+    """Return a batch evaluator's ``out`` with the rows where ``rows`` holds taken from ``other``, field by field."""
+
+    def pick(a: Array, b: Array) -> Array:
+        return jnp.where(rows.reshape(rows.shape + (1,) * (a.ndim - 1)), b, a)
+
+    return jax.tree_util.tree_map(pick, out, other)
+
+
 def make_uspace(
     specs: Sequence[C.ParamSpec], dtype: Any
 ) -> tuple[Callable[[Array], Array], Callable[[Array, int], Array]]:

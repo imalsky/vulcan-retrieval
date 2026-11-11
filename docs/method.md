@@ -63,8 +63,8 @@ and the inflation(s) out at the same priors: the offset integral is closed form,
 ## Sampler
 
 A draw that does not certify within `count_max` is rejected, with log L = -inf. A column frozen at `dt_min` is different:
-each chunk's `termination_reason` is checked right after the evaluator and the run stops with `DtMinFrozenError`, since it
-is a solver failure rather than a verdict on the draw. `nautilus_report` and the forward checks re-solve finished runs'
+it is a solver failure rather than a verdict on the draw. A warm start that froze is re-solved cold, alone, and that
+result stands; each chunk's `termination_reason` is then checked and a cold freeze stops the run with `DtMinFrozenError`. `nautilus_report` and the forward checks re-solve finished runs'
 draws and stop the same way; `nautilus_report --spectra 0` still writes the certificate and the figures that need no solve.
 
 Stock nautilus-sampler 1.0.6 (Lange 2023) with its default networks, `N_NETWORKS` ReLU MLPs, $n_{\rm update} = n_{\rm live}/2$,

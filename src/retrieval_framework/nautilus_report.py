@@ -448,6 +448,8 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
             "mode": "warm" if warm else "cold",
             "warm_of_n_eval": tally.get("n_warm", 0) / n if n else None,
             "cold_of_n_eval": tally.get("n_cold", 0) / n if n else None,
+            # Such a row stays in n_warm and warm_certified, by its cold verdict.
+            "warm_frozen_resolved_cold": tally.get("warm_frozen_resolved_cold", 0),
         },
         "rejections": rejections,
         "chemistry": {
