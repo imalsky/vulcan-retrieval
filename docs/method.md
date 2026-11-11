@@ -162,8 +162,9 @@ not a verdict by itself.
 
 `warmcold` is the warm-against-cold check on posterior rows solved cold by the production rung: the subsample reweighted by
 $\exp(L_{\rm cold} - L_{\rm run})$, a row that does not certify cold given weight 0, and every parameter's median shift in
-posterior sigma, low-Kzz rows ($\ln K_{zz} < -0.7$) apart. Gate: every median within 0.1 sigma. A warm run's numbers are quotable
-only after it passes.
+posterior sigma, low-Kzz rows ($\ln K_{zz} < -0.7$) apart. Gates: every median within 0.1 sigma, and an effective sample size of the weights of at least 100
+(below it the weighted median's own error, about $1.25/\sqrt{\rm ESS}$ sigma, exceeds the shift gate). A warm run's numbers are
+quotable only after it passes.
 
 ### posterior_forward_check variants
 

@@ -63,6 +63,14 @@ def test_e2e_gates_fail_a_nan_metric(scripts):
     assert over(_metrics(), none, np.array([False])) == ["no_jointly_certified_draw"]
 
 
+def test_warm_cold_fails_on_collapsed_weights_as_well_as_a_moved_median(scripts):
+    over = scripts.e2e._warm_cold_fails
+    assert over(0.075, 914.0) == []
+    assert over(-0.2, 914.0) == ["median_shift"]
+    assert over(0.0, 12.0) == ["ess"]
+    assert over(np.nan, np.nan) == ["median_shift", "ess"]
+
+
 def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
     """The deck goes through the forward's keywords with the sampled lnM, as the likelihood's RT does."""
     seen = {}
@@ -72,6 +80,7 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
         return np.array([1.0, 2.0]), np.array([[1.5, 2.0]])
 
     import jax.numpy as jnp
+    from jax.experimental import enable_x64
 
     from retrieval_framework.pipeline import Pipeline
 
@@ -92,7 +101,9 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
         ),
     )
     pipe.rt_args = lambda th: Pipeline.rt_args(pipe, th)
-    d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
+    # The pipeline's dtype is float64; a worker that has not yet imported vulcan3 still runs jax at float32.
+    with enable_x64():
+        d = scripts.loo.deltas_at(pipe, np.array([0.0, 0.0, 0.01, 0.2, -3.0]), ["H2O"])
     assert seen["deck"] == pytest.approx(-3.0)
     assert seen["lnM"] == pytest.approx(0.2)
     assert seen["wo_mols"] == ["H2O"]

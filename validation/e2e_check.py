@@ -31,6 +31,9 @@ VMR_FLOOR = 1.0e-12
 GOOD_FIT_NATS = 50.0
 GATES = {"max_bin_sigma": 0.1, "D_sigma": 0.5, "dex_p95": 0.03, "dex_max": 0.1, "dlogL": 0.5}
 WARM_COLD_SHIFT_SIGMA = 0.1
+# Effective sample size the reweighted rows must keep. A weighted median's own standard error is about
+# 1.25 / sqrt(ESS) sigma: 0.125 sigma at 100, already above the shift gate, so below it the shift cannot be read.
+WARM_COLD_MIN_ESS = 100.0
 LOW_KZZ = -0.7
 CORNER_Z = (0.02, 0.98)
 CORNER_PARAMS = ("lnZ", "c_o", "lnKzz", "s_o", "Tirr", "T1bar", "log10kappa")
@@ -344,6 +347,16 @@ def _wmedian(x, w):
     return float(x[o][np.searchsorted(c, 0.5 * c[-1])])
 
 
+def _warm_cold_fails(worst_shift_sigma, ess):
+    """Return the warm-against-cold gates a run is over; a NaN fails its gate."""
+    fails = []
+    if not abs(worst_shift_sigma) <= WARM_COLD_SHIFT_SIGMA:
+        fails.append("median_shift")
+    if not ess >= WARM_COLD_MIN_ESS:
+        fails.append("ess")
+    return fails
+
+
 def warmcold(args) -> int:
     from retrieval_framework import constants
 
@@ -374,12 +387,14 @@ def warmcold(args) -> int:
         "worst": worst,
         "worst_shift_sigma": float(shifts[worst]),
     }
-    status = "PASS" if abs(shifts[worst]) <= WARM_COLD_SHIFT_SIGMA else "FAIL"
+    fails = _warm_cold_fails(m["worst_shift_sigma"], m["ess"])
+    status = "FAIL" if fails else "PASS"
     summary = (
         f"warm vs cold on {m['rows']} weighted posterior rows: {m['cold_certified']} certify "
         f"cold ({m['cold_certified_low_kzz']}/{m['low_kzz_rows']} at low Kzz); median |dL| "
         f"{m['median_abs_dL']:.3g}; worst median shift {worst} {shifts[worst]:+.3f} sigma "
-        f"(gate {WARM_COLD_SHIFT_SIGMA}); ESS {m['ess']:.0f}"
+        f"(gate {WARM_COLD_SHIFT_SIGMA}); ESS {m['ess']:.0f} (gate {WARM_COLD_MIN_ESS:.0f})"
+        + (f"; over: {', '.join(fails)}" if fails else "")
     )
     print(summary)
     _artifact.emit(
