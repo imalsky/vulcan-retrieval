@@ -66,7 +66,10 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     G = len(groups)
     Nm = OBS.build_group_design({"groups": groups, "group": group_per_bin})
     has_off = np.array([bool(cfg.infer_offsets) and k > 0 for k in range(G)])
-    a_lo, a_hi = (float(v) * constants.PPM for v in C.need(cfg.prior_offset_ppm, "prior_offset_ppm"))
+    # Without an offset group the offset branch of `_terms` is never selected, so its bounds only have to be finite.
+    a_lo, a_hi = 0.0, 1.0
+    if has_off.any():
+        a_lo, a_hi = (float(v) * constants.PPM for v in C.need(cfg.prior_offset_ppm, "prior_offset_ppm"))
     infl = bool(cfg.infer_noise_inflation)
     per_group = infl and bool(cfg.noise_inflation_per_group)
     if infl:

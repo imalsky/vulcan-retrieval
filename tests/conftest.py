@@ -156,13 +156,25 @@ def capped_smoke_pipe():
 # boundary, the Gaussian mass nuisance, the grey deck.
 V5_SMOKE = {
     "infer_s_o": True,
+    "prior_s_o": (-2.302585092994046, 2.302585092994046),  # a factor of ten either way
+    "truth_s_o": 0.0,
     "kzz_mode": "powerlaw",
+    "kzz_p_ref_bar": 1.0e-3,
+    "prior_kzz_slope": (-1.0, 1.0),
+    "truth_kzz_slope": 0.0,
     "tp_infer_Tint": True,
     "tp_deep_param": "T1bar",
     "prior_T1bar": (600.0, 2500.0),
+    "truth_T1bar": 1500.0,
     "tp_adiabat": True,
+    "tp_nabla_ad": 0.29,
+    "prior_log10P_rcb": (-1.0, 0.88),
+    "truth_log10P_rcb": 0.5,
     "infer_lnM": True,
+    "truth_lnM": 0.0,
     "cloud_model": "deck",
+    "prior_log10P_deck": (-6.0, 0.8),
+    "truth_log10P_deck": 0.5,
 }
 
 

@@ -237,7 +237,7 @@ def test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum():
     """
     from conftest import build_smoke_pipe
 
-    pipe = build_smoke_pipe(infer_noise_inflation=True, integrate_nuisance=True)
+    pipe = build_smoke_pipe(infer_noise_inflation=True, integrate_nuisance=True, prior_noise_inflation=(0.5, 3.0))
     assert pipe.nuisance.names == ["noise_inflation"]
     assert "noise_inflation" not in pipe.names
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), 2)
