@@ -343,7 +343,7 @@ class Pipeline:
         off_idx = [i for i, k in enumerate(self.kinds) if k == "offset"]
         self._off_lo = off_idx[0] if off_idx else 0
         self._n_off = len(off_idx)
-        self._cloud_lo = self.cloud_idx[0]
+        self._cloud_lo = self.cloud_idx[0] if self.cloud_idx else 0  # cloud_model "none" has no cloud block
         self.n_cloud = len(self.cloud_idx)
 
         self.prior_types = [s.prior_type for s in specs]
@@ -621,6 +621,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         The pipeline, with no observations yet.
     """
     C.validate_config(cfg)
+    C.export_network(cfg)  # retrieval_forward imports vulcan3, which freezes the network at its first import
     from retrieval_framework import retrieval_forward as RF  # lazy: pulls in vulcan_chem -> VULCAN-JAX + exojax
 
     t0 = time.perf_counter()
@@ -703,7 +704,10 @@ def load_real_into_pipe(pipe: Pipeline) -> dict[str, np.ndarray]:
 
 
 def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
-    """Inject a synthetic spectrum: the model at truth plus Gaussian noise at the per-bin sigma.
+    """Inject a synthetic spectrum: the model at truth plus Gaussian noise at the per-bin sigma, inflated.
+
+    The noise is scaled by ``truth_noise_inflation``; the returned and injected sigma is the per-bin sigma itself, so
+    the inflation is what the retrieval should recover.
 
     An uncertified truth column would inject a spectrum no certified draw can reproduce, so it is refused.
 
@@ -739,7 +743,7 @@ def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
     if not np.all(np.isfinite(mu_true)):
         raise RuntimeError("truth forward is non-finite; check truth_* and priors")
     rng = np.random.default_rng(seed)
-    depth = mu_true + rng.standard_normal(mu_true.shape) * sigma
+    depth = mu_true + rng.standard_normal(mu_true.shape) * sigma * float(pipe.cfg.truth_noise_inflation)
     pipe.set_observations(depth, sigma)
     return {"depth": depth, "sigma": sigma, "flux_true": mu_true}
 

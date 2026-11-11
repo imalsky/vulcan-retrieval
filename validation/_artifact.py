@@ -1,7 +1,7 @@
-"""Shared helpers for the validation scripts: the production Config and profile, R-binning and the JSON artifact.
+"""Shared helpers for the validation scripts: a case's Config, R-binning and the JSON artifact.
 
-Each script's ``emit()`` writes under ``output/w39b_smc_retrieval/validation/``, with the code and data provenance that
-ties the number to one state. Imports no jax, exojax or chemistry, so it cannot perturb the measurement.
+``emit()`` writes beside the case a script was given (``spec_case``), or under ``RESULTS``, with the code and data
+provenance that ties the number to one state. Imports no jax, exojax or chemistry, so it cannot perturb the measurement.
 """
 
 from __future__ import annotations
@@ -26,25 +26,15 @@ logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
 
 
-PRODUCTION_SPEC = REPO / "runs" / "w39b_smc_retrieval" / "wasp39_test1.yaml"
+def spec_case(path):
+    """Return the Config of the run specification at ``path`` and the folder its validation artifacts go to.
 
-
-def production_config():
-    """Return the Config of the production spec, ``PRODUCTION_SPEC``; no jax import."""
-    from retrieval_framework.run_setup import load_spec
-
-    return load_spec(PRODUCTION_SPEC).cfg
-
-
-def production_profile(**overrides):
-    """Return the production case's forward profile, with ``overrides`` applied.
-
-    A ladder measures the model production uses, so the profile comes from the case's own ``Config.profile()``, not a
-    hand-copied approximation of it.
+    The folder is ``output/<case>/validation``, beside the case's runs. No jax import.
     """
-    prof = production_config().profile()
-    prof.update(overrides)
-    return prof
+    from retrieval_framework.run_setup import load_spec, output_base
+
+    spec = load_spec(path)
+    return spec.cfg, output_base(spec.path.parent) / "validation"
 
 
 RESULTS = REPO / "output" / "w39b_smc_retrieval" / "validation"

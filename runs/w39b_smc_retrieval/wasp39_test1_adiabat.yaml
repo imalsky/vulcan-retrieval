@@ -6,4 +6,5 @@
 base: wasp39_test1.yaml
 
 config:
-  tp_adiabat: true                     # prior_log10P_rcb and tp_nabla_ad at the schema defaults
+  tp_adiabat: true                     # tp_nabla_ad at the schema default
+  prior_log10P_rcb: [-1.0, 0.88]       # bar

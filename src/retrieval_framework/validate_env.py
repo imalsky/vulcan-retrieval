@@ -320,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = load_spec(spec).cfg
         # vulcan3 freezes its network at its first import, which the checks below make: without the spec's network
-        # it freezes on its own default, and the engine then refuses to import after it.
+        # it freezes on its own default, and the engine's select_network then refuses the spec's.
         export_network(cfg)
         # Before exojax: vulcan_chem's import-order guard raises if exojax comes first.
         _check_editable("vulcan3", "vulcan3", root / "VULCAN-JAX", "vulcan3")

@@ -47,6 +47,8 @@ def test_data_identity_never_reports_null_opacity_without_saying_why(tmp_path, m
         ("prior_lnZ", (-1.0, 1.0), True),  # prior definition
         ("seed", 999, True),  # RNG identity (bit-identical resume)
         ("count_max", 4000, True),  # solver-defined support
+        ("art_pbtm_bar", 9.0, True),  # the RT grid
+        ("report_kzz_ceiling_x", 10.0, False),  # read by the report only
         ("walltime_seconds", 3600.0, False),  # per-JOB governor
         ("smc_rt_chunk", 24, False),  # batch split, numerically identical
         ("out_dir", Path("/tmp/elsewhere"), False),
@@ -79,6 +81,46 @@ def test_target_digest_binds_the_solver_env(var, value, digest_pipe, monkeypatch
     d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setenv(var, value)
     assert provenance.target_digest(cfg, digest_pipe) != d0, f"{var} not bound"
+
+
+def test_target_digest_binds_the_composition_table_the_backend_and_the_fixed_numbers(
+    digest_pipe, monkeypatch, tmp_path
+):
+    """vulcan3 freezes its composition table at import, the backend moves every column at rounding level, and a fixed
+    number of either package moves the model: each must refuse a resume.
+    """
+    import jax
+    from vulcan_forward import constants as engine_constants
+
+    from retrieval_framework import constants
+
+    cfg = C.Config(molecules=("H2O",))
+    monkeypatch.delenv("VULCAN3_COM_FILE", raising=False)
+    m = provenance.target_manifest(cfg, digest_pipe)
+    assert m["manifest_version"] == 7
+    assert m["composition_file"]["path"].endswith("all_compose.txt")
+    assert m["fixed_values"]["vulcan-retrieval"]["T_EDGE_INSET_K"] == constants.T_EDGE_INSET_K
+    assert m["fixed_values"]["vulcan-forward"]["T_OPA_MIN_K"] == engine_constants.T_OPA_MIN_K
+    d0 = provenance.manifest_digest(m)
+    table = tmp_path / "compose.txt"
+    table.write_text("x\n")
+    monkeypatch.setenv("VULCAN3_COM_FILE", str(table))
+    assert provenance.target_digest(cfg, digest_pipe) != d0, "composition table not bound"
+    monkeypatch.delenv("VULCAN3_COM_FILE")
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    assert provenance.target_digest(cfg, digest_pipe) != d0, "backend not bound"
+    monkeypatch.undo()
+    monkeypatch.delenv("VULCAN3_COM_FILE", raising=False)
+    monkeypatch.setattr(constants, "T_EDGE_INSET_K", 30.0)
+    assert provenance.target_digest(cfg, digest_pipe) != d0, "fixed numbers not bound"
+
+
+def test_the_baseline_c_to_o_is_the_case_s_own():
+    """The report's C/O multiplies the case's C_H / O_H, after its overrides; a solar-preset case is refused."""
+    assert provenance.baseline_c_to_o("W39b", {}) == 0.00295 / 0.00537
+    assert provenance.baseline_c_to_o("W39b", {"C_H": 0.00537}) == 1.0
+    with pytest.raises(ValueError, match="use_solar"):
+        provenance.baseline_c_to_o("W39b", {"use_solar": True})
 
 
 def test_target_digest_moves_with_the_observations(digest_pipe):

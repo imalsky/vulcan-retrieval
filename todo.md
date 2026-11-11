@@ -3,9 +3,11 @@
 The evidence behind each item is in its section or in `notes.md`; solver and engine items live in VULCAN3's and
 vulcan-forward's own `todo.md`.
 
-1. [blocker] The sulfur survey: nothing is queued or running; two of its six runs hold resumable checkpoints, and the other four froze in a warm start and restart fresh on the cold re-solve of a frozen warm draw.
-2. [speed] The job-path test fills the 95-minute full tier; `oracle.md` caps a test at 90 minutes on a CPU and aims under an hour.
-3. [owed] Checks `oracle.md` asks for that are not there yet: the absorber screen per survey planet, and a truth test with no sampler.
+1. [blocker] The sulfur survey: nothing is queued or running; two of its six runs hold checkpoints that resume only on their first submission's trees (the current survey spec is a new target), and the other four froze in a warm start and restart fresh on the cold re-solve of a frozen warm draw.
+2. [stale] `requirements-hpc.txt` pins vulcan-forward `9ae2fa0`, below this package's floor 0.31.0.
+3. [decision] The warm-against-cold check passes on the median shift alone, with no effective-sample threshold.
+4. [decision] `art_nlayer` 67 sits at the 5 ppm ladder gate in the CO2 band of the survey's WASP-39b column, before the survey runs.
+5. [unverified] The job-path test has not run end to end on the current tree (the run-specification and engine interface change).
 
 ## 1. Sulfur survey runs
 
@@ -40,32 +42,43 @@ and move the reproduction scripts from the NAS `scratch/frozen_repro*` into the 
 target, so the four restart fresh, each after a running planet on its node; hd189733b and hd209458b resume only on
 their first submission's trees, which still abort on a freeze.
 
+The survey base now adds H2CO and CS to `molecules` (notes "Design records", sulfur survey case, absorber screen), and
+the target manifest is version 7: every survey run is a new target, and no checkpoint resumes on the current specs. The
+NAS data tree needs `H2CO.ktable.h5` and `CS.ktable.h5` (not checked there).
+
 After each run: `nautilus_report`, the warm-vs-cold check, and the rtol 0.05 re-solve of the posterior rows within 15000
 steps (notes "Design records", sulfur survey case); its numbers go to notes "Runs". Done when the six runs are in
 "Runs".
 
-## 2. The job-path test and the 90-minute cap
+## 2. The HPC engine pin
 
-Evidence: notes "Current state" (the full tier's wall time, the job-path test all of it). The test is
-`tests/test_run_nautilus.py::test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`: the smoke case through
-`run_nautilus` in separate processes, with a resume. `oracle.md` "Success: the repository's tests" caps a test at 90
-minutes on a CPU and aims under an hour; the test stays, as the small synthetic case the job path is tested on. Where
-its time goes is not measured (the processes each compile the chemistry program). Next: one timed run with
-`--durations`, then cut what the breakdown allows (live points, the column, the number of processes) while the test
-still fails when the job path breaks. The other slow tests' times are not recorded. Done when the test is under the
-cap and its time is in notes.
+`pyproject.toml` floors vulcan-forward at 0.31.0 (the caller names the network, its atoms and the RT bottom);
+`requirements-hpc.txt` still pins `9ae2fa0`, a 0.30 commit, so a standalone reproduction env built from it fails
+`validate_env`'s pin check. Next: replace the pin with the engine's released 0.31.0 commit once it is pushed. The daw
+root env's installed vulcan-forward metadata also reads 0.30.0 until `uv sync` reinstalls it. Done when both read 0.31.
 
-## 3. Checks the oracle asks for
+## 3. The warm-against-cold threshold
 
-Each is in `oracle.md` "Success: the repository's tests" or "Success: a run that is reported".
+Evidence: notes "Runs" (wasp39_test1, warm vs cold) and docs/method.md "e2e_check". `validation/e2e_check.py warmcold`
+reweights the cold re-solved rows by exp(L_cold - L_run) and passes when every parameter's median moves under 0.1
+sigma; it reports no gate on the effective sample size of those weights. On the finished WASP-39b run (v5): 919 of
+1000 rows certified cold, ESS 914, worst median shift 0.075 sigma (c_o) [M]; the earlier WASP-39b correction
+(postrun_93269) had ESS 5324 of 7888 rows. A run whose weights collapse onto a few rows could pass on medians alone.
+Decision for the maintainer: whether to add an ESS threshold (and its value), or keep the median gate alone.
 
-- Absorber screen: the bound on the tabled species left out of the RT was measured on the WASP-39b case only (notes
-  "Physics assumptions and limitations"); the survey planets have none. `validation/opacity_leave_one_out.py --states`
-  per planet.
-- Truth test: no test scores synthetic data at its own parameters against perturbed ones without a sampler.
-- No clear-atmosphere option: `cloud_model` is `powerlaw` or `deck`, and a spec must state one; a retrieval with no
-  cloud term needs a third value.
-- Nothing reports a species that is abundant in the observable layers and has no opacity table
-  (jwst-transit-authority's `certify.unmodeled_absorbers` does).
+## 4. The survey's RT layers
 
-Done when each is run, tested or dropped from `oracle.md` by the maintainer.
+Evidence: notes "Physics assumptions and limitations" (RT bottom). On the survey WASP-39b planet at its nominal state,
+101 against 67 RT layers moves the binned depth by 5.03 ppm at 4.346 um (gate 5 ppm, 0.055 sigma), from a scratch
+script's own binning on one certified column; the WASP-39b case's ladder measured 1.02 ppm. Next, the maintainer's
+call: `validation/resolution_ladder.py --spec runs/survey/<planet>.yaml` on a GPU, then keep 67 or raise `art_nlayer` in
+`survey_base.yaml` (a new target). Done when the ladder is recorded for the survey case.
+
+## 5. The job-path test on the current tree
+
+Evidence: notes "Current state" (tests). `tests/test_run_nautilus.py::test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`
+last passed whole at retrieval `33ba761` (95 min). On the current tree its first leg ran twice (cold startup check and
+a warm batch, as the test asserts), and both resumes were refused because VULCAN3 or vulcan-forward was committed
+between the legs, so the resume and finish legs are not yet shown. Run it alone, with the three trees unchanged for
+its 1.5 h: `python -m pytest tests/test_run_nautilus.py::test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes
+-m slow`. Done when it passes and its time is in notes.

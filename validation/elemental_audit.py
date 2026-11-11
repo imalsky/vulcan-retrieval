@@ -1,8 +1,9 @@
 """Elemental-inventory audit of the abundance map over random prior draws.
 
-    python validation/elemental_audit.py --n 30 [--converge]
+    python validation/elemental_audit.py --spec runs/<case>/<name>.yaml --n 30 [--converge]
 
-Checks the column ratios to H against the theta targets, dln(C/O) against c_o, the per-layer density closure, atom_ini
+Draws the case's chemistry block (lnZ, c_o, lnKzz and the extras it infers, s_o among them) from its priors, and checks
+the column ratios to H against the theta targets, dln(C/O) against c_o, the per-layer density closure, atom_ini
 against the initial column, and that the smallest repair factor stays above 0. With --converge it also reports the
 post-convergence drift of the column totals against atom_ini. Exit code 0 means all gates pass.
 """
@@ -47,22 +48,26 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=30, help="prior draws to audit")
     ap.add_argument("--converge", action="store_true", help="also re-converge each draw and report elemental drift")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--spec", required=True, help="the run specification whose case to audit")
     args = ap.parse_args()
 
+    from retrieval_framework import config_schema as C
+
+    cfg, results = _artifact.spec_case(args.spec)
+    C.export_network(cfg)  # before vulcan3 is imported
     from vulcan_forward import vulcan_chem
 
-    # The production case supplies the profile and the chemistry prior box.
-    # The chemistry is built without the T-P hook, so every draw uses the
-    # VULCAN baseline T-P (fourth theta slot = 0 K shift), not production's
-    # Guillot T-P.
-    cfg = _artifact.production_config()
-    profile = _artifact.production_profile()
-    chem = vulcan_chem.build_chem_model(profile)
+    # The case supplies the profile and the chemistry prior box. The chemistry is built without the T-P hook, so every
+    # draw uses the VULCAN baseline T-P (the last theta slot, a 0 K shift), not the case's Guillot T-P.
+    profile = cfg.profile()
+    chem = vulcan_chem.build_chem_model(profile, chem_extras=C.chem_extras(cfg))
+    chem_specs = [s for s in C.specs_from_config(cfg) if s.kind == "chem"]
+    names = [s.name for s in chem_specs]
 
     rng = np.random.default_rng(args.seed)
-    lo = np.array([cfg.prior_lnZ[0], cfg.prior_c_o[0], cfg.prior_lnKzz[0], 0.0])
-    hi = np.array([cfg.prior_lnZ[1], cfg.prior_c_o[1], cfg.prior_lnKzz[1], 0.0])
-    draws = lo + (hi - lo) * rng.random((args.n, 4))
+    lo = np.array([s.lo for s in chem_specs] + [0.0])
+    hi = np.array([s.hi for s in chem_specs] + [0.0])
+    draws = lo + (hi - lo) * rng.random((args.n, len(lo)))
 
     worst = {"ratio": 0.0, "dco": 0.0, "dens": 0.0, "atom": 0.0, "repair": np.inf}
     fails = 0
@@ -87,7 +92,7 @@ def main() -> int:
         worst["atom"] = max(worst["atom"], atom)
         worst["repair"] = min(worst["repair"], np.inf if np.isnan(rep) else rep)
         line = (
-            f"[{k:02d}] lnZ={th[0]:+.2f} c_o={th[1]:+.2f} lnKzz={th[2]:+.2f} | "
+            f"[{k:02d}] " + " ".join(f"{n}={v:+.2f}" for n, v in zip(names, th, strict=False)) + " | "
             f"ratio_err={r:.2e} dCO={dco:.2e} dens={dens:.2e} atom_ini={atom:.2e}"
             + (f" min_repair={rep:.4f}" if not np.isnan(rep) else "")
             + ("" if ok else "  <-- FAIL")
@@ -99,7 +104,7 @@ def main() -> int:
 
     print("\n==== elemental audit summary ====")
     print(
-        f"draws={args.n} | worst ratio_err={worst['ratio']:.3e} "
+        f"case={args.spec} draws={args.n} chemistry block {names} | worst ratio_err={worst['ratio']:.3e} "
         f"dCO={worst['dco']:.3e} density={worst['dens']:.3e} "
         f"atom_ini={worst['atom']:.3e} min_repair={worst['repair']:.4f}"
     )
@@ -113,10 +118,11 @@ def main() -> int:
     _artifact.emit(
         name="elemental_audit",
         title="Elemental inventory of the abundance map over prior draws",
-        measurements=[{"draws": args.n, "seed": args.seed, "failed": fails, "worst": worst}],
+        measurements=[{"draws": args.n, "seed": args.seed, "chem_block": names, "failed": fails, "worst": worst}],
         status="PASS" if verdict else "FAIL",
         summary=summary,
         resolved_config=profile,
+        out_dir=results,
     )
     return 0 if verdict else 1
 

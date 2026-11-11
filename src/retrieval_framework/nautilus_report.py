@@ -62,9 +62,13 @@ def _wquant(x: ArrayLike, w: np.ndarray, qs: tuple[float, ...] = (0.16, 0.5, 0.8
     return np.interp(qs, cw, np.asarray(x, np.float64)[o]).tolist()
 
 
-# A Kzz ceiling is a property of a case's profile: x10 on W39b's Tsai+2023 profile is the GCM's full-H w_rms (notes
-# "Design records"); no other case has one.
-KZZ_CEILING_X = {"W39b": 10.0}
+# Keys with no default that a run written before they were Config keys does not record, and the line that restores the
+# value it ran with, the engine's default of then.
+_ARCHIVED_LINES = {
+    "network": '"network": "thermo/SNCHO_photo_network.txt"',
+    "atom_list": '"atom_list": ["H", "O", "C", "N", "S"]',
+    "art_pbtm_bar": '"art_pbtm_bar": 7.0',
+}
 
 
 def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -173,6 +177,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
     eps = {k: 10.0 ** (v - 12.0) for k, v in constants.LODDERS2020_LOG_EPS.items()}
     lnZ, c_o = col("lnZ"), col("c_o")
     s_o = col("s_o") if "s_o" in names else np.zeros_like(lnZ)
+    c_to_o = provenance.baseline_c_to_o(cfgj["vulcan_cfg_name"], cfgj["cfg_overrides"])
     z_o = base * np.exp(lnZ)
     tot = eps["O"] + eps["N"] + eps["S"] * np.exp(s_o) + eps["C"] * np.exp(c_o)
     kzz = np.exp(col("lnKzz"))
@@ -181,7 +186,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         "quantiles": [0.16, 0.5, 0.84],
         "metallicity_O_H_solar": _wquant(z_o, w),
         "metallicity_total_solar": _wquant(z_o * tot / sum(eps.values()), w),
-        "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o), w),
+        "C_to_O": _wquant(c_to_o * np.exp(c_o), w),
         "S_to_O_solar": _wquant(np.exp(s_o), w) if "s_o" in names else None,
         "kzz_factor": _wquant(kzz, w),
         "kzz_ref_p_bar": KZZ_P_REF_BAR,
@@ -191,7 +196,9 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         "kzz_prior_floor_factor": floor,
         **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in constants.KZZ_FLOOR_MULTIPLES},
     }
-    ceil = KZZ_CEILING_X.get(cfgj["vulcan_cfg_name"])
+    if "report_kzz_ceiling_x" not in cfgj:
+        log.info("config.json has no report_kzz_ceiling_x (written before the key): no truncated Kzz block")
+    ceil = cfgj.get("report_kzz_ceiling_x")
     keep = kzz <= (np.inf if ceil is None else ceil)
     if ceil is not None and keep.any():
         wt = w[keep] / w[keep].sum()
@@ -199,7 +206,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         d[f"truncated_kzz_le_x{ceil:g}"] = {
             "weight": float(w[keep].sum()),
             "metallicity_O_H_solar": _wquant(z_o[keep], wt),
-            "C_to_O": _wquant(C._BASELINE_C_TO_O * np.exp(c_o[keep]), wt),
+            "C_to_O": _wquant(c_to_o * np.exp(c_o[keep]), wt),
             "kzz_factor": _wquant(kzz[keep], wt),
         }
     if "Tirr" in names:
@@ -354,6 +361,32 @@ def _model_caveats(cfg: dict, summ: dict, tally: dict, rejections: dict, cond: d
     return caveats
 
 
+def _unmodeled_caveat(out: Path) -> str:
+    """Return the caveat on network species with no opacity table, from the draws the report re-solved."""
+    path = out / "nautilus_spectra.npz"
+    if not path.is_file():
+        return (
+            "Species with no opacity table were not checked: no posterior draw was re-solved (nautilus_report "
+            "--spectra N re-solves N)."
+        )
+    with np.load(path) as z:
+        if "unmodeled_species" not in z.files:
+            return f"Species with no opacity table were not checked: {path.name} was written before the check."
+        n_ok, n = int(np.sum(z["certified"])), len(z["certified"])
+        found = dict(zip(z["unmodeled_species"].tolist(), z["unmodeled_vmr"].tolist(), strict=True))
+    where = (
+        f"in the transmission photosphere ({constants.PHOTOSPHERE_BAR[0]:g}-{constants.PHOTOSPHERE_BAR[1]:g} bar) "
+        f"of the {n_ok} of {n} re-solved draws that certified"
+    )
+    if not found:
+        return f"No species without an opacity table reaches a mean VMR of {constants.UNMODELED_VMR:g} {where}."
+    return (
+        "Species with no opacity table, so absent from the RT: "
+        + ", ".join(f"{sp} at mean VMR up to {v:.2e}" for sp, v in found.items())
+        + f" {where}. The spectrum omits their absorption, an error of unknown sign."
+    )
+
+
 def _identity_caveats(manifest: dict, manifest_digest: str | None, digest: str, code_now: dict) -> list[str]:
     """Return the caveats on whether the identity files and the code are the run's."""
     caveats = []
@@ -403,6 +436,7 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
     rejections = _rejection_fractions(tally)
     cond = _conditioning_map(out)
     caveats = _model_caveats(cfg, summ, tally, rejections, cond)
+    caveats.append(_unmodeled_caveat(out))
     caveats += _identity_caveats(manifest, manifest_digest, digest, code_now)
 
     return {
@@ -485,7 +519,7 @@ def _guillot_T(
 
 
 def _config_from_json(path: Path) -> C.Config:
-    """Return the run's Config from its config.json, dropping keys that are not Config fields."""
+    """Return the run's Config from its config.json; the keys it drops and the defaults it fills are logged."""
     d = json.loads(Path(path).read_text())
     if d.get("chem_presolve") or d.get("chem_retry"):
         raise RuntimeError(
@@ -494,11 +528,16 @@ def _config_from_json(path: Path) -> C.Config:
         )
     names = {f.name for f in fields(C.Config)}
     kw: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in d.items() if k in names}
-    if not kw.get("network"):
+    missing = [k for k in _ARCHIVED_LINES if not kw.get(k)]
+    if missing:
         raise ValueError(
-            f"{path} names no network. A run written before `network` was a "
-            'Config key solved thermo/SNCHO_photo_network.txt: add "network": "thermo/SNCHO_photo_network.txt" to it'
+            f"{path} names no {missing}. A run written before they were Config keys ran on the engine's defaults of "
+            f"then: add {', '.join(_ARCHIVED_LINES[k] for k in missing)} to it"
         )
+    log.info("%s: not Config fields, not read: %s", path.name, sorted(set(d) - names))
+    filled = sorted(names - set(d) - {"out_dir"})
+    if filled:
+        log.warning("%s: written before these Config keys, filled with today's defaults: %s", path.name, filled)
     for k in ("out_dir", "obs_dir"):
         if kw.get(k) is not None:
             kw[k] = Path(kw[k])
@@ -546,8 +585,9 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
             f"the rebuilt pipeline's parameters {pipe.names} are not the posterior's {list(post['param_names'])}"
         )
     t0 = time.perf_counter()
-    _, mu, ok = pipe.solve_cold(theta)
+    Y, mu, ok = pipe.solve_cold(theta)
     log.info("model spectra: %s/%s draws certified cold in %.0f s", int(ok.sum()), len(ok), time.perf_counter() - t0)
+    unmodeled = _unmodeled_absorbers(pipe, np.asarray(Y)[ok])
     mult = None
     if pipe.nuisance is not None:
         mu, mult = pipe.nuisance.apply(mu, np.asarray(post["nuisance"], np.float64)[idx])
@@ -556,9 +596,32 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
         theta=theta,
         model=mu,
         certified=ok,
+        unmodeled_species=np.asarray(list(unmodeled), dtype="<U16"),
+        unmodeled_vmr=np.asarray(list(unmodeled.values()), np.float64),
         **({} if mult is None else {"sigma_multiplier": mult}),
     )
     return theta, mu, ok, mult
+
+
+def _unmodeled_absorbers(pipe: Any, Y: np.ndarray) -> dict[str, float]:
+    """Return the network species with no opacity table that are abundant in the observable layers of columns ``Y``.
+
+    The rule of jwst-transit-authority's ``certify.unmodeled_absorbers``: a species' mean VMR over
+    ``constants.PHOTOSPHERE_BAR``, its largest over the columns, above ``constants.UNMODELED_VMR``; most abundant first.
+    """
+    from vulcan_forward.constants import MOLECULES
+
+    tabled = {v["vulcan"] for k, v in MOLECULES.items() if k not in constants.NO_OPACITY_TABLE}
+    skip = tabled | set(constants.NOT_A_TABLE_ABSORBER)
+    sidx = pipe.fwd.chem.sidx
+    p = np.asarray(pipe.fwd.p_chem_bar)
+    band = (p >= constants.PHOTOSPHERE_BAR[0]) & (p <= constants.PHOTOSPHERE_BAR[1])
+    if not (len(Y) and band.any()):
+        return {}
+    vmr = Y / Y.sum(axis=2, keepdims=True)
+    peak = vmr[:, band, :].mean(axis=1).max(axis=0)
+    out = {sp: float(peak[i]) for sp, i in sidx.items() if sp not in skip and peak[i] > constants.UNMODELED_VMR}
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -584,6 +647,7 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     setup_logging()
     out = Path(args.out_dir).resolve()
+    _config_from_json(out / "config.json")  # refuses an archived config.json before any figure
     # the forward build comes first: the certificate's version record imports
     # exojax, which must not precede vulcan_chem
     spectra = _model_spectra(out, args.spectra) if args.spectra > 0 else None

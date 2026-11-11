@@ -20,7 +20,8 @@ log = logging.getLogger("retrieval")
 
 DPI = 300
 _TO_PPM = 1.0 / constants.PPM
-# T-P band: log10 of its top (bar), its points down to ART_PBTM_BAR, and the weighted draws it is taken over.
+# T-P band: log10 of its top (bar), its points down to the run's art_pbtm_bar, and the weighted draws it is taken
+# over.
 TP_PLOT_LOG10_P_TOP = -8
 TP_PLOT_N_P = 120
 TP_PLOT_DRAWS = 300
@@ -116,11 +117,10 @@ def _tp_figure(
 ) -> None:
     """Draw the T-P posterior: the median and 5-95% interval of weighted draws."""
     import matplotlib.pyplot as plt
-    from vulcan_forward.constants import ART_PBTM_BAR
 
     rng = np.random.default_rng(3)
     sel = theta[rng.choice(len(theta), size=TP_PLOT_DRAWS, p=w)]
-    p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(ART_PBTM_BAR), TP_PLOT_N_P)
+    p_bar = np.logspace(TP_PLOT_LOG10_P_TOP, np.log10(float(cfgj["art_pbtm_bar"])), TP_PLOT_N_P)
 
     def T_of(t: np.ndarray) -> np.ndarray:
         """Return T on the band's pressure grid for one row."""

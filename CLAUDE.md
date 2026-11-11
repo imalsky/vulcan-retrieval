@@ -81,8 +81,12 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 ### Fail fast
 
 - The refusal points are spec load, `submit.py`, `validate_env` and the run's first chunk. Keep the refusals: missing
-  H2-He CIA, an unset planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a real-data run with
-  no overlapping bins, RESUME with no checkpoint.
+  H2-He CIA, an unset planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a named data source
+  with too few bins in any mode, RESUME with no checkpoint.
+- A spec states every key of `config_schema.CASE_KEYS`, and the keys its mode reads that have no default
+  (`run_setup._MODE_REQUIRED`); a stated key its mode does not read is refused (`run_setup._MODE_KEYS`). A number that
+  belongs to a case is a spec key, never a value in the code. The synthetic bin grid is only for a spec that names no
+  data source.
 - The chemistry block `[lnZ, c_o, lnKzz, <extras>]` is positional (`theta[0:n_chem]`, then the T-P entries; the extras
   are `config_schema.chem_extras`: `s_o` with `infer_s_o`, `kzz_slope` with `kzz_mode="powerlaw"`, in that order), and
   the first three are always inferred: never add a drop path. Read the block through `pipe.n_chem` / `pipe.n_chem_tp`,
@@ -103,7 +107,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   each chunk's `termination_reason` and aborts on a cold freeze (notes "Design records"); `nautilus_report` and the forward
   checks abort on any freeze in the draws they re-solve.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
-  `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start policy and the nautilus settings. Changing any needs a new spec
+  `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the composition table, the JAX backend, both packages' fixed numbers
+  (`constants.fixed_values`), the start policy and the nautilus settings. Changing any needs a new spec
   file; `run_nautilus` refuses a resume across it.
 - After a config or physics change, synthetic observations, `data/*.npz` caches and every checkpoint are stale:
   regenerate, never resume.
@@ -131,15 +136,16 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - The elemental map is the only abundance map; do not add another. Keep `prior_c_o`'s upper edge below the b_z bound
   (`build_retrieval_forward` raises).
 - No minichem and no self-made or pruned network; any published upstream network may be used (notes "Design records").
-- The network is `config.network` and has no default: every base spec names it (`validate_config` refuses an unset one).
-  It is import-frozen: every entry point that rebuilds a run calls `config_schema.export_network(cfg)` before the first
-  vulcan3 import, and the forward build refuses an engine frozen on another. A re-solve of a finished run names that
-  run's network.
+- The network is `config.network` with its `atom_list`, and neither has a default: every base spec names both
+  (`validate_config` refuses an unset one). They are import-frozen: every entry point that rebuilds a run calls
+  `config_schema.export_network(cfg)` (the engine's `select_network`, which imports jax: after `export_runtime`) before
+  the first vulcan3 import; `pipeline.build_pipeline` calls it itself, and the engine refuses a second pair in one
+  process. `tests/conftest.py` sets the session's one network. A re-solve of a finished run names that run's network.
 
 ### Lanes and batching
 
-- Every chemistry batch runs on the lane queue at `cold_lanes` lanes (`validate_config` refuses 0); under `ffi`,
-  `run_nautilus` runs `cold_lanes` x `FFI_BLOCKS_PER_SM` lanes.
+- Every chemistry batch runs on the lane queue at `cold_lanes` lanes, the number that runs under every solver
+  (`validate_config` refuses 0); `run_nautilus --dry-run` prints the lanes and the batch width.
 - One route: every batch, cold or warm, goes through `RetrievalForward._chem_batch_route`, never a per-row `vmap` of
   solves.
 - A refilled draw moves at the convergence scale, so a lane-count change is a target change: regenerate, never resume.
@@ -149,11 +155,13 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 
 ### Opacity and the RT
 
-- `opacity_mode="exomolop"` (correlated-k) is the only value the engine accepts. Never re-open sampled line-by-line
-  opacity or the Mie deck.
+- Correlated-k over the ExoMolOP tables is the only opacity path, with no key to choose it. Never re-open sampled
+  line-by-line opacity or the Mie deck. Rayleigh is in every retrieval (`validate_config` refuses `use_rayleigh:
+  false`); `cloud_model` is `powerlaw`, `deck` or `none` (no cloud term), and a spec states it.
+- `art_pbtm_bar`, the RT bottom, has no default: every base states it above the case's chemistry bottom.
 - Drop an RT molecule only with a recorded `validation/opacity_leave_one_out.py --states` bound below the gate (notes
   "Physics assumptions and limitations"). The engine refuses a band that lacks H2O, CO2, CO, CH4 or NH3 and warns for
-  HCN, H2S or SO2 (vulcan-forward `constants.CORE_MOLECULE_BANDS_UM`) unless the case names it in
+  HCN, H2S, SO2, C2H2, OCS or SO (vulcan-forward `constants.CORE_MOLECULE_BANDS_UM`) unless the case names it in
   `omit_core_molecules`: only a synthetic or single-molecule case does.
 - Change `art_nlayer` or the model top only when the ladder gates pass (notes "Design records").
 - A finite-difference check disagrees with AD in directions that reshuffle the g-ordering in `ckd.overlap`: not a bug;

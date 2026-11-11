@@ -23,14 +23,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 from e2e_check import _wmedian
 
-from retrieval_framework.nautilus_report import _weights
+from retrieval_framework.nautilus_report import _kzz_at_ref, _weights
 
-KZZ0 = 1.0e9  # cm^2/s: the survey's constant Kzz (data/survey/<case>/atm_<case>_Kzz.txt)
 BIN_DEX = 0.35
 
 
 def _run(out: Path):
+    """Return the run's config.json, its parameter names and lnKzz's index; run from the repo root (the case paths)."""
     cfg = json.loads((out / "config.json").read_text())
+    if cfg["kzz_mode"] != "scale":
+        raise RuntimeError(
+            f"{out}: kzz_mode {cfg['kzz_mode']!r}: the cut is on lnKzz times the case's base Kzz at 1 mbar, which only "
+            "the scale mode defines; a power-law run tilts it by each draw's slope"
+        )
     names = list(cfg["inferred_param_names"])
     j = names.index("lnKzz")
     if cfg["inferred_param_prior_types"][j] != "uniform":
@@ -38,12 +43,13 @@ def _run(out: Path):
     return cfg, names, j
 
 
-def _log10kzz(lnkzz):
-    return np.log10(KZZ0) + np.asarray(lnkzz) / np.log(10.0)
+def _log10kzz(cfg, lnkzz):
+    """log10 Kzz (cm^2/s) at 1 mbar: e^lnKzz times the case's base profile there (nautilus_report._kzz_at_ref)."""
+    return np.log10(_kzz_at_ref(cfg)) + np.asarray(lnkzz) / np.log(10.0)
 
 
 def _edges(cfg, cut):
-    lo = float(_log10kzz(cfg["prior_lnKzz"][0]))
+    lo = float(_log10kzz(cfg, cfg["prior_lnKzz"][0]))
     return np.append(np.arange(lo, cut - 1e-9, BIN_DEX), cut)
 
 
@@ -58,7 +64,7 @@ def select(args) -> int:
     acc = np.concatenate([p["acc"] for p in parts])
     warm = np.concatenate([np.full(len(p["cls"]), int(p["warm"])) for p in parts])
     lo, hi = cfg["prior_lnKzz"]
-    lk = _log10kzz(lo + (hi - lo) * z[:, j])
+    lk = _log10kzz(cfg, lo + (hi - lo) * z[:, j])
     first = np.zeros(len(z), bool)
     first[np.unique(z, axis=0, return_index=True)[1]] = True  # a redrawn batch logs twice
     idx = np.flatnonzero(first & (cls > 0) & (lk < args.log10kzz_max))
@@ -73,7 +79,7 @@ def select(args) -> int:
         "n_corners": 0,
         "run": str(out),
         "log10kzz_max": args.log10kzz_max,
-        "kzz0": KZZ0,
+        "kzz0": _kzz_at_ref(cfg),
         "bin_edges": edges.tolist(),
         "in_window_below_cut_per_bin": n_all.tolist(),
         "per_bin": args.per_bin,
@@ -132,13 +138,13 @@ def _refuse_foreign_solve(args, out, cfg, names, e):
     return meta, json.loads(str(sel["meta"]))
 
 
-def _rows_by_bin(edges, j, e, ok, post):
+def _rows_by_bin(cfg, edges, j, e, ok, post):
     """One row per log10 Kzz bin: the certified draws of the solve ``e`` there against the posterior rows there."""
-    lk_r, L, acc = _log10kzz(e["theta"][:, j]), e["logL"], e["acc"]
+    lk_r, L, acc = _log10kzz(cfg, e["theta"][:, j]), e["logL"], e["acc"]
     w = _weights(post["log_w"])
     logl_post = post["log_l"]
     fin = np.isfinite(logl_post)
-    lk_p = _log10kzz(post["theta"][:, j])
+    lk_p = _log10kzz(cfg, post["theta"][:, j])
     rows = []
     for a, b in itertools.pairwise(edges):
         r = (lk_r >= a) & (lk_r < b)
@@ -173,7 +179,7 @@ def compare(args) -> int:
     ok = e["certified"] & (e["logL"] > constants.REJECT_LOGL / 2)
     post = np.load(out / "nautilus_posterior.npz")
     edges = np.asarray(sel_meta["bin_edges"])
-    rows = _rows_by_bin(edges, j, e, ok, post)
+    rows = _rows_by_bin(cfg, edges, j, e, ok, post)
     Lp, L = post["log_l"], e["logL"]
     best = float(Lp[np.isfinite(Lp)].max())
     print(

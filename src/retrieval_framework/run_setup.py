@@ -30,7 +30,7 @@ import yaml
 from retrieval_framework import config_schema as C, constants
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from types import ModuleType
 
     from retrieval_framework.pipeline import Pipeline
@@ -55,6 +55,58 @@ __all__ = [
 log = logging.getLogger("retrieval")
 
 SECTIONS = ("base", "runtime", "sampler", "config")
+
+# Keys the run reads in one mode only: (keys, whether the Config's mode reads them, that mode in words). A stated key
+# whose mode is off is refused, since it would change nothing; a key also in _MODE_REQUIRED must be stated when its mode
+# is on. A key in two rows needs both modes.
+_MODE_KEYS: tuple[tuple[tuple[str, ...], Callable[[C.Config], bool], str], ...] = (
+    (("tp_Tint_K",), lambda c: not c.tp_infer_Tint, "tp_infer_Tint: false"),
+    (("tp_deep_param",), lambda c: c.tp_infer_Tint, "tp_infer_Tint: true"),
+    (
+        ("prior_T1bar", "truth_T1bar"),  # tp_deep_p_bar: the report's deep level in every mode
+        lambda c: c.tp_infer_Tint and c.tp_deep_param == "T1bar",
+        "tp_infer_Tint: true and tp_deep_param: T1bar",
+    ),
+    (
+        ("prior_Tint", "truth_Tint"),
+        lambda c: c.tp_infer_Tint and c.tp_deep_param == "Tint",
+        "tp_infer_Tint: true and tp_deep_param: Tint",
+    ),
+    (("tp_gamma_fixed",), lambda c: not c.tp_infer_gamma, "tp_infer_gamma: false"),
+    (("prior_log10gamma", "truth_log10gamma"), lambda c: c.tp_infer_gamma, "tp_infer_gamma: true"),
+    (("tp_nabla_ad", "prior_log10P_rcb", "truth_log10P_rcb"), lambda c: c.tp_adiabat, "tp_adiabat: true"),
+    (
+        ("prior_log10kappa_cloud", "truth_log10kappa_cloud", "prior_cloud_alpha", "truth_cloud_alpha"),
+        lambda c: c.cloud_model == "powerlaw",
+        "cloud_model: powerlaw",
+    ),
+    (("prior_log10P_deck", "truth_log10P_deck"), lambda c: c.cloud_model == "deck", "cloud_model: deck"),
+    (("prior_s_o", "truth_s_o"), lambda c: c.infer_s_o, "infer_s_o: true"),
+    (
+        ("kzz_p_ref_bar", "prior_kzz_slope", "truth_kzz_slope"),
+        lambda c: c.kzz_mode == "powerlaw",
+        "kzz_mode: powerlaw",
+    ),
+    (("truth_lnM",), lambda c: c.infer_lnM, "infer_lnM: true"),
+    (("prior_offset_ppm", "truth_offset_ppm"), lambda c: c.infer_offsets, "infer_offsets: true"),
+    (
+        ("prior_noise_inflation", "truth_noise_inflation", "noise_inflation_per_group"),
+        lambda c: c.infer_noise_inflation,
+        "infer_noise_inflation: true",
+    ),
+    (
+        ("combo", "obs_wl_lo", "obs_wl_hi", "obs_max_bin_R"),
+        lambda c: bool(c.obs_dir),
+        "a data source (obs_dir and obs_products)",
+    ),
+    (
+        tuple(f.name for f in fields(C.Config) if f.name.startswith("truth_")),
+        lambda c: c.generate_synthetic_data,
+        "generate_synthetic_data: true",
+    ),
+)
+# Keys of _MODE_KEYS that have no default for a case whose mode reads them.
+_MODE_REQUIRED = frozenset({"tp_Tint_K", "prior_log10P_rcb", "prior_log10P_deck", "combo", "obs_wl_lo", "obs_wl_hi"})
 
 
 @dataclass(frozen=True)
@@ -244,6 +296,24 @@ def _build(cls: Any, mapping: dict[str, Any], where: str) -> Any:
     return cls(**mapping)
 
 
+def _check_mode_keys(cfg: C.Config, stated: set[str], where: str) -> None:
+    """Refuse a stated key its mode does not read, and an unstated one its mode needs (``_MODE_KEYS``)."""
+    for keys, reads, mode in _MODE_KEYS:
+        on = bool(reads(cfg))
+        dead = sorted(set(keys) & stated) if not on else []
+        if dead:
+            raise ValueError(
+                f"{where}: {dead} are read only with {mode}, which this spec does not set, so they would "
+                "change nothing: drop them"
+            )
+        missing = sorted(set(keys) & _MODE_REQUIRED - stated) if on else []
+        if missing:
+            raise ValueError(
+                f"{where}: {missing} unset: {mode} reads them, and a schema default would not be this "
+                "case's: state them"
+            )
+
+
 def output_base(run_dir: Path) -> Path:
     """Return where a case's generated artifacts go.
 
@@ -320,7 +390,7 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
     bad = set(cfgd) - names
     if bad:
         raise ValueError(f"{where}: unknown key(s) {sorted(bad)}: not fields of config_schema.Config")
-    unset = sorted(C.CASE_KEYS - set(cfgd))
+    unset = sorted(C.CASE_KEYS - set(cfgd)) or sorted(k for k in C.CASE_KEYS if cfgd[k] is None)
     if unset:
         raise ValueError(
             f"{where}: {unset} unset. Each belongs to the planet and its data, so the spec (or its base) states it: "
@@ -339,6 +409,7 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
     name = path.stem
     cfg = C.Config(**cfgd, out_dir=output_base(path.parent) / f"{name}_nautilus")
     C.validate_config(cfg)
+    _check_mode_keys(cfg, set(cfgd), where)
     return Spec(path=path, base=base_path, name=name, cfg=cfg, sampler=sampler, runtime=runtime)
 
 
@@ -398,8 +469,8 @@ def check_inputs(cfg: C.Config) -> None:
     """Refuse a config whose input files would only fail minutes into a job.
 
     Checks the network, the case's vulcan3 config and its atm and stellar-flux files, and every product of ``combo``. A
-    real-data run also needs ``constants.MIN_REAL_BINS`` bins in the fit window and one in every group. Imports no
-    jax.
+    named data source also needs ``constants.MIN_REAL_BINS`` bins in the fit window and one in every group, in a
+    synthetic run too. Imports no jax.
 
     Parameters
     ----------
@@ -411,7 +482,7 @@ def check_inputs(cfg: C.Config) -> None:
     FileNotFoundError
         If an input file is missing.
     ValueError
-        If a real-data run has too few bins.
+        If a named data source has too few bins.
     """
     from retrieval_framework import observations as OBS, provenance
 
@@ -427,11 +498,12 @@ def check_inputs(cfg: C.Config) -> None:
         return
     obs = OBS.load_real_observations(cfg)
     empty = [g for g in cfg.combo if g not in obs["groups"]]
-    if not cfg.generate_synthetic_data and (len(obs["wl"]) < constants.MIN_REAL_BINS or empty):
+    if len(obs["wl"]) < constants.MIN_REAL_BINS or empty:
         raise ValueError(
             f"{cfg.obs_dir}: {len(obs['wl'])} bins of {list(cfg.combo)} in the fit window "
-            f"[{cfg.obs_wl_lo}, {cfg.obs_wl_hi}] um (groups with none: {empty}); a real-data "
-            f"run needs {constants.MIN_REAL_BINS} and one in every group"
+            f"[{cfg.obs_wl_lo}, {cfg.obs_wl_hi}] um (groups with none: {empty}); a named data "
+            f"source needs {constants.MIN_REAL_BINS} and one in every group. A synthetic run on the synthetic grid "
+            "names no data source"
         )
 
 

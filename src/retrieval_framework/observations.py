@@ -6,7 +6,7 @@ noise.
 
 A product CSV follows the Carter & May (2024) convention: one header line, then ``index, wave, wave_low, wave_hig,
 rp/rs, rp/rs_err_low, rp/rs_err_hih``. depth = (rp/rs)^2 and sigma = 2 (rp/rs) sigma_rprs, the two errors averaged. A
-synthetic constant-R grid is built only for a synthetic run with no source or too few bins in the model band.
+synthetic constant-R grid is built only for a synthetic run that names no data source.
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[s
     Raises
     ------
     ValueError
-        If a real-data run finds no usable bin, rather than fabricate a grid.
+        If a named data source has too few bins in the model band, in any mode, or a real-data run names no source.
     """
     wl = np.asarray(wl_model_um, float)
     synthetic = bool(cfg.generate_synthetic_data)
@@ -233,16 +233,15 @@ def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[s
                 f"{cfg.obs_wl_hi:g}] um lie outside the model band [{wl.min():.4f}, {wl.max():.4f}] um. Narrow "
                 "obs_wl_lo/obs_wl_hi or widen nu_min/nu_max: a bin is never dropped without the spec saying so."
             )
-        if n_real >= constants.MIN_REAL_BINS:
-            return real, True
-        if not synthetic:
+        if n_real < constants.MIN_REAL_BINS:
             raise ValueError(
                 f"only {n_real} of the configured observed bins fall inside the model "
-                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >={constants.MIN_REAL_BINS}) -- the model band "
-                "does not overlap the data. Fix obs_wl_lo/hi or nu_min/nu_max; refusing "
-                "to silently fabricate a synthetic grid for a real-data run."
+                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >={constants.MIN_REAL_BINS}): the model band "
+                "does not overlap the data. Fix obs_wl_lo/hi or nu_min/nu_max, or, for a synthetic run on the "
+                "synthetic grid, name no data source (no obs_dir or obs_products)."
             )
-    elif not synthetic:
+        return real, True
+    if not synthetic:
         raise ValueError(
             "no observation source configured (obs_dir/obs_products unset) "
             "and generate_synthetic_data=False -- nothing to fit"

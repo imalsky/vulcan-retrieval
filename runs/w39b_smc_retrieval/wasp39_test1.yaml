@@ -11,9 +11,10 @@
 # walltime 2 h past walltime_seconds, and charges the allocation in $PBS_GROUP.
 # A variant is a file beside this one with `base: wasp39_test1.yaml` and the keys it changes
 # (a key replaces the base's value whole, dicts and lists included). Every key under
-# config: is a field of config_schema.Config; a key not listed keeps the schema default.
-# Every config key but walltime_seconds, and the runtime block, enters the target
-# manifest: a change means a new file, never a resume. YAML reads 1e11 as text: write
+# config: is a field of config_schema.Config; a key not listed keeps the schema default, except the
+# keys every spec states (config_schema.CASE_KEYS, run_setup._MODE_REQUIRED).
+# Every config key outside provenance.TARGET_FREE_KEYS, and the runtime block, enters the
+# target manifest: a change means a new file, never a resume. YAML reads 1e11 as text: write
 # floats with an exponent as 1.0e+11.
 #
 # 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar,
@@ -41,6 +42,7 @@ config:
   seed: 20260704                       # nautilus and the synthetic injection; one file per seed
   vulcan_cfg_name: W39b                # chemistry baseline: vulcan3/configs/W39b.yaml (10x solar, Kzz profile)
   network: thermo/SNCHO_photo_network_2025.txt   # required; v5 ran thermo/SNCHO_photo_network.txt
+  atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
 
   # ---- forward model ------------------------------------------------------------
   nz: 100                              # chemistry layers, log-uniform over 1e-9..7.6 bar (10.1 per decade)
@@ -52,6 +54,7 @@ config:
   nu_min: 1900.0                       # cm^-1 (5.26 um)
   nu_max: 9900.0                       # cm^-1 (1.01 um, inside the H2-H2 CIA table)
   art_nlayer: 67                       # RT layers (ladder-converged)
+  art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11                      # s: caps meaningless large-dt Ros2 oscillations; not a convergence criterion
   # Passed to the vulcan3 config. Rp: the chemistry puts Rp at the layer nearest 1 bar;
   # 1.21 R_Jup keeps its scale heights on the RT's (whose 1.279 R_Jup sits at 1 mbar).
@@ -91,14 +94,13 @@ config:
   # ---- T-P: Guillot profile, f = 1/4 ---------------------------------------------
   tp_infer_Tint: true                  # the deep parameter is free ...
   tp_deep_param: T1bar                 # ... as T at 1 bar (tp_deep_p_bar); Tint follows in closed form
-  prior_T1bar: [320.0, 2980.0]         # K, the opacity window; a draw with no Guillot solution is rejected
+  prior_T1bar: [320.0, 2980.0]         # K, inside the 220-2980 K T-P window; a draw with no Guillot solution is rejected
   # Tirr: Teq 1100-1166 K, published limbs 889 / 1068 K (Espinoza+2024); 700 K keeps the
   # cool ridge's tail. An out-of-window profile is rejected, never clipped.
   prior_Tirr: [700.0, 2200.0]
   # gamma down to 1e-3 (the deep temperature saturates at ~(3/16 / (gamma sqrt 3))^(1/4)
   # Tirr); up to 2 lets the data prefer a weak inversion.
   prior_log10gamma: [-3.0, 0.3010299956639812]
-  prior_Tint: [50.0, 600.0]            # K; the deep prior of a variant with tp_deep_param: Tint
 
   # ---- composition and mixing (lnZ, c_o and lnKzz are always inferred) ----------
   prior_lnZ: [-2.302585092994046, 2.302585092994046]   # 1x-100x solar about the baseline
@@ -115,6 +117,8 @@ config:
   prior_lnR0: [-0.05, 0.15]            # ln(R(1 mbar) / rp_cm); the continuum sits ~3% above the literature radius
   infer_lnM: true                      # lnM = ln(M / 0.2785 MJ) ~ N(0, sigma), RT-only; the chemistry keeps M0
   prior_lnM_sigma: 0.11                # the literature mass error
+  # Report only: the posterior is also quoted truncated at Kzz x10, the Tsai+2023 GCM's full-H w_rms.
+  report_kzz_ceiling_x: 10.0
 
   # ---- clouds and noise (schema defaults: power-law cloud, offsets +-800 ppm) ----
   cloud_model: powerlaw                # stated, not inherited: a uniformly mixed power-law opacity
@@ -126,5 +130,5 @@ config:
   integrate_nuisance: true
 
   # ---- lanes and wall ------------------------------------------------------------
-  cold_lanes: 176                      # x FFI_BLOCKS_PER_SM (3) = 528 lanes under ffi; 64.4 GiB peak at nz 100
+  cold_lanes: 528                      # the lanes that run: 176 x 3 one-buffer ffi blocks per SM; 64.4 GiB peak at nz 100
   walltime_seconds: 165600             # the governor, 46 h: the run checkpoints and exits 0 here (PBS wall 48 h)

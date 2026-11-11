@@ -347,7 +347,16 @@ def test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes(tmp_path):
     assert json.loads((out / "nautilus_tally.json").read_text())["n_eval"] > n0
 
 
-VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.txt", "rp_cm": 1.0, "rstar_cm": 10.0}
+VALID = {
+    "vulcan_cfg_name": "W39b",
+    "network": "thermo/SNCHO_photo_network_2025.txt",
+    "atom_list": ("H", "O", "C", "N", "S"),
+    "rp_cm": 1.0,
+    "rstar_cm": 10.0,
+    "p_ref_bar": 1.0e-3,
+    "art_pbtm_bar": 7.0,
+    "cold_lanes": 8,
+}
 
 
 @pytest.mark.parametrize(
@@ -370,6 +379,14 @@ VALID = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.
         ({"cloud_model": "patchy"}, "cloud_model"),
         ({"infer_lnM": True, "prior_lnM_sigma": 0.0}, "prior_lnM_sigma"),
         ({"network": ""}, "network is unset"),  # no default network
+        ({"atom_list": ()}, "atom_list is unset"),  # nor its elements
+        ({"art_pbtm_bar": None}, "art_pbtm_bar"),  # nor an RT bottom
+        ({"art_pbtm_bar": 0.0}, "finite and positive"),
+        ({"rt_integration": "midpoint"}, "rt_integration"),
+        ({"use_rayleigh": False}, "use_rayleigh"),  # Rayleigh is in every retrieval
+        ({"obs_dir": Path("data")}, "obs_products"),  # a data source names both
+        ({"report_kzz_ceiling_x": 0.0}, "report_kzz_ceiling_x"),
+        ({"cloud_model": "none"}, None),  # a clear atmosphere
         ({"vulcan_cfg_name": " "}, "vulcan_cfg_name is unset"),  # no default planet
         ({"rp_cm": None}, "rp_cm"),
         ({"rstar_cm": None}, "rstar_cm"),

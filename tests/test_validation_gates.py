@@ -4,6 +4,7 @@ forward's cloud and mass, and a forward check records the state that solved its 
 
 import json
 import math
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -184,6 +185,20 @@ def test_the_e2e_solve_aborts_on_a_frozen_column(scripts):
     )
     with pytest.raises(DtMinFrozenError, match=r"at rows \[1\] of this batch"):
         scripts.e2e._solve_rows(pipe, jnp.zeros((3, 2)), True)
+
+
+def test_the_spot_variant_needs_its_star_and_the_kzz_cut_its_scale_mode(scripts, monkeypatch, tmp_path):
+    """The spotted star is the case's, named on the command line; the solver-cut test refuses a power-law run, whose
+    absolute Kzz is not lnKzz times one base.
+    """
+    import rejected_resolve
+
+    monkeypatch.setattr(sys, "argv", ["posterior_forward_check.py", "run", str(tmp_path), "--variant", "spot"])
+    with pytest.raises(SystemExit):
+        scripts.check.main()
+    (tmp_path / "config.json").write_text(json.dumps({"kzz_mode": "powerlaw", "inferred_param_names": ["lnKzz"]}))
+    with pytest.raises(RuntimeError, match="power-law"):
+        rejected_resolve._run(tmp_path)
 
 
 def test_an_artifact_hashes_the_tables_of_a_measurement_and_not_of_a_comparison(scripts, monkeypatch):

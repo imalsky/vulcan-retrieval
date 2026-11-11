@@ -17,7 +17,6 @@ import json
 import logging
 import shutil
 import time
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
@@ -43,12 +42,10 @@ if TYPE_CHECKING:
     from retrieval_framework.pipeline import Pipeline
     from retrieval_framework.run_setup import Spec
 
-__all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterior", "run_lanes", "startup_check"]
+__all__ = ["Anchors", "lanes_and_batch", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
 
 log = logging.getLogger("retrieval")
 
-# ffi one-buffer blocks resident per SM at ni 89 on compute capability 9.0: 63 of 228 KB of shared memory each.
-FFI_BLOCKS_PER_SM = 3
 TALLY_FILE = "nautilus_tally.json"
 
 
@@ -289,7 +286,7 @@ def make_loglike(
     prof: BatchProfiler | None = None,
     rejects: Path | None = None,
     nuisance: Path | None = None,
-    kzz_ref: float | None = None,
+    startup_kzz: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Build the batched log-likelihood of unit-cube points, -inf on every rejection class.
 
@@ -316,8 +313,9 @@ def make_loglike(
     nuisance : pathlib.Path, optional
         With integrated nuisances, each chunk writes its certified rows' ``z``, ``log_l`` and ``stats`` here before
         nautilus sees them.
-    kzz_ref : float, optional
-        The case's base Kzz at the reference pressure, cm^2/s; the first chunk is then the run's startup check.
+    startup_kzz : callable, optional
+        From theta rows [n, n_dim] to log10 Kzz (cm^2/s) at the report's reference pressure, in the case's Kzz mode;
+        the first chunk is then the run's startup check.
 
     Returns
     -------
@@ -336,12 +334,10 @@ def make_loglike(
     fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
-    if kzz_ref is not None:
-        i_kzz = list(pipe.names).index("lnKzz")
 
     def loglike(Z: np.ndarray) -> np.ndarray:
         """Evaluate unit-cube points in chunks of ``n_batch``."""
-        nonlocal kzz_ref  # cleared once the first chunk has passed the startup check
+        nonlocal startup_kzz  # cleared once the first chunk has passed the startup check
         Z = np.atleast_2d(np.asarray(Z, np.float64))
         out = np.empty(len(Z))
         for i in range(0, len(Z), n_batch):
@@ -376,7 +372,7 @@ def make_loglike(
             rej = _classify(tp_in[:m], conv, acc, L, count_max, constants.REJECT_BELOW)
             dead = rej.dead
             out[i : i + m] = np.where(dead, -np.inf, L)
-            if kzz_ref is not None:
+            if startup_kzz is not None:
                 th = np.asarray(jax.device_get(pipe.theta_batch(Uj)), np.float64)[:m]
                 counts = {
                     "T-P out": rej.tp_out.sum(),
@@ -384,10 +380,9 @@ def make_loglike(
                     "stalled": rej.stalled.sum(),
                     "non-finite": rej.nonfinite.sum(),
                 }
-                log10_kzz = np.log10(kzz_ref) + th[:, i_kzz] / np.log(10.0)
-                for line in startup_check(log10_kzz, ~rej.tp_out, ~dead, counts):
+                for line in startup_check(startup_kzz(th), ~rej.tp_out, ~dead, counts):
                     log.info(line)
-                kzz_ref = None
+                startup_kzz = None
             logs.write(Zc[:m], out[i : i + m], rej, acc, warm, time.perf_counter() - t0, st.nuis if nuisance else None)
             if warm:
                 tally["warm_anchor_dist_sum"] = tally.get("warm_anchor_dist_sum", 0.0) + float(dist[:m].sum())
@@ -554,14 +549,19 @@ def _saved_loglike(
     pipe: Pipeline, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return the run's log-likelihood, which saves the tally after each call, atomically."""
-    from retrieval_framework.nautilus_report import _kzz_at_ref
+    from retrieval_framework.nautilus_report import _log10_kzz_at_report_level
 
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info("nautilus: %s anchor column(s) loaded", len(anchors))
-    kzz_ref = (
-        None if resume else _kzz_at_ref({"vulcan_cfg_name": cfg.vulcan_cfg_name, "cfg_overrides": cfg.cfg_overrides})
-    )
+    names = list(pipe.names)
+    cfgj = {k: getattr(cfg, k) for k in ("vulcan_cfg_name", "cfg_overrides", "kzz_mode", "kzz_p_ref_bar")}
+
+    def startup_kzz(th: np.ndarray) -> np.ndarray:
+        """Return log10 Kzz at the report's reference pressure of theta rows, in the case's Kzz mode."""
+        slope = th[:, names.index("kzz_slope")] if "kzz_slope" in names else None
+        return _log10_kzz_at_report_level(cfgj, th[:, names.index("lnKzz")], slope)
+
     like = make_loglike(
         pipe,
         n_batch,
@@ -571,7 +571,7 @@ def _saved_loglike(
         BatchProfiler(),
         rejects=out / "rejected",
         nuisance=out / "nuisance" if pipe.nuisance is not None else None,
-        kzz_ref=kzz_ref,
+        startup_kzz=None if resume else startup_kzz,
     )
     tally_path = out / TALLY_FILE
 
@@ -707,9 +707,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def run_lanes(spec: Spec) -> int:
-    """Return the run's lane count: ``cold_lanes``, times ``FFI_BLOCKS_PER_SM`` under the ffi solver."""
-    return int(spec.cfg.cold_lanes) * (FFI_BLOCKS_PER_SM if spec.runtime.solver == "ffi" else 1)
+def lanes_and_batch(spec: Spec) -> tuple[int, int]:
+    """Return the lanes that run, ``cold_lanes``, and the batch width: ``n_batch``, else ``BATCH_PER_LANE`` per lane."""
+    lanes = int(spec.cfg.cold_lanes)
+    return lanes, int(spec.sampler.n_batch or constants.BATCH_PER_LANE * lanes)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -726,13 +727,14 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     spec = load_spec(args.spec)
     cfg = spec.cfg
+    lanes, n_batch = lanes_and_batch(spec)
     if args.dry_run:
         print(C.describe_config(cfg, spec.name))
         print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
+        print(f"lanes: {lanes}   batch: {n_batch} points")
         return
     export_runtime(spec.runtime)
     C.export_network(cfg)
-    cfg = replace(cfg, cold_lanes=run_lanes(spec))
     out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
     ckpt = out / "nautilus_checkpoint.hdf5"
     resume = bool(args.resume)
@@ -740,7 +742,6 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(spec.sampler.n_live)
-    n_batch = int(spec.sampler.n_batch or constants.BATCH_PER_LANE * cfg.cold_lanes)
     warm = bool(spec.sampler.warm_starts)
     _log_settings(spec, cfg, n_batch)
     _log_versions()

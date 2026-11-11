@@ -57,7 +57,6 @@ def _forward(monkeypatch, stage_diag=None, **over):
         _integ=SimpleNamespace(statics=SimpleNamespace(rtol_accept=0.05)),
     )
     rt = SimpleNamespace(molecules=("H2O",), p_art_bar=P_GRID, wl_um=np.array([3.0, 4.0]))
-    monkeypatch.setattr(RF, "_check_frozen_network", lambda _cfg: None)
     monkeypatch.setattr(RF.vulcan_chem, "build_chem_model", lambda *_a, **_k: chem)
     monkeypatch.setattr(RF.exojax_rt, "build_rt_model", lambda _profile: rt)
     monkeypatch.setattr(
@@ -68,8 +67,11 @@ def _forward(monkeypatch, stage_diag=None, **over):
     cfg = C.Config(
         vulcan_cfg_name="W39b",
         network="thermo/SNCHO_photo_network_2025.txt",
+        atom_list=("H", "O", "C", "N", "S"),
         rp_cm=1.0,
         rstar_cm=10.0,
+        p_ref_bar=1.0e-3,
+        art_pbtm_bar=7.0,
         infer_s_o=True,
         cold_lanes=LANES,
         **over,
@@ -122,14 +124,17 @@ def test_condensed_reservoirs_are_not_gas(monkeypatch):
     np.testing.assert_allclose(np.asarray(T_art), 1500.0)
 
 
-@pytest.mark.parametrize(("over", "key"), [({"cloud_model": "deck"}, "deck"), ({}, "cloud")])
+@pytest.mark.parametrize(
+    ("over", "key"), [({"cloud_model": "deck"}, "deck"), ({}, "cloud"), ({"cloud_model": "none"}, None)]
+)
 def test_the_rt_keywords_route_the_cloud_block_by_the_cloud_model(monkeypatch, over, key):
-    """What the likelihood's RT and the leave-one-out screen both pass."""
+    """What the likelihood's RT and the leave-one-out screen both pass; "none" passes no cloud term."""
     fwd, _ = _forward(monkeypatch, **over)
     kw = fwd.rt_kwargs(jnp.asarray([-2.0, 0.5]), 0.3)
-    assert set(kw) == {key, "lnM"}
+    assert set(kw) == {"lnM"} | ({key} if key else set())
     assert float(kw["lnM"]) == 0.3
-    assert float(jnp.ravel(kw[key])[0]) == -2.0
+    if key:
+        assert float(jnp.ravel(kw[key])[0]) == -2.0
 
 
 def test_a_freeze_in_either_stage_reaches_the_batch_diag(monkeypatch):

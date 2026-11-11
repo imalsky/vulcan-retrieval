@@ -1,6 +1,7 @@
 # Offline smoke test on the CPU: the real chemistry + RT pipeline in minutes (the slow
 # tests build it; tests/conftest.py loads this file). CO-only opacity (the one cached
-# k-table), a coarse column, a synthetic injection on the real G395H bin grid.
+# k-table), a coarse column, a synthetic injection on the synthetic constant-R bin grid
+# (no data source: the CO band holds no observed bin).
 # 8 parameters: lnZ, c_o, lnKzz, Tirr, log10kappa, lnR0, 2 cloud. No governor
 # (walltime_seconds), so tools/submit.py refuses it. The priors are the W39b case's,
 # by value, so a change to v5 never moves what the test suite builds.
@@ -24,6 +25,7 @@ config:
   run_label: WASP-39b
   vulcan_cfg_name: W39b
   network: thermo/SNCHO_photo_network_2025.txt
+  atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
   nz: 30
   cloud_model: powerlaw                # stated, not inherited: a uniformly mixed power-law opacity
   molecules: [CO]
@@ -31,32 +33,23 @@ config:
   nu_min: 4280.0                       # cm^-1: the CO 2-0 band only
   nu_max: 4360.0
   art_nlayer: 20
+  art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
+  count_max: 30000                     # W39b.yaml's cap, stated
   cfg_overrides: {Rp: 8650532000.0}    # 1.21 R_Jup, the chemistry's 1-bar radius
   rp_cm: 9143826800.0                  # 1.279 R_Jup
   rstar_cm: 64839240000.0              # 0.932 R_Sun
   tp_gravity_cgs: 422.0
   p_ref_bar: 1.0e-3
-  obs_dir: data/cm24_wasp39b
-  obs_products:
-    PRISM: [PRISM_native.csv]
-    NIRISS: [NIRISS_O1_R100.csv, NIRISS_O2_R100.csv]
-    G395H: [G395H_NRS1_R100.csv, G395H_NRS2_R100.csv]
-    G395H_NRS1: [G395H_NRS1_R100.csv]
-    G395H_NRS2: [G395H_NRS2_R100.csv]
-    NIRCam: [NIRCam_R100.csv]
-  combo: [G395H]                       # one group: no offsets
-  infer_offsets: false
-  obs_wl_lo: 2.28                      # um, overlapping the cached CO band
-  obs_wl_hi: 2.36
-  obs_max_bin_R: 200.0
+  infer_offsets: false                 # one synthetic group: no offsets
   tp_infer_gamma: false
+  tp_Tint_K: 150.0                     # K, the fixed deep parameter
   generate_synthetic_data: true
   prior_lnZ: [-2.302585092994046, 2.302585092994046]
   baseline_metallicity_solar: 10.0
   prior_c_o: [-1.70, 0.24]
   prior_lnKzz: [-2.3025850929940455, 6.907755278982137]
   prior_Tirr: [700.0, 2200.0]
-  prior_log10gamma: [-2.0, 0.3010299956639812]
-  prior_Tint: [50.0, 600.0]
   prior_lnR0: [-0.05, 0.15]
+  prior_lnM_sigma: 0.11                # read by the forward checks' mass variant; lnM is not sampled here
+  cold_lanes: 144

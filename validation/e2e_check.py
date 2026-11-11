@@ -163,10 +163,9 @@ def solve(args) -> int:
     import jax
     import jax.numpy as jnp
     from retrieval_framework import pipeline as P
-    from retrieval_framework.run_nautilus import run_lanes
 
-    lanes = run_lanes(spec)
-    cfg = replace(spec.cfg, cold_lanes=lanes)
+    cfg = spec.cfg
+    lanes = int(cfg.cold_lanes)
     pipe = P.build_pipeline(cfg)
     set_observations(cfg, pipe, P)
     names = list(pipe.names)

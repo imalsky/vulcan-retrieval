@@ -4,6 +4,7 @@ rejected row's baseline pin, the exact Gaussian log L and the refusal of an unce
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import sys
 from types import SimpleNamespace
@@ -87,8 +88,12 @@ def _build(monkeypatch, **over):
     cfg = C.Config(
         vulcan_cfg_name="W39b",
         network="thermo/SNCHO_photo_network_2025.txt",
+        atom_list=("H", "O", "C", "N", "S"),
         rp_cm=1.0,
         rstar_cm=10.0,
+        p_ref_bar=1.0e-3,
+        art_pbtm_bar=7.0,
+        cold_lanes=8,
         generate_synthetic_data=True,
         infer_offsets=True,
         infer_noise_inflation=True,
@@ -102,6 +107,7 @@ def _build(monkeypatch, **over):
     monkeypatch.setitem(sys.modules, "retrieval_framework.retrieval_forward", stub)
     monkeypatch.setattr(retrieval_framework, "retrieval_forward", stub, raising=False)
     monkeypatch.setattr(provenance, "target_manifest", lambda _cfg, _pipe: {"stub": True})
+    monkeypatch.setattr(C, "export_network", lambda _cfg: None)  # a stub forward: no engine to hand it to
     grid = OBS.get_observation_grid
 
     def two_groups(cfg_, wl_um):
@@ -187,6 +193,26 @@ def test_warm_evaluator_hands_each_row_its_own_references(monkeypatch):
     assert np.asarray(Ynew)[:, 0, 0].tolist() == [20.25, 20.5]
 
 
+def test_a_clear_atmosphere_has_no_cloud_block(monkeypatch):
+    """cloud_model "none": no cloud parameter, and the RT gets an empty cloud block."""
+    pipe = _build(monkeypatch, cloud_model="none")
+    assert pipe.n_cloud == 0
+    assert "cloud" not in pipe.kinds
+    assert pipe.rt_args(pipe.theta_truth)[1].shape == (0,)
+
+
+def test_the_injected_noise_carries_the_truth_inflation(monkeypatch):
+    """truth_noise_inflation scales the injected noise, and the sigma handed to the fit stays the per-bin sigma."""
+    noise = {}
+    for b in (1.0, 2.5):
+        pipe = _build(monkeypatch, truth_lnZ=0.0, truth_Tirr=1500.0, truth_noise_inflation=b)
+        o = P.generate_observations(pipe, seed=1)
+        noise[b] = o["depth"] - o["flux_true"]
+        np.testing.assert_array_equal(pipe.obs_sigma, np.asarray(pipe.obs["sigma"]))
+    # depth - flux_true rounds at the depth's scale (1e-2 x 1e-16): far below the 1e-4 noise
+    np.testing.assert_allclose(noise[2.5], 2.5 * noise[1.0], rtol=0, atol=1e-15)
+
+
 @pytest.mark.parametrize(("truth_lnZ", "refused"), [(0.8, True), (0.0, False)])
 def test_synthetic_truth_must_certify(monkeypatch, truth_lnZ, refused):
     pipe = _build(monkeypatch, truth_lnZ=truth_lnZ, truth_Tirr=1500.0)
@@ -219,3 +245,9 @@ def test_a_data_bin_outside_the_model_band_is_refused(monkeypatch):
     assert real["wl"].size == 20
     with pytest.raises(ValueError, match="3 of the 20 data bins"):
         OBS.get_observation_grid(cfg, np.linspace(2.9, 4.75, 400))
+    # A named source with too few bins is refused in a synthetic run too: the synthetic grid is only for a spec that
+    # names no source.
+    thin = {k: (v[:2] if isinstance(v, np.ndarray) else v) for k, v in obs.items()}
+    monkeypatch.setattr(OBS, "load_real_observations", lambda _cfg: dict(thin))
+    with pytest.raises(ValueError, match="name no data source"):
+        OBS.get_observation_grid(dataclasses.replace(cfg, generate_synthetic_data=True), np.linspace(2.9, 5.1, 400))

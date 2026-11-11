@@ -39,7 +39,6 @@ _CFG_OVERRIDES = {
     "P_t": 1.0e4,  # 0.01 bar
     "Kzz_prof": "const",
     "const_Kzz": 1.0e7,
-    "use_photo": False,
     "use_moldiff": True,
     "ini_mix": "const_mix",
     # He/H2O/CO/N2/H2S are the elemental-repair species and must be present.
@@ -99,11 +98,17 @@ _CFG_OVERRIDES = {
     # sufficient time. 1e14 s (~3 Myr) is far past every transport/condensation
     # timescale here.
     "runtime": 1.0e14,
+    # The step cap these solves always ran at: vulcan3 derives dt_max from the config file's runtime when it loads the
+    # file (min(1e22 * 1e-5, 1e15) for W39b.yaml), so the runtime above does not move it.
+    "dt_max": 1.0e15,
 }
 
 
 def _profile(**extra):
     return {
+        "network": "thermo/SNCHO_photo_network_2025.txt",
+        "atom_list": ["H", "O", "C", "N", "S"],
+        "vulcan_cfg_name": "W39b",  # the engine's default config when these solves were measured
         "nz": NZ,
         "use_photo": False,
         "yconv_cri": 1.0e-2,
@@ -340,10 +345,12 @@ def test_jvp_matches_finite_difference_through_condensing_state(stack, chem_iso)
     s8, s8_ls = _s8_cols(chem_iso)
     smooth_cols = [chem_iso.sidx[m] for m in ("H2O", "CO", "H2S")]
     th0 = jnp.asarray(_theta(T_STRUCT))
-    y_base = chem_iso.converged_y(th0, **_const_mix(chem_iso))
+    # These columns end at the physical runtime cap by design (the `runtime` note in _CFG_OVERRIDES), which the engine's
+    # certificate does not count as converged; converged_y returns an uncertified column only when asked.
+    y_base = chem_iso.converged_y(th0, allow_uncertified=True, **_const_mix(chem_iso))
 
     def f(th):
-        y = chem_iso.converged_y(th, warm_y=y_base)
+        y = chem_iso.converged_y(th, warm_y=y_base, allow_uncertified=True)
         smooth = jnp.stack([jnp.sum(y[:, c]) for c in smooth_cols])
         pinned = jnp.stack([jnp.sum(y[:, s8]), jnp.sum(y[:, s8_ls])])
         return smooth, pinned

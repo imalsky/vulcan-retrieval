@@ -3,4 +3,5 @@
 base: wasp39_test1.yaml
 
 config:
-  cloud_model: deck                    # prior_log10P_deck at the schema default
+  cloud_model: deck
+  prior_log10P_deck: [-6.0, 0.8]       # bar; 0.8 is near the RT grid bottom

@@ -41,7 +41,13 @@ def _run_dir(out):
     rng = np.random.default_rng(0)
     cfg = asdict(
         C.Config(
-            molecules=("H2O",), vulcan_cfg_name="W39b", network="thermo/SNCHO_photo_network_2025.txt", cold_lanes=8
+            molecules=("H2O",),
+            vulcan_cfg_name="W39b",
+            network="thermo/SNCHO_photo_network_2025.txt",
+            atom_list=("H", "O", "C", "N", "S"),
+            art_pbtm_bar=7.0,
+            cold_lanes=8,
+            report_kzz_ceiling_x=10.0,
         )
     )
     cfg.update(
@@ -131,6 +137,50 @@ def test_a_second_program_run_is_refused_rather_than_re_solved_without_it(tmp_pa
         NR._config_from_json(tmp_path / "config.json")
 
 
+def test_an_archived_config_is_rebuilt_with_every_drop_and_fill_logged(tmp_path, caplog):
+    """An old config.json keeps working: a retired key is dropped and a newer key filled, each logged; a key with no
+    default that the old run did not record is refused with the line that restores the value it ran with.
+    """
+    _run_dir(tmp_path)
+    cfgj = json.loads((tmp_path / "config.json").read_text())
+    old = {k: v for k, v in cfgj.items() if k != "rt_integration"}
+    (tmp_path / "config.json").write_text(json.dumps({**old, "opacity_mode": "exomolop"}))
+    with caplog.at_level("INFO", logger="retrieval"):
+        cfg = NR._config_from_json(tmp_path / "config.json")
+    assert cfg.rt_integration == "simpson"
+    assert "'opacity_mode'" in caplog.text
+    assert "filled with today's defaults: ['rt_integration']" in caplog.text
+    (tmp_path / "config.json").write_text(json.dumps({k: v for k, v in old.items() if k != "art_pbtm_bar"}))
+    with pytest.raises(ValueError, match=r'add "art_pbtm_bar": 7.0'):
+        NR._config_from_json(tmp_path / "config.json")
+
+
+def test_an_abundant_species_with_no_opacity_table_is_reported(tmp_path):
+    """The rule of jwst-transit-authority's certify.unmodeled_absorbers: mean VMR over 1e-5..1e-2 bar above 1e-4, for a
+    network species with no k-table; atoms, H2, He and the tabled species are not reported.
+    """
+    sidx = {"H2": 0, "He": 1, "H2O": 2, "CS2": 3, "C2H6": 4, "S2": 5}
+    p_bar = np.array([1e-7, 1e-4, 1e-3, 1.0])
+    y = np.zeros((2, 4, 6))
+    y[:, :, 0], y[:, :, 1], y[:, :, 2] = 0.84, 0.15, 5e-3
+    y[0, 1:3, 3] = 3e-3  # CS2 in the photosphere of one draw: reported at its largest
+    y[:, 3, 4] = 5e-2  # C2H6 only below the photosphere: not reported
+    y[:, 1:3, 5] = 1e-2  # S2: homonuclear, never reported
+    pipe = SimpleNamespace(fwd=SimpleNamespace(chem=SimpleNamespace(sidx=sidx), p_chem_bar=p_bar))
+    got = NR._unmodeled_absorbers(pipe, y)
+    assert list(got) == ["CS2"]
+    assert got["CS2"] == pytest.approx(3e-3 / y[0, 1].sum(), rel=1e-12)
+    _run_dir(tmp_path)
+    assert "not checked" in NR._unmodeled_caveat(tmp_path)
+    np.savez(
+        tmp_path / "nautilus_spectra.npz",
+        certified=np.array([True, True]),
+        unmodeled_species=np.asarray(list(got)),
+        unmodeled_vmr=np.asarray(list(got.values())),
+    )
+    assert "CS2 at mean VMR up to" in NR._unmodeled_caveat(tmp_path)
+
+
 def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
     """A column frozen at dt_min is a solver failure on a finished run too: not one more uncertified spectrum."""
     from vulcan_forward import vulcan_chem  # noqa: F401  # before vulcan3
@@ -196,12 +246,14 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert der["metallicity_total_solar"][1] < z_o[1]  # C/O below solar lowers total metals
     assert der["S_to_O_solar"] is None  # sulfur was not freed in this run
     # the Kzz block: weights at multiples of the prior floor, the absolute Kzz on the
-    # case's own profile, and the x10 ceiling only on W39b's; a constant-Kzz case
-    # (1e9) shifts the absolute Kzz by its base and has no ceiling
+    # case's own profile, and the x10 ceiling the spec states; a constant-Kzz case
+    # (1e9) shifts the absolute Kzz by its base, and one with no ceiling has no truncated block
     assert der["truncated_kzz_le_x10"]["weight"] == pytest.approx(1.0 - der["kzz_weight_above_x10"])
     assert der["kzz_weight_below_1.5x_floor"] <= der["kzz_weight_below_2x_floor"]
     cfgj = json.loads((tmp_path / "config.json").read_text())
-    (tmp_path / "config.json").write_text(json.dumps({**cfgj, "vulcan_cfg_name": "data/survey/w107b/W107b.yaml"}))
+    (tmp_path / "config.json").write_text(
+        json.dumps({**cfgj, "vulcan_cfg_name": "data/survey/w107b/W107b.yaml", "report_kzz_ceiling_x": None})
+    )
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
     d107 = NR.derived_quantities(tmp_path)
     assert not any("x10" in k for k in d107)

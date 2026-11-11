@@ -8,7 +8,6 @@ imported before ``exojax_rt`` and ``tp_profile``, in that order on purpose.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -86,21 +85,6 @@ def _with_stage1_freeze(cd1: Any, cd2: Any) -> Any:
         termination_reason=jnp.where(frozen, cd1.termination_reason, cd2.termination_reason),
         last_delta=jnp.where(frozen, cd1.last_delta, cd2.last_delta),
     )
-
-
-def _check_frozen_network(cfg: C.Config) -> None:
-    """Refuse an engine frozen on another network than the config's: it would solve other chemistry."""
-    import vulcan3
-    from vulcan3 import chem_funs
-
-    frozen = Path(chem_funs.NETWORK.network_path).resolve()
-    want = (Path(vulcan3.__file__).parent / cfg.network).resolve()
-    if frozen != want:
-        raise RuntimeError(
-            f"vulcan3 is frozen on {frozen} but the config's network is "
-            f"{cfg.network!r}: call config_schema.export_network(cfg) "
-            "before the first vulcan3 import"
-        )
 
 
 class RetrievalForward:
@@ -261,9 +245,9 @@ class RetrievalForward:
         kw: dict[str, Any] = {"lnM": jnp.asarray(lnM)}
         if str(self._cfg.cloud_model) == "deck":
             kw["deck"] = None if cloud is None else jnp.asarray(cloud)[0]
-        else:
+        elif str(self._cfg.cloud_model) == "powerlaw":
             kw["cloud"] = cloud
-        return kw
+        return kw  # "none": no cloud term
 
     def aux_from_y(self, y: Array, chem_theta: Array) -> tuple[Any, ...]:
         """Return the ART-grid profiles the RT takes, from a column of number densities.
@@ -364,7 +348,6 @@ def build_retrieval_forward(cfg: C.Config) -> RetrievalForward:
     RetrievalForward
         The forward.
     """
-    _check_frozen_network(cfg)
     profile = cfg.profile()
 
     tpm = tp_profile.build_tp_model(cfg)

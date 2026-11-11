@@ -1,7 +1,8 @@
 """Run provenance: code, version and data identity, and the target manifest.
 
 The target digest is the sha256 of the canonical manifest (``target_manifest``: resolved config, ordered priors,
-observation arrays, opacity and CIA content, code commits and versions, the solver environment). A run writes the
+observation arrays, opacity and CIA content, code commits and versions, the solver environment, the composition table,
+the JAX backend and both packages' fixed numbers). A run writes the
 manifest beside its outputs and binds its checkpoint to the digest, so a resume across a change is refused.
 """
 
@@ -30,6 +31,7 @@ __all__ = [
     "REPOSITORIES",
     "TARGET_FREE_KEYS",
     "archived_manifest_digest",
+    "baseline_c_to_o",
     "case_config",
     "case_data_file",
     "case_inputs",
@@ -217,6 +219,43 @@ def case_config(name: str) -> tuple[Path, dict]:
     return p.resolve(), {**default, **(yaml.safe_load(p.read_text()) or {})}
 
 
+def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
+    """Return the C/O of a case's baseline composition, the ratio that ``exp(c_o)`` multiplies.
+
+    Read from the case's vulcan3 config with ``cfg_overrides`` applied, as ``C_H / O_H``.
+
+    Parameters
+    ----------
+    name : str
+        The case's config name or path.
+    cfg_overrides : dict
+        Overrides of the file's settings.
+
+    Returns
+    -------
+    float
+        C/O by number.
+
+    Raises
+    ------
+    ValueError
+        If the case takes its abundances from vulcan3's solar preset (``use_solar: true``), whose file this reader does
+        not parse, or if C_H or O_H is not positive.
+    """
+    path, case = case_config(name)
+    case = {**case, **cfg_overrides}
+    if case.get("use_solar") is True:
+        raise ValueError(
+            f"{path}: use_solar is true, so the baseline C/O is in vulcan3's preset "
+            f"{case.get('fastchem_solar_abundance_file')!r}, which the report does not read. State C_H and O_H with "
+            "use_solar: false in the case config or cfg_overrides."
+        )
+    c_h, o_h = float(case["C_H"]), float(case["O_H"])
+    if not (c_h > 0.0 and o_h > 0.0):
+        raise ValueError(f"{path}: C_H={c_h}, O_H={o_h}: both must be positive for a baseline C/O")
+    return c_h / o_h
+
+
 def case_data_file(rel: str | Path) -> Path:
     """Return a case's data path, resolved as ``vulcan3.paths.resolve_data_path`` does.
 
@@ -305,16 +344,27 @@ def _data_identity(out_dir: Path, cfg_dict: dict) -> dict:
     return ident
 
 
-# Keys a chained job may differ in: the walltime governor is per job, and the RT chunk size is a batch split,
-# numerically identical at any width. Everything else is bound.
+# Keys a chained job may differ in: the walltime governor is per job, the RT chunk size is a batch split, numerically
+# identical at any width, and the label and the Kzz ceiling are read only by the report, not by the likelihood.
+# Everything else is bound.
 TARGET_FREE_KEYS = frozenset(
     {
         "out_dir",
         "run_label",
         "walltime_seconds",
         "smc_rt_chunk",
+        "report_kzz_ceiling_x",
     }
 )
+
+
+def _composition_file() -> dict[str, str]:
+    """Return the composition table vulcan3 freezes at its first import: ``VULCAN3_COM_FILE`` or its default."""
+    value = os.environ.get("VULCAN3_COM_FILE")
+    if value is None:
+        value = str(yaml.safe_load((_vulcan3_root() / "configs" / "default.yaml").read_text())["com_file"])
+    path = case_data_file(value)
+    return {"VULCAN3_COM_FILE": os.environ.get("VULCAN3_COM_FILE", ""), "path": str(path), "sha256": _sha256(path)}
 
 
 def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
@@ -337,6 +387,11 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
     """
     from dataclasses import asdict
 
+    import jax
+    from vulcan_forward import constants as engine_constants
+
+    from retrieval_framework import constants
+
     cfg_bound = {k: v for k, v in asdict(cfg).items() if k not in TARGET_FREE_KEYS}
 
     # The likelihood's actual inputs, not the file paths that produced them.
@@ -347,7 +402,7 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
 
     return {
         # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
-        "manifest_version": 6,
+        "manifest_version": 7,
         "config": cfg_bound,
         "params": {
             "names": list(pipe.names),
@@ -373,6 +428,12 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
         "vulcan3_solver": os.environ.get("VULCAN3_SOLVER", "fast"),
         "vulcan3_chem_rhs": os.environ.get("VULCAN3_CHEM_RHS", "codegen"),
         "vulcan3_bt_buffers": os.environ.get("VULCAN3_BT_BUFFERS") or "per-call",
+        "composition_file": _composition_file(),
+        "jax_backend": jax.default_backend(),
+        "fixed_values": {
+            "vulcan-retrieval": constants.fixed_values(),
+            "vulcan-forward": engine_constants.fixed_values(),
+        },
     }
 
 

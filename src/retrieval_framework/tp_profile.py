@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = ["build_tp_model", "tint_from_deep"]
 
-# The engine's valid RT window inset by constants.T_EDGE_INSET_K, [320, 2980] K (pipeline.tp_valid).
+# The engine's valid RT window inset by constants.T_EDGE_INSET_K, [220, 2980] K (pipeline.tp_valid).
 _T_MIN = float(T_OPA_MIN_K) + constants.T_EDGE_INSET_K
 _T_MAX = float(T_OPA_MAX_K) - constants.T_EDGE_INSET_K
 

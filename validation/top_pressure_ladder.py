@@ -5,13 +5,14 @@ vulcan_chem sets the chemistry P_t from it, interp_map refuses a clamped top).
 This script extends both grids one decade higher at the same layers per decade,
 solves the chemistry there, and compares the R=100 binned depth with production.
 
-    python validation/top_pressure_ladder.py
+    python validation/top_pressure_ladder.py --spec runs/<case>/<name>.yaml
 
 PASS gate: |Delta binned depth| < 5 ppm.
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import time
@@ -26,7 +27,6 @@ import _artifact
 
 GATE_PPM = 5.0
 BIN_R = 100.0
-BAND = (1900.0, 9900.0)
 
 
 def binned_depth(chem, rt, constants, interp_map):
@@ -51,6 +51,13 @@ def binned_depth(chem, rt, constants, interp_map):
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--spec", required=True, help="the run specification whose case to test")
+    args = ap.parse_args()
+    from retrieval_framework import config_schema as C
+
+    cfg, results = _artifact.spec_case(args.spec)
+    C.export_network(cfg)  # before vulcan3 is imported
     from vulcan_forward import constants
     from vulcan_forward import interp_map
 
@@ -58,9 +65,9 @@ def main() -> int:
     from vulcan_forward import vulcan_chem
     from vulcan_forward import exojax_rt
 
-    # The production case is the specification (_artifact.production_profile).
-    prod = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
-    edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
+    # The case is the specification, its band included.
+    prod = cfg.profile()
+    edges = _artifact.make_r_bins(1e4 / cfg.nu_max, 1e4 / cfg.nu_min, BIN_R)
 
     chem = vulcan_chem.build_chem_model(prod)
     rt = exojax_rt.build_rt_model(prod)
@@ -115,6 +122,7 @@ def main() -> int:
         status="PASS" if ok else "FAIL",
         summary=msg,
         resolved_config={"production": prod, "extended": ext},
+        out_dir=results,
     )
     return 0 if ok else 1
 

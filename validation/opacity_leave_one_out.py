@@ -1,9 +1,9 @@
 """Which absorbers does the production spectrum need: leave-one-out on the production forward.
 
-    python validation/opacity_leave_one_out.py [--spec <run spec>] [--molecules NH3 SO] [--states 8]
+    python validation/opacity_leave_one_out.py --spec <run spec> [--molecules NH3 SO] [--states 8]
         [--from-posterior <npz>]
 
-The screen belongs to a planet: ``--spec`` names its case (default: the production spec).
+The screen belongs to a planet: ``--spec`` names its case.
 
 An absorber the chemistry produces but the RT omits does not vanish: its opacity gets absorbed by whatever else can fit
 it. For each state this solves the chemistry once, takes ``transmission_depth_r(..., wo_mols=...)`` and bins every row
@@ -194,20 +194,17 @@ def main() -> int:
     )
     ap.add_argument("--from-posterior", default=None, help="nautilus_posterior.npz to draw representative states from")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--spec", default=None, help="the run spec to screen (default: the production spec)")
+    ap.add_argument("--spec", required=True, help="the run spec to screen")
     args = ap.parse_args()
 
-    # import order matters: vulcan_chem sets the import-frozen env vars
+    from retrieval_framework import config_schema as C
+
+    spec = Path(args.spec).resolve()
+    cfg, results = _artifact.spec_case(spec)
+    C.export_network(cfg)  # before vulcan3 is imported
     from vulcan_forward import vulcan_chem  # noqa: F401  # before exojax
     from retrieval_framework.pipeline import build_pipeline
 
-    spec = Path(args.spec).resolve() if args.spec else None
-    if spec is None:
-        cfg = _artifact.production_config()
-    else:
-        from retrieval_framework.run_setup import load_spec
-
-        cfg = load_spec(spec).cfg
     prod_mols = list(cfg.molecules)
     named = args.molecules
     extra = [m for m in named if m not in prod_mols] if named is not None else unscreened_candidates(prod_mols)
@@ -246,13 +243,13 @@ def main() -> int:
     msg = _verdict(rows, worst, omitted, n_screened)
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} -- {msg}")
     _artifact.emit(
-        name="opacity_leave_one_out" if spec is None else f"opacity_leave_one_out_{spec.stem}",
+        name=f"opacity_leave_one_out_{spec.stem}",
         title="Leave-one-out absorber screen on the production observation grid",
         measurements=measurements,
         status="PASS" if ok else "FAIL",
         summary=msg,
         resolved_config=profile,
-        **({} if spec is None else {"out_dir": _artifact.REPO / "output" / spec.parent.name / "validation"}),
+        out_dir=results,
     )
     return 0 if ok else 1
 

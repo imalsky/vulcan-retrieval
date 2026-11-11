@@ -14,6 +14,10 @@ from types import SimpleNamespace
 # Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
 # CUDA plugin would otherwise open every visible card in each worker.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# One network for the session: test modules import vulcan3 at collection, before any case is loaded, and vulcan3
+# freezes the network and its atoms at that first import.
+os.environ["VULCAN3_NETWORK"] = "thermo/SNCHO_photo_network_2025.txt"
+os.environ["VULCAN3_ATOM_LIST"] = "H,O,C,N,S"
 
 import pytest
 

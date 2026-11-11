@@ -34,6 +34,7 @@ BASE = C.Config(
     infer_noise_inflation=True,
     noise_inflation_per_group=True,
     integrate_nuisance=True,
+    cold_lanes=8,
 )
 
 

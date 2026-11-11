@@ -89,6 +89,27 @@ def job(tmp_path, monkeypatch):
     return SimpleNamespace(spec=str(spec), out=out, pipe=pipe, events=events, sampler=sampler)
 
 
+def test_the_startup_kzz_decades_follow_the_case_s_kzz_mode(job, monkeypatch):
+    """The launch guard's absolute log10 Kzz is the report's: under the power law, the base at kzz_p_ref_bar tilted by
+    each draw's slope to the report's level.
+    """
+    seen = {}
+    real = RN.make_loglike
+
+    def capture(*a, **kw):
+        seen["startup_kzz"] = kw["startup_kzz"]
+        return real(*a, **kw)
+
+    monkeypatch.setattr(RN, "make_loglike", capture)
+    monkeypatch.setattr(NR, "_kzz_at_ref", lambda _cfg, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
+    job.pipe.names = ["p0", "kzz_slope", "lnKzz"]
+    cfg = C.Config(kzz_mode="powerlaw", kzz_p_ref_bar=0.1, vulcan_cfg_name="W39b")
+    RN._saved_loglike(job.pipe, cfg, job.out, N_BATCH, warm=False, resume=False, tally={})
+    th = np.array([[0.0, 0.5, np.log(10.0)]])
+    # 1e9 at 0.1 bar, x10 by lnKzz, x10^(0.5 x 2) by the slope to 1 mbar
+    np.testing.assert_allclose(seen["startup_kzz"](th), [11.0], rtol=1e-12)
+
+
 def test_a_finished_run_writes_its_posterior_summary_and_identity(job):
     RN.main([job.spec])
     s = job.sampler["s"]

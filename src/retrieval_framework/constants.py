@@ -1,9 +1,10 @@
-"""Fixed numbers of the retrieval: each has a unit and a reason, and none is a run setting.
+"""Fixed numbers of the retrieval: each has a unit and a reason.
 
 A number that belongs to a case is a ``Config`` field stated in the run specification (``config_schema``). A number
-here is fixed on purpose: the specification cannot change it, and each run's record lists the values it ran with
-(``provenance.target_manifest``). The module imports nothing, so every other module can read it before the engine is
-imported. The methods behind the numbers are in docs/method.md.
+here is fixed on purpose and the specification cannot change it, except ``BATCH_PER_LANE``, the batch width when the
+specification's ``sampler.n_batch`` is null. Each run's target manifest stores ``fixed_values()`` of this module and of
+the engine (``provenance.target_manifest``). The module imports nothing, so every other module can read it before the
+engine is imported. The methods behind the numbers are in docs/method.md.
 """
 
 from __future__ import annotations
@@ -20,9 +21,12 @@ __all__ = [
     "LODDERS2020_LOG_EPS",
     "LSF_R_SAFETY",
     "MIN_REAL_BINS",
+    "NOT_A_TABLE_ABSORBER",
+    "NO_OPACITY_TABLE",
     "NUISANCE_NODES",
     "N_LIVE_PER_UPDATE",
     "N_NETWORKS",
+    "PHOTOSPHERE_BAR",
     "PPM",
     "PRIOR_Z_EPS",
     "REJECT_BELOW",
@@ -37,6 +41,7 @@ __all__ = [
     "TP_DRAW_MIN",
     "T_EDGE_INSET_K",
     "UNDERFLOW_DENOM",
+    "UNMODELED_VMR",
     "fixed_values",
 ]
 
@@ -97,6 +102,18 @@ KZZ_FLOOR_MULTIPLES = (1.5, 2.0)
 # The conditioning map: equal bins over each prior box, for these parameters when the case infers them.
 COND_BINS = 10
 COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
+# A network species with no opacity table, abundant in the observable layers, is reported with its abundance: the rule
+# and thresholds of jwst-transit-authority's certify.unmodeled_absorbers. Mean VMR over the transmission photosphere
+# PHOTOSPHERE_BAR (bar) above UNMODELED_VMR, an order of magnitude below the bulk carriers. NO_OPACITY_TABLE are the
+# engine molecules ExoMolOP publishes no k-table for; NOT_A_TABLE_ABSORBER are absent on purpose: atoms (no IR bands),
+# the CIA and Rayleigh gases H2 and He, and the dipole-free homonuclear N2, O2 and S2.
+UNMODELED_VMR = 1.0e-4
+PHOTOSPHERE_BAR = (1.0e-5, 1.0e-2)
+NO_OPACITY_TABLE = ("CS2", "C2H6")
+NOT_A_TABLE_ABSORBER = (
+    *("H", "O", "C", "N", "S", "O_1", "N_2D", "H2", "He", "N2", "O2", "S2"),
+    *("Li", "F", "Na", "Mg", "Si", "P", "Cl", "K", "Ti", "V", "Cr", "Fe", "Rb", "atCs"),
+)
 
 # ---- 3. Numerical tolerances ----
 

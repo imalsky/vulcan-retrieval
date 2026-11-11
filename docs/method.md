@@ -28,9 +28,9 @@ $$\theta = [\ln Z,\ \Delta\ln({\rm C/O}),\ \ln K_{zz},\ [s_o],\ [\alpha_K],\ \te
 
 $s_o$ is ln of the S/O multiple of the baseline, $\alpha_K$ the Kzz power-law slope, and brackets mark optional entries.
 The chemistry and T-P entries re-converge VULCAN (Tsai et al. 2021) and are the expensive part of every likelihood call.
-$\ln R_0$, $\ln M$ (Gaussian, RT-only) and the cloud parameters enter only the RT, and the instrument offsets apply after
-the spectrum. Planet identity enters through what the spec sets: the observed spectrum, the VULCAN baseline config,
-gravity and radii, and the priors.
+$\ln R_0$, $\ln M$ (Gaussian, RT-only) and the cloud parameters (two for `powerlaw`, one for `deck`, none for `none`)
+enter only the RT, and the instrument offsets apply after the spectrum. Planet identity enters through what the spec
+sets: the observed spectrum, the VULCAN baseline config, gravity and radii, and the priors.
 
 ## T-P profile
 
@@ -39,6 +39,9 @@ exojax's `atmprof_Guillot` (Kawahara et al. 2022) is the irradiated analytic pro
 grid and the ART grid. The chemistry side rebuilds the rates and the T- and composition-dependent structure from it; the
 photolysis cross sections are T-independent. The exojax side builds its own hydrostatic transit geometry from the same
 T(P) and the chemistry's mean molecular weight, interpolated with `interp_map`.
+
+The profile is never clipped: a draw with a layer outside [220, 2980] K on either grid (the engine's 200-3000 K opacity
+window inset by `T_EDGE_INSET_K`) is rejected.
 
 $f = 1/4$ is the global-average irradiation convention, an analytic-shape choice and not a terminator measurement, so the
 retrieved $(T_{\rm irr}, \kappa, \gamma)$ are flexible shape parameters of the limb profile. The deep parameter, a fixed
@@ -52,7 +55,10 @@ adiabat matched there, a sensitivity model: the join is imposed.
 
 ## Observations
 
-Product CSVs follow the Carter & May (2024) convention. The binning operator is an exact matrix, so a binned depth's JVP is
+Product CSVs follow the Carter & May (2024) convention. A spec that names a data source is fitted on its bins, or
+refused if fewer than `MIN_REAL_BINS` lie in the window and the model band, in a synthetic run too; a synthetic run that
+names no source runs on the constant-R synthetic grid (`SYNTH_R`, `SYNTH_SIGMA_PPM`), with the noise scaled by
+`truth_noise_inflation`. The binning operator is an exact matrix, so a binned depth's JVP is
 $B$ times the native depth's. It applies no instrument line-spread function, so a bin must span at least two model bands of
 the R1000 tables; that admits the native 0.015 um NIRCam bins of Welbanks et al. (2024).
 
@@ -79,8 +85,8 @@ spread_batch) that carried the same version string.
 Padding and out-of-window draws cost no solve: a chunk shorter than `n_batch` is filled with copies of its last row, and the
 evaluator masks those and every T-P-invalid row. The RT runs only on the rows whose log L can be kept.
 
-Lanes are `cfg.cold_lanes`, times `FFI_BLOCKS_PER_SM` under the ffi solver, whose one-buffer kernels keep that many lanes
-resident per SM.
+Lanes are `cfg.cold_lanes`, the number that runs under every solver; the ffi solver's one-buffer kernels keep three per
+SM resident, so the GH200 specs state 528. `--dry-run` prints the lanes and the batch width.
 
 ### Warm starts
 
@@ -110,9 +116,12 @@ warm-start counts summed over jobs. A finished run adds `nautilus_posterior.npz`
 ## Report
 
 `derived_quantities` gives weighted 16/50/84% quantiles of: metallicity as O/H and as total metals (C and S at their own
-knobs, with the Lodders 2020 photospheric abundances), C/O, S/O, the Kzz factor and the absolute log10 Kzz at 1 mbar, the
-weight near the prior floor, on a case with a ceiling the weight above it and the posterior truncated at it, T at the deep
-level and $T_{\rm int}$, and the integrated offsets and inflations. `_conditioning_map` shows where the rejected draws sit.
+knobs, with the Lodders 2020 photospheric abundances), C/O (e^c_o times the case's C_H / O_H,
+`provenance.baseline_c_to_o`), S/O, the Kzz factor and the absolute log10 Kzz at 1 mbar, the weight near the prior floor,
+with the spec's `report_kzz_ceiling_x` the weight above it and the posterior truncated at it, T at the deep level and
+$T_{\rm int}$, and the integrated offsets and inflations. `_conditioning_map` shows where the rejected draws sit. The
+certificate's caveats name every network species with no opacity table whose mean VMR over 1e-5 to 1e-2 bar exceeds
+1e-4 in a re-solved draw (`--spectra N`), the rule of jwst-transit-authority's `certify.unmodeled_absorbers`.
 
 Model spectra (`--spectra N`) cost the pipeline build and compile plus one batched cold two-stage solve of N columns and N RTs,
 about one likelihood batch of the run at width N. A draw whose cold solve does not certify is left out of the bands and counted
@@ -156,11 +165,14 @@ only after it passes.
 | Variant | Change |
 |---|---|
 | `base` | The run's own model |
-| `network2025` | `thermo/SNCHO_photo_network_2025.txt` |
 | `dayside` | Dayside-average photochemistry geometry: `sl_angle` acos(0.5), `f_diurnal` 0.5 |
 | `twolimb` | Two Guillot limbs at Tirr -/+ `TWO_LIMB_DTIRR_K`, depths averaged |
-| `mass` | The planet mass at +-1 sigma in the RT, at frozen chemistry |
-| `spot` | The transit-light-source factor of a spotted star |
+| `mass` | The planet mass at +-`prior_lnM_sigma` (the run's) in the RT, at frozen chemistry |
+| `spot` | The transit-light-source factor of a spotted star: `--spot-t-phot`, `--spot-dt`, `--spot-f`, required |
+
+The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`
+and `opacity_leave_one_out.py` each need `--spec runs/<case>/<name>.yaml` and write to `output/<case>/validation/`. The
+elemental audit draws the case's whole chemistry block, `s_o` and `kzz_slope` included when the case infers them.
 
 ## Glossary
 

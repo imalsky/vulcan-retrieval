@@ -1,6 +1,6 @@
 """Numerical convergence of the binned transit depth in ``art_nlayer``, on the production RT path.
 
-    python validation/resolution_ladder.py [--jacobian]
+    python validation/resolution_ladder.py --spec runs/<case>/<name>.yaml [--jacobian]
 
 Transmission is nonlinear in optical depth, so a grid that does not resolve the physics does not average into the
 correct R=100 bin. The band grid and quadrature come from the tables, so the free axis is the ART vertical grid. The
@@ -29,8 +29,7 @@ import _artifact
 GATE_PPM = 5.0
 GATE_JAC_REL = 0.01
 BIN_R = 100.0
-BAND = (1900.0, 9900.0)  # production retrieval band (cm^-1)
-LADDER = (67, 101, 151)  # art_nlayer rungs; the lowest must be production's
+LADDER = (67, 101, 151)  # art_nlayer rungs; the lowest must be the case's
 
 
 def production_pair(rungs, production_value, knob="art_nlayer"):
@@ -129,22 +128,26 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("--jacobian", action="store_true", help="also compare d(binned)/dlnZ per rung (jvp; expensive)")
+    ap.add_argument("--spec", required=True, help="the run specification whose case to ladder")
     args = ap.parse_args()
     knob = "art_nlayer"
 
+    from retrieval_framework import config_schema as C
+
+    cfg, results = _artifact.spec_case(args.spec)
+    C.export_network(cfg)  # before vulcan3 is imported
     # import order matters: vulcan_chem before exojax
     from vulcan_forward import vulcan_chem
     import jax.numpy as jnp
 
-    # The production case is the specification: nz, art_nlayer, art_ptop_bar,
-    # molecules, yconv_cri, count_max and dt_max all come from it. The state is
-    # the baseline column at the VULCAN baseline T-P (no Guillot hook).
-    profile = _artifact.production_profile(nu_min=BAND[0], nu_max=BAND[1])
+    # The case is the specification: its band, nz, art_nlayer, art_ptop_bar, molecules, yconv_cri, count_max and
+    # dt_max all come from it. The state is the baseline column at the VULCAN baseline T-P (no Guillot hook).
+    profile = cfg.profile()
     chem = vulcan_chem.build_chem_model(profile)
     theta0 = jnp.zeros(4, dtype=jnp.float64)
     y0 = chem.converged_y(theta0)
 
-    edges = _artifact.make_r_bins(1e4 / BAND[1], 1e4 / BAND[0], BIN_R)
+    edges = _artifact.make_r_bins(1e4 / cfg.nu_max, 1e4 / cfg.nu_min, BIN_R)
 
     results = {}
     for rung in LADDER:
@@ -178,8 +181,8 @@ def main() -> int:
         measurements=measurements,
         status=status,
         summary=(
-            f"opacity_mode=exomolop; {knob} ladder {rungs}; "
-            f"production is {profile[knob]}. "
+            f"case {args.spec}; {knob} ladder {rungs}; "
+            f"the case's is {profile[knob]}. "
             + (
                 "The production resolution is converged at the declared gates."
                 if ok
@@ -193,6 +196,7 @@ def main() -> int:
             )
         ),
         resolved_config=profile,
+        out_dir=results,
     )
     return 0 if ok else 1
 

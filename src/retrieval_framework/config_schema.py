@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR, check_band, check_core_molecules
+from vulcan_forward.constants import ART_PTOP_BAR, check_band, check_core_molecules
 
 from retrieval_framework import constants
 
@@ -35,13 +35,24 @@ __all__ = [
     "validate_config",
 ]
 
-# Default lane count, the smoke spec's; the production spec sets cold_lanes itself.
-_OFF_GPU_LANES = 144
-
-
-# Keys a run specification must state: each belongs to the planet and its data, and the schema's default is not this
-# planet's. run_setup.load_spec refuses a spec that leaves one out.
-CASE_KEYS = frozenset({"tp_gravity_cgs", "p_ref_bar", "molecules", "nu_min", "nu_max", "cloud_model"})
+# Keys a run specification must state: each belongs to the planet, its data or its run, and a schema default would not
+# be this case's. run_setup.load_spec refuses a spec that leaves one out; its table holds the keys one mode needs.
+CASE_KEYS = frozenset(
+    {
+        "tp_gravity_cgs",
+        "p_ref_bar",
+        "art_pbtm_bar",
+        "molecules",
+        "nu_min",
+        "nu_max",
+        "cloud_model",
+        "count_max",
+        "cold_lanes",
+        "prior_Tirr",
+        "prior_lnM_sigma",
+        "baseline_metallicity_solar",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -66,11 +77,12 @@ class Config:
     omit_core_molecules: tuple[str, ...] = ()
     nu_min: float = 1923.0  # ~5.2 um
     nu_max: float = 3450.0  # ~2.9 um  (NIRSpec G395H/PRISM red)
-    # Correlated-k from the ExoMolOP R=1000 tables, the only value build_rt_model accepts; the band grid
-    # and quadrature come from the files, so there is no spectral-resolution knob.
-    opacity_mode: str = "exomolop"
     art_nlayer: int = 67
     art_ptop_bar: float = ART_PTOP_BAR  # model top: chemistry AND RT end here (engine rule)
+    # RT grid bottom, bar; no default: it must sit above the case's chemistry bottom (the engine refuses one below).
+    art_pbtm_bar: float | None = None
+    # exojax ArtTransPure's chord quadrature: "simpson" or "trapezoid".
+    rt_integration: str = "simpson"
     use_rayleigh: bool = True  # H2/He Rayleigh scattering (ExoJax; zero free params)
     co_mode: str = "fixed_O"  # how the C/O guess is built (the engine repairs it exactly)
     count_min: int | None = None
@@ -83,19 +95,19 @@ class Config:
     # ---- planet identity: validate_config refuses an unset value ----
     # The VULCAN baseline config, a name or path vulcan3.load_config takes (e.g. "W39b").
     vulcan_cfg_name: str = ""
-    # The kinetics network, a vulcan3 path (thermo/...); no default: the spec names it
-    # (validate_config). Import-frozen: export_network selects it before vulcan3 is
-    # imported and the forward build refuses an engine frozen on another.
+    # The kinetics network, a vulcan3 path (thermo/...), and its elements; no default: the spec names both
+    # (validate_config). Import-frozen: export_network hands them to the engine before vulcan3 is imported, and the
+    # engine refuses a later call with another pair.
     network: str = ""
+    atom_list: tuple[str, ...] = ()
     # Planet/stellar radii for the RT depth normalization (cm).
     # tp_gravity_cgs below doubles as the RT's gravity at rp_cm; the planet mass
     # GM = g rp_cm^2 stays fixed when lnR0 scales the radius.
     rp_cm: float | None = None
     rstar_cm: float | None = None
-    # Pressure (bar) where rp_cm and tp_gravity_cgs apply; default the RT grid bottom, where ExoJAX
-    # defines radius_btm. lnR0 is the log radius change here, so moving it needs a matching
-    # prior_lnR0 (the W39b case anchors at 1 mbar).
-    p_ref_bar: float = ART_PBTM_BAR
+    # Pressure (bar) where rp_cm and tp_gravity_cgs apply. lnR0 is the log radius change here, so moving it needs a
+    # matching prior_lnR0 (the W39b case anchors at 1 mbar).
+    p_ref_bar: float | None = None
 
     # ---- observed spectrum source ----
     # obs_products maps a group label to its product CSVs in obs_dir; combo selects the groups to
@@ -129,7 +141,8 @@ class Config:
     tp_nabla_ad: float = 0.29  # dlnT/dlnP of the H2-He adiabat near 1000-2000 K
 
     # ---- clouds: "powerlaw" is ExoJax's kappa(nu) = kappac0 (nu / CLOUD_NUC0)^alphac, cm^2 per gram
-    #      of atmosphere, uniformly mixed; "deck" is an opaque grey deck below a free pressure ----
+    #      of atmosphere, uniformly mixed; "deck" is an opaque grey deck below a free pressure; "none" is a clear
+    #      atmosphere with no cloud term ----
     cloud_model: str = "powerlaw"
     prior_log10kappa_cloud: tuple[float, float] = (-7.0, 1.0)  # cm^2/g at 3.5 um
     truth_log10kappa_cloud: float = -6.5  # ~cloud-free injection
@@ -180,9 +193,8 @@ class Config:
     truth_log10gamma: float = -0.4
     prior_Tint: tuple[float, float] = (100.0, 500.0)  # K, used when tp_infer_Tint
     truth_Tint: float = 150.0
-    # T at tp_deep_p_bar (K), used with tp_deep_param="T1bar": the default is
-    # the engine's valid RT window; the irradiation term and the window shape
-    # the accepted prior (report it).
+    # T at tp_deep_p_bar (K), used with tp_deep_param="T1bar": the default lies inside the [220, 2980] K T-P
+    # window; the irradiation term and the window shape the accepted prior (report it).
     prior_T1bar: tuple[float, float] = (320.0, 2980.0)
     truth_T1bar: float = 1500.0
     prior_log10P_rcb: tuple[float, float] = (-1.0, 0.88)  # bar; used with tp_adiabat
@@ -224,12 +236,16 @@ class Config:
     allow_condense_inference: bool = False
     # Rows per lax.map chunk through the ExoJAX RT. 0 = one all-row batch.
     smc_rt_chunk: int = 16
-    # Lanes of the chemistry queue: a lane that certifies is refilled with the next draw in the same
-    # while loop, so wall time follows total work / lanes. A GH200 runs one kernel wave on 132 SMs;
-    # run_nautilus multiplies the lanes by FFI_BLOCKS_PER_SM under the ffi solver.
-    cold_lanes: int = _OFF_GPU_LANES
+    # Lanes of the chemistry queue, the number that runs: a lane that certifies is refilled with the next draw in the
+    # same while loop, so wall time follows total work / lanes. No default (CASE_KEYS); 0 is refused.
+    cold_lanes: int = 0
     # Lanes refilled per pass, capped at cold_lanes; more amortizes the refill.
     cold_refill_chunk: int = 8
+
+    # ---- report only ----
+    # A Kzz ceiling, a multiple of the case's base Kzz: the report also quotes the posterior truncated there. None: no
+    # truncated block.
+    report_kzz_ceiling_x: float | None = None
 
     # ---- walltime governor ----
     # Soft wall-clock budget, s (0: none); run_nautilus stops at it with its checkpoint written and
@@ -252,17 +268,19 @@ class Config:
             "omit_core_molecules": list(self.omit_core_molecules),
             "nu_min": float(self.nu_min),
             "nu_max": float(self.nu_max),
-            "opacity_mode": str(self.opacity_mode),
             "art_nlayer": int(self.art_nlayer),
             "art_ptop_bar": float(self.art_ptop_bar),
+            "rt_integration": str(self.rt_integration),
             "use_rayleigh": bool(self.use_rayleigh),
             "co_mode": str(self.co_mode),
             "kzz_mode": str(self.kzz_mode),
-            "kzz_p_ref_bar": float(self.kzz_p_ref_bar),
             "cfg_overrides": dict(self.cfg_overrides),
             "gs_cgs": float(self.tp_gravity_cgs),  # RT g at rp_cm = the T-P gravity
-            "p_ref_bar": float(self.p_ref_bar),  # where rp_cm/gs_cgs apply
+            "network": str(self.network),
+            "atom_list": list(self.atom_list),
         }
+        if self.kzz_mode == "powerlaw":  # the engine refuses the key under any other mode
+            p["kzz_p_ref_bar"] = float(self.kzz_p_ref_bar)
         # is not None: an explicit 0 must reach the engine.
         if self.count_min is not None:
             p["count_min"] = int(self.count_min)
@@ -276,15 +294,16 @@ class Config:
             p["rp_cm"] = float(self.rp_cm)
         if self.rstar_cm is not None:
             p["rstar_cm"] = float(self.rstar_cm)
+        if self.p_ref_bar is not None:
+            p["p_ref_bar"] = float(self.p_ref_bar)  # where rp_cm/gs_cgs apply
+        if self.art_pbtm_bar is not None:
+            p["art_pbtm_bar"] = float(self.art_pbtm_bar)
         return p
 
 
 # Fixed choices, not Config fields: no spec sets them.
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
 _FFI_COMPUTE_CAPABILITY = "9.0"
-# Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
-# the banner's C/O range and the report's C/O read it.
-_BASELINE_C_TO_O = 0.549
 
 
 @dataclass(frozen=True)
@@ -395,7 +414,7 @@ def specs_from_config(cfg: Config, groups: list[str] | None = None) -> list[Para
 
     if cfg.cloud_model == "deck":
         add("log10P_deck", r"$\log_{10}P_{\rm deck}$", *cfg.prior_log10P_deck, cfg.truth_log10P_deck, "cloud")
-    else:
+    elif cfg.cloud_model == "powerlaw":
         add(
             "log10kappa_cloud",
             r"$\log_{10}\kappa_{\rm cl}$",
@@ -475,7 +494,10 @@ def hardware_profile() -> dict:
 
 
 def export_network(cfg: Config) -> None:
-    """Select ``cfg.network`` for the engine; vulcan3 freezes the network at its first import, so this runs before it.
+    """Hand ``cfg.network`` and ``cfg.atom_list`` to the engine, which freezes both at vulcan3's first import.
+
+    Imports the engine's ``vulcan_chem``, and with it jax: call it after ``run_setup.export_runtime``. The engine's
+    ``select_network`` raises ``RuntimeError`` when the environment, or a vulcan3 already imported, holds another pair.
 
     Parameters
     ----------
@@ -485,27 +507,16 @@ def export_network(cfg: Config) -> None:
     Raises
     ------
     ValueError
-        If the network is unset.
-    RuntimeError
-        If the environment disagrees, or vulcan3 is already imported.
+        If the network or the atom list is unset.
     """
-    if not str(cfg.network).strip():
+    if not str(cfg.network).strip() or not cfg.atom_list:
         raise ValueError(
-            "network is unset: name the kinetics network under config:, "
-            "e.g. network: thermo/SNCHO_photo_network_2025.txt"
+            f"network={cfg.network!r}, atom_list={list(cfg.atom_list)}: name both under config:, e.g. network: "
+            "thermo/SNCHO_photo_network_2025.txt and atom_list: [H, O, C, N, S]"
         )
-    have = os.environ.get("VULCAN3_NETWORK")
-    if have is not None and have != cfg.network:
-        raise RuntimeError(
-            f"VULCAN3_NETWORK={have!r} in the environment disagrees with "
-            f"the config's network ({cfg.network!r}): unset it, the "
-            "config decides"
-        )
-    if "vulcan3" in sys.modules and have is None:
-        raise RuntimeError(
-            "export_network: vulcan3 is already imported; select the network before the first vulcan3 import"
-        )
-    os.environ["VULCAN3_NETWORK"] = cfg.network
+    from vulcan_forward.vulcan_chem import select_network
+
+    select_network(cfg.network, cfg.atom_list)
 
 
 def choose_solver() -> str:
@@ -609,8 +620,22 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
         raise ValueError(f"tp_deep_p_bar must be > 0 bar, got {cfg.tp_deep_p_bar!r}")
     if cfg.kzz_mode not in ("scale", "powerlaw"):
         raise ValueError(f"kzz_mode={cfg.kzz_mode!r}: expected 'scale' or 'powerlaw'")
-    if cfg.cloud_model not in ("powerlaw", "deck"):
-        raise ValueError(f"cloud_model={cfg.cloud_model!r}: expected 'powerlaw' or 'deck'")
+    if cfg.cloud_model not in ("powerlaw", "deck", "none"):
+        raise ValueError(f"cloud_model={cfg.cloud_model!r}: expected 'powerlaw', 'deck' or 'none'")
+    if not cfg.use_rayleigh:
+        raise ValueError(
+            "use_rayleigh=False is refused: H2 and He Rayleigh scattering is in every retrieval (oracle.md, the "
+            "standard opacity terms). Drop the key."
+        )
+    if bool(cfg.obs_dir) != bool(cfg.obs_products):
+        raise ValueError(
+            f"obs_dir={cfg.obs_dir!r}, obs_products={cfg.obs_products!r}: a data source names both, a synthetic grid "
+            "neither"
+        )
+    if cfg.report_kzz_ceiling_x is not None and not float(cfg.report_kzz_ceiling_x) > 0.0:
+        raise ValueError(
+            f"report_kzz_ceiling_x must be > 0 (a multiple of the base Kzz), got {cfg.report_kzz_ceiling_x}"
+        )
     if cfg.infer_lnM and not (float(cfg.prior_lnM_sigma) > 0.0):
         raise ValueError(f"prior_lnM_sigma must be > 0 with infer_lnM, got {cfg.prior_lnM_sigma!r}")
     if not str(cfg.vulcan_cfg_name).strip():
@@ -623,15 +648,27 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
             "network is unset: the case must name its kinetics network "
             "(e.g. network: thermo/SNCHO_photo_network_2025.txt)"
         )
+    if not cfg.atom_list:
+        raise ValueError(
+            "atom_list is unset: the case must name the network's elements (e.g. atom_list: [H, O, C, N, S])"
+        )
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(
             f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): the case must set both (cm)"
         )
+    if cfg.p_ref_bar is None or cfg.art_pbtm_bar is None:
+        raise ValueError(
+            f"p_ref_bar={cfg.p_ref_bar}, art_pbtm_bar={cfg.art_pbtm_bar}: the case must set both (bar): the pressure "
+            "where rp_cm and tp_gravity_cgs apply, and the RT grid bottom above the chemistry bottom"
+        )
+    if cfg.rt_integration not in ("simpson", "trapezoid"):
+        raise ValueError(f"rt_integration={cfg.rt_integration!r}: expected 'simpson' or 'trapezoid'")
     positive = {
         "rp_cm": cfg.rp_cm,
         "rstar_cm": cfg.rstar_cm,
         "tp_gravity_cgs": cfg.tp_gravity_cgs,
         "p_ref_bar": cfg.p_ref_bar,
+        "art_pbtm_bar": cfg.art_pbtm_bar,
     }
     bad = {k: v for k, v in positive.items() if not (math.isfinite(float(v)) and float(v) > 0.0)}
     if bad:
@@ -673,6 +710,9 @@ def describe_config(cfg: Config, name: str = "") -> str:
 
         groups = list(OBS.load_real_observations(cfg)["groups"])
     specs = specs_from_config(cfg, groups=groups)
+    from retrieval_framework.provenance import baseline_c_to_o
+
+    c_to_o = baseline_c_to_o(cfg.vulcan_cfg_name, cfg.cfg_overrides)
     W = 84
     bar = "=" * W
 
@@ -722,7 +762,8 @@ def describe_config(cfg: Config, name: str = "") -> str:
         + f"   mass={('N(0, ' + format(cfg.prior_lnM_sigma, 'g') + ') in lnM') if cfg.infer_lnM else 'fixed'}"
         f"   cloud_model={cfg.cloud_model}",
         rule("data"),
-        f"    {data}   band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={list(cfg.combo)}",
+        f"    {data}   "
+        + (f"band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={groups}" if cfg.obs_dir else "synthetic bin grid"),
         rule("run"),
         f"    rt_chunk={cfg.smc_rt_chunk}   walltime governor: "
         f"{cfg.walltime_seconds / 3600.0:.1f} h" + ("  (no limit)" if cfg.walltime_seconds <= 0 else ""),
@@ -732,7 +773,7 @@ def describe_config(cfg: Config, name: str = "") -> str:
         pt = {"log10_uniform": "log10U", "gaussian": "N"}.get(s.prior_type, "U")
         note = ""
         if s.name == "c_o":
-            note = f"  [C/O {math.exp(s.lo) * _BASELINE_C_TO_O:.2g}-{math.exp(s.hi) * _BASELINE_C_TO_O:.2g}]"
+            note = f"  [C/O {math.exp(s.lo) * c_to_o:.2g}-{math.exp(s.hi) * c_to_o:.2g}]"
         elif s.name == "log10gamma":
             note = f"  [gamma {10**s.lo:.2g}-{10**s.hi:.2g}]"
         elif s.name == "lnKzz":

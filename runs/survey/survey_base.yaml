@@ -33,13 +33,17 @@ sampler:
 config:
   seed: 20261029
   network: thermo/SNCHO_photo_network_2025.txt
+  atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
 
   # ---- forward model (as the WASP-107b case) -----------------------------------------
   nz: 100                              # log-uniform over 1e-9..10 bar (10 per decade)
-  molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO]
+  # H2CO and CS: the per-planet leave-one-out screen found each over the gate on one planet (notes "Physics
+  # assumptions and limitations"); one list for all six planets.
+  molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO, H2CO, CS]
   nu_min: 1900.0                       # cm^-1 (5.26 um); the band every production run uses
   nu_max: 9900.0                       # cm^-1 (1.01 um)
   art_nlayer: 67
+  art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
   cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
   count_max: 5000
@@ -54,7 +58,7 @@ config:
   # ---- T-P: Guillot profile, f = 1/4 (the planet sets prior_Tirr) --------------------
   tp_infer_Tint: true
   tp_deep_param: T1bar
-  prior_T1bar: [320.0, 2980.0]         # K, the opacity window; out-of-window profiles are rejected
+  prior_T1bar: [320.0, 2980.0]         # K, inside the 220-2980 K T-P window; out-of-window profiles are rejected
   prior_log10kappa: [-3.5, 0.5]        # IR opacity, cm^2/g
   prior_log10gamma: [-3.0, 0.3010299956639812]
 
@@ -79,5 +83,5 @@ config:
   integrate_nuisance: true
 
   # ---- lanes and wall ------------------------------------------------------------------
-  cold_lanes: 176
+  cold_lanes: 528                      # the lanes that run: 176 x 3 one-buffer ffi blocks per SM
   walltime_seconds: 165600             # 46 h governor (gpu_long)

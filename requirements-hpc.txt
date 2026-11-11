@@ -6,7 +6,7 @@
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
 # TestPyPI; THIS file carries the chemistry commits the next NAS run uses -- keep the
 # pins at or above those floors
-# (vulcan3>=0.18.0, vulcan-forward>=0.30.0).
+# (vulcan3>=0.18.0, vulcan-forward>=0.31.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
 # ExoJax is a plain pip dependency; the opacity data (k-tables, CIA) are

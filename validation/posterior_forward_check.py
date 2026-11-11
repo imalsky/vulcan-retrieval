@@ -1,11 +1,14 @@
 """Forward checks at posterior draws: one model change at a time, the same draws, the shift against the data's sigma.
 
     python validation/posterior_forward_check.py run <out_dir> --variant base
+    python validation/posterior_forward_check.py run <out_dir> --variant spot --spot-t-phot 5400 --spot-dt 400 \
+        --spot-f 0.03
     python validation/posterior_forward_check.py compare <base.npz> <variant.npz>
 
 ``run`` solves seeded weighted posterior rows cold on the run's own pipeline with the variant's change. ``compare``
-reports the worst per-bin |shift| / sigma and the band-mean shifts in the SO2 and CO2 bands. One variant per process,
-since vulcan3 freezes the network at import. The variants are in docs/method.md.
+reports the worst per-bin |shift| / sigma and the band-mean shifts in the SO2 and CO2 bands. The mass variant moves lnM
+by the run's ``prior_lnM_sigma``; the spotted star is the user's, named on the command line. The variants are in
+docs/method.md.
 """
 
 from __future__ import annotations
@@ -24,13 +27,13 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 
-NETWORK_2025 = "thermo/SNCHO_photo_network_2025.txt"
 TWO_LIMB_DTIRR_K = 150.0  # skin T ~ 0.59 Tirr: +-150 K in Tirr is ~180 K between the limbs
-MASS_SIGMA = 0.11  # the literature mass error in ln M
-SPOT_T_PHOT_K, SPOT_DT_K, SPOT_F = 5400.0, 400.0, 0.03  # a quiet G8 star
+# Dayside-average photochemistry: the stellar zenith angle acos(0.5), 60 deg, and the diurnal factor 0.5, the
+# hemisphere-mean geometry of a dayside column.
+DAYSIDE_SL_ANGLE_RAD, DAYSIDE_F_DIURNAL = math.acos(0.5), 0.5
 SO2_BAND_UM, CO2_BAND_UM = (3.95, 4.15), (4.20, 4.45)
 H_PLANCK, C_LIGHT, K_B = 6.62607015e-27, 2.99792458e10, 1.380649e-16
-VARIANTS = ("base", "network2025", "dayside", "twolimb", "mass", "spot")
+VARIANTS = ("base", "dayside", "twolimb", "mass", "spot")
 
 
 def _planck_ratio(wl_um, t_a, t_b):
@@ -39,7 +42,7 @@ def _planck_ratio(wl_um, t_a, t_b):
     return np.expm1(x / t_b) / np.expm1(x / t_a)
 
 
-def spot_factor(wl_um, t_phot=SPOT_T_PHOT_K, dt=SPOT_DT_K, f=SPOT_F):
+def spot_factor(wl_um, t_phot, dt, f):
     """Transit-light-source factor (Rackham et al. 2018): the observed depth is
     the true depth times 1 / (1 - f (1 - B_spot / B_phot)).
     """
@@ -66,8 +69,8 @@ def _twolimb(pipe, theta, names):
     return {"model": 0.5 * (mu_m + mu_e), "certified": ok_m & ok_e, "model_morning": mu_m, "model_evening": mu_e}
 
 
-def _mass(pipe, theta):
-    """The depth at lnM +- MASS_SIGMA on the base columns: the offsets match on both sides, so the shift is the RT's."""
+def _mass(pipe, theta, sigma):
+    """The depth at lnM +- sigma on the base columns: the offsets match on both sides, so the shift is the RT's."""
     import jax.numpy as jnp
 
     Y, mu, ok = pipe.solve_cold(theta)
@@ -83,7 +86,7 @@ def _mass(pipe, theta):
         return np.asarray(rows)
 
     base = at(0.0)
-    return {"model": mu + (at(+MASS_SIGMA) - base), "certified": ok, "model_minus": mu + (at(-MASS_SIGMA) - base)}
+    return {"model": mu + (at(+sigma) - base), "certified": ok, "model_minus": mu + (at(-sigma) - base)}
 
 
 def run(args) -> int:
@@ -92,18 +95,15 @@ def run(args) -> int:
     from retrieval_framework.nautilus_report import _config_from_json
 
     cfg = _config_from_json(out / "config.json")
-    if args.variant == "network2025":
-        cfg = replace(cfg, network=NETWORK_2025)
     C.export_network(cfg)  # before any vulcan3 import
     from vulcan_forward import vulcan_chem  # noqa: F401  (import order)
     from retrieval_framework import pipeline as P
 
     settings = {"variant": args.variant, "run": str(out), "draws": int(args.draws), "seed": int(args.seed)}
     if args.variant == "dayside":
-        cfg = replace(cfg, cfg_overrides={**cfg.cfg_overrides, "sl_angle": math.acos(0.5), "f_diurnal": 0.5})
-        settings.update(sl_angle_deg=60.0, f_diurnal=0.5)
-    elif args.variant == "network2025":
-        settings.update(network=NETWORK_2025)
+        over = {"sl_angle": DAYSIDE_SL_ANGLE_RAD, "f_diurnal": DAYSIDE_F_DIURNAL}
+        cfg = replace(cfg, cfg_overrides={**cfg.cfg_overrides, **over})
+        settings.update(over)
     theta, names = _draws(out, args.draws, args.seed)
     logging.info("solver: %s", C.choose_solver())
     pipe = P.build_pipeline(cfg)
@@ -120,12 +120,13 @@ def run(args) -> int:
         payload.update(_twolimb(pipe, theta, names))
         settings.update(dTirr_K=TWO_LIMB_DTIRR_K)
     elif args.variant == "mass":
-        payload.update(_mass(pipe, theta))
-        settings.update(lnM_sigma=MASS_SIGMA)
+        payload.update(_mass(pipe, theta, float(cfg.prior_lnM_sigma)))
+        settings.update(lnM_sigma=float(cfg.prior_lnM_sigma))
     elif args.variant == "spot":
         _, mu, ok = pipe.solve_cold(theta)
-        payload.update(model=mu * spot_factor(payload["wl"])[None, :], certified=ok, model_unspotted=mu)
-        settings.update(t_phot_K=SPOT_T_PHOT_K, dt_K=SPOT_DT_K, f_spot=SPOT_F)
+        star = (args.spot_t_phot, args.spot_dt, args.spot_f)
+        payload.update(model=mu * spot_factor(payload["wl"], *star)[None, :], certified=ok, model_unspotted=mu)
+        settings.update(t_phot_K=star[0], dt_K=star[1], f_spot=star[2])
     else:
         _, mu, ok = pipe.solve_cold(theta)
         payload.update(model=mu, certified=ok)
@@ -257,10 +258,15 @@ def main() -> int:
     r.add_argument("--variant", choices=VARIANTS, required=True)
     r.add_argument("--draws", type=int, default=16)
     r.add_argument("--seed", type=int, default=0)
+    r.add_argument("--spot-t-phot", type=float, help="spot variant: the photosphere's temperature, K")
+    r.add_argument("--spot-dt", type=float, help="spot variant: how much cooler the spots are, K")
+    r.add_argument("--spot-f", type=float, help="spot variant: the spot covering fraction")
     c = sub.add_parser("compare")
     c.add_argument("base")
     c.add_argument("variant")
     args = ap.parse_args()
+    if args.cmd == "run" and args.variant == "spot" and None in (args.spot_t_phot, args.spot_dt, args.spot_f):
+        ap.error("--variant spot needs --spot-t-phot, --spot-dt and --spot-f: the star is the case's, with no default")
     return run(args) if args.cmd == "run" else compare(args)
 
 

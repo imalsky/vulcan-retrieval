@@ -2,13 +2,16 @@
 parameter count it is documented with and to its derived output directory; a variant
 replaces its base's values one level deep, whole; a malformed file is refused by name;
 the runtime block is exported only when the environment does not contradict it;
-the forward build refuses an engine frozen on another network than the config's;
+a network other than the one vulcan3 froze is refused;
 check_inputs refuses a missing input file before anything is queued or built;
 tools/submit.py charges $PBS_GROUP and sets the wall from the spec's governor.
 """
 
 import importlib.util
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,16 +26,28 @@ from retrieval_framework import run_setup as R
 MINIMAL = {
     "vulcan_cfg_name": "W39b",
     "network": "thermo/SNCHO_photo_network_2025.txt",
+    "atom_list": ["H", "O", "C", "N", "S"],
     "rp_cm": 1.0,
     "rstar_cm": 1.0,
     # the keys every spec states (config_schema.CASE_KEYS)
     "tp_gravity_cgs": 422.0,
     "p_ref_bar": 1.0e-3,
+    "art_pbtm_bar": 7.0,
     "molecules": ["H2O", "CO2", "CO", "CH4", "NH3", "HCN", "H2S", "SO2"],
     "nu_min": 1923.0,
     "nu_max": 3450.0,
     "cloud_model": "powerlaw",
+    "count_max": 5000,
+    "cold_lanes": 8,
+    "prior_Tirr": [800.0, 2600.0],
+    "prior_lnM_sigma": 0.11,
+    "baseline_metallicity_solar": 10.0,
+    "tp_Tint_K": 150.0,  # tp_infer_Tint is off (run_setup._MODE_REQUIRED)
 }
+
+
+def _drop(*keys):
+    return {k: v for k, v in MINIMAL.items() if k not in keys}
 
 
 def _write(path: Path, doc) -> Path:
@@ -60,7 +75,8 @@ def _write(path: Path, doc) -> Path:
 def test_shipped_spec_loads_to_its_parameter_count(case, name, n_dim):
     run_dir = RUN_DIR.parent / case
     spec = R.load_spec(run_dir / f"{name}.yaml")
-    groups = list(OBS.load_real_observations(spec.cfg)["groups"])
+    # the smoke case names no data source: one synthetic group
+    groups = list(OBS.load_real_observations(spec.cfg)["groups"]) if spec.cfg.obs_dir else ["SYNTH"]
     assert len(C.specs_from_config(spec.cfg, groups=groups)) == n_dim
     assert spec.cfg.out_dir == R.output_base(run_dir) / f"{name}_nautilus"
 
@@ -93,6 +109,29 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
         # a spec states its planet: the schema's default is another planet's
         ({"config": {k: v for k, v in MINIMAL.items() if k != "tp_gravity_cgs"}}, r"\['tp_gravity_cgs'\] unset"),
         ({"config": {k: v for k, v in MINIMAL.items() if k not in ("molecules", "cloud_model")}}, "unset"),
+        # the run's own numbers, no schema default (config_schema.CASE_KEYS)
+        *[
+            ({"config": _drop(k)}, rf"\['{k}'\] unset")
+            for k in ("count_max", "cold_lanes", "prior_Tirr", "prior_lnM_sigma", "baseline_metallicity_solar")
+        ],
+        ({"config": dict(MINIMAL, count_max=None)}, r"\['count_max'\] unset"),
+        # a key the case's mode reads, with no default (run_setup._MODE_REQUIRED)
+        ({"config": _drop("tp_Tint_K")}, r"\['tp_Tint_K'\] unset: tp_infer_Tint: false"),
+        ({"config": dict(MINIMAL, cloud_model="deck")}, r"\['prior_log10P_deck'\] unset"),
+        ({"config": dict(MINIMAL, tp_adiabat=True)}, r"\['prior_log10P_rcb'\] unset"),
+        (
+            {"config": dict(MINIMAL, obs_dir="data/x", obs_products={"G": ["a.csv"]})},
+            r"\['combo', 'obs_wl_hi', 'obs_wl_lo'\] unset",
+        ),
+        # a key the case's mode does not read (run_setup._MODE_KEYS)
+        ({"config": dict(MINIMAL, tp_gamma_fixed=0.3)}, r"\['tp_gamma_fixed'\] are read only with tp_infer_gamma"),
+        ({"config": dict(MINIMAL, tp_infer_Tint=True)}, r"\['tp_Tint_K'\] are read only"),
+        ({"config": dict(MINIMAL, prior_log10P_deck=[-6.0, 0.8])}, "only with cloud_model: deck"),
+        ({"config": dict(MINIMAL, cloud_model="none", prior_cloud_alpha=[0.0, 6.0])}, "cloud_model: powerlaw"),
+        ({"config": dict(MINIMAL, kzz_p_ref_bar=1.0e-3)}, "only with kzz_mode: powerlaw"),
+        ({"config": dict(MINIMAL, tp_nabla_ad=0.3)}, "only with tp_adiabat"),
+        ({"config": dict(MINIMAL, truth_lnZ=0.5)}, "only with generate_synthetic_data"),
+        ({"config": dict(MINIMAL, obs_wl_lo=2.0)}, "only with a data source"),
     ],
 )
 def test_malformed_spec_is_refused_by_name(tmp_path, doc, match):
@@ -147,17 +186,19 @@ def test_submit_charges_pbs_group_and_walls_past_the_governor(tmp_path, monkeypa
 # find_spec, not importorskip: importing exojax before vulcan_chem breaks the
 # import-order guard for every later test in the worker.
 @pytest.mark.skipif(
-    importlib.util.find_spec("exojax") is None, reason="needs exojax (retrieval_forward); CI is stack-free"
+    importlib.util.find_spec("exojax") is None, reason="needs exojax (the engine's vulcan_chem); CI is stack-free"
 )
-def test_forward_build_refuses_an_engine_frozen_on_another_network():
-    """A run's network is its config's: a tool that rebuilt the run without
-    C.export_network would solve other chemistry, so the build refuses.
+def test_the_network_is_refused_once_vulcan3_froze_another():
+    """A run's network is its config's: once vulcan3 froze the session's network, a tool that rebuilds a run on another
+    would solve other chemistry, so export_network refuses it (the engine's select_network).
     """
-    from retrieval_framework import retrieval_forward as RF
+    import vulcan3  # noqa: F401  # frozen on the session's network (conftest)
 
-    RF._check_frozen_network(C.Config(**MINIMAL))  # what the test session froze
-    with pytest.raises(RuntimeError, match="export_network"):
-        RF._check_frozen_network(C.Config(**{**MINIMAL, "network": "thermo/SNCHO_photo_network.txt"}))
+    C.export_network(C.Config(**MINIMAL))
+    with pytest.raises(RuntimeError, match="already imported"):
+        C.export_network(C.Config(**{**MINIMAL, "network": "thermo/SNCHO_photo_network.txt"}))
+    with pytest.raises(RuntimeError, match="already imported"):
+        C.export_network(C.Config(**{**MINIMAL, "atom_list": ["H", "O", "C", "N"]}))
 
 
 @pytest.mark.parametrize(
@@ -168,6 +209,7 @@ def test_forward_build_refuses_an_engine_frozen_on_another_network():
         ("atm", "atm_file"),
         ("obs", "obs.csv"),
         ("window", "bins of"),
+        ("window_synthetic", "bins of"),  # a named source is fitted or refused, in a synthetic run too
     ],
 )
 def test_check_inputs_refuses_a_missing_input_before_any_build(broken, msg, tmp_path, monkeypatch):
@@ -195,8 +237,8 @@ def test_check_inputs_refuses_a_missing_input_before_any_build(broken, msg, tmp_
         over["network"] = "thermo/no_such_network.txt"
     elif broken in ("atm", "obs"):
         (case / {"atm": "atm.txt", "obs": "obs.csv"}[broken]).unlink()
-    elif broken == "window":
-        over.update(obs_wl_lo=4.0, obs_wl_hi=5.0)
+    elif broken in ("window", "window_synthetic"):
+        over.update(obs_wl_lo=4.0, obs_wl_hi=5.0, generate_synthetic_data=broken == "window_synthetic")
     cfg = C.Config(**{**MINIMAL, **over})
     if msg is None:
         R.check_inputs(cfg)
@@ -238,6 +280,42 @@ def test_one_run_directory_check_for_submit_and_the_runner(tmp_path):
         R.check_run_dir(tmp_path, resume=False)
     (tmp_path / "nautilus_checkpoint.hdf5").write_bytes(b"")
     R.check_run_dir(tmp_path, resume=True)
+
+
+@pytest.mark.parametrize("solver", ["fast", "ffi"])
+@pytest.mark.parametrize(("n_batch", "want_batch"), [(None, 24), (10, 10)])
+def test_the_lanes_that_run_are_cold_lanes_under_every_solver(
+    tmp_path, monkeypatch, capsys, solver, n_batch, want_batch
+):
+    """cold_lanes is the lane count that runs, under ffi too; the batch is n_batch, else three points per lane; and the
+    dry run prints both.
+    """
+    from retrieval_framework.run_nautilus import lanes_and_batch, main
+
+    doc = {"runtime": {"solver": solver}, "sampler": {"n_batch": n_batch}, "config": MINIMAL}
+    spec = R.load_spec(_write(tmp_path / "lanes.yaml", doc))
+    assert lanes_and_batch(spec) == (MINIMAL["cold_lanes"], want_batch)
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    main([str(spec.path), "--dry-run"])
+    assert f"lanes: {MINIMAL['cold_lanes']}   batch: {want_batch} points" in capsys.readouterr().out
+
+
+@pytest.mark.slow
+def test_a_fresh_process_builds_the_smoke_case_with_no_network_in_the_environment():
+    """build_pipeline selects the case's network itself: no VULCAN3_* variable and no prior vulcan3 import needed."""
+    repo = Path(__file__).resolve().parents[1]
+    env = {k: v for k, v in os.environ.items() if not k.startswith("VULCAN3_")}
+    job = (
+        "import sys\n"
+        "assert 'vulcan3' not in sys.modules\n"
+        "from retrieval_framework import pipeline as P, run_setup as R\n"
+        "pipe = P.build_pipeline(R.load_spec('runs/w39b_smc_retrieval/smoke.yaml').cfg)\n"
+        "from vulcan3.config import default_config\n"
+        "print('FROZEN', default_config().network, ','.join(default_config().atom_list), pipe.n_dim)\n"
+    )
+    r = subprocess.run([sys.executable, "-c", job], cwd=repo, env=env, capture_output=True, text=True, check=False)
+    assert r.returncode == 0, r.stderr[-3000:]
+    assert "FROZEN thermo/SNCHO_photo_network_2025.txt H,O,C,N,S 8" in r.stdout
 
 
 def test_dry_run_prints_the_resolved_settings_and_touches_nothing(capsys, monkeypatch):
