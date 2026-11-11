@@ -45,3 +45,6 @@ validation/results/
 
 # vulcan3 figures (plot_dir): never tracked.
 /plot/
+
+# Local working file, not part of the package
+todo.md
