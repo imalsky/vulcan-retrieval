@@ -166,7 +166,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   "Physics assumptions and limitations"). The engine refuses a band that lacks H2O, CO2, CO, CH4 or NH3 and warns for
   HCN, H2S, SO2, C2H2, OCS or SO (vulcan-forward `constants.CORE_MOLECULE_BANDS_UM`) unless the case names it in
   `omit_core_molecules`: only a synthetic or single-molecule case does.
-- Change `art_nlayer` or the model top only when the ladder gates pass (notes "Design records").
+- Change `art_nlayer` or the model top only when the ladder gates pass (`oracle.md` "The RT grid is converged"; notes
+  "Design records").
 - A finite-difference check disagrees with AD in directions that reshuffle the g-ordering in `ckd.overlap`: not a bug;
   do not "fix" it. Compare two AD routes by `max|dg| / max|g|`, never componentwise.
 
@@ -192,8 +193,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   from its `derived` block, never re-derived by hand; a T1bar run is reported against its accepted joint prior (notes
   "Physics assumptions and limitations"). Forward checks at a run's draws: `validation/posterior_forward_check.py`.
 - Quote posterior numbers from the weighted points (`theta`, `log_w`) in `nautilus_posterior.npz`, never its
-  equal-weight `samples`. With `integrate_nuisance` the offsets and inflations are the file's `nuisance` arrays, not
-  `theta`.
+  equal-weight `samples` (`oracle.md` "Its numbers are the posterior's own"). With `integrate_nuisance` the offsets and
+  inflations are the file's `nuisance` arrays, not `theta`.
 - Before publishing a number, read notes "Physics assumptions and limitations" and report beside the posterior what it
   lists. A finished GPU run's numbers go into notes "Runs" before any of them is reported.
 - The GPU validation set (`validation/elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`) runs at the

@@ -35,6 +35,9 @@ the assumptions it rests on.
   reason beside it.
 - **Runs are reproducible.** A run records its commits, network, data files and settings. A change
   to anything in its target needs a new case, never a resume.
+- **The RT grid is converged.** The number of RT layers and the model top are changed only when the
+  resolution and top-pressure ladders (`validation/resolution_ladder.py`,
+  `validation/top_pressure_ladder.py`) pass their gates.
 
 ### Success: the science
 
@@ -90,6 +93,9 @@ its hardware.
 - **Its priors are what it sampled.** The window rejection and the certificate reshape the stated
   priors. The accepted prior is reported beside the posterior, with the fraction of draws rejected
   and where in parameter space they fall.
+- **Its numbers are the posterior's own.** A reported number is read from the weighted posterior
+  points and the certificate's `derived` block, never from the equal-weight samples and never
+  re-derived by hand.
 - **Its result is a model, not a detection.** A reported abundance or significance names the model
   it was computed in: the molecule list, the cloud model, the network and the tolerances
   (Welbanks & Nixon et al. 2025). Bayes factors are quoted only between runs with the same
