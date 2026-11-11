@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 from e2e_check import _wmedian
 
-from retrieval_framework.nautilus_report import _kzz_at_ref, _weights
+from retrieval_framework.nautilus_report import kzz_at_ref, weights
 
 BIN_DEX = 0.35
 
@@ -44,8 +44,8 @@ def _run(out: Path):
 
 
 def _log10kzz(cfg, lnkzz):
-    """log10 Kzz (cm^2/s) at 1 mbar: e^lnKzz times the case's base profile there (nautilus_report._kzz_at_ref)."""
-    return np.log10(_kzz_at_ref(cfg)) + np.asarray(lnkzz) / np.log(10.0)
+    """log10 Kzz (cm^2/s) at 1 mbar: e^lnKzz times the case's base profile there (nautilus_report.kzz_at_ref)."""
+    return np.log10(kzz_at_ref(cfg["vulcan_cfg_name"], cfg["cfg_overrides"])) + np.asarray(lnkzz) / np.log(10.0)
 
 
 def _edges(cfg, cut):
@@ -79,7 +79,7 @@ def select(args) -> int:
         "n_corners": 0,
         "run": str(out),
         "log10kzz_max": args.log10kzz_max,
-        "kzz0": _kzz_at_ref(cfg),
+        "kzz0": kzz_at_ref(cfg["vulcan_cfg_name"], cfg["cfg_overrides"]),
         "bin_edges": edges.tolist(),
         "in_window_below_cut_per_bin": n_all.tolist(),
         "per_bin": args.per_bin,
@@ -141,7 +141,7 @@ def _refuse_foreign_solve(args, out, cfg, names, e):
 def _rows_by_bin(cfg, edges, j, e, ok, post):
     """One row per log10 Kzz bin: the certified draws of the solve ``e`` there against the posterior rows there."""
     lk_r, L, acc = _log10kzz(cfg, e["theta"][:, j]), e["logL"], e["acc"]
-    w = _weights(post["log_w"])
+    w = weights(post["log_w"])
     logl_post = post["log_l"]
     fin = np.isfinite(logl_post)
     lk_p = _log10kzz(cfg, post["theta"][:, j])
@@ -176,7 +176,7 @@ def compare(args) -> int:
     cfg, names, j = _run(out)
     e = np.load(args.solved)
     meta, sel_meta = _refuse_foreign_solve(args, out, cfg, names, e)
-    ok = e["certified"] & (e["logL"] > constants.REJECT_LOGL / 2)
+    ok = e["certified"] & (e["logL"] > constants.REJECT_BELOW)
     post = np.load(out / "nautilus_posterior.npz")
     edges = np.asarray(sel_meta["bin_edges"])
     rows = _rows_by_bin(cfg, edges, j, e, ok, post)

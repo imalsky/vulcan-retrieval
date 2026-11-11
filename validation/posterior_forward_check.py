@@ -50,10 +50,10 @@ def spot_factor(wl_um, t_phot, dt, f):
 
 
 def _draws(out: Path, n: int, seed: int):
-    from retrieval_framework.nautilus_report import _weights
+    from retrieval_framework.nautilus_report import weights
 
     post = np.load(out / "nautilus_posterior.npz")
-    w = _weights(post["log_w"])
+    w = weights(post["log_w"])
     idx = np.random.default_rng(seed).choice(len(w), size=int(n), p=w)
     return np.asarray(post["theta"], np.float64)[idx], [str(s) for s in post["param_names"]]
 
@@ -91,10 +91,10 @@ def _mass(pipe, theta, sigma):
 
 def run(args) -> int:
     out = Path(args.out_dir).resolve()
-    from retrieval_framework import config_schema as C
-    from retrieval_framework.nautilus_report import _config_from_json
+    from retrieval_framework import config_schema as C, hardware
+    from retrieval_framework.nautilus_report import config_from_json
 
-    cfg = _config_from_json(out / "config.json")
+    cfg = config_from_json(out / "config.json")
     C.export_network(cfg)  # before any vulcan3 import
     from vulcan_forward import vulcan_chem  # noqa: F401  (import order)
     from retrieval_framework import pipeline as P
@@ -105,7 +105,7 @@ def run(args) -> int:
         cfg = replace(cfg, cfg_overrides={**cfg.cfg_overrides, **over})
         settings.update(over)
     theta, names = _draws(out, args.draws, args.seed)
-    logging.info("solver: %s", C.choose_solver())
+    logging.info("solver: %s", hardware.choose_solver())
     pipe = P.build_pipeline(cfg)
     if list(pipe.names) != names:
         raise RuntimeError(f"the rebuilt pipeline's parameters {pipe.names} are not the posterior's {names}")
@@ -146,7 +146,7 @@ def _save_spectra(variant, cfg, settings, payload, out):
     folder = Path(out) / "validation"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"forward_check_{variant}.npz"
-    provenance = json.dumps(_artifact.collect_provenance(asdict(cfg)), default=str)
+    provenance = json.dumps(_artifact.collect_provenance(asdict(cfg), Path(out)), default=str)
     np.savez(path, settings=np.asarray(str(settings)), provenance=np.asarray(provenance), **payload)
     return path
 

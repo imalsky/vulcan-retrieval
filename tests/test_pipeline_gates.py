@@ -23,6 +23,7 @@ from retrieval_framework import constants
 from retrieval_framework import observations as OBS
 from retrieval_framework import pipeline as P
 from retrieval_framework import provenance
+from conftest import case_config
 
 NZ, NI = 4, 3
 P_ART = np.geomspace(1e-5, 1.0, 6)
@@ -85,7 +86,7 @@ def _stub_forward(n_tp):
 
 
 def _build(monkeypatch, **over):
-    cfg = C.Config(
+    cfg = case_config(
         vulcan_cfg_name="W39b",
         network="thermo/SNCHO_photo_network_2025.txt",
         atom_list=("H", "O", "C", "N", "S"),
@@ -239,7 +240,7 @@ def test_a_data_bin_outside_the_model_band_is_refused(monkeypatch):
         "group": np.array(["A"] * 20),
     }
     monkeypatch.setattr(OBS, "load_real_observations", lambda _cfg: dict(obs))
-    cfg = C.Config(obs_dir=Path("data"), obs_products={"A": ("a.csv",)})
+    cfg = case_config(obs_dir=Path("data"), obs_products={"A": ("a.csv",)})
     real, is_real = OBS.get_observation_grid(cfg, np.linspace(2.9, 5.1, 400))
     assert is_real
     assert real["wl"].size == 20

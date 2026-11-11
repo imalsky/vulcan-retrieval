@@ -23,6 +23,7 @@ sampler:
 
 config:
   run_label: WASP-39b
+  seed: 20260704                       # nautilus and the synthetic injection
   vulcan_cfg_name: W39b
   network: thermo/SNCHO_photo_network_2025.txt
   atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
@@ -45,6 +46,7 @@ config:
   tp_infer_gamma: false
   tp_Tint_K: 150.0                     # K, the fixed deep parameter
   tp_gamma_fixed: 0.4                  # the fixed visible-to-IR opacity ratio
+  tp_deep_p_bar: 1.0                   # bar: the report quotes T here
   generate_synthetic_data: true
   prior_lnZ: [-2.302585092994046, 2.302585092994046]
   baseline_metallicity_solar: 10.0

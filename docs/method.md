@@ -7,7 +7,7 @@ What the retrieval does, with the source of each method. Results and the reasons
 | Module | Job |
 |---|---|
 | `constants` | The fixed numbers, each with its unit and reason; imports nothing |
-| `config_schema` | `Config` and `validate_config`, the parameter list, `specs_from_config`, the run banner; no jax |
+| `config_schema` | `Config` and `validate_config`, the parameter list (`active_parameters`, the one place a mode decides what is sampled; `specs_from_config`), the run banner; no jax |
 | `run_setup` | The run specification (`load_spec`, `export_runtime`), logging, a run's identity files |
 | `observations` | The observed spectrum and the exact binning and offset operators |
 | `tp_profile` | The Guillot T-P evaluator |
@@ -15,11 +15,14 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `pipeline` | `Pipeline`: the u-space posterior, the batched likelihood evaluators, the T-P window |
 | `nuisance` | The integrated offsets and inflations |
 | `provenance` | Code and data identity, the target manifest and digest |
-| `run_nautilus` | The sampler driver: anchors, the resume refusal |
+| `run_nautilus` | The sampler driver: the likelihood's chunks, the nautilus settings, the resume refusal |
+| `anchors` | The warm-start anchors: every certified column, keyed by its unit-cube coordinates |
+| `case_keys` | Which Config keys a specification states: required, or refused when its mode does not read them |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
 | `report_figures` | The three figures |
 | `validate_env` | Environment validation, run first by every job |
+| `hardware` | The device a process runs on, for a run's record, and the solver an analysis tool picks |
 | `forward/config` | This repository's paths; importing it hands the engine its data root |
 
 ## Parameters
@@ -171,6 +174,11 @@ only after it passes.
 | `twolimb` | Two Guillot limbs at Tirr -/+ `TWO_LIMB_DTIRR_K`, depths averaged |
 | `mass` | The planet mass at +-`prior_lnM_sigma` (the run's) in the RT, at frozen chemistry |
 | `spot` | The transit-light-source factor of a spotted star: `--spot-t-phot`, `--spot-dt`, `--spot-f`, required |
+
+Every validation artifact records the case's own data identity: the product files its config names and the run's
+`observations.npz` where there is one. `e2e_check.py --results` defaults to the spec's case folder for `solve` and to the
+folder of the first input for `compare` and `warmcold`. A draw the engine refuses to start (a repair factor not > 0) is a
+FAIL row of `elemental_audit.py`, with the refusal recorded.
 
 The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`
 and `opacity_leave_one_out.py` each need `--spec runs/<case>/<name>.yaml` and write to `output/<case>/validation/`. The

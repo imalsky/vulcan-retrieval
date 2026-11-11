@@ -83,9 +83,11 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - The refusal points are spec load, `submit.py`, `validate_env` and the run's first chunk. Keep the refusals: missing
   H2-He CIA, an unset planet identity (`rp_cm`, `rstar_cm`, `vulcan_cfg_name`; `validate_config`), a named data source
   with too few bins in any mode, RESUME with no checkpoint.
-- A spec states every key of `config_schema.CASE_KEYS`, and every prior and truth its mode reads
-  (`run_setup._MODE_REQUIRED`); a stated key its mode does not read is refused (`run_setup._MODE_KEYS`), and a variant
-  removes a key its base states with `unset:`. A number that belongs to a case is a spec key, never a value in the code.
+- A spec states every key its case reads with no default (`case_keys.required_keys`: `CASE_KEYS`, the priors and
+  truths of the parameters `config_schema.active_parameters` samples, and `MODE_KEYS`), and a stated key its mode does
+  not read is refused (`case_keys.refused_keys`); a variant removes a key its base states with `unset:`. A required
+  Config field has no default (None), refused unset by `validate_config`; which parameters a mode samples is decided
+  only in `active_parameters`. A number that belongs to a case is a spec key, never a value in the code.
   The synthetic bin grid is only for a spec that names no data source.
 - The chemistry block `[lnZ, c_o, lnKzz, <extras>]` is positional (`theta[0:n_chem]`, then the T-P entries; the extras
   are `config_schema.chem_extras`: `s_o` with `infer_s_o`, `kzz_slope` with `kzz_mode="powerlaw"`, in that order), and
@@ -152,7 +154,7 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - A refilled draw moves at the convergence scale, so a lane-count change is a target change: regenerate, never resume.
 - A run's solver is its spec's `runtime.solver` (`run_setup.export_runtime`, before the first jax import; a disagreeing
   environment value is refused). The analysis tools (`nautilus_report`, the forward checks) call
-  `config_schema.choose_solver` instead. Name the metric before claiming a GPU speed-up.
+  `hardware.choose_solver` instead. Name the metric before claiming a GPU speed-up.
 
 ### Opacity and the RT
 

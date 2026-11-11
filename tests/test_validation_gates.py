@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from conftest import case_config
 
 VALIDATION = Path(__file__).resolve().parents[1] / "validation"
 
@@ -99,8 +100,7 @@ def test_the_screen_runs_the_forward_s_cloud_and_mass(scripts):
     np.testing.assert_allclose(d, [[0.5, 0.0]])
 
 
-def test_a_forward_check_comparison_keeps_what_solved_each_side(scripts, tmp_path, monkeypatch):
-    monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
+def test_a_forward_check_comparison_keeps_what_solved_each_side(scripts, tmp_path):
     wl = np.linspace(3.9, 4.5, 8)
     common = {
         "theta": np.zeros((3, 2)),
@@ -121,16 +121,13 @@ def test_a_forward_check_comparison_keeps_what_solved_each_side(scripts, tmp_pat
 def test_a_saved_forward_check_records_its_own_solve(scripts, tmp_path, monkeypatch):
     from vulcan_forward import paths as fwd_paths
 
-    from retrieval_framework import config_schema as C
-
-    monkeypatch.setattr(scripts.artifact, "RESULTS", tmp_path)
     # CI has no data folder, and provenance only hashes these tables.
     root = tmp_path / "data"
     for table in ("exomolop/H2O.ktable.h5", "opacity_cache/H2-H2_2011.cia", "opacity_cache/H2-He_2011.cia"):
         (root / table).parent.mkdir(parents=True, exist_ok=True)
         (root / table).write_bytes(b"table")
     monkeypatch.setattr(fwd_paths, "data_root", lambda: root)
-    cfg = C.Config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
+    cfg = case_config(molecules=("H2O",), rp_cm=1.0, rstar_cm=10.0)
     run = tmp_path / "output" / "survey" / "hd189733b_nautilus"
     path = scripts.check._save_spectra("base", cfg, {"variant": "base"}, {"model": np.zeros(2)}, run)
     assert path == run / "validation" / "forward_check_base.npz"  # beside its run, never another case's folder
@@ -154,9 +151,9 @@ def test_the_ladder_writes_its_artifact_beside_the_case_on_rungs_from_its_layers
     stub = SimpleNamespace(build_chem_model=lambda _p: SimpleNamespace(converged_y=lambda _t: None))
     monkeypatch.setitem(sys.modules, "vulcan_forward.vulcan_chem", stub)
     monkeypatch.setattr(vulcan_forward, "vulcan_chem", stub, raising=False)
-    cfg = C.Config(molecules=("H2O",), art_nlayer=20, nu_min=2000.0, nu_max=3000.0)
+    cfg = case_config(molecules=("H2O",), art_nlayer=20, nu_min=2000.0, nu_max=3000.0)
     monkeypatch.setattr(scripts.artifact, "spec_case", lambda _p: (cfg, tmp_path / "validation"))
-    monkeypatch.setattr(scripts.artifact, "collect_provenance", lambda _rc: {})
+    monkeypatch.setattr(scripts.artifact, "collect_provenance", lambda _rc, _d: {})
     monkeypatch.setattr(C, "export_network", lambda _cfg: None)
     rungs = []
     monkeypatch.setattr(
@@ -167,6 +164,42 @@ def test_the_ladder_writes_its_artifact_beside_the_case_on_rungs_from_its_layers
     assert rungs == [20, 30, 45]
     got = json.loads((tmp_path / "validation" / "resolution_ladder.json").read_text())
     assert got["verdict"]["status"] == "REPORT"
+
+
+def test_the_elemental_audit_records_a_refused_start_as_a_fail_row(scripts, tmp_path, monkeypatch):
+    """The engine refuses a start whose repair factor is not > 0: the audit records that draw and fails, not crash."""
+    import elemental_audit
+    import jax
+    import vulcan_forward
+
+    from retrieval_framework import config_schema as C
+
+    jax.config.update("jax_enable_x64", True)
+
+    def audit_init(th):
+        if th[0] > 0.0:
+            raise ValueError("the chemistry start column is not physical: stub")
+        return {
+            "ratio_max_rel_err": 0.0,
+            "density_closure_max_rel": 0.0,
+            "atom_ini_max_rel_err": 0.0,
+            "dln_CO_achieved": float(th[1]),
+            "min_repair_factor": 1.0,
+        }
+
+    stub = SimpleNamespace(build_chem_model=lambda *_a, **_k: SimpleNamespace(audit_init=audit_init))
+    monkeypatch.setitem(sys.modules, "vulcan_forward.vulcan_chem", stub)
+    monkeypatch.setattr(vulcan_forward, "vulcan_chem", stub, raising=False)
+    monkeypatch.setattr(scripts.artifact, "spec_case", lambda _p: (case_config(), tmp_path))
+    monkeypatch.setattr(scripts.artifact, "collect_provenance", lambda _rc, _d: {})
+    monkeypatch.setattr(C, "export_network", lambda _cfg: None)
+    monkeypatch.setattr(sys, "argv", ["elemental_audit.py", "--spec", "x.yaml", "--n", "8"])
+    assert elemental_audit.main() == 1
+    got = json.loads((tmp_path / "elemental_audit.json").read_text())
+    refused = got["measurements"][0]["refused"]
+    assert refused
+    assert all("not physical" in r["refusal"] for r in refused)
+    assert got["verdict"]["status"] == "FAIL"
 
 
 def test_a_file_from_before_provenance_says_so(scripts, tmp_path):
@@ -238,7 +271,18 @@ def test_an_artifact_hashes_the_tables_of_a_measurement_and_not_of_a_comparison(
     monkeypatch.setattr(scripts.artifact, "science_data_identity", lambda m: hashed.append(m) or {"opacity_sha256": {}})
     monkeypatch.setattr(scripts.artifact, "_data_identity", lambda *_a: {})
     monkeypatch.setattr(scripts.artifact, "_versions", lambda: {})
-    assert "science_data" not in scripts.artifact.collect_provenance({"base": "x", "variant": "y"})
+    assert "science_data" not in scripts.artifact.collect_provenance({"base": "x", "variant": "y"}, Path("."))
     assert hashed == []
-    assert "science_data" in scripts.artifact.collect_provenance({"molecules": ["H2O"]})
+    assert "science_data" in scripts.artifact.collect_provenance({"molecules": ["H2O"]}, Path("."))
     assert hashed == [["H2O"]]
+
+
+def test_an_artifact_hashes_the_case_s_own_observations(scripts, tmp_path, monkeypatch):
+    """The products a case's config names are hashed, so an artifact measured on another planet's data shows it."""
+    monkeypatch.setattr(scripts.artifact, "_data_identity", lambda *_a: {})
+    monkeypatch.setattr(scripts.artifact, "_versions", lambda: {})
+    (tmp_path / "a.csv").write_text("a\n")
+    rc = {"obs_dir": str(tmp_path), "obs_products": {"G": ["a.csv"]}}
+    first = scripts.artifact.collect_provenance(rc, tmp_path)["observation_products"]
+    (tmp_path / "a.csv").write_text("b\n")
+    assert scripts.artifact.collect_provenance(rc, tmp_path)["observation_products"] != first

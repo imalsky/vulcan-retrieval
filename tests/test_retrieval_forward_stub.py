@@ -16,8 +16,8 @@ if importlib.util.find_spec("exojax") is None:
 
 import jax.numpy as jnp
 
-from retrieval_framework import config_schema as C
 from retrieval_framework import retrieval_forward as RF
+from conftest import case_config
 
 LANES = 2
 SIDX = {"H2": 0, "He": 1, "H2O": 2, "S8_l_s": 3}
@@ -64,7 +64,7 @@ def _forward(monkeypatch, stage_diag=None, **over):
         "build_tp_model",
         lambda _cfg: SimpleNamespace(n_params=1, eval=lambda tp, p: jnp.full_like(p, tp[0])),
     )
-    cfg = C.Config(
+    cfg = case_config(
         vulcan_cfg_name="W39b",
         network="thermo/SNCHO_photo_network_2025.txt",
         atom_list=("H", "O", "C", "N", "S"),

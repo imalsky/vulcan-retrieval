@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from retrieval_framework import config_schema as C
 from retrieval_framework import provenance
+from conftest import case_config
 
 # digest_pipe stubs this, so that a test without the data tree can build a manifest.
 SCIENCE_DATA_IDENTITY = provenance.science_data_identity
@@ -62,7 +62,7 @@ def test_target_digest_moves_with_every_bound_class(field, value, moves, digest_
     A chained RESUME job legitimately changes the per-job settings; binding them would refuse the documented NAS
     chaining workflow.
     """
-    base = C.Config(molecules=("H2O", "CO2"))
+    base = case_config(molecules=("H2O", "CO2"))
     assert getattr(base, field) != value, f"{field} probe equals the default"
     changed = replace(base, **{field: value})
     assert (provenance.target_digest(base, digest_pipe) != provenance.target_digest(changed, digest_pipe)) is moves
@@ -78,7 +78,7 @@ def test_target_digest_moves_with_every_bound_class(field, value, moves, digest_
 )
 def test_target_digest_binds_the_solver_env(var, value, digest_pipe, monkeypatch):
     """Each env var is a numerical choice of the solve, so a resume must not switch it."""
-    cfg = C.Config(molecules=("H2O",))
+    cfg = case_config(molecules=("H2O",))
     monkeypatch.delenv(var, raising=False)
     d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setenv(var, value)
@@ -94,7 +94,7 @@ def test_target_digest_binds_each_runtime_input_and_fixed_number_alone(digest_pi
 
     from retrieval_framework import constants
 
-    cfg = C.Config(molecules=("H2O",))
+    cfg = case_config(molecules=("H2O",))
     table = tmp_path / "compose.txt"
     table.write_text("a\n")
     # the solver's loaded table, as once vulcan3 is imported
@@ -148,7 +148,7 @@ def test_target_digest_binds_a_network_its_thermo_data_and_a_preset_outside_the_
     for name, text in files.items():
         (case / name).write_text(text)
     (case / "C.yaml").write_text("atm_file: data/c/atm.txt\nsflux_file: data/c/sflux.txt\n")
-    cfg = C.Config(
+    cfg = case_config(
         molecules=("H2O",),
         vulcan_cfg_name="data/c/C.yaml",
         network=str(case / "thermo" / "net.txt"),
@@ -164,6 +164,12 @@ def test_target_digest_binds_a_network_its_thermo_data_and_a_preset_outside_the_
     assert provenance.target_digest(cfg, digest_pipe) == d0
 
 
+def test_a_run_record_refuses_a_config_that_names_no_chemistry(digest_pipe):
+    """The external-input binding needs the network and the case config: an unset one is refused, never skipped."""
+    with pytest.raises(ValueError, match="needs both to name its chemistry inputs"):
+        provenance.target_manifest(case_config(network=None), digest_pipe)
+
+
 def test_the_baseline_c_to_o_is_the_case_s_own():
     """The report's C/O multiplies the case's C_H / O_H, after its overrides; a solar-preset case is refused."""
     assert provenance.baseline_c_to_o("W39b", {}) == 0.00295 / 0.00537
@@ -175,7 +181,7 @@ def test_the_baseline_c_to_o_is_the_case_s_own():
 
 
 def test_target_digest_moves_with_the_observations(digest_pipe):
-    cfg = C.Config(molecules=("H2O",))
+    cfg = case_config(molecules=("H2O",))
     a = provenance.target_digest(cfg, digest_pipe)
     digest_pipe.obs_sigma = digest_pipe.obs_sigma * 2.0
     assert provenance.target_digest(cfg, digest_pipe) != a, "observations not bound"
@@ -205,7 +211,7 @@ def test_target_digest_binds_code_state_not_file_churn(state, moves, digest_pipe
     of `git diff HEAD -- src`, so it moves only when the code that defines the
     target changed.
     """
-    cfg = C.Config(molecules=("H2O",))
+    cfg = case_config(molecules=("H2O",))
     monkeypatch.setattr(provenance, "_repo_states", lambda *_a, **_k: _repo())
     d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setattr(provenance, "_repo_states", lambda *_a, **_k: _repo(**state))
@@ -222,7 +228,7 @@ def test_target_digest_binds_the_cia_tables(digest_pipe, monkeypatch, tmp_path):
     b.write_text("b")
     monkeypatch.setattr(paths, "cia_h2h2_file", lambda: a)
     monkeypatch.setattr(paths, "cia_h2he_file", lambda: a)
-    cfg = C.Config(molecules=())
+    cfg = case_config(molecules=())
     d0 = provenance.target_digest(cfg, digest_pipe)
     monkeypatch.setattr(paths, "cia_h2he_file", lambda: b)
     assert provenance.target_digest(cfg, digest_pipe) != d0
@@ -268,7 +274,7 @@ def test_target_digest_binds_a_path_style_case_and_its_files(digest_pipe, tmp_pa
     (case / "atm.txt").write_text("atm\n")
     (case / "sflux.txt").write_text("flux\n")
     (case / "C.yaml").write_text("atm_file: data/c/atm.txt\nsflux_file: data/c/sflux.txt\n")
-    cfg = C.Config(molecules=("H2O",), vulcan_cfg_name="data/c/C.yaml")
+    cfg = case_config(molecules=("H2O",), vulcan_cfg_name="data/c/C.yaml")
     d0 = provenance.target_digest(cfg, digest_pipe)
     for f in ("atm.txt", "sflux.txt", "C.yaml"):
         (case / f).write_text((case / f).read_text() + "# edited\n")
@@ -294,7 +300,7 @@ def test_a_target_manifest_refuses_a_table_it_cannot_hash(digest_pipe, monkeypat
     monkeypatch.setattr(paths, "cia_h2he_file", lambda: missing if absent == "cia" else table)
     monkeypatch.setattr(exomolop, "table_path", lambda _m: missing if absent == "opacity" else table)
     with pytest.raises(FileNotFoundError, match=r"absent\.dat"):
-        provenance.target_manifest(C.Config(molecules=("H2O",)), digest_pipe)
+        provenance.target_manifest(case_config(molecules=("H2O",)), digest_pipe)
 
 
 def test_an_archived_manifest_hashes_as_it_was_written(tmp_path):

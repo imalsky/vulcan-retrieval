@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import jax.numpy as jnp
 import numpy as np
 
-from retrieval_framework import constants, observations as OBS
+from retrieval_framework import config_schema as C, constants, observations as OBS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from jax import Array
     from jax.typing import ArrayLike
 
-    from retrieval_framework import config_schema as C
 
 __all__ = ["make_nuisance_marginal"]
 
@@ -67,11 +66,11 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     G = len(groups)
     Nm = OBS.build_group_design({"groups": groups, "group": group_per_bin})
     has_off = np.array([bool(cfg.infer_offsets) and k > 0 for k in range(G)])
-    a_lo, a_hi = (float(v) * constants.PPM for v in cfg.prior_offset_ppm)
+    a_lo, a_hi = (float(v) * constants.PPM for v in C.need(cfg.prior_offset_ppm, "prior_offset_ppm"))
     infl = bool(cfg.infer_noise_inflation)
     per_group = infl and bool(cfg.noise_inflation_per_group)
     if infl:
-        t = np.linspace(*np.log10(cfg.prior_noise_inflation), constants.NUISANCE_NODES)  # type: ignore[call-overload]  # two bounds
+        t = np.linspace(*np.log10(C.need(cfg.prior_noise_inflation, "prior_noise_inflation")), constants.NUISANCE_NODES)  # type: ignore[call-overload]  # two bounds
         w = np.full(constants.NUISANCE_NODES, 1.0 / (constants.NUISANCE_NODES - 1))
         w[[0, -1]] *= 0.5
     else:

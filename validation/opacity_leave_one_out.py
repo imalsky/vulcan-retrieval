@@ -1,4 +1,4 @@
-"""Which absorbers does the production spectrum need: leave-one-out on the production forward.
+"""Which absorbers does a case's spectrum need: leave-one-out on the case's own forward.
 
     python validation/opacity_leave_one_out.py --spec <run spec> [--molecules NH3 SO] [--states 8]
         [--from-posterior <npz>]
@@ -33,7 +33,7 @@ GATE_SIGMA_FRAC = 0.1
 
 
 def unscreened_candidates(prod_mols):
-    """Return every molecule with an installed k-table that production does not radiate.
+    """Return every molecule with an installed k-table that the case does not radiate.
 
     Inventoried at run time: a hard-coded list would stop testing a species once its table is installed. A table whose
     species the network does not solve makes build_pipeline raise.
@@ -158,11 +158,11 @@ def _measure(worst_over_states, n_screened, candidates, omitted, gate, sigma, wl
 
 
 def _verdict(rows, worst, omitted, n_screened):
-    """The summary: which omitted absorbers are required, and which production ones carry no measurable effect."""
+    """The summary: which omitted absorbers are required, and which of the case's carry no measurable effect."""
     idle = [m for m, _, _, _, _, over in rows if not over and m not in omitted]
     msg = (
         f"Every OMITTED absorber tested is below the per-bin gate across "
-        f"{n_screened} state(s); none is required beyond the production list."
+        f"{n_screened} state(s); none is required beyond the case's list."
         if not worst
         else f"REQUIRED but omitted: {', '.join(worst)}. Add them to the case's "
         "molecule list and rerun the posterior -- their opacity is currently "
@@ -170,7 +170,7 @@ def _verdict(rows, worst, omitted, n_screened):
     )
     if idle:
         msg += (
-            f" Production absorbers under the gate at this state set "
+            f" The case's absorbers under the gate at this state set "
             f"({', '.join(idle)}) are carried without measurable effect -- "
             "informational, not a failure; the gate only refuses OMISSIONS."
         )
@@ -184,7 +184,7 @@ def main() -> int:
         "--molecules",
         nargs="*",
         default=None,
-        help="candidates to test (default: every installed table production does not radiate)",
+        help="candidates to test (default: every installed table the case does not radiate)",
     )
     ap.add_argument(
         "--states",
@@ -209,13 +209,13 @@ def main() -> int:
     named = args.molecules
     extra = [m for m in named if m not in prod_mols] if named is not None else unscreened_candidates(prod_mols)
     baseline_mols = prod_mols + extra
-    # An omitted candidate over the gate is a defect; a production one over the
+    # An omitted candidate over the gate is a defect; one of the case's over the
     # gate is the list working as intended. Screening both is useful, but they
     # are opposite verdicts and must not share one.
     candidates = list(named) if named is not None else (extra or prod_mols)
     omitted = set(extra)
 
-    # The production forward at the augmented molecule list: parametric T-P,
+    # The case's forward at the augmented molecule list: parametric T-P,
     # two-stage cold solve, the run's own binning matrix and sigmas.
     pipe = build_pipeline(replace(cfg, molecules=tuple(baseline_mols)))
     profile = pipe.cfg.profile()
@@ -227,7 +227,7 @@ def main() -> int:
     print(f"[loo] baseline {len(baseline_mols)} absorbers: {baseline_mols}", flush=True)
     print(
         f"[loo] testing {len(candidates)} over {len(states)} state(s); "
-        f"{len(omitted & set(candidates))} of them omitted from production",
+        f"{len(omitted & set(candidates))} of them omitted from the case",
         flush=True,
     )
 
@@ -244,7 +244,7 @@ def main() -> int:
     print(f"\nVERDICT: {'PASS' if ok else 'FAIL'} -- {msg}")
     _artifact.emit(
         name=f"opacity_leave_one_out_{spec.stem}",
-        title="Leave-one-out absorber screen on the production observation grid",
+        title="Leave-one-out absorber screen on the case's observation grid",
         measurements=measurements,
         status="PASS" if ok else "FAIL",
         summary=msg,

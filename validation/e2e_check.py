@@ -1,4 +1,4 @@
-"""End-to-end check of the production forward map: the same seeded draws through a ladder of rungs.
+"""End-to-end check of a case's forward map: the same seeded draws through a ladder of rungs.
 
     python validation/e2e_check.py solve <spec> --rung production [--rows a:b --part k]
     python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws n
@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -114,9 +114,9 @@ def _draw_set(args, pipe, names):
         post = np.load(Path(args.posterior) / "nautilus_posterior.npz")
         if list(post["param_names"]) != names:
             raise RuntimeError(f"the posterior's parameters {list(post['param_names'])} are not the spec's {names}")
-        from retrieval_framework.nautilus_report import _weights
+        from retrieval_framework.nautilus_report import weights
 
-        w = _weights(post["log_w"])
+        w = weights(post["log_w"])
         idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w)
         return np.array(post["u"][idx], np.float64), (), {"post_row": idx, "logL_run": post["log_l"][idx]}
     if args.u_from:  # another machine's draw set, row for row
@@ -195,7 +195,7 @@ def solve(args) -> int:
         "runtime": rt.env(),
         "n_corners": len(C),
         "device": str(jax.devices()[0]),
-        "provenance": _artifact.collect_provenance(),
+        "provenance": _artifact.collect_provenance(asdict(cfg), Path(cfg.out_dir)),
     }
     args.results.mkdir(parents=True, exist_ok=True)
     tag = (
@@ -268,8 +268,8 @@ def compare(args) -> int:
     common, ia, ib = np.intersect1d(a["rows"], b["rows"], return_indices=True)
     if not np.array_equal(a["u"][ia], b["u"][ib]):
         raise RuntimeError("the two files hold different draws for the same rows")
-    ok_a = a["certified"][ia] & (a["logL"][ia] > constants.REJECT_LOGL / 2)
-    ok_b = b["certified"][ib] & (b["logL"][ib] > constants.REJECT_LOGL / 2)
+    ok_a = a["certified"][ia] & (a["logL"][ia] > constants.REJECT_BELOW)
+    ok_b = b["certified"][ib] & (b["logL"][ib] > constants.REJECT_BELOW)
     both = ok_a & ok_b
     mism = common[ok_a != ok_b]
     dmu = (a["mu"][ia] - b["mu"][ib])[both] / a["sigma"][None, :]
@@ -350,7 +350,7 @@ def warmcold(args) -> int:
     z = _load(args.cold)
     if "logL_run" not in z:
         raise RuntimeError(f"{args.cold} was not solved with --posterior")
-    ok = z["certified"] & (z["logL"] > constants.REJECT_LOGL / 2)
+    ok = z["certified"] & (z["logL"] > constants.REJECT_BELOW)
     dL = np.where(ok, z["logL"] - z["logL_run"], -np.inf)
     w = np.exp(dL - np.max(dL[ok]))
     names, th = z["names"], z["theta"]
@@ -413,15 +413,22 @@ def main() -> int:
     c.add_argument("b", nargs="+")
     c.add_argument("--worst", type=int, default=10)
     w = sub.add_parser("warmcold")
-    w.add_argument("cold", nargs="+", help="the production rung's --posterior solve (parts)")
+    w.add_argument("cold", nargs="+", help="the production rung's --posterior solve (parts): the case's runtime")
     for p in (s, c, w):
         p.add_argument(
             "--results",
             type=Path,
-            default=_artifact.RESULTS,
-            help="the results directory (default: WASP-39b's validation directory)",
+            default=None,
+            help="the results directory (default: solve, the spec's case validation folder; compare and warmcold, "
+            "beside their first input)",
         )
     args = ap.parse_args()
+    if args.results is None:
+        args.results = {
+            "solve": lambda: _artifact.spec_case(args.spec)[1],
+            "compare": lambda: Path(args.a).resolve().parent,
+            "warmcold": lambda: Path(args.cold[0]).resolve().parent,
+        }[args.cmd]()
     return {"solve": solve, "compare": compare, "warmcold": warmcold}[args.cmd](args)
 
 

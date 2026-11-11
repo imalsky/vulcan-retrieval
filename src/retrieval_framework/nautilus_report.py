@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from vulcan_forward.constants import KZZ_P_REF_BAR
 
-from retrieval_framework import config_schema as C, constants, provenance
+from retrieval_framework import config_schema as C, constants, hardware, provenance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,8 +32,14 @@ if TYPE_CHECKING:
 __all__ = [
     "CERT_FILE",
     "certificate",
+    "config_from_json",
     "derived_quantities",
+    "kzz_at_ref",
+    "log10_kzz_at_report_level",
     "main",
+    "read_json",
+    "tp_curve",
+    "weights",
     "write_certificate",
 ]
 
@@ -43,12 +49,12 @@ CERT_FILE = "nautilus_certificate.json"
 _BAR_TO_CGS = 1.0e6  # dyn cm^-2 per bar
 
 
-def _read(out: Path, name: str) -> Any:
+def read_json(out: Path, name: str) -> Any:
     """Read one JSON file of the run."""
     return json.loads((out / name).read_text())
 
 
-def _weights(log_w: ArrayLike) -> np.ndarray:
+def weights(log_w: ArrayLike) -> np.ndarray:
     """Return the normalized weights from log weights."""
     w = np.exp(np.asarray(log_w, np.float64) - np.max(log_w))
     return w / w.sum()
@@ -63,7 +69,7 @@ def _wquant(x: ArrayLike, w: np.ndarray, qs: tuple[float, ...] = (0.16, 0.5, 0.8
 
 
 # Keys with no default that a run written before they were Config keys does not record, and the line that restores the
-# value it ran with, the engine's default of then.
+# value it ran with, the engine's default of then. Any other missing key with no default is refused for its own value.
 _ARCHIVED_LINES = {
     "network": '"network": "thermo/SNCHO_photo_network.txt"',
     "atom_list": '"atom_list": ["H", "O", "C", "N", "S"]',
@@ -74,7 +80,7 @@ _ARCHIVED_LINES = {
 def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[float, float, float, float]:
     """Return (Tirr, kappa, gamma, Tint) of one posterior row; Tint follows from a retrieved deep temperature.
 
-    This and ``_tp_curve`` are numpy twins of ``tp_profile``'s evaluator, so the report reads a finished run's rows
+    This and ``tp_curve`` are numpy twins of ``tp_profile``'s evaluator, so the report reads a finished run's rows
     without building the model; tests/test_nautilus_report.py holds them to it on every option.
     """
     g = float(cfgj["tp_gravity_cgs"])
@@ -98,7 +104,7 @@ def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[f
     return Tirr, kappa, gamma, Tint
 
 
-def _tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: ArrayLike) -> np.ndarray:
+def tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: ArrayLike) -> np.ndarray:
     """Return T(p_bar), K, of one posterior row: the Guillot profile, with the adiabat below the retrieved boundary."""
     g = float(cfgj["tp_gravity_cgs"])
     Tirr, kappa, gamma, Tint = _tp_params(t, names, cfgj)
@@ -111,14 +117,33 @@ def _tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: Arra
     return T
 
 
-def _kzz_at_ref(cfgj: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
-    """Return the case's base Kzz (cm^2/s) at ``p_bar``, by default KZZ_P_REF_BAR, the value e^lnKzz scales.
+def kzz_at_ref(vulcan_cfg_name: str, cfg_overrides: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
+    """Return the case's base Kzz at a pressure, the value e^lnKzz scales.
 
     vulcan3's ``const_Kzz``, or its atm file's Kzz column interpolated linearly in pressure, as the case's
     ``Kzz_prof`` says.
+
+    Parameters
+    ----------
+    vulcan_cfg_name : str
+        The case's vulcan3 config name or path.
+    cfg_overrides : dict
+        Overrides of the file's settings.
+    p_bar : float, optional
+        The pressure, bar; by default ``KZZ_P_REF_BAR``.
+
+    Returns
+    -------
+    float
+        Kzz, cm^2/s.
+
+    Raises
+    ------
+    ValueError
+        If the profile is neither ``const`` nor ``file``, or the file does not span ``p_bar``.
     """
-    over = cfgj["cfg_overrides"]
-    _, case = provenance.case_config(cfgj["vulcan_cfg_name"])
+    over = cfg_overrides
+    _, case = provenance.case_config(vulcan_cfg_name)
     prof = over.get("Kzz_prof", case["Kzz_prof"])
     if prof == "const":
         return float(over.get("const_Kzz", case["const_Kzz"]))
@@ -133,18 +158,47 @@ def _kzz_at_ref(cfgj: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
     return float(np.interp(p_bar, p[o], np.asarray(t["Kzz"], np.float64)[o]))
 
 
-def _log10_kzz_at_report_level(cfgj: dict[str, Any], lnkzz: np.ndarray, slope: np.ndarray | None) -> np.ndarray:
-    """Return log10 Kzz (cm^2/s) at KZZ_P_REF_BAR of each row, on the engine's profile.
+def log10_kzz_at_report_level(
+    vulcan_cfg_name: str,
+    cfg_overrides: dict[str, Any],
+    powerlaw_p_ref_bar: float | None,
+    lnkzz: np.ndarray,
+    slope: np.ndarray | None,
+) -> np.ndarray:
+    """Return log10 Kzz at ``KZZ_P_REF_BAR`` of each row, on the engine's profile.
 
-    ``kzz_mode="powerlaw"`` anchors the base at ``kzz_p_ref_bar`` and tilts it as (P / P_anchor)^-slope; at the default
+    The power law anchors the base at its reference pressure and tilts it as (P / P_anchor)^-slope; at the default
     anchor the tilt is 1. Otherwise e^lnKzz scales the case's profile.
+
+    Parameters
+    ----------
+    vulcan_cfg_name : str
+        The case's vulcan3 config name or path.
+    cfg_overrides : dict
+        Overrides of the file's settings.
+    powerlaw_p_ref_bar : float or None
+        The power law's ``kzz_p_ref_bar``, bar; None for ``kzz_mode: scale``.
+    lnkzz : numpy.ndarray [n]
+        Each row's lnKzz.
+    slope : numpy.ndarray [n] or None
+        Each row's power-law slope; None under the scale mode.
+
+    Returns
+    -------
+    numpy.ndarray [n]
+        log10 Kzz, cm^2/s.
     """
     kzz = np.exp(lnkzz)
-    if cfgj["kzz_mode"] != "powerlaw":
-        return np.log10(_kzz_at_ref(cfgj) * kzz)
-    anchor = float(cfgj["kzz_p_ref_bar"])
+    if powerlaw_p_ref_bar is None:
+        return np.log10(kzz_at_ref(vulcan_cfg_name, cfg_overrides) * kzz)
+    anchor = float(powerlaw_p_ref_bar)
     tilt = (KZZ_P_REF_BAR / anchor) ** (-(0.0 if slope is None else slope))
-    return np.log10(_kzz_at_ref(cfgj, anchor) * kzz * tilt)
+    return np.log10(kzz_at_ref(vulcan_cfg_name, cfg_overrides, anchor) * kzz * tilt)
+
+
+def _powerlaw_p_ref(cfgj: dict[str, Any]) -> float | None:
+    """Return a config.json's power-law reference pressure, None under the scale mode."""
+    return float(cfgj["kzz_p_ref_bar"]) if cfgj["kzz_mode"] == "powerlaw" else None
 
 
 def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
@@ -163,11 +217,11 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
     out = Path(out_dir).resolve()
     if not (out / "nautilus_posterior.npz").exists():
         return None
-    cfgj = _read(out, "config.json")
+    cfgj = read_json(out, "config.json")
     post = np.load(out / "nautilus_posterior.npz")
     names = [str(s) for s in post["param_names"]]
     theta = np.asarray(post["theta"], np.float64)
-    w = _weights(post["log_w"])
+    w = weights(post["log_w"])
 
     def col(n: str) -> np.ndarray:
         """Return one parameter's column of theta."""
@@ -191,7 +245,14 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         "kzz_factor": _wquant(kzz, w),
         "kzz_ref_p_bar": KZZ_P_REF_BAR,
         "log10_kzz_ref_cgs": _wquant(
-            _log10_kzz_at_report_level(cfgj, col("lnKzz"), col("kzz_slope") if "kzz_slope" in names else None), w
+            log10_kzz_at_report_level(
+                cfgj["vulcan_cfg_name"],
+                cfgj["cfg_overrides"],
+                _powerlaw_p_ref(cfgj),
+                col("lnKzz"),
+                col("kzz_slope") if "kzz_slope" in names else None,
+            ),
+            w,
         ),
         "kzz_prior_floor_factor": floor,
         **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in constants.KZZ_FLOOR_MULTIPLES},
@@ -213,7 +274,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         p_deep = np.array([float(cfgj["tp_deep_p_bar"])])
         # the full profile (adiabat included) at the deep level, and the Tint
         # behind it
-        T_deep = np.asarray([_tp_curve(t, names, cfgj, p_deep)[0] for t in theta])
+        T_deep = np.asarray([tp_curve(t, names, cfgj, p_deep)[0] for t in theta])
         Tint = np.asarray([_tp_params(t, names, cfgj)[3] for t in theta])
         d.update(T_deep_p_bar=float(p_deep[0]), T_deep_K=_wquant(T_deep, w), Tint_K=_wquant(Tint, w))
     if "nuisance" in post.files:
@@ -236,10 +297,10 @@ def _conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
     afiles = sorted((out / "anchors").glob("anchors_*.npz"))
     if not (afiles and (out / "rejected").is_dir() and (out / "nautilus_posterior.npz").exists()):
         return None
-    cfgj = _read(out, "config.json")
+    cfgj = read_json(out, "config.json")
     post = np.load(out / "nautilus_posterior.npz")
     names = [str(s) for s in post["param_names"]]
-    theta, w = np.asarray(post["theta"], np.float64), _weights(post["log_w"])
+    theta, w = np.asarray(post["theta"], np.float64), weights(post["log_w"])
 
     def z_of(files: list[Path], keep: Callable[[Any], Any]) -> list[np.ndarray]:
         """Return the kept unit-cube points of each file."""
@@ -425,10 +486,10 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
         The certificate.
     """
     out = Path(out_dir).resolve()
-    cfg = _read(out, "config.json")
-    summ = _read(out, "nautilus_summary.json")
-    tally = _read(out, "nautilus_tally.json")
-    manifest = _read(out, provenance.MANIFEST_FILE)
+    cfg = read_json(out, "config.json")
+    summ = read_json(out, "nautilus_summary.json")
+    tally = read_json(out, "nautilus_tally.json")
+    manifest = read_json(out, provenance.MANIFEST_FILE)
     digest = (out / "target_digest.txt").read_text().strip()
     manifest_digest = provenance.archived_manifest_digest(out)
     run_code = manifest.get("code") or {}
@@ -521,8 +582,31 @@ def _guillot_T(
     return (0.75 * Tint**4 * (2.0 / 3.0 + tau) + 0.75 * Tirr**4 * f * fac) ** 0.25
 
 
-def _config_from_json(path: Path) -> C.Config:
-    """Return the run's Config from its config.json; the keys it drops and the defaults it fills are logged."""
+def config_from_json(path: Path) -> C.Config:
+    """Return the run's Config from its config.json, validated.
+
+    A key the run's config.json predates is filled from today's default and logged, and a key it records that is no
+    longer a field is dropped and logged; a key with no default it lacks is refused, naming the line to add.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The run's config.json.
+
+    Returns
+    -------
+    config_schema.Config
+        The run's configuration.
+
+    Raises
+    ------
+    RuntimeError
+        If the run solved with a second program this tree no longer builds.
+    ValueError
+        If it lacks a key with no default, or ``validate_config`` refuses it.
+    """
+    from retrieval_framework import case_keys
+
     d = json.loads(Path(path).read_text())
     if d.get("chem_presolve") or d.get("chem_retry"):
         raise RuntimeError(
@@ -531,11 +615,13 @@ def _config_from_json(path: Path) -> C.Config:
         )
     names = {f.name for f in fields(C.Config)}
     kw: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in d.items() if k in names}
-    missing = [k for k in _ARCHIVED_LINES if not kw.get(k)]
+    missing = sorted(k for k in case_keys.required_keys(C.Config(**kw)) if kw.get(k) in (None, "", ()))
     if missing:
         raise ValueError(
-            f"{path} names no {missing}. A run written before they were Config keys ran on the engine's defaults of "
-            f"then: add {', '.join(_ARCHIVED_LINES[k] for k in missing)} to it"
+            f"{path} names no {missing}, which have no default. A run written before they were Config keys ran on the "
+            "engine's defaults of then: add "
+            + ", ".join(_ARCHIVED_LINES.get(k, f'"{k}": <the value that run used>') for k in missing)
+            + " to it"
         )
     log.info("%s: not Config fields, not read: %s", path.name, sorted(set(d) - names))
     filled = sorted(names - set(d) - {"out_dir"})
@@ -544,10 +630,14 @@ def _config_from_json(path: Path) -> C.Config:
     for k in ("out_dir", "obs_dir"):
         if kw.get(k) is not None:
             kw[k] = Path(kw[k])
-    return C.Config(**kw)
+    cfg = C.Config(**kw)
+    C.validate_config(cfg)
+    return cfg
 
 
-def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+def _model_spectra(
+    out_dir: str | Path, cfg: C.Config, n: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     """Re-solve ``n`` weighted posterior draws cold.
 
     With integrated nuisances the depth carries each row's drawn offsets and the multiplier its drawn inflations;
@@ -557,6 +647,8 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
     ----------
     out_dir : str or pathlib.Path
         The run's output directory.
+    cfg : config_schema.Config
+        The run's configuration (``config_from_json``).
     n : int
         The draws.
 
@@ -571,17 +663,16 @@ def _model_spectra(out_dir: str | Path, n: int) -> tuple[np.ndarray, np.ndarray,
         If the rebuilt pipeline's parameters are not the posterior's.
     """
     out = Path(out_dir).resolve()
-    cfg = _config_from_json(out / "config.json")
     C.export_network(cfg)  # before vulcan3 is imported
 
     from retrieval_framework import pipeline as P
 
     post = np.load(out / "nautilus_posterior.npz")
-    rng = np.random.default_rng(int(cfg.seed) + 1)
+    rng = np.random.default_rng(int(C.need(cfg.seed, "seed")) + 1)
     theta = np.asarray(post["theta"], np.float64)
-    idx = rng.choice(len(theta), size=int(n), p=_weights(post["log_w"]))
+    idx = rng.choice(len(theta), size=int(n), p=weights(post["log_w"]))
     theta = theta[idx]
-    log.info("solver: %s", C.choose_solver())  # before vulcan3 is imported
+    log.info("solver: %s", hardware.choose_solver())  # before vulcan3 is imported
     pipe = P.build_pipeline(cfg)
     if list(pipe.names) != [str(s) for s in post["param_names"]]:
         raise ValueError(
@@ -626,7 +717,7 @@ def _unmodeled_absorbers(pipe: Any, Y: np.ndarray) -> tuple[dict[str, float], st
         return {}, "no re-solved draw certified"
     if not band.any():
         return {}, f"no chemistry layer lies in {constants.PHOTOSPHERE_BAR[0]:g}-{constants.PHOTOSPHERE_BAR[1]:g} bar"
-    gas = np.asarray(pipe.fwd._gas_mask, np.float64)
+    gas = np.asarray(pipe.fwd.gas_mask, np.float64)
     y_gas = Y * gas[None, None, :]
     vmr = y_gas / y_gas.sum(axis=2, keepdims=True)
     peak = vmr[:, band, :].mean(axis=1).max(axis=0)
@@ -661,10 +752,10 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     setup_logging()
     out = Path(args.out_dir).resolve()
-    _config_from_json(out / "config.json")  # refuses an archived config.json before any figure
+    cfg = config_from_json(out / "config.json")  # refuses an archived config.json before any figure
     # the forward build comes first: the certificate's version record imports
     # exojax, which must not precede vulcan_chem
-    spectra = _model_spectra(out, args.spectra) if args.spectra > 0 else None
+    spectra = _model_spectra(out, cfg, args.spectra) if args.spectra > 0 else None
     log.info("wrote %s", write_certificate(out))
     for p in plot(out, spectra):
         log.info("wrote %s", p)

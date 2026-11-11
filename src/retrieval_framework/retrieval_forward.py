@@ -67,7 +67,7 @@ def _refuse_c_o_bound(chem: SimpleNamespace, cfg: C.Config) -> None:
     """
     if str(cfg.co_mode) == "fixed_O":
         bound = float(chem.co_bz_bound)
-        hi = float(cfg.prior_c_o[1])
+        hi = float(C.need(cfg.prior_c_o, "prior_c_o")[1])
         if hi >= bound:
             raise ValueError(
                 f"prior_c_o upper bound {hi:+.3f} reaches the fixed-O b_z positivity "
@@ -136,9 +136,9 @@ class RetrievalForward:
         for species, i in chem.sidx.items():
             if species.endswith(("_l_s", "_l", "_s")):
                 gas[int(i)] = 0.0
-        self._gas_mask = jnp.asarray(gas)
+        self.gas_mask = jnp.asarray(gas)
         self._p_art_bar_j = jnp.asarray(rt.p_art_bar)
-        self._lanes = int(cfg.cold_lanes)
+        self._lanes = int(C.need(cfg.cold_lanes, "cold_lanes"))
         self._refill_chunk = int(cfg.cold_refill_chunk)
         self.chem_rtol = _rtol_accept(chem)
         self.y_baseline = np.asarray(chem.y0, dtype=np.float64)
@@ -266,7 +266,7 @@ class RetrievalForward:
             mixing ratios [nlayer], the temperature [nlayer] in K and the mean molecular weight [nlayer] in amu.
         """
         to_art = self._to_art
-        y_gas = y * self._gas_mask[None, :]
+        y_gas = y * self.gas_mask[None, :]
         ymix = y_gas / jnp.sum(y_gas, axis=1, keepdims=True)
         T_art = self.tp_model.eval(chem_theta[self.n_chem : self.n_chem + self.n_tp], self._p_art_bar_j)
         mmw_v = ymix @ self._species_masses

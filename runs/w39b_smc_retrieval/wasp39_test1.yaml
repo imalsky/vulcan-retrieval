@@ -1,4 +1,4 @@
-# WASP-39b, the v5 configuration: the final one after the external science review.
+# WASP-39b: the headline retrieval of the G395H and NIRISS spectrum (Carter & May 2024).
 # This file is the whole run. Its stem is the run name; the output goes to
 # output/w39b_smc_retrieval/wasp39_test1_nautilus/ (derived, never a key here).
 #
@@ -12,7 +12,7 @@
 # A variant is a file beside this one with `base: wasp39_test1.yaml` and the keys it changes
 # (a key replaces the base's value whole, dicts and lists included). Every key under
 # config: is a field of config_schema.Config; a key not listed keeps the schema default, except the
-# keys every spec states (config_schema.CASE_KEYS, run_setup._MODE_REQUIRED).
+# keys every spec states (case_keys.required_keys).
 # Every config key outside provenance.TARGET_FREE_KEYS, and the runtime block, enters the
 # target manifest: a change means a new file, never a resume. YAML reads 1e11 as text: write
 # floats with an exponent as 1.0e+11.
@@ -41,7 +41,7 @@ config:
   run_label: WASP-39b
   seed: 20260704                       # nautilus and the synthetic injection; one file per seed
   vulcan_cfg_name: W39b                # chemistry baseline: vulcan3/configs/W39b.yaml (10x solar, Kzz profile)
-  network: thermo/SNCHO_photo_network_2025.txt   # required; v5 ran thermo/SNCHO_photo_network.txt
+  network: thermo/SNCHO_photo_network_2025.txt   # the newest sulfur network
   atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
 
   # ---- forward model ------------------------------------------------------------
@@ -136,5 +136,5 @@ config:
   integrate_nuisance: true
 
   # ---- lanes and wall ------------------------------------------------------------
-  cold_lanes: 528                      # the lanes that run: 176 x 3 one-buffer ffi blocks per SM; 64.4 GiB peak at nz 100
+  cold_lanes: 528                      # the lanes that run on one GH200; 64.4 GiB peak at nz 100
   walltime_seconds: 165600             # the governor, 46 h: the run checkpoints and exits 0 here (PBS wall 48 h)

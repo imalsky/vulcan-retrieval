@@ -17,14 +17,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from retrieval_framework import constants
+from retrieval_framework import config_schema as C, constants
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from jax.typing import ArrayLike
 
-    from retrieval_framework import config_schema as C
 
 __all__ = [
     "build_binning_matrix",
@@ -111,16 +110,16 @@ def load_real_observations(cfg: C.Config) -> dict[str, Any]:
         raise ValueError("load_real_observations needs obs_dir: this Config has none")
     obs_dir = Path(cfg.obs_dir)
     products = dict(cfg.obs_products)
-    missing = [g for g in cfg.combo if g not in products]
+    missing = [g for g in C.need(cfg.combo, "combo") if g not in products]
     if missing:
         raise ValueError(f"combo groups {missing} not in obs_products (known: {sorted(products)})")
     rows = []
-    for grp in cfg.combo:
+    for grp in C.need(cfg.combo, "combo"):
         for fname in products[grp]:
             cols = read_rprs_csv(obs_dir / fname)
             rows.append((*cols, np.array([grp] * len(cols[0]))))
     wl, lo, hi, depth, sigma, group = map(np.concatenate, zip(*rows, strict=True))
-    sel = (wl >= float(cfg.obs_wl_lo)) & (wl <= float(cfg.obs_wl_hi))
+    sel = (wl >= float(C.need(cfg.obs_wl_lo, "obs_wl_lo"))) & (wl <= float(C.need(cfg.obs_wl_hi, "obs_wl_hi")))
     r_max = float(cfg.obs_max_bin_R)
     if r_max > 0.0:
         drop = sel & (0.5 * (lo + hi) / (hi - lo) > r_max)

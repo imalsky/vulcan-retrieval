@@ -1,6 +1,6 @@
 """Shared helpers for the validation scripts: a case's Config, R-binning and the JSON artifact.
 
-``emit()`` writes beside the case a script was given (``spec_case``), or under ``RESULTS``, with the code and data
+``emit()`` writes into the folder it is given, beside the case or the run it measured, with the code and data
 provenance that ties the number to one state. Imports no jax, exojax or chemistry, so it cannot perturb the measurement.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 # one copy of the git/hash primitives, owned by the provenance module
-from retrieval_framework.provenance import _data_identity, _repo_states, _versions, science_data_identity
+from retrieval_framework.provenance import _data_identity, _repo_states, _sha256, _versions, science_data_identity
 
 logger = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -35,9 +35,6 @@ def spec_case(path):
 
     spec = load_spec(path)
     return spec.cfg, output_base(spec.path.parent) / "validation"
-
-
-RESULTS = REPO / "output" / "w39b_smc_retrieval" / "validation"
 
 
 def make_r_bins(wl_lo, wl_hi, R):
@@ -83,11 +80,15 @@ def _devices() -> list[str]:
         return []
 
 
-def collect_provenance(resolved_config: dict | None = None) -> dict:
-    """Return everything needed to tie a number to an exact code, data and machine state."""
+def collect_provenance(resolved_config: dict | None, data_dir: Path) -> dict:
+    """Return everything needed to tie a number to an exact code, data and machine state.
+
+    ``data_dir`` is where the measured case's ``observations.npz`` sits, a run's folder; a config that names a data
+    source also hashes its product files.
+    """
     repos = _repo_states(REPO.parent)
-    # top_pressure_ladder nests its two grids under "production"/"extended"
-    rc = (resolved_config or {}).get("production", resolved_config or {})
+    # top_pressure_ladder nests its two grids under "case"/"extended"
+    rc = (resolved_config or {}).get("case", resolved_config or {})
     prov = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
@@ -101,8 +102,8 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
             "cpu_count": os.cpu_count(),
             "hostname": socket.gethostname(),
         },
-        # the data root, the VULCAN config and its network (no observations here)
-        "data": _data_identity(RESULTS, rc),
+        # the data root, the VULCAN config, its network and the observations.npz in data_dir, if any
+        "data": _data_identity(Path(data_dir), rc),
         "env_overrides": {
             k: os.environ[k]
             for k in sorted(os.environ)
@@ -122,6 +123,9 @@ def collect_provenance(resolved_config: dict | None = None) -> dict:
         # results names no molecules and reads no table; its solves' provenance is in resolved_config.
         if rc.get("molecules"):
             prov["science_data"] = science_data_identity(rc["molecules"])
+        if rc.get("obs_dir") and rc.get("obs_products"):
+            files = sorted({f for group in rc["obs_products"].values() for f in group})
+            prov["observation_products"] = {f: _sha256(Path(rc["obs_dir"]) / f) for f in files}
     return prov
 
 
@@ -132,22 +136,23 @@ def emit(
     status: str,
     summary: str,
     resolved_config: dict | None = None,
-    out_dir: Path | None = None,
+    *,
+    out_dir: Path,
 ) -> Path:
-    """Write ``<name>.json`` under ``out_dir``, by default ``RESULTS``, and return its path.
+    """Write ``<name>.json`` under ``out_dir`` and return its path.
 
     ``status`` is PASS, FAIL or REPORT, a measurement with no pass gate.
     """
     if status not in ("PASS", "FAIL", "REPORT"):
         raise ValueError(f"status must be PASS/FAIL/REPORT, got {status!r}")
-    out_dir = out_dir or RESULTS
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "artifact": name,
         "title": title,
         "verdict": {"status": status, "summary": summary},
         "measurements": measurements,
-        "provenance": collect_provenance(resolved_config),
+        "provenance": collect_provenance(resolved_config, out_dir),
     }
     jpath = out_dir / f"{name}.json"
     jpath.write_text(json.dumps(payload, indent=2, default=str) + "\n")

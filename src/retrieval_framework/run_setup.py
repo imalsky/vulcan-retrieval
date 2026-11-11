@@ -4,10 +4,10 @@ Sections: ``base`` (one file beside it whose sections it refines), ``unset`` (a 
 base states that it removes), ``runtime`` (the environment the engine is imported under), ``sampler`` (nautilus) and
 ``config`` (fields of ``config_schema.Config``, flat). The run's name is the file stem and its output directory
 ``<repo>/output/<case>/<name>_nautilus``. A variant restates the keys it changes: a key's value replaces the base's
-whole, and a base has no base of its own. A spec states every key of ``config_schema.CASE_KEYS``, and every key its mode
-reads with no default (``_MODE_KEYS``, ``_MODE_REQUIRED``); a key its mode does not read is refused. Loading writes no
-environment and imports no jax; ``export_runtime`` writes the runtime block before the engine is imported and refuses a
-value that disagrees.
+whole, and a base has no base of its own. A spec states every key its case reads with no default
+(``case_keys.required_keys``, refused unset by ``config_schema.validate_config``), and a key its mode does not read is
+refused (``case_keys.refused_keys``). Loading writes no environment and imports no jax; ``export_runtime`` writes the
+runtime block before the engine is imported and refuses a value that disagrees.
 
     python -m retrieval_framework.run_setup runs/<case>/<name>.yaml   # the runtime as export lines
 """
@@ -29,11 +29,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import yaml
+from vulcan_forward.constants import check_core_molecules
 
-from retrieval_framework import config_schema as C, constants
+from retrieval_framework import case_keys, config_schema as C, constants, hardware
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
     from types import ModuleType
 
     from retrieval_framework.pipeline import Pipeline
@@ -59,80 +60,6 @@ log = logging.getLogger("retrieval")
 
 SECTIONS = ("base", "unset", "runtime", "sampler", "config")
 _MAPPINGS = ("runtime", "sampler", "config")
-
-# Keys the run reads in one mode only: (keys, whether the Config's mode reads them, that mode in words, whether a stated
-# key is refused while the mode is off). A key in two rows is read only when both modes are on.
-_MODE_KEYS: tuple[tuple[tuple[str, ...], Callable[[C.Config], bool], str, bool], ...] = (
-    (("tp_Tint_K",), lambda c: not c.tp_infer_Tint, "tp_infer_Tint: false", True),
-    (("tp_deep_param",), lambda c: c.tp_infer_Tint, "tp_infer_Tint: true", True),
-    (
-        ("prior_T1bar", "truth_T1bar"),
-        lambda c: c.tp_infer_Tint and c.tp_deep_param == "T1bar",
-        "tp_infer_Tint: true and tp_deep_param: T1bar",
-        True,
-    ),
-    # The report quotes the deep temperature at tp_deep_p_bar in every mode, so it is never refused.
-    (
-        ("tp_deep_p_bar",),
-        lambda c: c.tp_infer_Tint and c.tp_deep_param == "T1bar",
-        "tp_infer_Tint: true and tp_deep_param: T1bar",
-        False,
-    ),
-    (
-        ("prior_Tint", "truth_Tint"),
-        lambda c: c.tp_infer_Tint and c.tp_deep_param == "Tint",
-        "tp_infer_Tint: true and tp_deep_param: Tint",
-        True,
-    ),
-    (("tp_gamma_fixed",), lambda c: not c.tp_infer_gamma, "tp_infer_gamma: false", True),
-    (("prior_log10gamma", "truth_log10gamma"), lambda c: c.tp_infer_gamma, "tp_infer_gamma: true", True),
-    (("tp_nabla_ad", "prior_log10P_rcb", "truth_log10P_rcb"), lambda c: c.tp_adiabat, "tp_adiabat: true", True),
-    (
-        ("prior_log10kappa_cloud", "truth_log10kappa_cloud", "prior_cloud_alpha", "truth_cloud_alpha"),
-        lambda c: c.cloud_model == "powerlaw",
-        "cloud_model: powerlaw",
-        True,
-    ),
-    (("prior_log10P_deck", "truth_log10P_deck"), lambda c: c.cloud_model == "deck", "cloud_model: deck", True),
-    (("prior_s_o", "truth_s_o"), lambda c: c.infer_s_o, "infer_s_o: true", True),
-    (
-        ("kzz_p_ref_bar", "prior_kzz_slope", "truth_kzz_slope"),
-        lambda c: c.kzz_mode == "powerlaw",
-        "kzz_mode: powerlaw",
-        True,
-    ),
-    (("truth_lnM",), lambda c: c.infer_lnM, "infer_lnM: true", True),
-    (("prior_offset_ppm", "truth_offset_ppm"), lambda c: c.infer_offsets, "infer_offsets: true", True),
-    (
-        ("prior_noise_inflation", "noise_inflation_per_group"),
-        lambda c: c.infer_noise_inflation,
-        "infer_noise_inflation: true",
-        True,
-    ),
-    (
-        ("combo", "obs_wl_lo", "obs_wl_hi", "obs_max_bin_R"),
-        lambda c: bool(c.obs_dir),
-        "a data source (obs_dir and obs_products)",
-        True,
-    ),
-    # The injection reads every truth of the sampled parameters and truth_noise_inflation.
-    (
-        tuple(f.name for f in fields(C.Config) if f.name.startswith("truth_")),
-        lambda c: c.generate_synthetic_data,
-        "generate_synthetic_data: true",
-        True,
-    ),
-)
-# Keys of _MODE_KEYS with no default for a case that reads them: stated whenever every row naming them is on.
-_MODE_REQUIRED = frozenset(
-    {
-        *("tp_Tint_K", "tp_gamma_fixed", "tp_deep_p_bar", "tp_nabla_ad", "kzz_p_ref_bar", "combo", "obs_wl_lo"),
-        *("prior_log10gamma", "prior_T1bar", "prior_Tint", "prior_log10P_rcb", "prior_s_o", "prior_kzz_slope"),
-        *("prior_log10kappa_cloud", "prior_cloud_alpha", "prior_log10P_deck", "prior_offset_ppm", "obs_wl_hi"),
-        "prior_noise_inflation",
-        *(f.name for f in fields(C.Config) if f.name.startswith("truth_")),
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -324,26 +251,37 @@ def _build(cls: Any, mapping: dict[str, Any], where: str) -> Any:
     return cls(**mapping)
 
 
-def _check_mode_keys(cfg: C.Config, stated: set[str], where: str) -> None:
-    """Refuse a stated key its mode does not read, and an unstated one its mode needs (``_MODE_KEYS``)."""
-    for keys, reads, mode, refuse_off in _MODE_KEYS:
-        dead = sorted(set(keys) & stated) if refuse_off and not reads(cfg) else []
-        if dead:
+def _merge(path: Path, doc: dict[str, Any]) -> tuple[Path | None, dict[str, dict[str, Any]]]:
+    """Return a spec's base file and its sections merged over the base's, the variant's ``unset:`` keys removed."""
+    sections: dict[str, dict[str, Any]] = {s: {} for s in _MAPPINGS}
+    dropped = list(doc.get("unset") or [])
+    if dropped and "base" not in doc:
+        raise ValueError(f"{path}: `unset: {dropped}` needs a base: only a variant removes keys it inherits")
+    twice = sorted({k for k in dropped if dropped.count(k) > 1})
+    if twice:
+        raise ValueError(f"{path}: `unset:` names {twice} more than once: list each key once")
+    if "base" not in doc:
+        base_path = None
+    else:
+        base_path = (path.parent / str(doc["base"])).resolve()
+        base = _read(base_path)
+        if "base" in base:
             raise ValueError(
-                f"{where}: {dead} are read only with {mode}, which this spec does not set, so they would "
-                "change nothing: drop them (a variant lists a base's key under `unset:`)"
+                f"{path}: its base {base_path.name} has a base of its own; a spec resolves from at most two files"
             )
-    for keys, reads, mode, _ in _MODE_KEYS:
-        if not reads(cfg):
-            continue
-        missing = sorted(
-            k for k in set(keys) & _MODE_REQUIRED - stated if all(r(cfg) for ks, r, _m, _o in _MODE_KEYS if k in ks)
-        )
-        if missing:
+        for s, values in sections.items():
+            values.update(base.get(s) or {})
+        inherited = base.get("config") or {}
+        wrong = sorted(set(dropped) - set(inherited)) + sorted(set(dropped) & set(doc.get("config") or {}))
+        if wrong:
             raise ValueError(
-                f"{where}: {missing} unset: {mode} reads them, and a schema default would not be this "
-                "case's: state them"
+                f"{path}: `unset:` names {wrong}: each must be a config key the base states and the variant does not"
             )
+        for k in dropped:
+            del sections["config"][k]
+    for s, values in sections.items():
+        values.update(doc.get(s) or {})  # the variant's value wins, whole
+    return base_path, sections
 
 
 def output_base(run_dir: Path) -> Path:
@@ -365,7 +303,7 @@ def output_base(run_dir: Path) -> Path:
     return run_dir / "output"
 
 
-def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a spec can be malformed
+def load_spec(path: str | Path) -> Spec:
     """Return the run specification at ``path``, resolved against its ``base`` and validated.
 
     Parameters
@@ -386,31 +324,7 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
     path = Path(path).resolve()
     if path.suffix not in (".yaml", ".yml"):
         raise ValueError(f"{path}: a run specification is a .yaml file")
-    doc = _read(path)
-    base_path = None
-    sections: dict[str, dict[str, Any]] = {s: {} for s in _MAPPINGS}
-    dropped = list(doc.get("unset") or [])
-    if dropped and "base" not in doc:
-        raise ValueError(f"{path}: `unset: {dropped}` needs a base: only a variant removes keys it inherits")
-    if "base" in doc:
-        base_path = (path.parent / str(doc["base"])).resolve()
-        base = _read(base_path)
-        if "base" in base:
-            raise ValueError(
-                f"{path}: its base {base_path.name} has a base of its own; a spec resolves from at most two files"
-            )
-        for s, values in sections.items():
-            values.update(base.get(s) or {})
-        inherited = base.get("config") or {}
-        wrong = sorted(set(dropped) - set(inherited)) + sorted(set(dropped) & set(doc.get("config") or {}))
-        if wrong:
-            raise ValueError(
-                f"{path}: `unset:` names {wrong}: each must be a config key the base states and the variant does not"
-            )
-        for k in dropped:
-            del sections["config"][k]
-    for s, values in sections.items():
-        values.update(doc.get(s) or {})  # the variant's value wins, whole
+    base_path, sections = _merge(path, _read(path))
 
     runtime = _build(Runtime, sections["runtime"], f"{path.name} runtime")
     sampler = _build(Sampler, sections["sampler"], f"{path.name} sampler")
@@ -433,12 +347,6 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
     bad = set(cfgd) - names
     if bad:
         raise ValueError(f"{where}: unknown key(s) {sorted(bad)}: not fields of config_schema.Config")
-    unset = sorted(C.CASE_KEYS - set(cfgd)) or sorted(k for k in C.CASE_KEYS if cfgd[k] is None)
-    if unset:
-        raise ValueError(
-            f"{where}: {unset} unset. Each belongs to the planet and its data, so the spec (or its base) states it: "
-            "the schema's default is not this planet's."
-        )
     hints = typing.get_type_hints(C.Config)
     for k, v in cfgd.items():
         _check(where, k, v, hints[k])
@@ -451,8 +359,28 @@ def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a 
         cfgd["obs_dir"] = od
     name = path.stem
     cfg = C.Config(**cfgd, out_dir=output_base(path.parent) / f"{name}_nautilus")
+    refused = case_keys.refused_keys(cfg)
+    dead = sorted(set(cfgd) & set(refused))
+    if dead:
+        raise ValueError(
+            f"{where}: {dead} would change nothing: "
+            + "; ".join(f"{k}: {refused[k]}" for k in dead)
+            + ". Drop them (a variant lists a base's key under `unset:`)."
+        )
     C.validate_config(cfg)
-    _check_mode_keys(cfg, set(cfgd), where)
+    unlisted = check_core_molecules(
+        list(C.need(cfg.molecules, "molecules")),
+        list(cfg.omit_core_molecules),
+        float(C.need(cfg.nu_min, "nu_min")),
+        float(C.need(cfg.nu_max, "nu_max")),
+    )
+    if unlisted:
+        log.warning(
+            "%s: %s absorb in the model band and are not in `molecules`: name them in `omit_core_molecules` if that is "
+            "meant",
+            where,
+            unlisted,
+        )
     return Spec(path=path, base=base_path, name=name, cfg=cfg, sampler=sampler, runtime=runtime)
 
 
@@ -529,10 +457,10 @@ def check_inputs(cfg: C.Config) -> None:
     """
     from retrieval_framework import observations as OBS, provenance
 
-    net = provenance.case_data_file(cfg.network)
+    net = provenance.case_data_file(C.need(cfg.network, "network"))
     if not net.is_file():
         raise FileNotFoundError(f"network {cfg.network!r} not found (resolved to {net})")
-    path, case = provenance.case_config(cfg.vulcan_cfg_name)
+    path, case = provenance.case_config(C.need(cfg.vulcan_cfg_name, "vulcan_cfg_name"))
     for key in ("atm_file", "sflux_file"):
         f = provenance.case_data_file(cfg.cfg_overrides.get(key, case[key]))
         if not f.is_file():
@@ -540,10 +468,10 @@ def check_inputs(cfg: C.Config) -> None:
     if not cfg.obs_dir:
         return
     obs = OBS.load_real_observations(cfg)
-    empty = [g for g in cfg.combo if g not in obs["groups"]]
+    empty = [g for g in C.need(cfg.combo, "combo") if g not in obs["groups"]]
     if len(obs["wl"]) < constants.MIN_REAL_BINS or empty:
         raise ValueError(
-            f"{cfg.obs_dir}: {len(obs['wl'])} bins of {list(cfg.combo)} in the fit window "
+            f"{cfg.obs_dir}: {len(obs['wl'])} bins of {list(C.need(cfg.combo, 'combo'))} in the fit window "
             f"[{cfg.obs_wl_lo}, {cfg.obs_wl_hi}] um (groups with none: {empty}); a named data "
             f"source needs {constants.MIN_REAL_BINS} and one in every group. A synthetic run on the synthetic grid "
             "names no data source"
@@ -676,7 +604,7 @@ def _write_config_json(cfg: C.Config, pipe: Pipeline, spec: Spec) -> None:
             "n_chem_tp": int(pipe.n_chem_tp),
         }
     )
-    d["hardware"] = C.hardware_profile()
+    d["hardware"] = hardware.hardware_profile()
     out: Path = cfg.out_dir  # type: ignore[assignment]  # load_spec sets it
     (out / "config.json").write_text(json.dumps(d, indent=2, default=str))
 
@@ -700,7 +628,7 @@ def set_observations(cfg: C.Config, pipe: Pipeline, P: ModuleType) -> dict[str, 
     """
     if cfg.generate_synthetic_data:
         log.info("Generating synthetic observations (injection at truth_*)...")
-        o = P.generate_observations(pipe, seed=int(cfg.seed))
+        o = P.generate_observations(pipe, seed=int(C.need(cfg.seed, "seed")))
         obs_save = {
             "wl": pipe.obs["wl"],
             "wl_lo": pipe.obs["wl_lo"],

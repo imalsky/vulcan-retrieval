@@ -29,7 +29,7 @@ MINIMAL = {
     "atom_list": ["H", "O", "C", "N", "S"],
     "rp_cm": 1.0,
     "rstar_cm": 1.0,
-    # the keys every spec states (config_schema.CASE_KEYS)
+    # the keys every spec states (case_keys.CASE_KEYS)
     "tp_gravity_cgs": 422.0,
     "p_ref_bar": 1.0e-3,
     "art_pbtm_bar": 7.0,
@@ -42,7 +42,9 @@ MINIMAL = {
     "prior_Tirr": [800.0, 2600.0],
     "prior_lnM_sigma": 0.11,
     "baseline_metallicity_solar": 10.0,
-    "tp_Tint_K": 150.0,  # tp_infer_Tint is off (run_setup._MODE_REQUIRED)
+    "seed": 1,
+    "tp_deep_p_bar": 1.0,
+    "tp_Tint_K": 150.0,  # tp_infer_Tint is off (case_keys.MODE_KEYS)
     "prior_lnZ": [-2.3, 2.3],
     "prior_c_o": [-1.7, 0.24],
     "prior_lnKzz": [-2.3, 6.9],
@@ -133,32 +135,38 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
         # a spec states its planet: the schema's default is another planet's
         ({"config": {k: v for k, v in MINIMAL.items() if k != "tp_gravity_cgs"}}, r"\['tp_gravity_cgs'\] unset"),
         ({"config": {k: v for k, v in MINIMAL.items() if k not in ("molecules", "cloud_model")}}, "unset"),
-        # the run's own numbers, no schema default (config_schema.CASE_KEYS)
+        # the run's own numbers, no schema default (case_keys.CASE_KEYS)
         *[
             ({"config": _drop(k)}, rf"\['{k}'\] unset")
             for k in ("count_max", "cold_lanes", "prior_Tirr", "prior_lnM_sigma", "baseline_metallicity_solar")
         ],
         ({"config": dict(MINIMAL, count_max=None)}, r"\['count_max'\] unset"),
-        # a key the case's mode reads, with no default (run_setup._MODE_REQUIRED)
-        ({"config": _drop("tp_Tint_K")}, r"\['tp_Tint_K'\] unset: tp_infer_Tint: false"),
+        # a key the case's mode reads, with no default (case_keys.required_keys)
+        ({"config": _drop("tp_Tint_K")}, r"\['tp_Tint_K'\] unset"),
         (
             {"config": dict(_drop("prior_log10kappa_cloud", "prior_cloud_alpha"), cloud_model="deck")},
             r"\['prior_log10P_deck'\] unset",
         ),
         ({"config": dict(MINIMAL, tp_adiabat=True)}, r"\['prior_log10P_rcb', 'tp_nabla_ad'\] unset"),
         ({"config": _drop("prior_log10kappa")}, r"\['prior_log10kappa'\] unset"),
-        ({"config": _drop("prior_offset_ppm")}, r"\['prior_offset_ppm'\] unset: infer_offsets"),
+        ({"config": _drop("prior_offset_ppm")}, r"\['prior_offset_ppm'\] unset"),
         ({"config": dict(MINIMAL, infer_noise_inflation=True)}, r"\['prior_noise_inflation'\] unset"),
-        ({"config": dict(MINIMAL, tp_infer_gamma=False)}, r"\['prior_log10gamma'\] are read only"),
+        (
+            {"config": dict(MINIMAL, tp_infer_gamma=False)},
+            r"\['prior_log10gamma'\] would change nothing: prior_log10gamma: no parameter",
+        ),
         ({"config": dict(_drop("prior_log10gamma"), tp_infer_gamma=False)}, r"\['tp_gamma_fixed'\] unset"),
         (
             {"config": dict(MINIMAL, tp_infer_Tint=True, tp_deep_param="T1bar", prior_T1bar=[320.0, 2980.0])},
-            r"\['tp_Tint_K'\] are read only",
+            r"\['tp_Tint_K'\] would change nothing",
         ),
         (
             {
                 "config": dict(
-                    _drop("tp_Tint_K"), tp_infer_Tint=True, tp_deep_param="T1bar", prior_T1bar=[320.0, 2980.0]
+                    _drop("tp_Tint_K", "tp_deep_p_bar"),
+                    tp_infer_Tint=True,
+                    tp_deep_param="T1bar",
+                    prior_T1bar=[320.0, 2980.0],
                 )
             },
             r"\['tp_deep_p_bar'\] unset",
@@ -170,18 +178,27 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
         ),
         (  # the injection reads truth_noise_inflation whether or not the inflation is inferred
             {"config": dict(_drop("prior_offset_ppm"), generate_synthetic_data=True, infer_offsets=False, **TRUTHS)},
-            r"\['truth_noise_inflation'\] unset: generate_synthetic_data",
+            r"\['truth_noise_inflation'\] unset",
         ),
-        ({"config": dict(MINIMAL, truth_noise_inflation=1.0)}, r"\['truth_noise_inflation'\] are read only"),
+        (
+            {"config": dict(MINIMAL, truth_noise_inflation=1.0)},
+            r"truth_noise_inflation: it is read only with generate_synthetic_data",
+        ),
         (
             {"config": dict(MINIMAL, obs_dir="data/x", obs_products={"G": ["a.csv"]})},
             r"\['combo', 'obs_wl_hi', 'obs_wl_lo'\] unset",
         ),
-        # a key the case's mode does not read (run_setup._MODE_KEYS)
-        ({"config": dict(MINIMAL, tp_gamma_fixed=0.3)}, r"\['tp_gamma_fixed'\] are read only with tp_infer_gamma"),
-        ({"config": dict(MINIMAL, tp_infer_Tint=True)}, r"\['tp_Tint_K'\] are read only"),
-        ({"config": dict(MINIMAL, prior_log10P_deck=[-6.0, 0.8])}, "only with cloud_model: deck"),
-        ({"config": dict(MINIMAL, cloud_model="none", prior_cloud_alpha=[0.0, 6.0])}, "cloud_model: powerlaw"),
+        # a key the case's mode does not read (case_keys.refused_keys)
+        ({"config": dict(MINIMAL, tp_gamma_fixed=0.3)}, r"tp_gamma_fixed: it is read only with tp_infer_gamma: false"),
+        ({"config": dict(MINIMAL, tp_infer_Tint=True)}, r"\['tp_Tint_K'\] would change nothing"),
+        (
+            {"config": dict(MINIMAL, prior_log10P_deck=[-6.0, 0.8])},
+            r"prior_log10P_deck: no parameter this spec samples reads it",
+        ),
+        ({"config": dict(MINIMAL, cloud_model="none")}, "prior_cloud_alpha: no parameter this spec samples reads it"),
+        # what validate_config no longer repeats: the table refuses a deep parameter or a per-group split nobody reads
+        ({"config": dict(MINIMAL, tp_deep_param="T1bar")}, "tp_deep_param: it is read only with tp_infer_Tint: true"),
+        ({"config": dict(MINIMAL, noise_inflation_per_group=True)}, "noise_inflation_per_group: it is read only"),
         ({"config": dict(MINIMAL, kzz_p_ref_bar=1.0e-3)}, "only with kzz_mode: powerlaw"),
         ({"config": dict(MINIMAL, tp_nabla_ad=0.3)}, "only with tp_adiabat"),
         ({"config": dict(MINIMAL, truth_lnZ=0.5)}, "only with generate_synthetic_data"),
@@ -202,7 +219,7 @@ def test_a_variant_unsets_keys_its_base_states(tmp_path):
     clear = {"base": "base.yaml", "unset": cloud, "config": {"cloud_model": "none"}}
     spec = R.load_spec(_write(tmp_path / "clear.yaml", clear))
     assert spec.cfg.cloud_model == "none"
-    with pytest.raises(ValueError, match="read only with cloud_model: powerlaw"):  # without unset
+    with pytest.raises(ValueError, match="prior_cloud_alpha: no parameter"):  # without unset
         R.load_spec(_write(tmp_path / "c0.yaml", {"base": "base.yaml", "config": {"cloud_model": "none"}}))
     for name, doc in (
         ("c1", {**clear, "unset": [*cloud, "prior_log10P_deck"]}),
@@ -210,6 +227,8 @@ def test_a_variant_unsets_keys_its_base_states(tmp_path):
     ):
         with pytest.raises(ValueError, match="`unset:` names"):
             R.load_spec(_write(tmp_path / f"{name}.yaml", doc))
+    with pytest.raises(ValueError, match=r"names \['prior_cloud_alpha'\] more than once"):
+        R.load_spec(_write(tmp_path / "c4.yaml", {**clear, "unset": [*cloud, "prior_cloud_alpha"]}))
     with pytest.raises(ValueError, match="needs a base"):
         R.load_spec(_write(tmp_path / "c3.yaml", {"unset": cloud, "config": MINIMAL}))
 

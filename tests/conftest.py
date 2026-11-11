@@ -34,6 +34,85 @@ if _SRC.is_dir() and _IMPORTED != _SRC:
     )
 
 RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "w39b_smc_retrieval"
+
+# A complete case for the tests that build a Config directly: every key a case states, at WASP-39b-like values (the
+# schema held these as defaults before they moved into the specifications), every mode's priors and truths included.
+CASE = {
+    "seed": 20260704,
+    "vulcan_cfg_name": "W39b",
+    "network": "thermo/SNCHO_photo_network_2025.txt",
+    "atom_list": ("H", "O", "C", "N", "S"),
+    "rp_cm": 9.1438268e9,
+    "rstar_cm": 6.483924e10,
+    "tp_gravity_cgs": 422.0,
+    "p_ref_bar": 1.0e-3,
+    "art_pbtm_bar": 7.0,
+    "molecules": ("H2O", "CO2", "CO", "CH4", "NH3", "HCN", "H2S", "SO2"),
+    "nu_min": 1923.0,
+    "nu_max": 3450.0,
+    "cloud_model": "powerlaw",
+    "count_max": 5000,
+    "cold_lanes": 8,
+    "baseline_metallicity_solar": 10.0,
+    "combo": ("NIRISS", "G395H"),
+    "obs_wl_lo": 1.0,
+    "obs_wl_hi": 5.28,
+    "tp_Tint_K": 150.0,
+    "tp_gamma_fixed": 0.4,
+    "tp_deep_p_bar": 1.0,
+    "tp_nabla_ad": 0.29,
+    "kzz_p_ref_bar": 1.0e-3,
+    "prior_lnZ": (-2.302585092994046, 2.302585092994046),
+    "prior_c_o": (-1.6, 0.45),
+    "prior_lnKzz": (-5.0, 5.0),
+    "prior_s_o": (-2.302585092994046, 2.302585092994046),
+    "prior_kzz_slope": (-1.0, 1.0),
+    "prior_Tirr": (800.0, 2600.0),
+    "prior_log10kappa": (-3.5, 0.5),
+    "prior_log10gamma": (-2.0, 0.7),
+    "prior_Tint": (100.0, 500.0),
+    "prior_T1bar": (320.0, 2980.0),
+    "prior_log10P_rcb": (-1.0, 0.88),
+    "prior_lnR0": (-0.08, 0.08),
+    "prior_lnM_sigma": 0.11,
+    "prior_log10kappa_cloud": (-7.0, 1.0),
+    "prior_cloud_alpha": (0.0, 6.0),
+    "prior_log10P_deck": (-6.0, 0.8),
+    "prior_offset_ppm": (-800.0, 800.0),
+    "prior_noise_inflation": (0.5, 3.0),
+    **{
+        f"truth_{k}": v
+        for k, v in {
+            "lnZ": 0.0,
+            "c_o": 0.0,
+            "lnKzz": 0.0,
+            "s_o": 0.0,
+            "kzz_slope": 0.0,
+            "Tirr": 1650.0,
+            "log10kappa": -2.0,
+            "log10gamma": -0.4,
+            "Tint": 150.0,
+            "T1bar": 1500.0,
+            "log10P_rcb": 0.5,
+            "lnR0": 0.0,
+            "lnM": 0.0,
+            "log10kappa_cloud": -6.5,
+            "cloud_alpha": 1.0,
+            "log10P_deck": 0.5,
+            "offset_ppm": 0.0,
+            "noise_inflation": 1.0,
+        }.items()
+    },
+}
+
+
+def case_config(**over):
+    """Return the Config of ``CASE`` with ``over`` applied."""
+    from retrieval_framework import config_schema as C
+
+    return C.Config(**{**CASE, **over})
+
+
 CAPPED_COLD_CMAX = 50  # < count_min: no solve can certify, its column stays finite
 
 

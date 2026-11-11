@@ -21,10 +21,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import yaml
 
+from retrieval_framework import config_schema as C, constants
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from retrieval_framework import config_schema as C
     from retrieval_framework.pipeline import Pipeline
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "TARGET_FREE_KEYS",
     "archived_manifest_digest",
     "baseline_c_to_o",
+    "baseline_metallicity_solar",
     "case_config",
     "case_data_file",
     "case_inputs",
@@ -220,11 +222,35 @@ def case_config(name: str) -> tuple[Path, dict]:
     return p.resolve(), {**default, **(yaml.safe_load(p.read_text()) or {})}
 
 
+def _start_abundances(name: str, cfg_overrides: dict) -> tuple[Path, float, float]:
+    """Return a case config's path, C_H and O_H, refusing a case whose start composition is not those two numbers."""
+    path, case = case_config(name)
+    case = {**case, **cfg_overrides}
+    if case.get("use_solar") is True:
+        raise ValueError(
+            f"{path}: use_solar is true, so the baseline composition is vulcan3's preset "
+            f"{case.get('fastchem_solar_abundance_file')!r}, which the report does not read. State C_H and O_H with "
+            "use_solar: false in the case config or cfg_overrides."
+        )
+    if case.get("ini_mix") != "EQ":
+        raise ValueError(
+            f"{path}: ini_mix is {case.get('ini_mix')!r}, so the start column's composition comes from that column, "
+            "not from C_H and O_H, which this reader uses. Report C/O and metallicity on an EQ case, or derive them "
+            "from the start column."
+        )
+    c_h, o_h = float(case["C_H"]), float(case["O_H"])
+    if not (c_h > 0.0 and o_h > 0.0):
+        raise ValueError(f"{path}: C_H={c_h}, O_H={o_h}: both must be positive for a baseline composition")
+    return path, c_h, o_h
+
+
 def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
     """Return the C/O of a case's baseline composition, the ratio that ``exp(c_o)`` multiplies.
 
     Read from the case's vulcan3 config with ``cfg_overrides`` applied, as ``C_H / O_H``: the elemental inventory of the
-    equilibrium start, which the engine's C/O knob scales.
+    equilibrium start, which the engine's C/O knob scales. ``_start_abundances`` raises ``ValueError`` for a case that
+    takes its abundances from vulcan3's solar preset, whose start is not the equilibrium one, or whose C_H or O_H is
+    not positive.
 
     Parameters
     ----------
@@ -237,31 +263,30 @@ def baseline_c_to_o(name: str, cfg_overrides: dict) -> float:
     -------
     float
         C/O by number.
-
-    Raises
-    ------
-    ValueError
-        If the case takes its abundances from vulcan3's solar preset (``use_solar: true``), whose file this reader does
-        not parse, if its start is not the equilibrium one (``ini_mix`` other than ``EQ``), or if C_H or O_H is not
-        positive.
     """
-    path, case = case_config(name)
-    case = {**case, **cfg_overrides}
-    if case.get("use_solar") is True:
-        raise ValueError(
-            f"{path}: use_solar is true, so the baseline C/O is in vulcan3's preset "
-            f"{case.get('fastchem_solar_abundance_file')!r}, which the report does not read. State C_H and O_H with "
-            "use_solar: false in the case config or cfg_overrides."
-        )
-    if case.get("ini_mix") != "EQ":
-        raise ValueError(
-            f"{path}: ini_mix is {case.get('ini_mix')!r}, so the start column's C/O comes from that column, not from "
-            "C_H / O_H, which this reader uses. Report C/O on an EQ case, or derive it from the start column."
-        )
-    c_h, o_h = float(case["C_H"]), float(case["O_H"])
-    if not (c_h > 0.0 and o_h > 0.0):
-        raise ValueError(f"{path}: C_H={c_h}, O_H={o_h}: both must be positive for a baseline C/O")
+    _, c_h, o_h = _start_abundances(name, cfg_overrides)
     return c_h / o_h
+
+
+def baseline_metallicity_solar(name: str, cfg_overrides: dict) -> float:
+    """Return a case's baseline metallicity in solar units: its O_H over the Lodders (2020) photospheric O/H.
+
+    Refuses the cases ``baseline_c_to_o`` refuses.
+
+    Parameters
+    ----------
+    name : str
+        The case's config name or path.
+    cfg_overrides : dict
+        Overrides of the file's settings.
+
+    Returns
+    -------
+    float
+        O/H over solar.
+    """
+    _, _, o_h = _start_abundances(name, cfg_overrides)
+    return o_h / 10.0 ** (constants.LODDERS2020_LOG_EPS["O"] - 12.0)
 
 
 def case_data_file(rel: str | Path) -> Path:
@@ -401,7 +426,10 @@ def _external_chemistry_inputs(cfg: C.Config) -> dict[str, dict[str, str]]:
     The packaged ones are bound by vulcan3's code state.
     """
     if not (cfg.network and cfg.vulcan_cfg_name):
-        return {}
+        raise ValueError(
+            f"network={cfg.network!r}, vulcan_cfg_name={cfg.vulcan_cfg_name!r}: a run record needs both to name its "
+            "chemistry inputs (validate_config refuses either unset)"
+        )
     pkg = _vulcan3_root()
     _, case = case_config(cfg.vulcan_cfg_name)
     net = case_data_file(cfg.network)
@@ -436,8 +464,6 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
     import jax
     from vulcan_forward import constants as engine_constants
 
-    from retrieval_framework import constants
-
     cfg_bound = {k: v for k, v in asdict(cfg).items() if k not in TARGET_FREE_KEYS}
 
     # The likelihood's actual inputs, not the file paths that produced them.
@@ -459,7 +485,7 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
         "groups": list(pipe.groups),
         "observations_sha256": h.hexdigest(),
         "n_bin": int(pipe.n_bin),
-        **science_data_identity(cfg.molecules),
+        **science_data_identity(C.need(cfg.molecules, "molecules")),
         "case_inputs": case_inputs(cfg.vulcan_cfg_name, cfg.cfg_overrides),
         # Not dirty_files: that list churns with any scratch edit, while src_diff moves only when the code changes.
         "code": {

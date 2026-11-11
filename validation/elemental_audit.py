@@ -22,8 +22,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _artifact
 
-# gates: the projection is exact up to the fixed-iteration
-# residual; see vulcan_forward._elemental._ELEMENTAL_REPAIR_ITERS
+# gates: the projection is exact up to the fixed-iteration residual (vulcan_forward constants.ELEMENTAL_REPAIR_ITERS).
+# The engine refuses a start whose smallest repair factor is not > 0, so a draw that would fail the repair gate raises
+# in audit_init and is recorded as a FAIL row.
 GATE_RATIO = 1.0e-6
 GATE_DENSITY = 1.0e-10
 GATE_ATOM_INI = 1.0e-10
@@ -71,8 +72,19 @@ def main() -> int:
 
     worst = {"ratio": 0.0, "dco": 0.0, "dens": 0.0, "atom": 0.0, "repair": np.inf}
     fails = 0
+    refused = []
     for k, th in enumerate(draws):
-        a = chem.audit_init(th)
+        try:
+            a = chem.audit_init(th)
+        except ValueError as exc:  # the engine's "start column is not physical" refusal
+            fails += 1
+            refused.append({"draw": k, "theta": th.tolist(), "refusal": str(exc)})
+            print(
+                f"[{k:02d}] "
+                + " ".join(f"{n}={v:+.2f}" for n, v in zip(names, th, strict=False))
+                + f" | {exc}  <-- FAIL"
+            )
+            continue
         r = a.get("ratio_max_rel_err", np.nan)
         dco = abs(a.get("dln_CO_achieved", np.nan) - th[1])
         dens = a["density_closure_max_rel"]
@@ -118,7 +130,16 @@ def main() -> int:
     _artifact.emit(
         name="elemental_audit",
         title="Elemental inventory of the abundance map over prior draws",
-        measurements=[{"draws": args.n, "seed": args.seed, "chem_block": names, "failed": fails, "worst": worst}],
+        measurements=[
+            {
+                "draws": args.n,
+                "seed": args.seed,
+                "chem_block": names,
+                "failed": fails,
+                "worst": worst,
+                "refused": refused,
+            }
+        ],
         status="PASS" if verdict else "FAIL",
         summary=summary,
         resolved_config=profile,

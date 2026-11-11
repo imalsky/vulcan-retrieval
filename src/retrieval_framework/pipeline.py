@@ -37,6 +37,7 @@ __all__ = [
     "make_noise_model",
     "make_uspace",
     "save_npz",
+    "take_rows",
     "validate_observations",
 ]
 
@@ -100,7 +101,7 @@ def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: floa
         )
 
 
-def _take_rows(rows: Array, out: Any, other: Any) -> Any:
+def take_rows(rows: Array, out: Any, other: Any) -> Any:
     """Return a batch evaluator's ``out`` with the rows where ``rows`` holds taken from ``other``, field by field."""
 
     def pick(a: Array, b: Array) -> Array:
@@ -632,7 +633,7 @@ def build_pipeline(cfg: C.Config) -> Pipeline:
         fwd.wl_um.size,
         cfg.nz,
         fwd.n_tp,
-        list(cfg.molecules),
+        list(C.need(cfg.molecules, "molecules")),
     )
     return Pipeline(cfg, fwd)
 
@@ -733,7 +734,9 @@ def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
     mu_true = np.asarray(mu, np.float64)
     if pipe.nuisance is not None and pipe.cfg.infer_offsets:
         off = OBS.build_offset_design(pipe.obs)
-        mu_true = mu_true + off @ np.full(off.shape[1], pipe.cfg.truth_offset_ppm * constants.PPM)
+        mu_true = mu_true + off @ np.full(
+            off.shape[1], C.need(pipe.cfg.truth_offset_ppm, "truth_offset_ppm") * constants.PPM
+        )
     if not bool(ok):
         raise RuntimeError(
             "the truth chemistry does not certify or froze at dt_min (VULCAN's certificate under "
@@ -743,7 +746,9 @@ def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
     if not np.all(np.isfinite(mu_true)):
         raise RuntimeError("truth forward is non-finite; check truth_* and priors")
     rng = np.random.default_rng(seed)
-    depth = mu_true + rng.standard_normal(mu_true.shape) * sigma * float(pipe.cfg.truth_noise_inflation)
+    depth = mu_true + rng.standard_normal(mu_true.shape) * sigma * float(
+        C.need(pipe.cfg.truth_noise_inflation, "truth_noise_inflation")
+    )
     pipe.set_observations(depth, sigma)
     return {"depth": depth, "sigma": sigma, "flux_true": mu_true}
 

@@ -43,7 +43,7 @@ target, so the four restart fresh, each after a running planet on its node; hd18
 their first submission's trees, which still abort on a freeze.
 
 The survey base now adds H2CO and CS to `molecules` (notes "Design records", sulfur survey case, absorber screen), and
-the target manifest is version 7: every survey run is a new target, and no checkpoint resumes on the current specs. The
+the target manifest is version 8: every survey run is a new target, and no checkpoint resumes on the current specs. The
 NAS data tree needs `H2CO.ktable.h5` and `CS.ktable.h5` (not checked there).
 
 After each run: `nautilus_report`, the warm-vs-cold check, and the rtol 0.05 re-solve of the posterior rows within 15000

@@ -15,6 +15,7 @@ import jax.numpy as jnp
 from retrieval_framework import config_schema as C
 from retrieval_framework import pipeline as P
 from retrieval_framework.config_schema import ParamSpec
+from conftest import case_config
 
 EDGE_ATOL = 1e-8  # theta at |u| = 40 sits within this of the box edge
 
@@ -22,7 +23,7 @@ EDGE_ATOL = 1e-8  # theta at |u| = 40 sits within this of the box edge
 # on [0.5, 3.0]), so the tests below pin what a run actually samples.
 SPECS = [
     ParamSpec("a", "a", "uniform", -2.0, 3.0, 0.0, "chem"),
-    next(s for s in C.specs_from_config(C.Config(infer_noise_inflation=True)) if s.name == "noise_inflation"),
+    next(s for s in C.specs_from_config(case_config(infer_noise_inflation=True)) if s.name == "noise_inflation"),
 ]
 
 
@@ -74,7 +75,7 @@ def test_gaussian_prior_is_mean_plus_sigma_times_the_normal_quantile():
     assert abs(TH[:, 1].std() - 0.11) < 0.002
     assert abs(TH[:, 0].mean() - 0.5) < 0.03
     # the layout: the gaussian lnM sits after lnR0, the extras after lnKzz
-    cfg = C.Config(infer_lnM=True, infer_s_o=True, kzz_mode="powerlaw", cloud_model="deck")
+    cfg = case_config(infer_lnM=True, infer_s_o=True, kzz_mode="powerlaw", cloud_model="deck")
     names = [sp.name for sp in C.specs_from_config(cfg)]
     assert names == [
         "lnZ",
@@ -105,7 +106,7 @@ def test_free_tint_at_the_fixed_value_is_the_fixed_profile():
     from vulcan_forward import vulcan_chem  # noqa: F401  (before exojax)
     from retrieval_framework import tp_profile as tp
 
-    fixed_cfg, free_cfg = C.Config(), C.Config(tp_infer_Tint=True)
+    fixed_cfg, free_cfg = case_config(), case_config(tp_infer_Tint=True)
     fixed, free = tp.build_tp_model(fixed_cfg), tp.build_tp_model(free_cfg)
     names = [s.name for s in C.specs_from_config(free_cfg) if s.kind == "tp"]
     assert names == ["Tirr", "log10kappa", "log10gamma", "Tint"]
@@ -130,9 +131,9 @@ def test_deep_temperature_parametrization_and_the_adiabat():
     from vulcan_forward import vulcan_chem  # noqa: F401  (before exojax)
     from retrieval_framework import tp_profile as tp
 
-    deep_cfg = C.Config(tp_infer_Tint=True, tp_deep_param="T1bar", tp_deep_p_bar=1.0)
+    deep_cfg = case_config(tp_infer_Tint=True, tp_deep_param="T1bar", tp_deep_p_bar=1.0)
     deep = tp.build_tp_model(deep_cfg)
-    tint = tp.build_tp_model(C.Config(tp_infer_Tint=True))
+    tint = tp.build_tp_model(case_config(tp_infer_Tint=True))
     assert [s.name for s in C.specs_from_config(deep_cfg) if s.kind == "tp"] == [
         "Tirr",
         "log10kappa",
@@ -152,7 +153,7 @@ def test_deep_temperature_parametrization_and_the_adiabat():
     floor = float(tint.eval(th.at[3].set(0.0), jnp.array([1.0]))[0])
     assert np.all(np.isnan(np.asarray(deep.eval(th.at[3].set(0.9 * floor), p))))
     # the adiabat: Guillot above P_rcb, T_rcb (P / P_rcb)^nabla below
-    ad = tp.build_tp_model(C.Config(tp_infer_Tint=True, tp_adiabat=True, tp_nabla_ad=0.29))
+    ad = tp.build_tp_model(case_config(tp_infer_Tint=True, tp_adiabat=True, tp_nabla_ad=0.29))
     assert ad.n_params == 5
     th_ad = jnp.array([1000.0, -0.5, -1.5, 300.0, -1.0])
     T_g = np.asarray(tint.eval(th_ad[:4], p))
@@ -165,7 +166,7 @@ def test_deep_temperature_parametrization_and_the_adiabat():
     # T1bar with the adiabat: T(1 bar) is still the retrieved value when the
     # boundary sits above 1 bar (the deep level on the adiabat) and when it sits
     # below; a boundary temperature under the irradiation floor has no profile
-    both = tp.build_tp_model(C.Config(tp_infer_Tint=True, tp_deep_param="T1bar", tp_adiabat=True, tp_nabla_ad=0.29))
+    both = tp.build_tp_model(case_config(tp_infer_Tint=True, tp_deep_param="T1bar", tp_adiabat=True, tp_nabla_ad=0.29))
     for lg_rcb in (-1.0, 0.5):
         th_b = jnp.array([1000.0, -0.5, -0.5, 1700.0, lg_rcb])
         assert abs(float(both.eval(th_b, jnp.array([1.0]))[0]) - 1700.0) < 1e-6, lg_rcb

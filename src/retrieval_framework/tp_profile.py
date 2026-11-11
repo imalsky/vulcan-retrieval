@@ -8,13 +8,14 @@ must come first. docs/method.md states what the parameters mean and what they do
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 from vulcan_forward.constants import BAR_CGS, T_OPA_MAX_K, T_OPA_MIN_K
 
-from retrieval_framework import constants
+from retrieval_framework import config_schema as C, constants
 
 if TYPE_CHECKING:
     from jax import Array
@@ -117,16 +118,17 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
     """
     from exojax.atm.atmprof import atmprof_Guillot
 
-    g = float(cfg.tp_gravity_cgs)
+    g = float(C.need(cfg.tp_gravity_cgs, "tp_gravity_cgs"))
     f = constants.GUILLOT_F
-    Tint = float(cfg.tp_Tint_K)
     infer_gamma = bool(cfg.tp_infer_gamma)
-    gamma_fixed = float(cfg.tp_gamma_fixed)
     infer_Tint = bool(cfg.tp_infer_Tint)
-    deep_param = str(cfg.tp_deep_param) if infer_Tint else "fixed"
-    p_deep = float(cfg.tp_deep_p_bar)
     adiabat = bool(cfg.tp_adiabat)
-    nabla = float(cfg.tp_nabla_ad)
+    # each fixed value only in the mode that reads it: the others are unset
+    Tint = math.nan if infer_Tint else float(C.need(cfg.tp_Tint_K, "tp_Tint_K"))
+    gamma_fixed = math.nan if infer_gamma else float(C.need(cfg.tp_gamma_fixed, "tp_gamma_fixed"))
+    deep_param = str(cfg.tp_deep_param) if infer_Tint else "fixed"
+    p_deep = float(C.need(cfg.tp_deep_p_bar, "tp_deep_p_bar"))
+    nabla = float(C.need(cfg.tp_nabla_ad, "tp_nabla_ad")) if adiabat else math.nan
     i_deep = 2 + int(infer_gamma)
     i_rcb = i_deep + int(infer_Tint)
     n_params = i_rcb + int(adiabat)

@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
-from retrieval_framework import config_schema as C, constants
+from retrieval_framework import config_schema as C, constants, hardware
+from retrieval_framework.anchors import Anchors, atomic_savez
 from retrieval_framework.batch_profiler import BatchProfiler
 from retrieval_framework.run_setup import (
     check_run_dir,
@@ -42,19 +43,20 @@ if TYPE_CHECKING:
     from retrieval_framework.pipeline import Pipeline
     from retrieval_framework.run_setup import Spec
 
-__all__ = ["Anchors", "lanes_and_batch", "main", "make_loglike", "make_sampler", "nuisance_posterior", "startup_check"]
+__all__ = [
+    "NautilusSettings",
+    "lanes_and_batch",
+    "main",
+    "make_loglike",
+    "make_sampler",
+    "nautilus_settings",
+    "nuisance_posterior",
+    "startup_check",
+]
 
 log = logging.getLogger("retrieval")
 
 TALLY_FILE = "nautilus_tally.json"
-
-
-def _atomic_savez(path: Path, **arrays: Any) -> None:
-    """Write an npz under a temporary name and rename it, so a kill leaves no partial file."""
-    tmp = path.with_name(f".{path.name}.part")
-    with tmp.open("wb") as fh:
-        np.savez(fh, **arrays)
-    tmp.replace(path)
 
 
 def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray, counts: dict) -> list[str]:
@@ -104,97 +106,6 @@ def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray,
             "count_max that certifies it before raising the cap. " + " | ".join(lines)
         )
     return lines
-
-
-class Anchors:
-    """The certified columns so far: unit-cube coordinates, the column and its reference composition.
-
-    One npz per added batch in ``folder``; an existing folder is reloaded on resume. A file with two-wide references
-    reads as s_o = 0.
-    """
-
-    N_REF = 3
-
-    def __init__(self, folder: Path, n_key: int) -> None:
-        self.folder = folder
-        folder.mkdir(parents=True, exist_ok=True)
-        self.z = np.empty((0, n_key))
-        self.refs = np.empty((0, self.N_REF))
-        self.parts: list[np.ndarray] = []
-        self.part, self.row = np.empty(0, int), np.empty(0, int)
-        for f in sorted(folder.glob("anchors_*.npz")):
-            with np.load(f) as d:
-                self._append(d["z"], d["Y"], d["refs"])
-
-    def __len__(self) -> int:
-        """Return the number of anchors."""
-        return len(self.z)
-
-    def _append(self, z: np.ndarray, Y: np.ndarray, refs: np.ndarray) -> None:
-        """Append one batch in memory."""
-        refs = np.asarray(refs, np.float64)
-        if refs.shape[1] < self.N_REF:
-            refs = np.pad(refs, ((0, 0), (0, self.N_REF - refs.shape[1])))
-        self.part = np.concatenate([self.part, np.full(len(z), len(self.parts))])
-        self.row = np.concatenate([self.row, np.arange(len(z))])
-        self.parts.append(np.asarray(Y))
-        self.z = np.concatenate([self.z, z])
-        self.refs = np.concatenate([self.refs, refs])
-
-    def add(self, z: np.ndarray, Y: np.ndarray, refs: np.ndarray) -> None:
-        """Append certified columns as one new file.
-
-        Parameters
-        ----------
-        z : numpy.ndarray [n, n_key]
-            Unit-cube coordinates.
-        Y : numpy.ndarray [n, nz, ni]
-            The columns.
-        refs : numpy.ndarray [n, 3]
-            The reference compositions.
-        """
-        if len(z):
-            _atomic_savez(self.folder / f"anchors_{len(self.parts):05d}.npz", z=z, Y=Y, refs=refs)
-            self._append(z, Y, refs)
-
-    def nearest(self, zq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Return each query's nearest anchor, Euclidean in the unit cube.
-
-        Parameters
-        ----------
-        zq : numpy.ndarray [n, n_key]
-            The queries.
-
-        Returns
-        -------
-        tuple of numpy.ndarray
-            ``(index, distance)``.
-        """
-        idx = np.empty(len(zq), int)
-        dist = np.empty(len(zq))
-        for j in range(0, len(zq), 64):
-            d2 = ((zq[j : j + 64, None, :] - self.z[None]) ** 2).sum(-1)
-            idx[j : j + 64] = d2.argmin(1)
-            dist[j : j + 64] = np.sqrt(d2.min(1))
-        return idx, dist
-
-    def columns(self, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Return the columns and references of anchors ``idx``.
-
-        Parameters
-        ----------
-        idx : numpy.ndarray [n]
-            The anchor indices.
-
-        Returns
-        -------
-        tuple of numpy.ndarray
-            ``(Y, refs)``.
-        """
-        return (
-            np.stack([self.parts[p][r] for p, r in zip(self.part[idx], self.row[idx], strict=True)]),
-            self.refs[idx],
-        )
 
 
 class _Rejections(NamedTuple):
@@ -253,7 +164,7 @@ class _ChunkLogs:
             with self.batch_log.open("a") as fh:
                 fh.write(json.dumps({"t": round(t, 2), "mode": mode, "acc": acc.tolist()}) + "\n")
         if self.rejects is not None and dead.any():
-            _atomic_savez(
+            atomic_savez(
                 self.rejects / f"rejected_{self.n_rej:05d}.npz",
                 z=z[dead],
                 cls=rej.code()[dead].astype(np.int8),
@@ -263,7 +174,7 @@ class _ChunkLogs:
             self.n_rej += 1
         if self.nuisance is not None and not dead.all():
             stats = np.asarray(nuis, np.float64)[: len(z)]
-            _atomic_savez(
+            atomic_savez(
                 self.nuisance / f"nuisance_{self.n_nui:05d}.npz", z=z[~dead], log_l=log_l[~dead], stats=stats[~dead]
             )
             self.n_nui += 1
@@ -361,7 +272,7 @@ def make_loglike(
                 # A warm start that froze at dt_min is re-solved cold, alone; a cold freeze still stops the run.
                 fz = act & (st.reason == constants.TERM_DT_MIN_FROZEN)
                 if n_fz := int(fz.sum()):
-                    L, Ynew, rnew, st = P._take_rows(fz, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, fz))
+                    L, Ynew, rnew, st = P.take_rows(fz, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, fz))
                     tally["warm_frozen_resolved_cold"] = tally.get("warm_frozen_resolved_cold", 0) + n_fz
             else:
                 L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
@@ -451,16 +362,79 @@ def nuisance_posterior(
     return res
 
 
+class NautilusSettings(NamedTuple):
+    """A run's nautilus settings, built once from its specification and the fixed choices in ``constants``.
+
+    Attributes
+    ----------
+    n_live, n_update, n_batch, n_eff : int
+        Live points, live points per bound update, points per batch, and the effective samples nautilus stops at.
+    warm : bool
+        Whether solves continue from the nearest certified column.
+    seed : int
+        The sampler's seed.
+    """
+
+    n_live: int
+    n_update: int
+    n_batch: int
+    n_eff: int
+    warm: bool
+    seed: int
+
+    def identity(self) -> str:
+        """Return the part of the checkpoint identity that the settings fix; nautilus restores none of them."""
+        return (
+            f"|{'warm' if self.warm else 'cold'}"
+            f"|n_batch={self.n_batch}|n_live={self.n_live}|n_update={self.n_update}|f_live={constants.F_LIVE}"
+            f"|enlarge_per_dim={constants.ENLARGE_PER_DIM}|networks={constants.N_NETWORKS}xrelu|stock"
+        )
+
+    def record(self) -> dict[str, Any]:
+        """Return the settings as the run's log and summary state them."""
+        return {
+            "n_live": self.n_live,
+            "n_batch": self.n_batch,
+            "n_update": self.n_update,
+            "f_live": constants.F_LIVE,
+            "enlarge_per_dim": constants.ENLARGE_PER_DIM,
+            "networks": f"{constants.N_NETWORKS}x relu (nautilus default)",
+            "discard_exploration": constants.DISCARD_EXPLORATION,
+        }
+
+
+def nautilus_settings(spec: Spec) -> NautilusSettings:
+    """Return a specification's nautilus settings.
+
+    Parameters
+    ----------
+    spec : run_setup.Spec
+        The specification.
+
+    Returns
+    -------
+    NautilusSettings
+        The settings; n_update is ``n_live // constants.N_LIVE_PER_UPDATE``.
+    """
+    n_live = int(spec.sampler.n_live)
+    return NautilusSettings(
+        n_live=n_live,
+        n_update=n_live // constants.N_LIVE_PER_UPDATE,
+        n_batch=lanes_and_batch(spec)[1],
+        n_eff=int(spec.sampler.n_eff),
+        warm=bool(spec.sampler.warm_starts),
+        seed=int(C.need(spec.cfg.seed, "seed")),
+    )
+
+
 def make_sampler(
     loglike: Callable[[np.ndarray], np.ndarray],
     n_dim: int,
-    n_live: int,
-    n_batch: int,
-    seed: int,
+    settings: NautilusSettings,
     filepath: str | None = None,
     resume: bool = False,
 ) -> nautilus.Sampler:
-    """Return the stock nautilus sampler with this module's settings.
+    """Return the stock nautilus sampler with a run's settings.
 
     The prior is the identity on the unit cube, since the pipeline maps u = logit(z) to theta; ``loglike`` is
     vectorized.
@@ -471,12 +445,8 @@ def make_sampler(
         From [n, n_dim] to [n].
     n_dim : int
         The dimension.
-    n_live : int
-        Live points; n_update is half of it.
-    n_batch : int
-        Points per batch.
-    seed : int
-        The sampler's seed.
+    settings : NautilusSettings
+        Live points, update, batch and seed.
     filepath : str, optional
         The checkpoint.
     resume : bool, optional
@@ -493,14 +463,14 @@ def make_sampler(
         lambda z: z,
         loglike,
         n_dim=n_dim,
-        n_live=n_live,
-        n_update=n_live // constants.N_LIVE_PER_UPDATE,
+        n_live=settings.n_live,
+        n_update=settings.n_update,
         enlarge_per_dim=constants.ENLARGE_PER_DIM,
         n_networks=constants.N_NETWORKS,
-        n_batch=n_batch,
+        n_batch=settings.n_batch,
         vectorized=True,
         pass_dict=False,
-        seed=seed,
+        seed=settings.seed,
         filepath=filepath,
         resume=resume,
     )
@@ -523,24 +493,16 @@ def _starts(warm: bool) -> str:
     return "anchored warm (growing)" if warm else "cold"
 
 
-def _log_settings(spec: Any, cfg: C.Config, n_batch: int) -> None:
+def _log_settings(spec: Any, cfg: C.Config, settings: NautilusSettings) -> None:
     """Log the run's sampler settings and the resolved Config."""
-    n_live = int(spec.sampler.n_live)
     log.info("spec=%s out_dir=%s", spec.path, cfg.out_dir)
     log.info(
-        "nautilus: n_live=%s n_update=%s n_eff=%s n_batch=%s (cold_lanes=%s) f_live=%s enlarge_per_dim=%s "
-        "networks=%sx relu (nautilus default) discard_exploration=%s seed=%s starts=%s",
-        n_live,
-        n_live // constants.N_LIVE_PER_UPDATE,
-        int(spec.sampler.n_eff),
-        n_batch,
+        "nautilus: %s n_eff=%s cold_lanes=%s seed=%s starts=%s",
+        " ".join(f"{k}={v}" for k, v in settings.record().items()),
+        settings.n_eff,
         cfg.cold_lanes,
-        constants.F_LIVE,
-        constants.ENLARGE_PER_DIM,
-        constants.N_NETWORKS,
-        constants.DISCARD_EXPLORATION,
-        cfg.seed,
-        _starts(bool(spec.sampler.warm_starts)),
+        settings.seed,
+        _starts(settings.warm),
     )
     log.info(C.describe_config(cfg, spec.name))
 
@@ -549,18 +511,20 @@ def _saved_loglike(
     pipe: Pipeline, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return the run's log-likelihood, which saves the tally after each call, atomically."""
-    from retrieval_framework.nautilus_report import _log10_kzz_at_report_level
+    from retrieval_framework.nautilus_report import log10_kzz_at_report_level
 
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
     if anchors is not None:
         log.info("nautilus: %s anchor column(s) loaded", len(anchors))
     names = list(pipe.names)
-    cfgj = {k: getattr(cfg, k) for k in ("vulcan_cfg_name", "cfg_overrides", "kzz_mode", "kzz_p_ref_bar")}
+    p_ref = cfg.kzz_p_ref_bar if cfg.kzz_mode == "powerlaw" else None
 
     def startup_kzz(th: np.ndarray) -> np.ndarray:
         """Return log10 Kzz at the report's reference pressure of theta rows, in the case's Kzz mode."""
         slope = th[:, names.index("kzz_slope")] if "kzz_slope" in names else None
-        return _log10_kzz_at_report_level(cfgj, th[:, names.index("lnKzz")], slope)
+        return log10_kzz_at_report_level(
+            C.need(cfg.vulcan_cfg_name, "vulcan_cfg_name"), cfg.cfg_overrides, p_ref, th[:, names.index("lnKzz")], slope
+        )
 
     like = make_loglike(
         pipe,
@@ -620,28 +584,23 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
     )
 
 
-def _write_summary(sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, n_batch: int, tally: dict) -> None:
+def _write_summary(
+    sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, settings: NautilusSettings, tally: dict
+) -> None:
     """Write nautilus_summary.json."""
     import nautilus
 
-    n_live = int(spec.sampler.n_live)
-    warm = bool(spec.sampler.warm_starts)
+    warm = settings.warm
     summary = {
         "logZ_box": float(sampler.log_z),
         "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff),
-        "n_live": n_live,
-        "n_batch": n_batch,
-        "n_update": n_live // constants.N_LIVE_PER_UPDATE,
-        "f_live": constants.F_LIVE,
-        "enlarge_per_dim": constants.ENLARGE_PER_DIM,
-        "networks": f"{constants.N_NETWORKS}x relu (nautilus default)",
-        "discard_exploration": constants.DISCARD_EXPLORATION,
+        **settings.record(),
         "nautilus": f"{nautilus.__version__} (stock)",
         "starts": _starts(warm),
         "rejections_and_starts": tally,
         "spec": spec.name,
-        "seed": int(spec.cfg.seed),
+        "seed": settings.seed,
         "chem_rtol": pipe.fwd.chem_rtol,
         "evidence_note": "zero-filled box evidence (log L = -inf on every rejection)"
         + (
@@ -666,7 +625,7 @@ def _log_versions() -> None:
         nautilus.__version__,
         nautilus.__file__,
     )
-    log.info("hardware: %s", C.hardware_profile())
+    log.info("hardware: %s", hardware.hardware_profile())
 
 
 def _copy_specs(spec: Any, out: Path) -> None:
@@ -676,13 +635,13 @@ def _copy_specs(spec: Any, out: Path) -> None:
         shutil.copy(spec.base, out / "spec_base.yaml")
 
 
-def _sample(sampler: nautilus.Sampler, n_eff: int, timeout: float, tally: dict) -> bool:
+def _sample(sampler: nautilus.Sampler, settings: NautilusSettings, timeout: float, tally: dict) -> bool:
     """Run the sampler to its stopping rule or the timeout, and log where it ended; True if it finished."""
     log.info("nautilus: starting at n_like=%s; timeout %.2f h", sampler.n_like, timeout / 3600)
     t0 = time.perf_counter()
     done = sampler.run(
         f_live=constants.F_LIVE,
-        n_eff=n_eff,
+        n_eff=settings.n_eff,
         discard_exploration=constants.DISCARD_EXPLORATION,
         timeout=timeout,
         verbose=True,
@@ -709,7 +668,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def lanes_and_batch(spec: Spec) -> tuple[int, int]:
     """Return the lanes that run, ``cold_lanes``, and the batch width: ``n_batch``, else ``BATCH_PER_LANE`` per lane."""
-    lanes = int(spec.cfg.cold_lanes)
+    lanes = int(C.need(spec.cfg.cold_lanes, "cold_lanes"))
     return lanes, int(spec.sampler.n_batch or constants.BATCH_PER_LANE * lanes)
 
 
@@ -728,6 +687,7 @@ def main(argv: list[str] | None = None) -> None:
     spec = load_spec(args.spec)
     cfg = spec.cfg
     lanes, n_batch = lanes_and_batch(spec)
+    settings = nautilus_settings(spec)
     if args.dry_run:
         print(C.describe_config(cfg, spec.name))
         print(f"sampler: {spec.sampler}\nruntime: {spec.runtime}\nout_dir: {cfg.out_dir}")
@@ -741,9 +701,7 @@ def main(argv: list[str] | None = None) -> None:
     check_run_dir(out, resume)
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
-    n_live = int(spec.sampler.n_live)
-    warm = bool(spec.sampler.warm_starts)
-    _log_settings(spec, cfg, n_batch)
+    _log_settings(spec, cfg, settings)
     _log_versions()
 
     from retrieval_framework import pipeline as P
@@ -756,11 +714,7 @@ def main(argv: list[str] | None = None) -> None:
     # Before anything in the run directory is written. The start policy, the batch width and the sampler settings
     # (nautilus restores none of them) are part of the target, so a resume cannot switch them.
     digest_path = out / "target_digest.txt"
-    want = (
-        f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
-        f"|n_batch={n_batch}|n_live={n_live}|n_update={n_live // constants.N_LIVE_PER_UPDATE}|f_live={constants.F_LIVE}"
-        f"|enlarge_per_dim={constants.ENLARGE_PER_DIM}|networks={constants.N_NETWORKS}xrelu|stock"
-    )
+    want = pipe.target_digest + settings.identity()
     if resume:
         _check_resume(digest_path, want, ckpt.name)
     write_run_identity(cfg, pipe, spec, obs_save)
@@ -769,17 +723,17 @@ def main(argv: list[str] | None = None) -> None:
 
     tally_path = out / TALLY_FILE
     tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
-    like = _saved_loglike(pipe, cfg, out, n_batch, warm, resume, tally)
-    sampler = make_sampler(like, pipe.n_dim, n_live, n_batch, int(cfg.seed), filepath=str(ckpt), resume=resume)
+    like = _saved_loglike(pipe, cfg, out, n_batch, settings.warm, resume, tally)
+    sampler = make_sampler(like, pipe.n_dim, settings, filepath=str(ckpt), resume=resume)
     budget = float(cfg.walltime_seconds)
     timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
-    done = _sample(sampler, int(spec.sampler.n_eff), timeout, tally)
+    done = _sample(sampler, settings, timeout, tally)
     if not done:
         log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is %s).", ckpt)
         return
 
-    _write_posterior(sampler, pipe, out, want, int(cfg.seed))
-    _write_summary(sampler, pipe, spec, out, n_batch, tally)
+    _write_posterior(sampler, pipe, out, want, settings.seed)
+    _write_summary(sampler, pipe, spec, out, settings, tally)
     log.info("wrote %s and nautilus_summary.json", out / "nautilus_posterior.npz")
     from retrieval_framework.nautilus_report import write_certificate
 

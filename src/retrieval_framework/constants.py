@@ -10,6 +10,7 @@ engine is imported. The methods behind the numbers are in docs/method.md.
 from __future__ import annotations
 
 __all__ = [
+    "BASELINE_METALLICITY_RTOL",
     "BATCH_PER_LANE",
     "COND_BINS",
     "COND_PARAMS",
@@ -99,6 +100,9 @@ LSF_R_SAFETY = 2.0
 # Kzz weights near the prior floor are taken at these multiples of the specification's prior_lnKzz lower edge (x0.15
 # and x0.2 on a x0.1 floor).
 KZZ_FLOOR_MULTIPLES = (1.5, 2.0)
+# A specification's baseline_metallicity_solar may differ from its case file's O_H over the Lodders O by this relative
+# amount: the case files round <X>_H to three significant figures (at most 0.5 %), and a wrong case is off by factors.
+BASELINE_METALLICITY_RTOL = 0.01
 # The conditioning map: equal bins over each prior box, for these parameters when the case infers them.
 COND_BINS = 10
 COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")

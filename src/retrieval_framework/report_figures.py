@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from retrieval_framework import constants, observations as OBS
-from retrieval_framework.nautilus_report import _read, _tp_curve, _weights
+from retrieval_framework.nautilus_report import read_json, tp_curve, weights
 
 if TYPE_CHECKING:
     from jax.typing import ArrayLike
@@ -124,7 +124,7 @@ def _tp_figure(
 
     def T_of(t: np.ndarray) -> np.ndarray:
         """Return T on the band's pressure grid for one row."""
-        return _tp_curve(t, names, cfgj, p_bar)
+        return tp_curve(t, names, cfgj, p_bar)
 
     qs = np.nanpercentile(np.stack([T_of(t) for t in sel]), [5, 50, 95], axis=0)
     fig, ax = plt.subplots(figsize=(6.5, 6.5))
@@ -225,7 +225,7 @@ def plot(out_dir: str | Path, spectra: tuple[Any, ...] | None = None) -> list[Pa
     out = Path(out_dir).resolve()
     plots = out / "plots"
     plots.mkdir(exist_ok=True)
-    cfgj = _read(out, "config.json")
+    cfgj = read_json(out, "config.json")
     post = np.load(out / "nautilus_posterior.npz")
     names = [str(s) for s in post["param_names"]]
     if names != list(cfgj["inferred_param_names"]):
@@ -233,7 +233,7 @@ def plot(out_dir: str | Path, spectra: tuple[Any, ...] | None = None) -> list[Pa
             f"nautilus_posterior.npz parameters {names} are not config.json's {cfgj['inferred_param_names']}"
         )
     theta = np.asarray(post["theta"], np.float64)
-    w = _weights(post["log_w"])
+    w = weights(post["log_w"])
     truth = np.asarray(cfgj["inferred_param_truth"], np.float64)
     synthetic = bool(cfgj["generate_synthetic_data"])
     shown_truth = truth if synthetic and np.isfinite(truth).any() else None

@@ -14,14 +14,16 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from test_run_nautilus import D, _stub_pipe
+from test_run_nautilus import D, _FrozenStats, _stub_pipe
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
+from retrieval_framework import hardware
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import pipeline as P
 from retrieval_framework import run_nautilus as RN
 from retrieval_framework import run_setup as R
+from conftest import case_config
 
 DIGEST = "d" * 64
 N_BATCH, N_LIVE = 8, 16
@@ -70,21 +72,21 @@ def job(tmp_path, monkeypatch):
     events = []
     sampler = {}
 
-    def make_sampler(like, n_dim, n_live, n_batch, seed, filepath=None, resume=False):
+    def make_sampler(like, n_dim, settings, filepath=None, resume=False):
         events.append("sampler")
-        sampler["args"] = (n_dim, n_live, n_batch, seed, filepath, resume)
+        sampler["args"] = (n_dim, settings.n_live, settings.n_batch, settings.seed, filepath, resume)
         sampler["s"] = _Sampler(like, sampler.get("done", True))
         return sampler["s"]
 
     monkeypatch.setattr(RN, "export_runtime", lambda _rt: None)
     monkeypatch.setattr(RN, "setup_logging", lambda _path: None)
     monkeypatch.setattr(C, "export_network", lambda _cfg: None)
-    monkeypatch.setattr(C, "hardware_profile", lambda: "stub")
+    monkeypatch.setattr(hardware, "hardware_profile", lambda: "stub")
     monkeypatch.setattr(P, "build_pipeline", lambda _cfg: pipe)
     monkeypatch.setattr(RN, "set_observations", lambda _cfg, _pipe, _P: {})
     monkeypatch.setattr(RN, "write_run_identity", lambda *_a: events.append("identity"))
     monkeypatch.setattr(RN, "make_sampler", make_sampler)
-    monkeypatch.setattr(NR, "_kzz_at_ref", lambda _cfg: 1.0e9)
+    monkeypatch.setattr(NR, "kzz_at_ref", lambda _name, _over, _p_bar=NR.KZZ_P_REF_BAR: 1.0e9)
     monkeypatch.setattr(NR, "write_certificate", lambda out: events.append("certificate") or out / "cert.json")
     out = tmp_path / "output" / "stub_main_nautilus"
     return SimpleNamespace(spec=str(spec), out=out, pipe=pipe, events=events, sampler=sampler)
@@ -102,9 +104,9 @@ def test_the_startup_kzz_decades_follow_the_case_s_kzz_mode(job, monkeypatch):
         return real(*a, **kw)
 
     monkeypatch.setattr(RN, "make_loglike", capture)
-    monkeypatch.setattr(NR, "_kzz_at_ref", lambda _cfg, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
+    monkeypatch.setattr(NR, "kzz_at_ref", lambda _name, _over, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
     job.pipe.names = ["p0", "kzz_slope", "lnKzz"]
-    cfg = C.Config(kzz_mode="powerlaw", kzz_p_ref_bar=0.1, vulcan_cfg_name="W39b")
+    cfg = case_config(kzz_mode="powerlaw", kzz_p_ref_bar=0.1, vulcan_cfg_name="W39b")
     RN._saved_loglike(job.pipe, cfg, job.out, N_BATCH, warm=False, resume=False, tally={})
     th = np.array([[0.0, 0.5, np.log(10.0)]])
     # 1e9 at 0.1 bar, x10 by lnKzz, x10^(0.5 x 2) by the slope to 1 mbar
@@ -245,13 +247,6 @@ def test_integrated_nuisances_reach_the_posterior_file_from_the_logged_statistic
     np.testing.assert_allclose(post["nuisance"][alive, 0], 2.0 * u0[alive], rtol=1e-12, atol=0)
     assert np.all(np.isnan(post["nuisance"][~alive]))
     assert post["samples_nuisance"].shape == (4, 1)
-
-
-class _FrozenStats(NamedTuple):
-    acc: jnp.ndarray
-    conv_ok: jnp.ndarray
-    reason: jnp.ndarray
-    last_delta: jnp.ndarray
 
 
 @pytest.mark.parametrize("frozen_row", [0, 2])

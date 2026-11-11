@@ -33,7 +33,7 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   (the refusal names them: the 2021 network, H,O,C,N,S, 7.0 bar). The maintainer decided against
   rerunning the finished runs on the 2025 file and against the WASP-107b prior-edge rerun (Tirr, C/O and log10 gamma
   edges widened).
-- Tests [M], daw CPU `-n 8`: normal 272 passed in 42 s; CI runs it serially on Python 3.10-3.12, and its stack-free
+- Tests [M], daw CPU `-n 8`: normal 280 passed in 52 s; CI runs it serially on Python 3.10-3.12, and its stack-free
   unit job (`fail_under` 80) enforces the coverage floor. Full tier: the job-path test
   (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 95 min (1 h 35 min, daw load ~20, retrieval
   `33ba761`), inside the maintainer's 100-minute cap: build and the synthetic truth 9.7 min (mostly the first
@@ -823,7 +823,9 @@ HPC
 - Baseline C/O: the report's C/O and the banner's range are e^c_o times the case's C_H / O_H, read from its vulcan3
   config after `cfg_overrides` (`provenance.baseline_c_to_o`). A case on vulcan3's solar preset, or whose start is not
   the equilibrium one (`ini_mix` other than EQ, whose start column carries its own C/O), is refused; every shipped
-  case is EQ (vulcan3's default). For the
+  case is EQ (vulcan3's default). The stated `baseline_metallicity_solar` must equal the case file's O_H over the
+  Lodders (2020) O within 1 % (`constants.BASELINE_METALLICITY_RTOL`; the files round to three figures): 0.00537 /
+  5.370e-4 = 9.9994 for every shipped case, which states 10.0 [M]. For the
   WASP-39b configs 0.00295 / 0.00537 = 0.54935, where the code held 0.549: a reported C/O moves by +0.063% [M,
   arithmetic]. Every survey config holds the same C_H and O_H [M].
 - He/H fixed at 0.0838 (present-day photospheric; the vulcan3 .dat header cites Lodders 2019 Table 8), not retrieved and
@@ -883,8 +885,9 @@ HPC
   - `opacity_leave_one_out.py` reads an archived run through the current names and priors: use it on the run it came
     from.
   - The ladder scripts build the RT inputs by hand (no `gas_mask`, `_artifact.bin_trapz`).
-  - Rebuilding an archived run (`nautilus_report._config_from_json`) fills the Config keys its config.json predates
-    with today's defaults and logs each one, so old runs stay reportable; the keys with no default are refused instead.
+  - Rebuilding an archived run (`nautilus_report.config_from_json`) fills the Config keys its config.json predates
+    with today's defaults and logs each one, so old runs stay reportable; a key with no default it lacks is refused,
+    naming the line to add (for the v5 run's config.json: `network`, `atom_list`, `art_pbtm_bar`, measured).
   - The data loader (`observations.read_rprs_csv`) drops rows with a non-finite wavelength or sigma and repairs reversed
     bin edges, and logs the counts: published products carry padding rows.
   - The synthetic bin grid's R = 200 and 120 ppm (`constants.SYNTH_R`, `SYNTH_SIGMA_PPM`) are fixed constants of the
@@ -914,7 +917,7 @@ precedent found (searches through 2026-09, not exhaustive).
   `archive/per-network-kwargs-silu-2026-10-19`; the GitHub repo is archived.
 - Unused paths removed at `76148c2` (CPU smoke A/B bitwise [M]; not compared on the GPU), among them the lockstep
   chemistry batch (`cold_lanes = 0`) and the `infer_lnZ` / `infer_c_o` / `infer_lnKzz` switches; an old config.json
-  still loads (`nautilus_report._config_from_json` drops unknown keys).
+  still loads (`nautilus_report.config_from_json` drops unknown keys).
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1 nat ("Runs", baseline_v2);
   replaced by the presolve chain (cdcffd1), and the retry-only mode then removed.
 - The presolve chain (cdcffd1 to `0a2dbf3`; baseline_v3_presolve, override at `397d8bb`, and baseline_v4, override at

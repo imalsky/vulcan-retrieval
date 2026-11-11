@@ -16,9 +16,11 @@ import pytest
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
+from retrieval_framework import hardware
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import provenance
 from retrieval_framework import report_figures
+from conftest import case_config
 
 NAMES = ["lnZ", "c_o", "lnKzz", "Tirr", "log10kappa", "log10gamma", "lnR0", "noise_inflation"]
 MEAN = np.array([0.2, -0.5, 0.0, 1000.0, -1.0, -1.0, 0.03, 1.2])
@@ -39,17 +41,7 @@ TALLY = {
 
 def _run_dir(out):
     rng = np.random.default_rng(0)
-    cfg = asdict(
-        C.Config(
-            molecules=("H2O",),
-            vulcan_cfg_name="W39b",
-            network="thermo/SNCHO_photo_network_2025.txt",
-            atom_list=("H", "O", "C", "N", "S"),
-            art_pbtm_bar=7.0,
-            cold_lanes=8,
-            report_kzz_ceiling_x=10.0,
-        )
-    )
+    cfg = asdict(case_config(report_kzz_ceiling_x=10.0))
     cfg.update(
         inferred_param_names=NAMES, inferred_param_labels=NAMES, inferred_param_truth=[float("nan")] * len(NAMES)
     )
@@ -134,7 +126,7 @@ def test_a_second_program_run_is_refused_rather_than_re_solved_without_it(tmp_pa
     cfgj = json.loads((tmp_path / "config.json").read_text())
     (tmp_path / "config.json").write_text(json.dumps({**cfgj, key: True}))
     with pytest.raises(RuntimeError, match="0a2dbf3"):
-        NR._config_from_json(tmp_path / "config.json")
+        NR.config_from_json(tmp_path / "config.json")
 
 
 def test_an_archived_config_is_rebuilt_with_every_drop_and_fill_logged(tmp_path, caplog):
@@ -146,13 +138,13 @@ def test_an_archived_config_is_rebuilt_with_every_drop_and_fill_logged(tmp_path,
     old = {k: v for k, v in cfgj.items() if k != "rt_integration"}
     (tmp_path / "config.json").write_text(json.dumps({**old, "opacity_mode": "exomolop"}))
     with caplog.at_level("INFO", logger="retrieval"):
-        cfg = NR._config_from_json(tmp_path / "config.json")
+        cfg = NR.config_from_json(tmp_path / "config.json")
     assert cfg.rt_integration == "simpson"
     assert "'opacity_mode'" in caplog.text
     assert "filled with today's defaults: ['rt_integration']" in caplog.text
     (tmp_path / "config.json").write_text(json.dumps({k: v for k, v in old.items() if k != "art_pbtm_bar"}))
     with pytest.raises(ValueError, match=r'add "art_pbtm_bar": 7.0'):
-        NR._config_from_json(tmp_path / "config.json")
+        NR.config_from_json(tmp_path / "config.json")
 
 
 def test_an_abundant_species_with_no_opacity_table_is_reported(tmp_path):
@@ -169,7 +161,7 @@ def test_an_abundant_species_with_no_opacity_table_is_reported(tmp_path):
     y[:, 3, 4] = 5e-2  # C2H6 only below the photosphere: not reported
     y[:, 1:3, 5] = 1e-2  # S2: homonuclear, never reported
     y[:, :, 6] = 10.0  # a condensed reservoir, ten times the gas: neither diluting CS2 nor reported
-    fwd = SimpleNamespace(chem=SimpleNamespace(sidx=sidx), p_chem_bar=p_bar, _gas_mask=gas)
+    fwd = SimpleNamespace(chem=SimpleNamespace(sidx=sidx), p_chem_bar=p_bar, gas_mask=gas)
     got, not_run = NR._unmodeled_absorbers(SimpleNamespace(fwd=fwd), y)
     assert (list(got), not_run) == (["CS2"], "")
     assert got["CS2"] == pytest.approx(3e-4 / y[0, 1, :6].sum(), rel=1e-12)
@@ -222,10 +214,10 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
     )
     pipe.solve_cold = lambda th: P.Pipeline.solve_cold(pipe, th)
     monkeypatch.setattr(C, "export_network", lambda _cfg: None)
-    monkeypatch.setattr(C, "choose_solver", lambda: "fast")
+    monkeypatch.setattr(hardware, "choose_solver", lambda: "fast")
     monkeypatch.setattr(P, "build_pipeline", lambda _cfg: pipe)
     with pytest.raises(vulcan3.DtMinFrozenError, match=r"at rows \[1\] of this batch"):
-        NR._model_spectra(tmp_path, n)
+        NR._model_spectra(tmp_path, NR.config_from_json(tmp_path / "config.json"), n)
     assert not (tmp_path / "nautilus_spectra.npz").exists()
 
 
@@ -267,7 +259,7 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert not any("x10" in k for k in d107)
     np.testing.assert_allclose(
         np.subtract(d107["log10_kzz_ref_cgs"], der["log10_kzz_ref_cgs"]),
-        9.0 - np.log10(NR._kzz_at_ref({"vulcan_cfg_name": "W39b", "cfg_overrides": {}})),
+        9.0 - np.log10(NR.kzz_at_ref("W39b", {})),
         rtol=0,
         atol=1e-12,
     )
@@ -332,7 +324,7 @@ def test_the_reported_tp_curve_is_the_model_s_profile(over):
 
     from retrieval_framework import tp_profile
 
-    cfg = C.Config(rp_cm=1.0, rstar_cm=10.0, **over)
+    cfg = case_config(rp_cm=1.0, rstar_cm=10.0, **over)
     specs = C.specs_from_config(cfg)
     names = [s.name for s in specs]
     values = {
@@ -349,7 +341,7 @@ def test_the_reported_tp_curve_is_the_model_s_profile(over):
     p_bar = np.logspace(-8.0, 1.0, 40)
     want = np.asarray(model.eval(jax.numpy.asarray(tp), jax.numpy.asarray(p_bar)))
     assert np.all(np.isfinite(want))
-    got = NR._tp_curve(t, names, asdict(cfg), p_bar)
+    got = NR.tp_curve(t, names, asdict(cfg), p_bar)
     np.testing.assert_allclose(got, want, rtol=1e-11, atol=0)
     assert NR._tp_params(t, names, asdict(cfg))[3] == pytest.approx(
         float(model.tint_of(jax.numpy.asarray(tp))), rel=1e-11
@@ -361,7 +353,7 @@ def test_the_reported_kzz_follows_the_power_law_anchor_and_slope(tmp_path, monke
     _run_dir(tmp_path)
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
     # the stub's base depends on the level it is read at, so reading it at the wrong level shows
-    monkeypatch.setattr(NR, "_kzz_at_ref", lambda _cfg, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
+    monkeypatch.setattr(NR, "kzz_at_ref", lambda _name, _over, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
     cfgj = json.loads((tmp_path / "config.json").read_text())
     (tmp_path / "config.json").write_text(json.dumps({**cfgj, "kzz_mode": "powerlaw", "kzz_p_ref_bar": 0.1}))
     names = [*NAMES, "kzz_slope"]
@@ -376,9 +368,9 @@ def test_the_reported_kzz_follows_the_power_law_anchor_and_slope(tmp_path, monke
     got = NR.derived_quantities(tmp_path)["log10_kzz_ref_cgs"]
     np.testing.assert_allclose(got, 10.0, rtol=1e-12, atol=0)
     # at the default anchor the slope tilts nothing, and lnKzz scales it
-    at_default = NR._log10_kzz_at_report_level(
-        {**cfgj, "kzz_mode": "powerlaw"}, np.array([np.log(10.0)]), np.array([0.5])
+    at_default = NR.log10_kzz_at_report_level(
+        cfgj["vulcan_cfg_name"], {}, NR.KZZ_P_REF_BAR, np.array([np.log(10.0)]), np.array([0.5])
     )
     np.testing.assert_allclose(at_default, np.log10(1.0e9 * (NR.KZZ_P_REF_BAR / 0.1) * 10.0), rtol=1e-12, atol=0)
-    got = NR._log10_kzz_at_report_level({**cfgj, "kzz_mode": "scale"}, np.array([np.log(100.0)]), None)
+    got = NR.log10_kzz_at_report_level(cfgj["vulcan_cfg_name"], {}, None, np.array([np.log(100.0)]), None)
     np.testing.assert_allclose(got, np.log10(1.0e9 * (NR.KZZ_P_REF_BAR / 0.1) * 100.0), rtol=1e-12, atol=0)

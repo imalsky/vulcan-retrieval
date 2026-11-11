@@ -1,9 +1,9 @@
-"""Model-top convergence of the production forward.
+"""Model-top convergence of a case's forward.
 
 Chemistry and RT grids both end at the model top (constants.ART_PTOP_BAR, 1e-9 bar;
 vulcan_chem sets the chemistry P_t from it, interp_map refuses a clamped top).
 This script extends both grids one decade higher at the same layers per decade,
-solves the chemistry there, and compares the R=100 binned depth with production.
+solves the chemistry there, and compares the R=100 binned depth with the case's.
 
     python validation/top_pressure_ladder.py --spec runs/<case>/<name>.yaml
 
@@ -74,7 +74,7 @@ def main() -> int:
     p_top, p_btm = float(np.min(chem.p_bar)), float(np.max(chem.p_bar))
     wl, d = binned_depth(chem, rt, constants, interp_map)
     b_prod = _artifact.bin_trapz(wl, d, edges)
-    print(f"[topP] production: model top {p_top:.0e} bar, nz={prod['nz']}, art_nlayer={prod['art_nlayer']}", flush=True)
+    print(f"[topP] case: model top {p_top:.0e} bar, nz={prod['nz']}, art_nlayer={prod['art_nlayer']}", flush=True)
 
     # one decade higher on both grids, same layers per decade
     f = (np.log10(p_btm / p_top) + 1.0) / np.log10(p_btm / p_top)
@@ -107,10 +107,10 @@ def main() -> int:
     print(f"\nVERDICT: {msg}")
     _artifact.emit(
         name="top_pressure_ladder",
-        title="Model top: production vs one decade higher on both grids",
+        title="Model top: the case's against one decade higher on both grids",
         measurements=[
             {
-                "name": f"production ({p_top:.0e} bar) vs extended ({p_top / 10:.0e} bar) model top",
+                "name": f"case ({p_top:.0e} bar) vs extended ({p_top / 10:.0e} bar) model top",
                 "value": f"{dppm:.2f} ppm",
                 "value_raw": float(dppm),
                 "unit": "ppm",
@@ -121,7 +121,7 @@ def main() -> int:
         ],
         status="PASS" if ok else "FAIL",
         summary=msg,
-        resolved_config={"production": prod, "extended": ext},
+        resolved_config={"case": prod, "extended": ext},
         out_dir=results,
     )
     return 0 if ok else 1

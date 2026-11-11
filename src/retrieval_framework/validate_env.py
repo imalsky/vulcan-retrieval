@@ -17,10 +17,8 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from retrieval_framework import config_schema as C
+from retrieval_framework import config_schema as C
 
 __all__ = ["main"]
 
@@ -331,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         _check_exojax()
         os.chdir(root / "vulcan-retrieval")  # the job's working directory
         _check_spec_inputs(cfg)
-        _check_data_tree(root, tuple(cfg.molecules))
+        _check_data_tree(root, tuple(C.need(cfg.molecules, "molecules")))
         _check_exogibbs()
         _check_nautilus()
 

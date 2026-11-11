@@ -16,12 +16,13 @@ import jax.numpy as jnp
 from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
 from retrieval_framework import pipeline as P
+from conftest import case_config
 
 GROUPS = ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
 
 
 def _cfg(**kw):
-    return C.Config(infer_noise_inflation=True, **kw)
+    return case_config(infer_noise_inflation=True, **kw)
 
 
 def _layout(cfg, groups=GROUPS):

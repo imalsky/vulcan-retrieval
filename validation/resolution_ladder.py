@@ -1,4 +1,4 @@
-"""Numerical convergence of the binned transit depth in ``art_nlayer``, on the production RT path.
+"""Numerical convergence of the binned transit depth in ``art_nlayer``, on a case's own RT path.
 
     python validation/resolution_ladder.py --spec runs/<case>/<name>.yaml [--jacobian]
 
@@ -6,7 +6,7 @@ Transmission is nonlinear in optical depth, so a grid that does not resolve the 
 correct R=100 bin. The band grid and quadrature come from the tables, so the free axis is the ART vertical grid. The
 chemistry converges once, then the RT is rebuilt at each rung and every spectrum binned on the same bins.
 
-Gates: the production rung changes by < 5 ppm against the next rung, and its Jacobian direction by < 1% where the depth
+Gates: the case's rung changes by < 5 ppm against the next rung, and its Jacobian direction by < 1% where the depth
 response is significant.
 """
 
@@ -34,13 +34,13 @@ BIN_R = 100.0
 LADDER_FACTORS = (1.0, 1.5, 2.25)
 
 
-def production_pair(rungs, production_value, knob="art_nlayer"):
-    """Return the production/next-rung pair or fail a mis-specified ladder."""
+def case_pair(rungs, case_value, knob="art_nlayer"):
+    """Return the case's rung and the next, or fail a mis-specified ladder."""
     ordered = sorted({int(r) for r in rungs})
     if len(ordered) < 2:
         raise ValueError("resolution ladder needs at least two distinct rungs")
-    if ordered[0] != int(production_value):
-        raise ValueError(f"lowest rung must be production {knob}={production_value}, got {ordered[0]}")
+    if ordered[0] != int(case_value):
+        raise ValueError(f"lowest rung must be the case's {knob}={case_value}, got {ordered[0]}")
     return ordered, (ordered[0], ordered[1])
 
 
@@ -77,7 +77,7 @@ def _run_rung(prof, want_jac, chem, y0, theta0, edges):
 
 
 def _depth_gates(results, rungs, decisive_pair, knob):
-    """(measurements, ok): each rung against the next; only the production pair is a gate."""
+    """(measurements, ok): each rung against the next; only the case's pair is a gate."""
     ok = True
     measurements = []
     print("\n==== binned-depth convergence (vs next rung) ====")
@@ -102,7 +102,7 @@ def _depth_gates(results, rungs, decisive_pair, knob):
 
 
 def _jacobian_gate(results, decisive_pair, knob):
-    """(measurement, ok): the production pair's dlnZ Jacobian, in the bins where the response is significant."""
+    """(measurement, ok): the case's pair's dlnZ Jacobian, in the bins where the response is significant."""
     print("\n==== Jacobian (dlnZ) convergence ====")
     a, b = decisive_pair
     ja, jb = results[a]["jac_lnZ"], results[b]["jac_lnZ"]
@@ -160,7 +160,7 @@ def main() -> int:
         print(f"[ladder] {knob}={rung}: {time.time() - t0:.0f}s", flush=True)
 
     try:
-        rungs, decisive_pair = production_pair(results, profile[knob], knob)
+        rungs, decisive_pair = case_pair(results, profile[knob], knob)
     except ValueError as exc:
         raise SystemExit(f"resolution_ladder: {exc}") from exc
     measurements, ok = _depth_gates(results, rungs, decisive_pair, knob)
@@ -172,7 +172,7 @@ def main() -> int:
     # so a clean run is REPORT, not PASS.
     status = ("PASS" if args.jacobian else "REPORT") if ok else "FAIL"
     print(
-        f"\nVERDICT: {status} (production-rung gate {GATE_PPM} ppm"
+        f"\nVERDICT: {status} (the case's rung gate {GATE_PPM} ppm"
         + (f", Jacobian {GATE_JAC_REL:.0%}" if args.jacobian else "")
         + ")"
     )
@@ -186,10 +186,10 @@ def main() -> int:
             f"case {args.spec}; {knob} ladder {rungs}; "
             f"the case's is {profile[knob]}. "
             + (
-                "The production resolution is converged at the declared gates."
+                "The case's resolution is converged at the declared gates."
                 if ok
                 else f"NOT converged at the declared gates -- adopt the lowest "
-                f"tested passing rung as the production {knob}."
+                f"tested passing rung as the case's {knob}."
             )
             + (
                 " Jacobian axis included."

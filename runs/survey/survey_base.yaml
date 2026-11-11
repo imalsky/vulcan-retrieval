@@ -2,7 +2,7 @@
 # difference between planets is a difference in the planets (notes "Design records",
 # sulfur survey). Each planet is a file beside this one that names it as `base:` and adds
 # only its own numbers (system, data files, Tirr prior, mass error); this file is the
-# base, never a run (it names no planet, so validate_config refuses it).
+# base, never a run: it names no planet or data source, so run_setup.load_spec refuses it alone.
 #
 #   python tools/submit.py runs/survey/<planet>.yaml [--dry-run]
 #
@@ -84,5 +84,5 @@ config:
   integrate_nuisance: true
 
   # ---- lanes and wall ------------------------------------------------------------------
-  cold_lanes: 528                      # the lanes that run: 176 x 3 one-buffer ffi blocks per SM
+  cold_lanes: 528                      # the lanes that run on one GH200
   walltime_seconds: 165600             # 46 h governor (gpu_long)

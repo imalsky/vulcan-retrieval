@@ -33,13 +33,9 @@ jax.config.update("jax_enable_x64", True)
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
 from retrieval_framework import pipeline as P
-from retrieval_framework.run_nautilus import (
-    Anchors,
-    _check_resume,
-    make_loglike,
-    make_sampler,
-    startup_check,
-)
+from retrieval_framework.anchors import Anchors
+from retrieval_framework.run_nautilus import NautilusSettings, _check_resume, make_loglike, make_sampler, startup_check
+from conftest import case_config
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 # log Z of the stub likelihood over the unit box with its three cut regions
@@ -149,7 +145,8 @@ def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
     assert not hasattr(nautilus.Sampler, "add_samples_spread")
     like = make_loglike(_stub_pipe(), 64, {})
     f = tmp_path / "ckpt.hdf5"
-    s = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f))
+    settings = NautilusSettings(n_live=300, n_update=150, n_batch=64, n_eff=2000, warm=False, seed=0)
+    s = make_sampler(like, D, settings, filepath=str(f))
     assert type(s) is nautilus.Sampler
     assert s.n_networks == constants.N_NETWORKS == 4
     assert s.neural_network_kwargs == {}
@@ -157,7 +154,7 @@ def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
     s.run(f_live=constants.F_LIVE, n_eff=2000, discard_exploration=constants.DISCARD_EXPLORATION, verbose=False)
     assert s.n_eff >= 2000
     assert abs(s.log_z - EXACT_LOGZ) < 0.05
-    r = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f), resume=True)
+    r = make_sampler(like, D, settings, filepath=str(f), resume=True)
     assert r.n_like == s.n_like
     assert r.explored
     assert abs(r.log_z - s.log_z) < 1e-12
@@ -370,26 +367,29 @@ VALID = {
         ({"nu_max": 12000.0}, "supported band"),
         ({"cold_lanes": -1}, "cold_lanes"),
         ({"cold_refill_chunk": 0}, "cold_refill_chunk"),
-        ({"noise_inflation_per_group": True}, "infer_noise_inflation"),
         ({"cfg_overrides": {"use_condense": True}}, "use_condense"),
         ({"tp_deep_param": "T_1bar", "tp_infer_Tint": True}, "tp_deep_param"),
-        ({"tp_deep_param": "T1bar"}, "tp_infer_Tint"),  # a fixed Tint would ignore it
         ({"tp_deep_p_bar": 0.0, "tp_infer_Tint": True}, "tp_deep_p_bar"),
         ({"kzz_mode": "const"}, "kzz_mode"),
         ({"cloud_model": "patchy"}, "cloud_model"),
         ({"infer_lnM": True, "prior_lnM_sigma": 0.0}, "prior_lnM_sigma"),
-        ({"network": ""}, "network is unset"),  # no default network
-        ({"atom_list": ()}, "atom_list is unset"),  # nor its elements
+        ({"network": ""}, r"\['network'\] unset"),  # no default network
+        ({"atom_list": ()}, r"\['atom_list'\] unset"),  # nor its elements
         ({"art_pbtm_bar": None}, "art_pbtm_bar"),  # nor an RT bottom
         ({"art_pbtm_bar": 0.0}, "finite and positive"),
         ({"rt_integration": "midpoint"}, "rt_integration"),
         ({"use_rayleigh": False}, "use_rayleigh"),  # Rayleigh is in every retrieval
-        ({"truth_noise_inflation": -2.0}, "truth_noise_inflation"),  # it scales the injected noise
-        ({"truth_noise_inflation": float("nan")}, "truth_noise_inflation"),
+        # it scales the injected noise
+        ({"truth_noise_inflation": -2.0, "generate_synthetic_data": True}, "truth_noise_inflation"),
+        ({"truth_noise_inflation": float("nan"), "generate_synthetic_data": True}, "truth_noise_inflation"),
         ({"obs_dir": Path("data")}, "obs_products"),  # a data source names both
         ({"report_kzz_ceiling_x": 0.0}, "report_kzz_ceiling_x"),
         ({"cloud_model": "none"}, None),  # a clear atmosphere
-        ({"vulcan_cfg_name": " "}, "vulcan_cfg_name is unset"),  # no default planet
+        ({"vulcan_cfg_name": None}, r"\['vulcan_cfg_name'\] unset"),  # no default planet
+        ({"prior_lnZ": None, "seed": None}, r"\['prior_lnZ', 'seed'\] unset"),  # nor a case's prior or seed
+        ({"prior_T1bar": None, "tp_infer_Tint": True, "tp_deep_param": "T1bar"}, r"\['prior_T1bar'\] unset"),
+        ({"baseline_metallicity_solar": 3.0}, "disagrees with the case file's O/H, 9.999 x solar"),
+        ({"cfg_overrides": {"ini_mix": "const_mix"}}, "ini_mix"),  # the report's C/O and metallicity need EQ
         ({"rp_cm": None}, "rp_cm"),
         ({"rstar_cm": None}, "rstar_cm"),
         ({"integrate_nuisance": True, "infer_offsets": False, "infer_noise_inflation": False}, "integrate_nuisance"),
@@ -411,7 +411,7 @@ VALID = {
 )
 def test_validate_config_refusals(over, msg):
     """The refusals a spec can hit (msg None: accepted), the repository's fail-fast list among them."""
-    cfg = C.Config(**{**VALID, **over})
+    cfg = case_config(**{**VALID, **over})
     if msg is None:
         C.validate_config(cfg)
     else:
