@@ -9,7 +9,7 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 - Version 0.28.0: the v5 model options (T at a deep level in place of Tint, the window on the chemistry grid, `s_o`, a
   Gaussian `lnM`, the Kzz power law, the grey deck and the adiabat; "Design records"), the rejected-draw log and the
   certificate's derived quantities. pyproject floors: vulcan-forward>=0.31.0 (the caller names the network, its atoms
-  and the RT bottom), vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `14d80ae` and vulcan-forward `2fdf5a2`
+  and the RT bottom), vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `ae21fef` and vulcan-forward `2fdf5a2`
   (0.31.1; the survey's code, with the collision limit on dissociations, VULCAN3 notes "Parity ledger"; not yet run on a
   GH200), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. TestPyPI releases, tags confirmed by the
   maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0, jwst-transit-authority 0.72.0.
