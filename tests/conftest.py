@@ -14,6 +14,10 @@ from types import SimpleNamespace
 # Tests run on CPU unless the caller sets JAX_PLATFORMS: on a GPU host the
 # CUDA plugin would otherwise open every visible card in each worker.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# The engine sets this at its import, but a test module that imports scipy first has already started scipy's BLAS with
+# one thread per core. Those threads busy-wait between calls, and two test processes on shared cores then starve each
+# other (notes "Current state", Tests).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 # One network for the session: test modules import vulcan3 at collection, before any case is loaded, and vulcan3
 # freezes the network and its atoms at that first import.
 os.environ["VULCAN3_NETWORK"] = "thermo/SNCHO_photo_network_2025.txt"
