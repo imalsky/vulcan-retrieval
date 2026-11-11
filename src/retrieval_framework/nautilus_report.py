@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from vulcan_forward.constants import KZZ_P_REF_BAR
+from vulcan_forward.constants import BAR_CGS, KZZ_P_REF_BAR
 
 from retrieval_framework import config_schema as C, constants, hardware, provenance
 
@@ -46,7 +46,6 @@ __all__ = [
 log = logging.getLogger("retrieval")
 
 CERT_FILE = "nautilus_certificate.json"
-_BAR_TO_CGS = 1.0e6  # dyn cm^-2 per bar
 
 
 def read_json(out: Path, name: str) -> Any:
@@ -151,7 +150,7 @@ def kzz_at_ref(vulcan_cfg_name: str, cfg_overrides: dict[str, Any], p_bar: float
         raise ValueError(f"Kzz_prof {prof!r}: the report reads only 'file' or 'const'")
     atm = provenance.case_data_file(over.get("atm_file", case["atm_file"]))
     t = np.genfromtxt(atm, names=True, dtype=None, skip_header=1)
-    p = np.asarray(t["Pressure"], np.float64) / _BAR_TO_CGS
+    p = np.asarray(t["Pressure"], np.float64) / BAR_CGS
     if not p.min() <= p_bar <= p.max():
         raise ValueError(f"{atm} does not span {p_bar} bar")
     o = np.argsort(p)
@@ -576,7 +575,7 @@ def _guillot_T(
     p_bar: ArrayLike, gravity: float, kappa: float, gamma: float, Tint: float, Tirr: float, f: float
 ) -> np.ndarray:
     """Return Guillot (2010) Eq. 29, the numpy twin of ``exojax.atm.atmprof.atmprof_Guillot``."""
-    tau = np.asarray(p_bar) * _BAR_TO_CGS * kappa / gravity
+    tau = np.asarray(p_bar) * BAR_CGS * kappa / gravity
     invsq3 = 1.0 / np.sqrt(3.0)
     fac = 2.0 / 3.0 + invsq3 * (1.0 / gamma + (gamma - 1.0 / gamma) * np.exp(-gamma * tau / invsq3))
     return (0.75 * Tint**4 * (2.0 / 3.0 + tau) + 0.75 * Tirr**4 * f * fac) ** 0.25
