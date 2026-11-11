@@ -168,11 +168,11 @@ def test_the_e2e_solve_aborts_on_a_frozen_column(scripts):
     import jax.numpy as jnp
     from vulcan3 import DtMinFrozenError
 
-    from retrieval_framework import pipeline as P
+    from retrieval_framework import constants, pipeline as P
 
     def frozen(U, Y, refs, _active):
         n = U.shape[0]
-        reason = jnp.zeros(n, int).at[1].set(P._TERM_DT_MIN_FROZEN)
+        reason = jnp.zeros(n, int).at[1].set(constants.TERM_DT_MIN_FROZEN)
         stats = P.EvalStats(jnp.zeros(n, int), jnp.zeros(n, bool), reason, jnp.full(n, 0.08))
         return jnp.zeros(n), Y, refs, stats
 

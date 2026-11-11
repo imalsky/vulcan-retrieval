@@ -164,13 +164,13 @@ def _rows_by_bin(edges, j, e, ok, post):
 
 
 def compare(args) -> int:
-    from retrieval_framework.pipeline import REJECT_LOGL
+    from retrieval_framework import constants
 
     out = Path(args.out_dir).resolve()
     cfg, names, j = _run(out)
     e = np.load(args.solved)
     meta, sel_meta = _refuse_foreign_solve(args, out, cfg, names, e)
-    ok = e["certified"] & (e["logL"] > REJECT_LOGL / 2)
+    ok = e["certified"] & (e["logL"] > constants.REJECT_LOGL / 2)
     post = np.load(out / "nautilus_posterior.npz")
     edges = np.asarray(sel_meta["bin_edges"])
     rows = _rows_by_bin(edges, j, e, ok, post)

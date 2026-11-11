@@ -127,7 +127,7 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   on a T-converged column (the two-stage solve), never on the cold equilibrium start.
 - Chemistry stays f64.
 - Never clip the T-P profile: a draw whose profile leaves the window on the ART or chemistry grid is rejected
-  (`pipeline.tp_valid` / `sample_prior_u`; window: `tp_profile.T_EDGE_INSET_K` inside the opacity tables' range).
+  (`pipeline.tp_valid` / `sample_prior_u`; window: `constants.T_EDGE_INSET_K` inside the opacity tables' range).
 - The elemental map is the only abundance map; do not add another. Keep `prior_c_o`'s upper edge below the b_z bound
   (`build_retrieval_forward` raises).
 - No minichem and no self-made or pruned network; any published upstream network may be used (notes "Design records").

@@ -21,9 +21,9 @@ from typing import Any
 
 from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR, check_band, check_core_molecules
 
+from retrieval_framework import constants
+
 __all__ = [
-    "GUILLOT_F",
-    "UNDERFLOW_DENOM",
     "Config",
     "ParamSpec",
     "chem_extras",
@@ -113,7 +113,7 @@ class Config:
     # LSF (observations._refuse_unresolved_products). 0 disables the cut.
     obs_max_bin_R: float = 0.0
 
-    # ---- T-P profile: exojax's atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f), f = GUILLOT_F ----
+    # ---- T-P profile: exojax's atmprof_Guillot(P, g, kappa, gamma, Tint, Tirr, f), f = constants.GUILLOT_F ----
     tp_gravity_cgs: float = 422.0  # WASP-39b surface gravity
     tp_Tint_K: float = 150.0  # interior temperature when tp_infer_Tint=False
     tp_infer_gamma: bool = True  # retrieve log10(gamma); False -> fixed no-inversion
@@ -280,9 +280,6 @@ class Config:
 
 
 # Fixed choices, not Config fields: no spec sets them.
-GUILLOT_F = 0.25  # Guillot f: 1/4 = whole-planet average irradiation
-# Floor for a denominator or log argument that may be exactly zero.
-UNDERFLOW_DENOM = 1e-300
 # The CUDA compute capability the `ffi` block-Thomas kernel runs on.
 _FFI_COMPUTE_CAPABILITY = "9.0"
 # Baseline C/O of the W39b column, W39b.yaml C_H / O_H = 0.00295 / 0.00537;
@@ -711,7 +708,7 @@ def describe_config(cfg: Config, name: str = "") -> str:
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> high-Kzz non-convergence)",
         rule("T-P profile"),
         f"    model=guillot   deep={('free ' + cfg.tp_deep_param) if cfg.tp_infer_Tint else f'Tint {cfg.tp_Tint_K:g}K'}"
-        f"   f={GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
+        f"   f={constants.GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
         f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}"
         + (f"   adiabat below a free P_rcb (nabla {cfg.tp_nabla_ad:g})" if cfg.tp_adiabat else ""),
         (

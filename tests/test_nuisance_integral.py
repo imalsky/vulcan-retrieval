@@ -20,7 +20,7 @@ from scipy.special import logsumexp
 jax.config.update("jax_enable_x64", True)
 
 from retrieval_framework import config_schema as C
-from retrieval_framework import observations as OBS
+from retrieval_framework import constants
 from retrieval_framework import pipeline as P
 from retrieval_framework.nuisance import make_nuisance_marginal
 from retrieval_framework.run_nautilus import make_loglike, nuisance_posterior
@@ -70,7 +70,7 @@ def _brute(cfg, grp, s0, d, mu, n_t=4001, n_o=8001):
     t = np.linspace(*np.log10(cfg.prior_noise_inflation), n_t) if infl else np.zeros(1)
     wt = np.full(t.size, 1.0 / max(t.size - 1, 1))
     wt[[0, -1]] *= 0.5 if infl else 1.0
-    lo, hi = (v * OBS.PPM for v in cfg.prior_offset_ppm)
+    lo, hi = (v * constants.PPM for v in cfg.prior_offset_ppm)
     o = np.linspace(lo, hi, n_o)
     wo = np.full(n_o, (hi - lo) / (n_o - 1) / (hi - lo))
     wo[[0, -1]] *= 0.5
@@ -140,7 +140,7 @@ def test_layout_and_draws():
     p = np.exp(ll - ll.max())
     p /= p.sum()
     for j, x in (
-        (0, np.broadcast_to(o[None, :] / OBS.PPM, p.shape)),
+        (0, np.broadcast_to(o[None, :] / constants.PPM, p.shape)),
         (3, np.broadcast_to(10.0 ** t[:, None], p.shape)),
     ):
         mean, sd = (p * x).sum(), np.sqrt((p * (x - (p * x).sum()) ** 2).sum())
@@ -148,7 +148,9 @@ def test_layout_and_draws():
         assert abs(dr[:, j].std() / sd - 1) < 0.03
     # apply: each bin gets its group's offset once and its group's inflation
     mu2, mult = nm.apply(mu[None], dr[:1])
-    np.testing.assert_allclose(mu2[0] - mu, dr[0, 0] * OBS.PPM * m + dr[0, 1] * OBS.PPM * (grp == GROUPS[2]))
+    np.testing.assert_allclose(
+        mu2[0] - mu, dr[0, 0] * constants.PPM * m + dr[0, 1] * constants.PPM * (grp == GROUPS[2])
+    )
     np.testing.assert_allclose(mult[0], np.select([grp == g for g in GROUPS], dr[0, 2:]))
 
 
@@ -190,7 +192,7 @@ def test_run_logs_and_joins_the_statistics(tmp_path):
 
     def cold(U, Y, refs, _active):
         z = jax.nn.sigmoid(U)
-        L = jnp.where(z[:, 0] < 0.5, -jnp.sum(z, axis=1), P.REJECT_LOGL)
+        L = jnp.where(z[:, 0] < 0.5, -jnp.sum(z, axis=1), constants.REJECT_LOGL)
         st = jnp.stack([z[:, 0], 2 * z[:, 0]], axis=1)  # G = 1
         return L, Y, refs, _Stats(jnp.full(z.shape[0], 5), z[:, 0] < 0.5, st)
 
@@ -239,7 +241,7 @@ def test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum():
     U = pipe.sample_prior_u(jax.random.PRNGKey(0), 2)
     Y0, refs0 = P._blank_state(pipe, 2)
     L, Y, _, st = jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(2, bool))
-    keep = np.asarray(L) > P.REJECT_BELOW
+    keep = np.asarray(L) > constants.REJECT_BELOW
     assert keep.any()
     th = jax.vmap(pipe.theta_from_u)(U)
     mu = np.asarray(pipe.observed_depth_from_y_jit(Y, th))

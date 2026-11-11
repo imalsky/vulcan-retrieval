@@ -14,6 +14,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from retrieval_framework import config_schema as C
+from retrieval_framework import constants
 from retrieval_framework import pipeline as P
 
 pytestmark = pytest.mark.slow
@@ -65,14 +66,14 @@ def test_v5_options_build_sample_and_evaluate(v5_smoke_pipe, smoke_pipe):
     L, refs = np.asarray(L), np.asarray(refs)
     assert np.all(np.asarray(st.conv_ok))
     assert np.all(np.isfinite(L))
-    assert np.all(L > P.REJECT_BELOW)
+    assert np.all(L > constants.REJECT_BELOW)
     i_s = pipe.names.index("s_o")
     # the jitted transform and the eager one differ by an ulp
     np.testing.assert_allclose(refs, Theta[:2][:, [0, 1, i_s]], rtol=1e-12, atol=0)
     L, _Ynew, refs, _st = ev(U[:2], Y0, refs0, np.array([True, False]))
     L, refs = np.asarray(L), np.asarray(refs)
-    assert L[0] > P.REJECT_BELOW
-    assert L[1] == P.REJECT_LOGL
+    assert L[0] > constants.REJECT_BELOW
+    assert L[1] == constants.REJECT_LOGL
     assert np.all(refs[1] == 0.0)
     # with every option off the v4 layout is unchanged
     base = smoke_pipe

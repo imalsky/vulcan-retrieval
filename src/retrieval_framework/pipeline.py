@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from retrieval_framework import config_schema as C, observations as OBS
+from retrieval_framework import config_schema as C, constants, observations as OBS
 from retrieval_framework.nuisance import make_nuisance_marginal
 
 if TYPE_CHECKING:
@@ -29,8 +29,6 @@ if TYPE_CHECKING:
     from retrieval_framework.retrieval_forward import RetrievalForward
 
 __all__ = [
-    "REJECT_BELOW",
-    "REJECT_LOGL",
     "EvalStats",
     "Pipeline",
     "build_pipeline",
@@ -43,23 +41,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger("retrieval")
-
-
-# A rejected draw's log-likelihood is this finite sentinel on device; run_nautilus maps it to -inf. Anything at or below
-# REJECT_BELOW is a rejection.
-REJECT_LOGL = -1.0e30
-REJECT_BELOW = -1.0e29
-
-# vulcan3.state.TERM_DT_MIN_FROZEN, held here because this module imports no engine: vulcan3's first import must follow
-# the network export. tests/test_run_nautilus_main.py compares the two.
-_TERM_DT_MIN_FROZEN = 4
-
-# sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.
-_PRIOR_Z_EPS = 1e-6
-# T-P window rejection sampling: the floor on candidates per round, and the cap (max(factor * n, min)) where it raises.
-_TP_DRAW_MIN = 16
-_TP_DRAW_CAP_FACTOR = 64
-_TP_DRAW_CAP_MIN = 4096
 
 
 def save_npz(path: Path, **arrays: Any) -> None:
@@ -107,7 +88,7 @@ def _abort_if_frozen(reason: Array, last_delta: Array, z: np.ndarray, rtol: floa
     Nothing can raise inside the jitted evaluator, which keeps it in JAX's persistent compile cache, so the check sits
     right after it. The message carries the first frozen row's point, since the job loses the batch's inputs.
     """
-    rows = np.flatnonzero(np.asarray(jax.device_get(reason))[: len(z)] == _TERM_DT_MIN_FROZEN)
+    rows = np.flatnonzero(np.asarray(jax.device_get(reason))[: len(z)] == constants.TERM_DT_MIN_FROZEN)
     if rows.size:
         from vulcan3 import DtMinFrozenError
 
@@ -157,8 +138,8 @@ def make_uspace(
     is_log10 = jnp.asarray([1.0 if s.prior_type == "log10_uniform" else 0.0 for s in specs], dtype=dtype)
     is_gauss = jnp.asarray([1.0 if s.prior_type == "gaussian" else 0.0 for s in specs], dtype=dtype)
     lo_lin, span_lin = prior_lo, prior_hi - prior_lo
-    lo_log = jnp.log10(jnp.clip(prior_lo, C.UNDERFLOW_DENOM, None))
-    span_log = jnp.log10(jnp.clip(prior_hi, C.UNDERFLOW_DENOM, None)) - lo_log
+    lo_log = jnp.log10(jnp.clip(prior_lo, constants.UNDERFLOW_DENOM, None))
+    span_log = jnp.log10(jnp.clip(prior_hi, constants.UNDERFLOW_DENOM, None)) - lo_log
 
     def theta_from_u(u: Array) -> Array:
         """Map a u vector to theta."""
@@ -171,7 +152,7 @@ def make_uspace(
 
     def sample_prior_u(rng_key: Array, n_particles: int) -> Array:
         """Draw u of shape [n_particles, n_dim] from the box prior."""
-        eps = jnp.asarray(_PRIOR_Z_EPS, dtype=dtype)
+        eps = jnp.asarray(constants.PRIOR_Z_EPS, dtype=dtype)
         z = jax.random.uniform(rng_key, (n_particles, n_dim), dtype=dtype, minval=eps, maxval=1.0 - eps)
         return jnp.log(z) - jnp.log1p(-z)
 
@@ -315,7 +296,7 @@ class Pipeline:
         self.dtype = dtype = jnp.float64  # the forward's import set x64; chemistry stays f64
 
         # A draw whose raw T-P leaves [T_min, T_max] anywhere on the ART grid or the chemistry grid (which reaches below
-        # the RT bottom) is rejected, not bent into range: redrawn at the prior and given REJECT_LOGL by every
+        # the RT bottom) is rejected, not bent into range: redrawn at the prior and given constants.REJECT_LOGL by every
         # evaluator. A NaN profile (a T1bar draw with no Guillot solution) goes the same way.
         self.n_chem = int(fwd.n_chem)
         self._n_tp = int(fwd.n_tp)
@@ -380,7 +361,7 @@ class Pipeline:
         self.binned_ok_jit = jax.jit(self._binned_ok)
 
         self._sigma_for = make_noise_model(self.names, self.obs["group"], lambda: self.obs_sigma_jax, dtype)
-        self._reject = jnp.asarray(REJECT_LOGL, dtype=dtype)
+        self._reject = jnp.asarray(constants.REJECT_LOGL, dtype=dtype)
 
         self._rt_chunk = int(cfg.smc_rt_chunk)
         self.y_baseline = jnp.asarray(fwd.y_baseline, dtype=dtype)  # (nz, ni)
@@ -434,8 +415,8 @@ class Pipeline:
         n_particles = int(n_particles)
         key = rng_key
         kept, have, drawn = [], 0, 0
-        over = max(n_particles, _TP_DRAW_MIN)
-        max_draw = max(_TP_DRAW_CAP_FACTOR * n_particles, _TP_DRAW_CAP_MIN)
+        over = max(n_particles, constants.TP_DRAW_MIN)
+        max_draw = max(constants.TP_DRAW_CAP_FACTOR * n_particles, constants.TP_DRAW_CAP_MIN)
         while have < n_particles:
             key, sub = jax.random.split(key)
             cand = self._sample_box_u(sub, over)
@@ -504,7 +485,7 @@ class Pipeline:
         """Return the binned model depth: B @ native depth + O @ offsets."""
         mu = self._B_jax @ depth
         if self._n_off > 0:
-            mu = mu + self._O_jax @ (theta[self._off_lo : self._off_lo + self._n_off] * OBS.PPM)
+            mu = mu + self._O_jax @ (theta[self._off_lo : self._off_lo + self._n_off] * constants.PPM)
         return mu
 
     def _binned_ok(self, theta: Array) -> tuple[Array, Array]:
@@ -748,7 +729,7 @@ def generate_observations(pipe: Pipeline, seed: int) -> dict[str, np.ndarray]:
     mu_true = np.asarray(mu, np.float64)
     if pipe.nuisance is not None and pipe.cfg.infer_offsets:
         off = OBS.build_offset_design(pipe.obs)
-        mu_true = mu_true + off @ np.full(off.shape[1], pipe.cfg.truth_offset_ppm * OBS.PPM)
+        mu_true = mu_true + off @ np.full(off.shape[1], pipe.cfg.truth_offset_ppm * constants.PPM)
     if not bool(ok):
         raise RuntimeError(
             "the truth chemistry does not certify or froze at dt_min (VULCAN's certificate under "

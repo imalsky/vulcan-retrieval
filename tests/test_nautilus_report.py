@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from retrieval_framework import config_schema as C
+from retrieval_framework import constants
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import provenance
 from retrieval_framework import report_figures
@@ -149,7 +150,7 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
         last_delta: jnp.ndarray
 
     def solve(_th):
-        reason = jnp.zeros(n, int).at[1].set(P._TERM_DT_MIN_FROZEN)
+        reason = jnp.zeros(n, int).at[1].set(constants.TERM_DT_MIN_FROZEN)
         return jnp.zeros((n, 1)), Diag(jnp.ones(n), jnp.ones(n, int), reason, jnp.full(n, 0.08))
 
     pipe = SimpleNamespace(

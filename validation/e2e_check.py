@@ -263,14 +263,14 @@ def _over_the_gates(m, mism, both):
 
 
 def compare(args) -> int:
-    from retrieval_framework.pipeline import REJECT_LOGL
+    from retrieval_framework import constants
 
     a, b = _load([args.a]), _load(args.b)
     common, ia, ib = np.intersect1d(a["rows"], b["rows"], return_indices=True)
     if not np.array_equal(a["u"][ia], b["u"][ib]):
         raise RuntimeError("the two files hold different draws for the same rows")
-    ok_a = a["certified"][ia] & (a["logL"][ia] > REJECT_LOGL / 2)
-    ok_b = b["certified"][ib] & (b["logL"][ib] > REJECT_LOGL / 2)
+    ok_a = a["certified"][ia] & (a["logL"][ia] > constants.REJECT_LOGL / 2)
+    ok_b = b["certified"][ib] & (b["logL"][ib] > constants.REJECT_LOGL / 2)
     both = ok_a & ok_b
     mism = common[ok_a != ok_b]
     dmu = (a["mu"][ia] - b["mu"][ib])[both] / a["sigma"][None, :]
@@ -346,12 +346,12 @@ def _wmedian(x, w):
 
 
 def warmcold(args) -> int:
-    from retrieval_framework.pipeline import REJECT_LOGL
+    from retrieval_framework import constants
 
     z = _load(args.cold)
     if "logL_run" not in z:
         raise RuntimeError(f"{args.cold} was not solved with --posterior")
-    ok = z["certified"] & (z["logL"] > REJECT_LOGL / 2)
+    ok = z["certified"] & (z["logL"] > constants.REJECT_LOGL / 2)
     dL = np.where(ok, z["logL"] - z["logL_run"], -np.inf)
     w = np.exp(dL - np.max(dL[ok]))
     names, th = z["names"], z["theta"]

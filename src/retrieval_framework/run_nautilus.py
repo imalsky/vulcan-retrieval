@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
-from retrieval_framework import config_schema as C
+from retrieval_framework import config_schema as C, constants
 from retrieval_framework.batch_profiler import BatchProfiler
 from retrieval_framework.run_setup import (
     check_run_dir,
@@ -47,16 +47,8 @@ __all__ = ["Anchors", "main", "make_loglike", "make_sampler", "nuisance_posterio
 
 log = logging.getLogger("retrieval")
 
-F_LIVE = 0.03  # exploration ends when the live set holds this evidence share
-ENLARGE_PER_DIM = 1.3
-N_NETWORKS = 4  # nautilus's default ReLU networks (hidden layers 100-50-20)
-DISCARD_EXPLORATION = True
-BATCH_PER_LANE = 3  # points per lane per batch: certified lanes refill in-batch
 # ffi one-buffer blocks resident per SM at ni 89 on compute capability 9.0: 63 of 228 KB of shared memory each.
 FFI_BLOCKS_PER_SM = 3
-# In-window cold draws a log10 Kzz decade needs before none certifying refuses the
-# run: 0 of 30 bounds that decade's certified fraction below 10% (95%).
-STARTUP_MIN_DRAWS = 30
 TALLY_FILE = "nautilus_tally.json"
 
 
@@ -90,17 +82,17 @@ def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray,
     Raises
     ------
     RuntimeError
-        If nothing was kept, or a decade with ``STARTUP_MIN_DRAWS`` or more in-window draws kept none: the posterior
-        there would be cut by the solver, not by the data.
+        If nothing was kept, or a decade with ``constants.STARTUP_MIN_DRAWS`` or more in-window draws kept none: the
+        posterior there would be cut by the solver, not by the data.
     """
     dec = np.floor(np.asarray(log10_kzz, np.float64)[in_window]).astype(int)
     ok = np.asarray(kept, bool)[in_window]
     lines, cut = [], []
     for d in np.unique(dec):
         n, k = int((dec == d).sum()), int(ok[dec == d].sum())
-        thin = " (too few to judge)" if n < STARTUP_MIN_DRAWS else ""
+        thin = " (too few to judge)" if n < constants.STARTUP_MIN_DRAWS else ""
         lines.append(f"startup: log10 Kzz [{d}, {d + 1}): {n} in window, {k} kept{thin}")
-        if n >= STARTUP_MIN_DRAWS and k == 0:
+        if n >= constants.STARTUP_MIN_DRAWS and k == 0:
             cut.append(f"[{d}, {d + 1})")
     if not ok.any():
         raise RuntimeError(
@@ -110,7 +102,7 @@ def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray,
     if cut:
         raise RuntimeError(
             f"startup check: no in-window cold draw certified in log10 Kzz {', '.join(cut)} "
-            f"(>= {STARTUP_MIN_DRAWS} draws each): the posterior there would be cut by the "
+            f"(>= {constants.STARTUP_MIN_DRAWS} draws each): the posterior there would be cut by the "
             "solver, not the data. Narrow prior_lnKzz to exclude it, or measure the "
             "count_max that certifies it before raising the cap. " + " | ".join(lines)
         )
@@ -371,7 +363,7 @@ def make_loglike(
                 Yw, rw = anchors.columns(idx)
                 L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype), jnp.asarray(rw, pipe.dtype), act)
                 # A warm start that froze at dt_min is re-solved cold, alone; a cold freeze still stops the run.
-                fz = act & (st.reason == P._TERM_DT_MIN_FROZEN)
+                fz = act & (st.reason == constants.TERM_DT_MIN_FROZEN)
                 if n_fz := int(fz.sum()):
                     L, Ynew, rnew, st = P._take_rows(fz, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, fz))
                     tally["warm_frozen_resolved_cold"] = tally.get("warm_frozen_resolved_cold", 0) + n_fz
@@ -381,7 +373,7 @@ def make_loglike(
             L = np.asarray(jax.device_get(L), np.float64)[:m]
             acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
             conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
-            rej = _classify(tp_in[:m], conv, acc, L, count_max, P.REJECT_BELOW)
+            rej = _classify(tp_in[:m], conv, acc, L, count_max, constants.REJECT_BELOW)
             dead = rej.dead
             out[i : i + m] = np.where(dead, -np.inf, L)
             if kzz_ref is not None:
@@ -507,9 +499,9 @@ def make_sampler(
         loglike,
         n_dim=n_dim,
         n_live=n_live,
-        n_update=n_live // 2,
-        enlarge_per_dim=ENLARGE_PER_DIM,
-        n_networks=N_NETWORKS,
+        n_update=n_live // constants.N_LIVE_PER_UPDATE,
+        enlarge_per_dim=constants.ENLARGE_PER_DIM,
+        n_networks=constants.N_NETWORKS,
         n_batch=n_batch,
         vectorized=True,
         pass_dict=False,
@@ -544,14 +536,14 @@ def _log_settings(spec: Any, cfg: C.Config, n_batch: int) -> None:
         "nautilus: n_live=%s n_update=%s n_eff=%s n_batch=%s (cold_lanes=%s) f_live=%s enlarge_per_dim=%s "
         "networks=%sx relu (nautilus default) discard_exploration=%s seed=%s starts=%s",
         n_live,
-        n_live // 2,
+        n_live // constants.N_LIVE_PER_UPDATE,
         int(spec.sampler.n_eff),
         n_batch,
         cfg.cold_lanes,
-        F_LIVE,
-        ENLARGE_PER_DIM,
-        N_NETWORKS,
-        DISCARD_EXPLORATION,
+        constants.F_LIVE,
+        constants.ENLARGE_PER_DIM,
+        constants.N_NETWORKS,
+        constants.DISCARD_EXPLORATION,
         cfg.seed,
         _starts(bool(spec.sampler.warm_starts)),
     )
@@ -640,11 +632,11 @@ def _write_summary(sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Pa
         "n_eff": float(sampler.n_eff),
         "n_live": n_live,
         "n_batch": n_batch,
-        "n_update": n_live // 2,
-        "f_live": F_LIVE,
-        "enlarge_per_dim": ENLARGE_PER_DIM,
-        "networks": f"{N_NETWORKS}x relu (nautilus default)",
-        "discard_exploration": DISCARD_EXPLORATION,
+        "n_update": n_live // constants.N_LIVE_PER_UPDATE,
+        "f_live": constants.F_LIVE,
+        "enlarge_per_dim": constants.ENLARGE_PER_DIM,
+        "networks": f"{constants.N_NETWORKS}x relu (nautilus default)",
+        "discard_exploration": constants.DISCARD_EXPLORATION,
         "nautilus": f"{nautilus.__version__} (stock)",
         "starts": _starts(warm),
         "rejections_and_starts": tally,
@@ -689,7 +681,11 @@ def _sample(sampler: nautilus.Sampler, n_eff: int, timeout: float, tally: dict) 
     log.info("nautilus: starting at n_like=%s; timeout %.2f h", sampler.n_like, timeout / 3600)
     t0 = time.perf_counter()
     done = sampler.run(
-        f_live=F_LIVE, n_eff=n_eff, discard_exploration=DISCARD_EXPLORATION, timeout=timeout, verbose=True
+        f_live=constants.F_LIVE,
+        n_eff=n_eff,
+        discard_exploration=constants.DISCARD_EXPLORATION,
+        timeout=timeout,
+        verbose=True,
     )
     log.info(
         "nautilus: %s after %.2f h | n_like=%s | log_z=%.3f | n_eff=%.0f | tally=%s",
@@ -744,7 +740,7 @@ def main(argv: list[str] | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     setup_logging(out / "run.log")
     n_live = int(spec.sampler.n_live)
-    n_batch = int(spec.sampler.n_batch or BATCH_PER_LANE * cfg.cold_lanes)
+    n_batch = int(spec.sampler.n_batch or constants.BATCH_PER_LANE * cfg.cold_lanes)
     warm = bool(spec.sampler.warm_starts)
     _log_settings(spec, cfg, n_batch)
     _log_versions()
@@ -761,8 +757,8 @@ def main(argv: list[str] | None = None) -> None:
     digest_path = out / "target_digest.txt"
     want = (
         f"{pipe.target_digest}|{'warm' if warm else 'cold'}"
-        f"|n_batch={n_batch}|n_live={n_live}|n_update={n_live // 2}|f_live={F_LIVE}"
-        f"|enlarge_per_dim={ENLARGE_PER_DIM}|networks={N_NETWORKS}xrelu|stock"
+        f"|n_batch={n_batch}|n_live={n_live}|n_update={n_live // constants.N_LIVE_PER_UPDATE}|f_live={constants.F_LIVE}"
+        f"|enlarge_per_dim={constants.ENLARGE_PER_DIM}|networks={constants.N_NETWORKS}xrelu|stock"
     )
     if resume:
         _check_resume(digest_path, want, ckpt.name)

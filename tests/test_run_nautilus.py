@@ -31,12 +31,9 @@ from scipy.special import ndtr
 jax.config.update("jax_enable_x64", True)
 
 from retrieval_framework import config_schema as C
+from retrieval_framework import constants
 from retrieval_framework import pipeline as P
 from retrieval_framework.run_nautilus import (
-    DISCARD_EXPLORATION,
-    F_LIVE,
-    N_NETWORKS,
-    STARTUP_MIN_DRAWS,
     Anchors,
     _check_resume,
     make_loglike,
@@ -68,7 +65,7 @@ def _masked(name, seen, active, L, acc, conv):
     """
     if seen is not None:
         jax.debug.callback(lambda a: seen.append((name, np.asarray(a).tolist())), active, ordered=True)
-    return (jnp.where(active, L, P.REJECT_LOGL), jnp.where(active, acc, 0), active & conv)
+    return (jnp.where(active, L, constants.REJECT_LOGL), jnp.where(active, acc, 0), active & conv)
 
 
 def _stub_pipe(seen=None):
@@ -95,7 +92,7 @@ def _stub_pipe(seen=None):
     def warm(U, Y, refs, active):  # hands back the column it started from; like the
         _, L, acc, conv = common(U)  # pipeline's, it floors L on a stalled/exhausted exit
         L, acc, conv = _masked("warm", seen, active, L, acc, conv)
-        L = jnp.where(conv, L, P.REJECT_LOGL)
+        L = jnp.where(conv, L, constants.REJECT_LOGL)
         return L, Y, refs, _Stats(acc, conv)
 
     def make(mode):
@@ -154,10 +151,10 @@ def test_sampler_is_stock_nautilus_with_default_relu_networks(tmp_path):
     f = tmp_path / "ckpt.hdf5"
     s = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f))
     assert type(s) is nautilus.Sampler
-    assert s.n_networks == N_NETWORKS == 4
+    assert s.n_networks == constants.N_NETWORKS == 4
     assert s.neural_network_kwargs == {}
-    assert DISCARD_EXPLORATION is True
-    s.run(f_live=F_LIVE, n_eff=2000, discard_exploration=DISCARD_EXPLORATION, verbose=False)
+    assert constants.DISCARD_EXPLORATION is True
+    s.run(f_live=constants.F_LIVE, n_eff=2000, discard_exploration=constants.DISCARD_EXPLORATION, verbose=False)
     assert s.n_eff >= 2000
     assert abs(s.log_z - EXACT_LOGZ) < 0.05
     r = make_sampler(like, D, n_live=300, n_batch=64, seed=0, filepath=str(f), resume=True)
@@ -208,13 +205,13 @@ def _freezing(fn, where):
         L, Ynew, rnew, st = fn(U, Y, refs, active)
         fz = jnp.asarray(active, bool) & where(U)
         return (
-            jnp.where(fz, P.REJECT_LOGL, L),
+            jnp.where(fz, constants.REJECT_LOGL, L),
             Ynew,
             rnew,
             _FrozenStats(
                 jnp.where(fz, 7, st.acc),
                 st.conv_ok & ~fz,
-                jnp.where(fz, P._TERM_DT_MIN_FROZEN, 1),
+                jnp.where(fz, constants.TERM_DT_MIN_FROZEN, 1),
                 jnp.where(fz, 0.3, 0.0),
             ),
         )
@@ -274,11 +271,11 @@ def test_a_frozen_warm_draw_is_re_solved_cold(tmp_path):
 
 
 def test_startup_check_refuses_a_solver_cut_decade_and_an_empty_first_chunk():
-    """A decade with STARTUP_MIN_DRAWS in-window draws and none kept refuses the
+    """A decade with constants.STARTUP_MIN_DRAWS in-window draws and none kept refuses the
     run, naming it; one kept draw passes it; a sparse decade is reported as too few
     to judge, never refused; out-of-window draws do not count; nothing kept refuses.
     """
-    n = STARTUP_MIN_DRAWS
+    n = constants.STARTUP_MIN_DRAWS
     lk = np.r_[np.full(n, 6.5), np.full(n, 8.5), np.full(n - 1, 12.5), np.full(5, 7.5)]
     win = np.r_[np.ones(3 * n - 1, bool), np.zeros(5, bool)]
     kept = np.r_[np.zeros(n, bool), np.ones(n, bool), np.zeros(n + 4, bool)]

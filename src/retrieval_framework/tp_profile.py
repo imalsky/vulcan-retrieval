@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 from vulcan_forward.constants import BAR_CGS, T_OPA_MAX_K, T_OPA_MIN_K
 
-from retrieval_framework.config_schema import GUILLOT_F
+from retrieval_framework import constants
 
 if TYPE_CHECKING:
     from jax import Array
@@ -22,13 +22,11 @@ if TYPE_CHECKING:
 
     from retrieval_framework.config_schema import Config
 
-__all__ = ["T_EDGE_INSET_K", "build_tp_model", "tint_from_deep"]
+__all__ = ["build_tp_model", "tint_from_deep"]
 
-# The profile is not clipped, since a clip invents an isothermal wall; the pipeline rejects a profile with a layer
-# outside the engine's valid RT window inset by this, [320, 2980] K (pipeline.tp_valid).
-T_EDGE_INSET_K = 20.0
-_T_MIN = float(T_OPA_MIN_K) + T_EDGE_INSET_K
-_T_MAX = float(T_OPA_MAX_K) - T_EDGE_INSET_K
+# The engine's valid RT window inset by constants.T_EDGE_INSET_K, [320, 2980] K (pipeline.tp_valid).
+_T_MIN = float(T_OPA_MIN_K) + constants.T_EDGE_INSET_K
+_T_MAX = float(T_OPA_MAX_K) - constants.T_EDGE_INSET_K
 
 
 def _guillot_terms(
@@ -120,7 +118,7 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
     from exojax.atm.atmprof import atmprof_Guillot
 
     g = float(cfg.tp_gravity_cgs)
-    f = GUILLOT_F
+    f = constants.GUILLOT_F
     Tint = float(cfg.tp_Tint_K)
     infer_gamma = bool(cfg.tp_infer_gamma)
     gamma_fixed = float(cfg.tp_gamma_fixed)

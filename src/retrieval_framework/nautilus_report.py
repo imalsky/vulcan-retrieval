@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from vulcan_forward.constants import KZZ_P_REF_BAR
 
-from retrieval_framework import config_schema as C, provenance
+from retrieval_framework import config_schema as C, constants, provenance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -62,17 +62,9 @@ def _wquant(x: ArrayLike, w: np.ndarray, qs: tuple[float, ...] = (0.16, 0.5, 0.8
     return np.interp(qs, cw, np.asarray(x, np.float64)[o]).tolist()
 
 
-# Lodders (2020) present-day photospheric log eps (the vulcan3 .dat header
-# cites its Table 8); the total-metals factor weighs C and S by their knobs.
-LODDERS2020_LOG_EPS = {"C": 8.47, "N": 7.85, "O": 8.73, "S": 7.15}
-# Kzz weights near the prior floor are taken at these multiples of the spec's
-# prior_lnKzz lower edge (x0.15 and x0.2 on a x0.1 floor). A ceiling is a
-# property of a case's profile: x10 on W39b's Tsai+2023 profile is the GCM's full-H
-# w_rms (notes "Design records"); no other case has one.
-KZZ_FLOOR_MULTIPLES = (1.5, 2.0)
+# A Kzz ceiling is a property of a case's profile: x10 on W39b's Tsai+2023 profile is the GCM's full-H w_rms (notes
+# "Design records"); no other case has one.
 KZZ_CEILING_X = {"W39b": 10.0}
-COND_BINS = 10  # equal bins over each prior box in the map
-COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
 
 
 def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -94,7 +86,7 @@ def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[f
             p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
             T_inv = T_inv * (min(p_rcb, p_inv) / p_inv) ** float(cfgj["tp_nabla_ad"])
             p_inv = min(p_rcb, p_inv)
-        Tint = float(np.asarray(tint_from_deep(T_inv, Tirr, kappa, gamma, g, C.GUILLOT_F, p_inv)))
+        Tint = float(np.asarray(tint_from_deep(T_inv, Tirr, kappa, gamma, g, constants.GUILLOT_F, p_inv)))
     elif "Tint" in names:
         Tint = float(t[names.index("Tint")])
     else:
@@ -106,10 +98,10 @@ def _tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: Arra
     """Return T(p_bar), K, of one posterior row: the Guillot profile, with the adiabat below the retrieved boundary."""
     g = float(cfgj["tp_gravity_cgs"])
     Tirr, kappa, gamma, Tint = _tp_params(t, names, cfgj)
-    T = _guillot_T(p_bar, g, kappa, gamma, Tint, Tirr, C.GUILLOT_F)
+    T = _guillot_T(p_bar, g, kappa, gamma, Tint, Tirr, constants.GUILLOT_F)
     if "log10P_rcb" in names:
         p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
-        T_rcb = _guillot_T(p_rcb, g, kappa, gamma, Tint, Tirr, C.GUILLOT_F)
+        T_rcb = _guillot_T(p_rcb, g, kappa, gamma, Tint, Tirr, constants.GUILLOT_F)
         nabla = float(cfgj["tp_nabla_ad"])
         T = np.where(np.asarray(p_bar) > p_rcb, T_rcb * (np.asarray(p_bar) / p_rcb) ** nabla, T)
     return T
@@ -178,7 +170,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         return theta[:, names.index(n)]
 
     base = float(cfgj["baseline_metallicity_solar"])
-    eps = {k: 10.0 ** (v - 12.0) for k, v in LODDERS2020_LOG_EPS.items()}
+    eps = {k: 10.0 ** (v - 12.0) for k, v in constants.LODDERS2020_LOG_EPS.items()}
     lnZ, c_o = col("lnZ"), col("c_o")
     s_o = col("s_o") if "s_o" in names else np.zeros_like(lnZ)
     z_o = base * np.exp(lnZ)
@@ -197,7 +189,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
             _log10_kzz_at_report_level(cfgj, col("lnKzz"), col("kzz_slope") if "kzz_slope" in names else None), w
         ),
         "kzz_prior_floor_factor": floor,
-        **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in KZZ_FLOOR_MULTIPLES},
+        **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in constants.KZZ_FLOOR_MULTIPLES},
     }
     ceil = KZZ_CEILING_X.get(cfgj["vulcan_cfg_name"])
     keep = kzz <= (np.inf if ceil is None else ceil)
@@ -229,9 +221,9 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
 def _conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
     """Return where the rejections sit, for lnKzz, the deep T-P parameter and lnZ, one at a time.
 
-    ``COND_BINS`` equal bins over the prior box, each with the in-window proposals evaluated, the rejected fraction and
-    the posterior weight. A batch redrawn after a resume counts twice. None without anchors/ (a cold run keeps no
-    certified points) or rejected/.
+    ``constants.COND_BINS`` equal bins over the prior box, each with the in-window proposals evaluated, the rejected
+    fraction and the posterior weight. A batch redrawn after a resume counts twice. None without anchors/ (a cold run
+    keeps no certified points) or rejected/.
     """
     out = Path(out_dir).resolve()
     afiles = sorted((out / "anchors").glob("anchors_*.npz"))
@@ -252,19 +244,19 @@ def _conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
 
     ok = z_of(afiles, lambda _d: slice(None))
     bad = z_of(sorted((out / "rejected").glob("rejected_*.npz")), lambda d: d["cls"] > 0)
-    edges_z = np.linspace(0.0, 1.0, COND_BINS + 1)
+    edges_z = np.linspace(0.0, 1.0, constants.COND_BINS + 1)
     n_ok, n_bad = sum(len(z) for z in ok), sum(len(z) for z in bad)
     m: dict[str, Any] = {
         "rejected_of_in_window": n_bad / (n_ok + n_bad) if n_ok + n_bad else None,
         "rejected_in_log": n_bad,
     }
-    for name in COND_PARAMS:
+    for name in constants.COND_PARAMS:
         if name not in names:
             continue
         j = names.index(name)  # the anchors keep the chemistry block, which holds j
         lo, hi = cfgj[f"prior_{name}"]
         c_ok = sum(np.histogram(z[:, j], edges_z)[0] for z in ok)
-        c_bad = sum((np.histogram(z[:, j], edges_z)[0] for z in bad), np.zeros(COND_BINS, int))
+        c_bad = sum((np.histogram(z[:, j], edges_z)[0] for z in bad), np.zeros(constants.COND_BINS, int))
         edges = lo + (hi - lo) * edges_z
         n = c_ok + c_bad
         m[name] = {

@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from retrieval_framework import constants
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -25,8 +27,6 @@ if TYPE_CHECKING:
     from retrieval_framework import config_schema as C
 
 __all__ = [
-    "MIN_REAL_BINS",
-    "PPM",
     "build_binning_matrix",
     "build_group_design",
     "build_offset_design",
@@ -40,15 +40,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-PPM = 1.0e-6  # one part per million of the transit depth (offsets, sigmas)
 # The scalar noise-inflation parameter's name; the per-group ones are f"{_NOISE_PREFIX}_{group}".
 _NOISE_PREFIX = "noise_inflation"
-# A real-data run needs at least this many observed bins inside the model band.
-MIN_REAL_BINS = 4
-# Synthetic bin grid: resolving power, per-bin sigma, and the fractional inset from the model band edges.
-SYNTH_R = 200
-SYNTH_SIGMA_PPM = 120.0
-SYNTH_BAND_PAD_FRAC = 0.001
 
 
 def _validated_model_wavelengths(wl_model_um: np.ndarray) -> np.ndarray:
@@ -154,7 +147,7 @@ def load_real_observations(cfg: C.Config) -> dict[str, Any]:
 
 
 def _synthetic_bin_grid(
-    wl_lo: float, wl_hi: float, R: int = SYNTH_R, sigma_ppm: float = SYNTH_SIGMA_PPM
+    wl_lo: float, wl_hi: float, R: int = constants.SYNTH_R, sigma_ppm: float = constants.SYNTH_SIGMA_PPM
 ) -> dict[str, Any]:
     """Return a constant-R bin grid across [wl_lo, wl_hi], one instrument group, for a synthetic run."""
     edge_list = [wl_lo]
@@ -169,7 +162,7 @@ def _synthetic_bin_grid(
         "wl_lo": lo,
         "wl_hi": hi,
         "depth": np.full(n, np.nan),
-        "sigma": np.full(n, sigma_ppm * PPM),
+        "sigma": np.full(n, sigma_ppm * constants.PPM),
         "group": np.array(["SYNTH"] * n),
         "groups": ["SYNTH"],
     }
@@ -240,12 +233,12 @@ def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[s
                 f"{cfg.obs_wl_hi:g}] um lie outside the model band [{wl.min():.4f}, {wl.max():.4f}] um. Narrow "
                 "obs_wl_lo/obs_wl_hi or widen nu_min/nu_max: a bin is never dropped without the spec saying so."
             )
-        if n_real >= MIN_REAL_BINS:
+        if n_real >= constants.MIN_REAL_BINS:
             return real, True
         if not synthetic:
             raise ValueError(
                 f"only {n_real} of the configured observed bins fall inside the model "
-                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >={MIN_REAL_BINS}) -- the model band "
+                f"band [{wl.min():.3f}, {wl.max():.3f}] um (need >={constants.MIN_REAL_BINS}) -- the model band "
                 "does not overlap the data. Fix obs_wl_lo/hi or nu_min/nu_max; refusing "
                 "to silently fabricate a synthetic grid for a real-data run."
             )
@@ -255,14 +248,9 @@ def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[s
             "and generate_synthetic_data=False -- nothing to fit"
         )
 
-    pad = SYNTH_BAND_PAD_FRAC
+    pad = constants.SYNTH_BAND_PAD_FRAC
     grid = _synthetic_bin_grid(float(wl.min()) * (1 + pad), float(wl.max()) * (1 - pad))
     return restrict_to_model_band(grid, wl), False
-
-
-# A cell average is a faithful binning operator only when a data bin spans at least this many R1000 model bands. Two
-# admits Welbanks et al. (2024)'s native 0.015 um NIRCam bins (R up to 336, about three bands).
-_LSF_R_SAFETY = 2.0
 
 
 def _refuse_unresolved_products(wl_model_um: np.ndarray, obs: dict[str, Any]) -> None:
@@ -275,12 +263,12 @@ def _refuse_unresolved_products(wl_model_um: np.ndarray, obs: dict[str, Any]) ->
     r_data = 0.5 * (lo[inside] + hi[inside]) / (hi[inside] - lo[inside])
     wl_s = np.sort(np.asarray(wl_model_um, float))
     r_model = float(np.median(0.5 * (wl_s[1:] + wl_s[:-1]) / np.diff(wl_s)))
-    limit = r_model / _LSF_R_SAFETY
+    limit = r_model / constants.LSF_R_SAFETY
     bad = int(np.sum(r_data > limit))
     if bad:
         raise ValueError(
             f"{bad} of {r_data.size} data bins have R up to {r_data.max():.0f}, "
-            f"within a factor {_LSF_R_SAFETY:g} of the model band R "
+            f"within a factor {constants.LSF_R_SAFETY:g} of the model band R "
             f"({r_model:.0f}). The binning operator is a pure cell average with "
             "no instrument line-spread function, so it would model those bins "
             "wrong. Bin the product down, or add an LSF before the cell average."
@@ -291,8 +279,8 @@ def build_binning_matrix(wl_model_um: np.ndarray, obs: dict[str, Any]) -> np.nda
     """Return the bin-averaging matrix for bins already inside the model span.
 
     Its rows dotted with the native depth give the d(lambda)-weighted trapezoidal bin average. No instrument line-spread
-    function is applied: that is defensible only while each bin spans at least ``_LSF_R_SAFETY`` model bands, and a
-    product approaching the model's own R is refused.
+    function is applied: that is defensible only while each bin spans at least ``constants.LSF_R_SAFETY`` model bands,
+    and a product approaching the model's own R is refused.
 
     Parameters
     ----------

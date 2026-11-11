@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from retrieval_framework import observations as OBS
+from retrieval_framework import constants, observations as OBS
 from retrieval_framework.nautilus_report import _read, _tp_curve, _weights
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ __all__ = ["plot", "predictive_replicates"]
 log = logging.getLogger("retrieval")
 
 DPI = 300
-_TO_PPM = 1.0 / OBS.PPM
+_TO_PPM = 1.0 / constants.PPM
 # T-P band: log10 of its top (bar), its points down to ART_PBTM_BAR, and the weighted draws it is taken over.
 TP_PLOT_LOG10_P_TOP = -8
 TP_PLOT_N_P = 120

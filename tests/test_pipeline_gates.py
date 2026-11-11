@@ -18,6 +18,7 @@ jax.config.update("jax_enable_x64", True)
 
 import retrieval_framework
 from retrieval_framework import config_schema as C
+from retrieval_framework import constants
 from retrieval_framework import observations as OBS
 from retrieval_framework import pipeline as P
 from retrieval_framework import provenance
@@ -164,7 +165,7 @@ def test_cold_evaluator_gates_and_exact_log_l(monkeypatch):
     assert L[0] == pytest.approx(want, rel=1e-12)
 
     # every other row is the reject sentinel, for its own reason
-    assert np.all(L[1:] == P.REJECT_LOGL)
+    assert np.all(L[1:] == constants.REJECT_LOGL)
     assert np.asarray(st.conv_ok).tolist() == [True, False, True, True, True]
     assert np.all(np.asarray(st.acc) == 11)
 

@@ -778,7 +778,7 @@ HPC
   temperature: `T_cross_sp` is empty in every config and vulcan-forward refuses a non-empty list (its per-proposal
   rebuild does not follow them), as upstream's own default is. The size of this in 700-3000 K gas is not measured.
 - T-P window [320, 2980] K: vulcan-forward's opacity window 300-3000 K (`T_OPA_MIN_K`, `T_OPA_MAX_K`) less the 20 K
-  inset (`tp_profile.T_EDGE_INSET_K`); the ExoMolOP tables themselves span 100-3400 K.
+  inset (`constants.T_EDGE_INSET_K`); the ExoMolOP tables themselves span 100-3400 K.
 - He/H fixed at 0.0838 (present-day photospheric; the vulcan3 .dat header cites Lodders 2019 Table 8), not retrieved and
   not scaled with Z (d ln(He/H)/d lnZ = 0).
 - RT: 12 molecules, H2-H2 / H2-He CIA, power-law clouds uniformly mixed, H2/He Rayleigh, inverse-square gravity (+1.5

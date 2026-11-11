@@ -12,6 +12,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from retrieval_framework import pipeline as P
+from retrieval_framework import constants
 
 pytestmark = pytest.mark.slow
 
@@ -29,7 +30,7 @@ def test_every_entry_point_rejects_uncertified_finite_spectrum(capped_smoke_pipe
     ev = jax.jit(pipe._make_batch_eval("cold"))
     L, _, _, st = ev(U, Y0, refs0, np.ones(2, bool))
     assert not np.any(np.asarray(st.conv_ok))
-    assert np.all(np.asarray(L) <= P.REJECT_BELOW)
+    assert np.all(np.asarray(L) <= constants.REJECT_BELOW)
     # the truth is refused before set_observations would be called a second time
     with pytest.raises(RuntimeError, match="truth chemistry does not certify"):
         P.generate_observations(pipe, seed=0)

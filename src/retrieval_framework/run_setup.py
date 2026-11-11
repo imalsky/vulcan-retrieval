@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import yaml
 
-from retrieval_framework import config_schema as C
+from retrieval_framework import config_schema as C, constants
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -111,7 +111,7 @@ class Sampler:
     n_eff : int
         Effective posterior samples at which nautilus stops.
     n_batch : int, optional
-        Points per batch; None is ``run_nautilus.BATCH_PER_LANE`` times the lanes.
+        Points per batch; None is ``constants.BATCH_PER_LANE`` times the lanes.
     warm_starts : bool
         Continue each solve from the nearest certified column.
     """
@@ -398,7 +398,7 @@ def check_inputs(cfg: C.Config) -> None:
     """Refuse a config whose input files would only fail minutes into a job.
 
     Checks the network, the case's vulcan3 config and its atm and stellar-flux files, and every product of ``combo``. A
-    real-data run also needs ``observations.MIN_REAL_BINS`` bins in the fit window and one in every group. Imports no
+    real-data run also needs ``constants.MIN_REAL_BINS`` bins in the fit window and one in every group. Imports no
     jax.
 
     Parameters
@@ -427,11 +427,11 @@ def check_inputs(cfg: C.Config) -> None:
         return
     obs = OBS.load_real_observations(cfg)
     empty = [g for g in cfg.combo if g not in obs["groups"]]
-    if not cfg.generate_synthetic_data and (len(obs["wl"]) < OBS.MIN_REAL_BINS or empty):
+    if not cfg.generate_synthetic_data and (len(obs["wl"]) < constants.MIN_REAL_BINS or empty):
         raise ValueError(
             f"{cfg.obs_dir}: {len(obs['wl'])} bins of {list(cfg.combo)} in the fit window "
             f"[{cfg.obs_wl_lo}, {cfg.obs_wl_hi}] um (groups with none: {empty}); a real-data "
-            f"run needs {OBS.MIN_REAL_BINS} and one in every group"
+            f"run needs {constants.MIN_REAL_BINS} and one in every group"
         )
 
 

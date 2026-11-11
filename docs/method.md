@@ -6,6 +6,7 @@ What the retrieval does, with the source of each method. Results and the reasons
 
 | Module | Job |
 |---|---|
+| `constants` | The fixed numbers, each with its unit and reason; imports nothing |
 | `config_schema` | `Config` and `validate_config`, the parameter list, `specs_from_config`, the run banner; no jax |
 | `run_setup` | The run specification (`load_spec`, `export_runtime`), logging, a run's identity files |
 | `observations` | The observed spectrum and the exact binning and offset operators |

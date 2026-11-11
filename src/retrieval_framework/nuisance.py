@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import jax.numpy as jnp
 import numpy as np
 
-from retrieval_framework import observations as OBS
+from retrieval_framework import constants, observations as OBS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -23,13 +23,8 @@ if TYPE_CHECKING:
 
     from retrieval_framework import config_schema as C
 
-__all__ = ["NUISANCE_NODES", "make_nuisance_marginal"]
+__all__ = ["make_nuisance_marginal"]
 
-# Trapezoid nodes in log10 b for an integrated noise inflation. On the WASP-39b case's
-# bins the error against brute force falls as h^2: 3.6e-3 nats at 513 nodes in the worst
-# case tried (b piled at its floor), <= 5e-5 on realistic spectra (notes "Design
-# records", the integrated nuisances).
-NUISANCE_NODES = 2049
 _LOG2PI = math.log(2.0 * math.pi)
 
 
@@ -48,7 +43,7 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     Group g's bins see the offset o_g, uniform on ``prior_offset_ppm`` (none for the reference group or with
     infer_offsets off), and sigma0 b, with b log10-uniform on ``prior_noise_inflation`` (per group, for every bin, or
     b = 1). From R_g = sum r / s0^2 and S_g = sum r^2 / s0^2, the o integral is closed form and the b integral a
-    normalized trapezoid over ``NUISANCE_NODES`` nodes in log10 b; the groups multiply.
+    normalized trapezoid over ``constants.NUISANCE_NODES`` nodes in log10 b; the groups multiply.
 
     Parameters
     ----------
@@ -72,12 +67,12 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     G = len(groups)
     Nm = OBS.build_group_design({"groups": groups, "group": group_per_bin})
     has_off = np.array([bool(cfg.infer_offsets) and k > 0 for k in range(G)])
-    a_lo, a_hi = (float(v) * OBS.PPM for v in cfg.prior_offset_ppm)
+    a_lo, a_hi = (float(v) * constants.PPM for v in cfg.prior_offset_ppm)
     infl = bool(cfg.infer_noise_inflation)
     per_group = infl and bool(cfg.noise_inflation_per_group)
     if infl:
-        t = np.linspace(*np.log10(cfg.prior_noise_inflation), NUISANCE_NODES)  # type: ignore[call-overload]  # two bounds
-        w = np.full(NUISANCE_NODES, 1.0 / (NUISANCE_NODES - 1))
+        t = np.linspace(*np.log10(cfg.prior_noise_inflation), constants.NUISANCE_NODES)  # type: ignore[call-overload]  # two bounds
+        w = np.full(constants.NUISANCE_NODES, 1.0 / (constants.NUISANCE_NODES - 1))
         w[[0, -1]] *= 0.5
     else:
         t, w = np.zeros(1), np.ones(1)
@@ -148,7 +143,7 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
                 oh, sd = R[:, g] / consts[0][g], bk[:, g] / np.sqrt(consts[0][g])
                 # atleast_1d: truncnorm returns a scalar for one-element arguments, as a one-row chunk has
                 rvs = truncnorm.rvs((a_lo - oh) / sd, (a_hi - oh) / sd, loc=oh, scale=sd, random_state=rng)
-                cols.append(np.atleast_1d(rvs) / OBS.PPM)
+                cols.append(np.atleast_1d(rvs) / constants.PPM)
             cols += list(bk.T) if per_group else [bk[:, 0]] if infl else []
             out[i : i + chunk] = np.stack(cols, axis=1)
         return out
@@ -156,7 +151,7 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
     def apply(mu: Any, nuis: Any) -> tuple[np.ndarray, np.ndarray]:
         """Return mu with the drawn offsets and the sigma multiplier per bin."""
         nuis = np.asarray(nuis, np.float64)
-        mu = np.asarray(mu, np.float64) + (nuis[:, :n_off] * OBS.PPM) @ Nm[:, has_off].T
+        mu = np.asarray(mu, np.float64) + (nuis[:, :n_off] * constants.PPM) @ Nm[:, has_off].T
         mult = (
             nuis[:, n_off:] @ Nm.T
             if per_group

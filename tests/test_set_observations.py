@@ -11,6 +11,7 @@ import pytest
 
 from conftest import RUN_DIR
 from retrieval_framework import pipeline as P
+from retrieval_framework import constants
 
 
 N = 5
@@ -79,7 +80,7 @@ def test_production_case_assembles_and_evaluates_one_finite_likelihood(monkeypat
     Y0, refs0 = P._blank_state(pipe, len(CERTIFYING_DRAWS))
     logl = np.asarray(jax.jit(pipe._make_batch_eval("cold"))(U, Y0, refs0, np.ones(len(CERTIFYING_DRAWS), bool))[0])
     assert np.all(np.isfinite(logl)), f"non-finite likelihood: {logl}"
-    assert np.all(logl > P.REJECT_BELOW), f"rejected likelihood: {logl}"
+    assert np.all(logl > constants.REJECT_BELOW), f"rejected likelihood: {logl}"
 
     # The opacity leave-one-out screen selects its states from this same pipe;
     # prove the selection on the real object before a GPU run.

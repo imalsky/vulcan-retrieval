@@ -16,6 +16,7 @@ jax.config.update("jax_enable_x64", True)
 from test_run_nautilus import D, _stub_pipe
 
 from retrieval_framework import config_schema as C
+from retrieval_framework import constants
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import pipeline as P
 from retrieval_framework import run_nautilus as RN
@@ -96,8 +97,8 @@ def test_a_finished_run_writes_its_posterior_summary_and_identity(job):
     assert (job.out / "target_digest.txt").read_text() == IDENTITY + "\n"
     assert (job.out / "spec.yaml").exists()
     assert (job.out / "spec_base.yaml").exists()
-    assert s.run_kw["f_live"] == RN.F_LIVE
-    assert s.run_kw["discard_exploration"] is RN.DISCARD_EXPLORATION
+    assert s.run_kw["f_live"] == constants.F_LIVE
+    assert s.run_kw["discard_exploration"] is constants.DISCARD_EXPLORATION
 
     post = np.load(job.out / "nautilus_posterior.npz")
     assert [str(n) for n in post["param_names"]] == ["p0", "p1", "lnKzz"]
@@ -224,10 +225,10 @@ def test_a_frozen_lane_aborts_the_run_naming_the_row_the_ratio_and_rtol(job, fro
     def make(_mode):
         def frozen(U, Y, refs, _active):
             n = U.shape[0]
-            reason = jnp.zeros(n, int).at[frozen_row].set(P._TERM_DT_MIN_FROZEN)
+            reason = jnp.zeros(n, int).at[frozen_row].set(constants.TERM_DT_MIN_FROZEN)
             delta = jnp.full(n, 0.01).at[frozen_row].set(0.0808)
             stats = _FrozenStats(jnp.full(n, 2), jnp.zeros(n, bool), reason, delta)
-            return jnp.full(n, P.REJECT_LOGL), Y, refs, stats
+            return jnp.full(n, constants.REJECT_LOGL), Y, refs, stats
 
         return frozen
 
@@ -249,7 +250,7 @@ def test_a_frozen_lane_aborts_the_run_naming_the_row_the_ratio_and_rtol(job, fro
 def test_the_local_frozen_code_is_vulcan3_s():
     from vulcan3 import state
 
-    assert P._TERM_DT_MIN_FROZEN == state.TERM_DT_MIN_FROZEN
+    assert constants.TERM_DT_MIN_FROZEN == state.TERM_DT_MIN_FROZEN
 
 
 def test_a_solver_error_aborts_the_run_and_is_not_taken_for_a_rejection(job):
