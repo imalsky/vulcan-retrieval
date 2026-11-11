@@ -33,7 +33,8 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   edges widened).
 - Tests [M], daw CPU `-n 1`: normal 192 passed; CI runs it serially on Python 3.10-3.12, and its stack-free unit job
   (`fail_under` 80) enforces the coverage floor. The full tier takes 95 min on daw (`-n 8`, 215 tests), the job-path
-  test all of it; the maintainer accepted that over the 90-minute limit. A column frozen at `dt_min` raises.
+  test all of it; the maintainer accepted that over the 90-minute limit. A cold column frozen at `dt_min` raises; a frozen warm one is
+  re-solved cold.
 
 ## Runs
 
@@ -603,6 +604,12 @@ HPC
   to one draw can differ by this much. The survey at rtol 0.2 and 1e-14 s would have cleared by 1 %
   at its hot, sulfur-rich corner (`runs/survey/wasp39b.yaml`: lnZ 3.40, s_o 2.30, 2976 K, 10 bar: ratio
   0.198); its 3 draws solved did not freeze.
+- A frozen warm draw is re-solved cold (the maintainer decided, after the four survey freezes in todo "Sulfur survey
+  runs"): the warm start, not the path, froze each of them, and cold none did [M]. `run_nautilus` re-solves only the
+  frozen rows of the chunk through the cold evaluator and keeps that result: certified, or an ordinary rejection. A
+  freeze in the cold solve still stops the run. The count is the certificate's `starts.warm_frozen_resolved_cold`;
+  such a row stays in the warm counts (`n_warm`, `warm_certified`), by its cold verdict. Pinned by `tests/test_run_nautilus.py` (a stub, the routing
+  only); not yet run on the real solver.
 - Launch guards (the maintainer decided: no check or pre-run a user must know to run; errors as early as possible).
   `submit.py` (its docstring) and `validate_env --spec` refuse missing inputs (`run_setup.check_inputs`), and the job a
   spec or base edited after submission (`run_setup.spec_digest`); `submit.py` and `run_nautilus` share one run-directory
@@ -767,8 +774,9 @@ HPC
 - Guillot T-P, f = 1/4, no convective adjustment: (Tirr, kappa, gamma, the deep parameter) shape one 1D limb; the deep
   parameter is a deep-temperature knob (Tint through v4, T at 1 bar from v5). One profile drives both grids.
 - Closed column; lnZ / c_o (and s_o from v5) are exact column-ratio directions; fixed-O C/O keeps each layer's oxygen
-  while b_z > 0. Everything is rebuilt per proposal except the photolysis cross-section T-interpolation (host side,
-  second order).
+  while b_z > 0. Everything is rebuilt per proposal. The UV cross sections are the room-temperature files at every
+  temperature: `T_cross_sp` is empty in every config and vulcan-forward refuses a non-empty list (its per-proposal
+  rebuild does not follow them), as upstream's own default is. The size of this in 700-3000 K gas is not measured.
 - T-P window [320, 2980] K: vulcan-forward's opacity window 300-3000 K (`T_OPA_MIN_K`, `T_OPA_MAX_K`) less the 20 K
   inset (`tp_profile.T_EDGE_INSET_K`); the ExoMolOP tables themselves span 100-3400 K.
 - He/H fixed at 0.0838 (present-day photospheric; the vulcan3 .dat header cites Lodders 2019 Table 8), not retrieved and

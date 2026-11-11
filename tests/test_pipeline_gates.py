@@ -196,3 +196,25 @@ def test_synthetic_truth_must_certify(monkeypatch, truth_lnZ, refused):
     else:
         P.generate_observations(pipe, seed=1)
         assert np.all(np.isfinite(pipe.obs_depth))
+
+
+def test_a_data_bin_outside_the_model_band_is_refused(monkeypatch):
+    """Every bin of the data window is fitted or the run stops: the band cut drops none."""
+    from pathlib import Path
+
+    lo = 3.0 + 0.1 * np.arange(20)
+    obs = {
+        "wl": lo + 0.05,
+        "wl_lo": lo,
+        "wl_hi": lo + 0.1,
+        "depth": np.full(20, 0.02),
+        "sigma": np.full(20, 1.0e-4),
+        "group": np.array(["A"] * 20),
+    }
+    monkeypatch.setattr(OBS, "load_real_observations", lambda _cfg: dict(obs))
+    cfg = C.Config(obs_dir=Path("data"), obs_products={"A": ("a.csv",)})
+    real, is_real = OBS.get_observation_grid(cfg, np.linspace(2.9, 5.1, 400))
+    assert is_real
+    assert real["wl"].size == 20
+    with pytest.raises(ValueError, match="3 of the 20 data bins"):
+        OBS.get_observation_grid(cfg, np.linspace(2.9, 4.75, 400))

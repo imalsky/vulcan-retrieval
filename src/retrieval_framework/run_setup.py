@@ -263,7 +263,7 @@ def output_base(run_dir: Path) -> Path:
     return run_dir / "output"
 
 
-def load_spec(path: str | Path) -> Spec:
+def load_spec(path: str | Path) -> Spec:  # noqa: C901  # one refusal per way a spec can be malformed
     """Return the run specification at ``path``, resolved against its ``base`` and validated.
 
     Parameters
@@ -320,6 +320,12 @@ def load_spec(path: str | Path) -> Spec:
     bad = set(cfgd) - names
     if bad:
         raise ValueError(f"{where}: unknown key(s) {sorted(bad)}: not fields of config_schema.Config")
+    unset = sorted(C.CASE_KEYS - set(cfgd))
+    if unset:
+        raise ValueError(
+            f"{where}: {unset} unset. Each belongs to the planet and its data, so the spec (or its base) states it: "
+            "the schema's default is not this planet's."
+        )
     hints = typing.get_type_hints(C.Config)
     for k, v in cfgd.items():
         _check(where, k, v, hints[k])

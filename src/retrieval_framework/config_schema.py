@@ -11,6 +11,7 @@ apply after it. Imports no jax. docs/method.md describes the parameters.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sys
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR
+from vulcan_forward.constants import ART_PBTM_BAR, ART_PTOP_BAR, check_band, check_core_molecules
 
 __all__ = [
     "GUILLOT_F",
@@ -38,6 +39,11 @@ __all__ = [
 _OFF_GPU_LANES = 144
 
 
+# Keys a run specification must state: each belongs to the planet and its data, and the schema's default is not this
+# planet's. run_setup.load_spec refuses a spec that leaves one out.
+CASE_KEYS = frozenset({"tp_gravity_cgs", "p_ref_bar", "molecules", "nu_min", "nu_max", "cloud_model"})
+
+
 @dataclass(frozen=True)
 class Config:
     """Everything static for one retrieval run; ``run_setup.load_spec`` builds one from the spec's ``config`` block."""
@@ -53,7 +59,11 @@ class Config:
     # VULCAN master's W39b convergence (1e-3 costs thousands of steps for no gradient gain);
     # slope_cri, yconv_min and flux_cri come from the vulcan_cfg_name config.
     yconv_cri: float = 0.01
-    molecules: tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "SO2")
+    # The engine's core absorbers: a case adds the minor species its planet needs.
+    molecules: tuple[str, ...] = ("H2O", "CO2", "CO", "CH4", "NH3", "HCN", "H2S", "SO2")
+    # Core absorbers the case leaves out of the RT on purpose; the engine refuses a band that needs one otherwise
+    # (vulcan_forward.constants.CORE_MOLECULE_BANDS_UM).
+    omit_core_molecules: tuple[str, ...] = ()
     nu_min: float = 1923.0  # ~5.2 um
     nu_max: float = 3450.0  # ~2.9 um  (NIRSpec G395H/PRISM red)
     # Correlated-k from the ExoMolOP R=1000 tables, the only value build_rt_model accepts; the band grid
@@ -239,6 +249,7 @@ class Config:
             "nz": int(self.nz),
             "yconv_cri": float(self.yconv_cri),
             "molecules": list(self.molecules),
+            "omit_core_molecules": list(self.omit_core_molecules),
             "nu_min": float(self.nu_min),
             "nu_max": float(self.nu_max),
             "opacity_mode": str(self.opacity_mode),
@@ -618,6 +629,26 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
     if cfg.rp_cm is None or cfg.rstar_cm is None:
         raise ValueError(
             f"planet radii unset (rp_cm={cfg.rp_cm}, rstar_cm={cfg.rstar_cm}): the case must set both (cm)"
+        )
+    positive = {
+        "rp_cm": cfg.rp_cm,
+        "rstar_cm": cfg.rstar_cm,
+        "tp_gravity_cgs": cfg.tp_gravity_cgs,
+        "p_ref_bar": cfg.p_ref_bar,
+    }
+    bad = {k: v for k, v in positive.items() if not (math.isfinite(float(v)) and float(v) > 0.0)}
+    if bad:
+        raise ValueError(f"{bad} must be finite and positive: a radius, a gravity or a pressure cannot be otherwise")
+    # The engine's own refusals, raised here so a spec fails at load and not after the opacity build.
+    check_band(float(cfg.nu_min), float(cfg.nu_max))
+    unlisted = check_core_molecules(
+        list(cfg.molecules), list(cfg.omit_core_molecules), float(cfg.nu_min), float(cfg.nu_max)
+    )
+    if unlisted:
+        logging.getLogger(__name__).warning(
+            "%s absorb in the model band and are not in `molecules`: name them in `omit_core_molecules` if that is "
+            "meant",
+            unlisted,
         )
 
 

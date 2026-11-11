@@ -117,6 +117,7 @@ config:
   prior_lnM_sigma: 0.11                # the literature mass error
 
   # ---- clouds and noise (schema defaults: power-law cloud, offsets +-800 ppm) ----
+  cloud_model: powerlaw                # stated, not inherited: a uniformly mixed power-law opacity
   infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform on (0.5, 3)
   noise_inflation_per_group: true      # one per group: NIRISS, G395H_NRS1, G395H_NRS2
   # Offsets and inflations integrated out (closed form in the offset, 2049 nodes in

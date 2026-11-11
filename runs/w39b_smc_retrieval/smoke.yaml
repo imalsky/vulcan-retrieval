@@ -25,7 +25,9 @@ config:
   vulcan_cfg_name: W39b
   network: thermo/SNCHO_photo_network_2025.txt
   nz: 30
+  cloud_model: powerlaw                # stated, not inherited: a uniformly mixed power-law opacity
   molecules: [CO]
+  omit_core_molecules: [H2O, CH4, NH3, H2S]   # a one-molecule synthetic case: these also absorb at 2.29-2.34 um
   nu_min: 4280.0                       # cm^-1: the CO 2-0 band only
   nu_max: 4360.0
   art_nlayer: 20

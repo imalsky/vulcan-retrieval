@@ -231,8 +231,15 @@ def get_observation_grid(cfg: C.Config, wl_model_um: np.ndarray) -> tuple[dict[s
 
     if have_source:
         real = load_real_observations(cfg)
+        n_window = int(np.asarray(real["wl"]).size)
         real = restrict_to_model_band(real, wl)
         n_real = int(np.asarray(real["wl"]).size)
+        if n_real < n_window:
+            raise ValueError(
+                f"{n_window - n_real} of the {n_window} data bins in the data window [{cfg.obs_wl_lo:g}, "
+                f"{cfg.obs_wl_hi:g}] um lie outside the model band [{wl.min():.4f}, {wl.max():.4f}] um. Narrow "
+                "obs_wl_lo/obs_wl_hi or widen nu_min/nu_max: a bin is never dropped without the spec saying so."
+            )
         if n_real >= MIN_REAL_BINS:
             return real, True
         if not synthetic:

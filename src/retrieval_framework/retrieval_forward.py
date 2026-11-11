@@ -188,7 +188,8 @@ class RetrievalForward:
         diag : ConvDiag
             Stage 2's convergence record.
         """
-        y_relaxed = self.chem.converged_y(self._baseline_composition(chem_theta, 0))
+        # Stage 1 is not gated: stage 2's ConvDiag is the certificate (notes "Design records").
+        y_relaxed = self.chem.converged_y(self._baseline_composition(chem_theta, 0), allow_uncertified=True)
         return self.chem.converged_y(
             chem_theta, warm_y=y_relaxed, lnZ_ref=0.0, c_o_ref=0.0, s_o_ref=0.0, return_conv_diag=True
         )

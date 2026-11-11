@@ -14,7 +14,9 @@ Layout, Figures, Branches, Behind main and Tests are in the project-root `CLAUDE
 
 ## Docs
 
-Four root docs: `README.md` (the maintainer's; never edit it unasked), `notes.md` (the results and reasons behind the
+Five root docs: `oracle.md` (the maintainer's goal for this repo and what success and failure are: read it before
+planning work and compare a result with it before calling work done; never edit it unasked), `README.md` (the
+maintainer's; never edit it unasked), `notes.md` (the results and reasons behind the
 rules below, by topic section, never a dated history; unless another section is named, the measured reason for a rule is
 in notes "Evidence behind the rules"), `todo.md` (open work: read it first; open or close items in the same pass) and
 this file (directions only). A decision is "the maintainer decided". Any other hand-written `.md` file goes in `docs/`.
@@ -95,11 +97,11 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   run's evidence is approximate. An evidence claim uses `warm_starts: false`.
 - The chemistry policy is the spec's: one program per draw, at the spec's `rtol` (`cfg_overrides`) within `count_max`
   accepted steps, and only its VULCAN certificate keeps a draw. A second program (a presolve chain) needs a full-run A/B
-  first (notes "Design records").
+  first (notes "Design records"); the cold re-solve of a frozen warm start is not one (the maintainer decided).
 - `count_max` is the certifying cap: a draw that does not certify within it is rejected (log L = -inf), never extended.
-  Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection: `run_nautilus` checks each chunk's
-  `termination_reason` right after the jitted evaluator and aborts (notes "Design records"); so do `nautilus_report` and the forward
-  checks on the draws they re-solve.
+  Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection: `run_nautilus` re-solves a frozen warm row cold, then checks
+  each chunk's `termination_reason` and aborts on a cold freeze (notes "Design records"); `nautilus_report` and the forward
+  checks abort on any freeze in the draws they re-solve.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
   `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`), the start policy and the nautilus settings. Changing any needs a new spec
   file; `run_nautilus` refuses a resume across it.
@@ -150,7 +152,9 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - `opacity_mode="exomolop"` (correlated-k) is the only value the engine accepts. Never re-open sampled line-by-line
   opacity or the Mie deck.
 - Drop an RT molecule only with a recorded `validation/opacity_leave_one_out.py --states` bound below the gate (notes
-  "Physics assumptions and limitations").
+  "Physics assumptions and limitations"). The engine refuses a band that lacks H2O, CO2, CO, CH4 or NH3 and warns for
+  HCN, H2S or SO2 (vulcan-forward `constants.CORE_MOLECULE_BANDS_UM`) unless the case names it in
+  `omit_core_molecules`: only a synthetic or single-molecule case does.
 - Change `art_nlayer` or the model top only when the ladder gates pass (notes "Design records").
 - A finite-difference check disagrees with AD in directions that reshuffle the g-ordering in `ckd.overlap`: not a bug;
   do not "fix" it. Compare two AD routes by `max|dg| / max|g|`, never componentwise.

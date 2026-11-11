@@ -20,7 +20,19 @@ from retrieval_framework import config_schema as C
 from retrieval_framework import observations as OBS
 from retrieval_framework import run_setup as R
 
-MINIMAL = {"vulcan_cfg_name": "W39b", "network": "thermo/SNCHO_photo_network_2025.txt", "rp_cm": 1.0, "rstar_cm": 1.0}
+MINIMAL = {
+    "vulcan_cfg_name": "W39b",
+    "network": "thermo/SNCHO_photo_network_2025.txt",
+    "rp_cm": 1.0,
+    "rstar_cm": 1.0,
+    # the keys every spec states (config_schema.CASE_KEYS)
+    "tp_gravity_cgs": 422.0,
+    "p_ref_bar": 1.0e-3,
+    "molecules": ["H2O", "CO2", "CO", "CH4", "NH3", "HCN", "H2S", "SO2"],
+    "nu_min": 1923.0,
+    "nu_max": 3450.0,
+    "cloud_model": "powerlaw",
+}
 
 
 def _write(path: Path, doc) -> Path:
@@ -78,6 +90,9 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
         ({"runtime": {"solver": "cuda"}, "config": MINIMAL}, "fast, ffi or reference"),
         ({"job": {}, "config": MINIMAL}, "unknown top-level"),  # the PBS job is submit.py's
         ("config:\n  nz: 1\n  nz: 2\n", "duplicate key"),
+        # a spec states its planet: the schema's default is another planet's
+        ({"config": {k: v for k, v in MINIMAL.items() if k != "tp_gravity_cgs"}}, r"\['tp_gravity_cgs'\] unset"),
+        ({"config": {k: v for k, v in MINIMAL.items() if k not in ("molecules", "cloud_model")}}, "unset"),
     ],
 )
 def test_malformed_spec_is_refused_by_name(tmp_path, doc, match):
