@@ -42,7 +42,7 @@ config:
   molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO, H2CO, CS]
   nu_min: 1900.0                       # cm^-1 (5.26 um); the band every production run uses
   nu_max: 9900.0                       # cm^-1 (1.01 um)
-  art_nlayer: 67
+  art_nlayer: 101
   art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
   cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
@@ -79,7 +79,7 @@ config:
   prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like
   prior_offset_ppm: [-800.0, 800.0]    # per extra detector
   infer_noise_inflation: true
-  prior_noise_inflation: [0.5, 3.0]    # log10-uniform, one per detector
+  prior_noise_inflation: [1.0, 3.0]    # log10-uniform, one per detector; never below 1 (errors are not shrunk)
   noise_inflation_per_group: true
   integrate_nuisance: true
 

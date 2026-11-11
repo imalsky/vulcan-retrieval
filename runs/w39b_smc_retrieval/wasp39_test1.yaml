@@ -128,7 +128,7 @@ config:
   prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like
   prior_offset_ppm: [-800.0, 800.0]    # per group after the reference
   infer_noise_inflation: true          # free sigma multiplier (Line+2015), log10-uniform
-  prior_noise_inflation: [0.5, 3.0]
+  prior_noise_inflation: [1.0, 3.0]       # never below 1: the published errors are not shrunk
   noise_inflation_per_group: true      # one per group: NIRISS, G395H_NRS1, G395H_NRS2
   # Offsets and inflations integrated out (closed form in the offset, 2049 nodes in
   # log10 b; same priors, same evidence): nautilus samples only the 12 physical
