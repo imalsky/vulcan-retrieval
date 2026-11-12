@@ -22,21 +22,23 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   maintainer decided; last in `f1a881a`); their certificates lack the report's fixed Kzz block, so the "Runs" Kzz
   numbers are hand-derived.
 - Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
-  hd209458b; "Design records", sulfur survey case). The NAS trees are at the pins and bootstrapped, and the kernel test
-  passes there [M]. The first submissions (retrieval `49badf9`) all ended unfinished (todo). The maintainer decided: at
+  hd209458b; "Design records", sulfur survey case). The NAS trees are behind the pins: they need a pull,
+  the bootstrap (vulcan-forward 0.31.1 has a new dependency), the kernel test and the k-tables of H2CO and CS. The first submissions (retrieval `49badf9`) all ended unfinished (todo). The maintainer decided: at
   most two survey runs at a time.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json lacks `network`,
   `atom_list` and `art_pbtm_bar`, so the report and the forward checks refuse them until those lines are added (the
   refusal names them: the 2021 network, H,O,C,N,S, 7.0 bar). The maintainer decided against rerunning the finished runs
   on the 2025 file and against the WASP-107b prior-edge rerun (Tirr, C/O and log10 gamma edges widened).
-- Tests [M], daw CPU `-n 8`: normal 282 passed in 51 s; CI runs it serially on Python 3.10-3.12, and its stack-free unit
+- Tests [M], daw CPU `-n 8`: normal 283 passed in 48 s; CI runs it serially on Python 3.10-3.12, and its stack-free unit
   job (`fail_under` 80) enforces the coverage floor. Full tier: the job-path test
-  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 95 min (daw load ~20, retrieval `33ba761`),
-  inside the maintainer's 100-minute cap: build and the synthetic truth 9.7 min (mostly the first compile), first leg 62
-  min (the first cold batch of 8 draws at `count_max` 2000 44.6 min, four at the cap in both stages; three warm batches
-  5.2-6.2 min each), the resume 1.0 min of rebuild and 22.3 min for four warm batches. At another load the first cold
-  batch took 15.8 min and the first warm batch 7.0 min [M, partial runs]. The other 14 slow tests take 21 min at `-n 8`,
+  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 86.6 min alone on 10 cores nothing else used
+  (retrieval `2b89bf1`, vulcan3 `ae21fef`, vulcan-forward `2fdf5a2`), inside the maintainer's 100-minute cap: first leg
+  58 min (the first cold chunk of 8 draws at `count_max` 2000 36.8 min, four at the cap; three warm chunks 6.5-7.7 min),
+  the resume 1 min of rebuild and 25.9 min for four warm chunks (5.9-7.1 min); no slow chunk reported. Earlier, at
+  `33ba761` and daw load ~20, 95 min. With one BLAS thread in the job a warm chunk took 12.3 min, and sharing 2 of 12
+  cores 55 min ("HPC (NAS GH200) and daw", CPU cores), so the test starts its job without the session's thread default.
+  The other 14 slow tests take 21 min at `-n 8`,
   the longest `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 12.9 min alone. That
   test and `test_v5_options`, collected alone, ran past 30 min together on 8 shared cores until `tests/conftest.py`
   set one BLAS thread; with it 23.6 min together ("HPC (NAS GH200) and daw", CPU cores).
