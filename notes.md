@@ -32,16 +32,10 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   on the 2025 file and against the WASP-107b prior-edge rerun (Tirr, C/O and log10 gamma edges widened).
 - Tests [M], daw CPU `-n 8`: normal 283 passed in 48 s; CI runs it serially on Python 3.10-3.12, and its stack-free unit
   job (`fail_under` 80) enforces the coverage floor. Full tier: the job-path test
-  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 86.6 min alone on 10 cores nothing else used
-  (retrieval `2b89bf1`, vulcan3 `ae21fef`, vulcan-forward `2fdf5a2`), inside the maintainer's 100-minute cap: first leg
-  58 min (the first cold chunk of 8 draws at `count_max` 2000 36.8 min, four at the cap; three warm chunks 6.5-7.7 min),
-  the resume 1 min of rebuild and 25.9 min for four warm chunks (5.9-7.1 min); no slow chunk reported. Earlier, at
-  `33ba761` and daw load ~20, 95 min. With one BLAS thread in the job a warm chunk took 12.3 min, and sharing 2 of 12
-  cores 55 min ("HPC (NAS GH200) and daw", CPU cores), so the test starts its job without the session's thread default.
-  The other 14 slow tests take 21 min at `-n 8`,
-  the longest `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 12.9 min alone. That
-  test and `test_v5_options`, collected alone, ran past 30 min together on 8 shared cores until `tests/conftest.py`
-  set one BLAS thread; with it 23.6 min together ("HPC (NAS GH200) and daw", CPU cores).
+  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 86.6 min alone on 10 unshared cores (retrieval
+  `2b89bf1`, vulcan3 `ae21fef`, vulcan-forward `2fdf5a2`), inside the 100-minute cap: first leg 58 min (cold chunk 36.8
+  min, three warm chunks 6.5-7.7), resume 1 min of rebuild and 25.9 min for four warm chunks. The other 15 slow tests:
+  14 min at `-n 8` for 13, and the two prior-draw tests 6 and 14 min, each alone ("HPC (NAS GH200) and daw", CPU cores).
 - Truth test [M] (`tests/test_truth_scores_highest.py`, slow): `generate_observations` at the smoke truth with the
   injected noise scaled to nothing (`truth_noise_inflation` 1e-30; the cloud at log10 kappa -3.0, so cloud_alpha acts),
   then the run's own cold batched log-likelihood (`run_nautilus.make_loglike`) on the truth and 8 points each stepped
@@ -360,16 +354,14 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   522, 23.4 GiB; 426 lanes 787.8 ms, 464, 33.4 GiB. 568 lanes projected at 44.6 GiB against the 42.8 GiB pool and not
   run. A fixed per-call cost of ~58 ms per lane (seed and loop, every lane masked) is unprofiled. CPU, one lane
   single-threaded: 57.3 ms per accepted step, so 32 such processes give ~559 lane-steps/s [E], about the GPU's best.
-- CPU cores [M, daw, `scratch/stall/`]: a process that imports scipy before the engine (`run_nautilus` does, through
-  nautilus; the engine sets `OMP_NUM_THREADS=1` only at its own import) starts scipy's OpenBLAS with one thread per
-  visible core. The solver's LU and triangular solves use them, and they busy-wait between calls. Alone on its cores the
-  run is faster (the v5 smoke solve of two draws: 70.8 s on 8 cores against 105 s with one BLAS thread on 4). Sharing
-  cores it collapses: two such solves on the same 8 cores did not finish in 490 s (104 s and 227 s with one thread), and
-  a job-path run sharing 2 of its 12 cores took 3298 s for a warm chunk that takes about 410 s. `OPENBLAS_THREAD_TIMEOUT`
-  4 (threads sleep at once) removes the collapse but costs more alone than one thread (145 s). So: pin a CPU run to
-  cores nothing else uses, or start it with `OMP_NUM_THREADS=1`. `run_nautilus` reports a chunk
-  `constants.SLOW_CHUNK_FACTOR` times slower per solver iteration than the run's best of its mode (CPU only, a log
-  line and `slow_chunks` in the tally, never a stop); that run's chunks were 0.21, 0.51, 0.21 and 1.65 s per iteration.
+- CPU cores [M, daw]: a process that imports scipy before the engine (`run_nautilus` does, through nautilus) starts
+  scipy's OpenBLAS with one thread per visible core; the solver's LU and triangular solves use them, and they busy-wait
+  between calls. Alone the run is faster (two smoke draws 70.8 s on 8 cores against 105 s with one thread on 4; a
+  job-path warm chunk 6.9 against 12.3 min). Sharing cores it collapses: two such solves on 8 cores did not finish in
+  490 s (104 and 227 s with one thread), and a job-path run sharing 2 of 12 cores took 55 min for a warm chunk.
+  `OPENBLAS_THREAD_TIMEOUT` 4 costs 145 s alone. Pin a CPU run to unshared cores or start it with `OMP_NUM_THREADS=1`;
+  the tests set one thread, except in the job-path test's job; `run_nautilus` logs a chunk `constants.SLOW_CHUNK_FACTOR`
+  times slower than the run's best (CPU only, never a stop).
 - daw batched run (`fast`, no nvcc, so the lanes are `cold_lanes`): a variant spec (`base: wasp39_test1.yaml`; `runtime:
   {solver: fast, xla_flags: null}`; `config: {cold_lanes: 284}`) with `XLA_PYTHON_CLIENT_PREALLOCATE=true` in the shell
   (the lane count is in the target, so it is its own run). At 284 lanes the v4 ladder's 264 and 132 rungs stay active;
@@ -464,13 +456,10 @@ HPC
 
 ## Design records
 
-- The maintainer decided, before the survey's restart: `art_nlayer` 101 in `survey_base.yaml` (was 67; 5.03 ppm between
-  the two on the survey's WASP-39b column, "Physics assumptions and limitations"; the WASP-39b case keeps 67; the ladder
-  at 101 on a survey case is owed, so `oracle.md` "The RT grid is converged" is unmet for the survey until then);
-  `prior_noise_inflation` [1.0, 3.0] in both bases (was [0.5, 3.0]: published errors are not shrunk; finished runs under
-  the old prior put NRS1 at 0.899 and G102 at 0.88-0.89, "Runs"); and `e2e_check.py warmcold` fails below an effective
-  sample size of 100 (a weighted median's error is about 1.25 / sqrt(ESS) sigma, above the 0.1 sigma gate at 100; the
-  recorded runs have 914 and 5324).
+- The maintainer decided, before the survey's restart: `art_nlayer` 101 in `survey_base.yaml` (was 67; the ladder at 101
+  on a survey case is owed, so `oracle.md` "The RT grid is converged" is unmet for the survey until then);
+  `prior_noise_inflation` [1.0, 3.0] in both bases (was [0.5, 3.0]; finished runs put NRS1 at 0.899 and G102 at 0.88-0.89,
+  "Runs"); `e2e_check.py warmcold` fails below an effective sample size of 100 (the recorded runs have 914 and 5324).
 - WASP-39b v5, the maintainer's decisions after the external science review. Each model option is a Config switch, so
   the v4 target is unchanged at the defaults.
   - The deep T-P parameter is T at 1 bar, not Tint (why: "Priors and the T-P profile"; Guillot's deep gradient 0.25

@@ -47,7 +47,8 @@ Name a notes section by its heading. Before proposing a solver, sampler or speed
 - Tests: normal tier `python -m pytest tests -n 8` (pyproject's addopts deselect `slow`; conftest defaults
   `JAX_PLATFORMS=cpu`). Full tier: add `-m "slow or not slow"`; a single slow file or node id needs `-m slow`. The full
   tier holds the job path end to end (`run_nautilus` on the smoke case) and the production case's build: run it when the
-  maintainer asks.
+  maintainer asks. Run the job-path test by itself on CPU cores nothing else uses (`taskset`), not inside `-n 8`: its
+  job runs threaded BLAS and collapses on shared cores (notes "HPC (NAS GH200) and daw", CPU cores).
 - Mark a test `slow` if it builds a real pipeline (`build_pipeline` on a real config); claims that share one heavy build
   stay in one test (xdist builds a fixture per worker).
 - Lint and types: `uvx pre-commit run --all-files`; size limits: `python3 tools/check_size_limits.py`. CI runs both and
