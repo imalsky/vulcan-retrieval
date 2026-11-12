@@ -187,6 +187,32 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
 
 
+def test_a_chunk_far_slower_than_the_runs_best_is_reported(tmp_path, caplog):
+    """Seconds per solver iteration against the run's best of the mode, carried over a resume; a first chunk is not
+    judged (it also pays the compile), and the report is a log line and a count, never a rejection.
+    """
+    from retrieval_framework.run_nautilus import _ChunkLogs, _iteration_seconds
+
+    acc = np.array([2001, 400, 0, 900])
+    best = 410.0 / 2001
+    assert _iteration_seconds(410.0, acc, 4) == pytest.approx(best)
+    assert _iteration_seconds(10.0, np.full(4, 300), 2) == pytest.approx(10.0 / 600)  # two lanes, refilled
+    assert _iteration_seconds(5.0, np.zeros(4, int), 4) is None  # no row was solved
+    batch_log = tmp_path / "batches.jsonl"
+    batch_log.write_text(json.dumps({"t": 410.0, "mode": "warm", "acc": acc.tolist()}) + "\n")
+    tally = {}
+    logs = _ChunkLogs(tally, batch_log, None, None, lanes=4)
+    with caplog.at_level("WARNING", logger="retrieval"):
+        logs._report_if_slow("warm", 8.0 * best)  # this process's first warm chunk
+        logs._report_if_slow("warm", 2.5 * best)  # as far apart as chunks of a loaded run get
+        assert "slow_chunks" not in tally
+        assert not caplog.records
+        logs._report_if_slow("warm", 8.0 * best)
+    assert tally == {"slow_chunks": 1}
+    assert "8.0 times this run's best" in caplog.text
+    assert _ChunkLogs({}, batch_log, None, None).best == {}  # no lane count: nothing is judged
+
+
 class _FrozenStats(NamedTuple):
     acc: jnp.ndarray
     conv_ok: jnp.ndarray

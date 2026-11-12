@@ -32,6 +32,7 @@ __all__ = [
     "PRIOR_Z_EPS",
     "REJECT_BELOW",
     "REJECT_LOGL",
+    "SLOW_CHUNK_FACTOR",
     "STARTUP_MIN_DRAWS",
     "SYNTH_BAND_PAD_FRAC",
     "SYNTH_R",
@@ -121,6 +122,10 @@ NOT_A_TABLE_ABSORBER = (
 
 # ---- 3. Numerical tolerances ----
 
+# A chunk this many times slower per solver iteration than the run's best chunk of its mode is reported in the log.
+# On a CPU another job on the run's cores does this: 8x measured, against up to 2.5x between chunks of one run on a
+# loaded machine (notes "HPC (NAS GH200) and daw").
+SLOW_CHUNK_FACTOR = 5.0
 # Floor for a denominator or log argument that may be exactly zero.
 UNDERFLOW_DENOM = 1e-300
 # sample_prior_u draws z = sigmoid(u) inside [eps, 1 - eps], so u stays finite.

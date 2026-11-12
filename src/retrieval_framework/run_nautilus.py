@@ -144,9 +144,19 @@ def _classify(
 class _ChunkLogs:
     """What a run keeps per chunk: the tally, the batch log, and the rejected and nuisance files."""
 
-    def __init__(self, tally: dict, batch_log: Path | None, rejects: Path | None, nuisance: Path | None) -> None:
+    def __init__(
+        self, tally: dict, batch_log: Path | None, rejects: Path | None, nuisance: Path | None, lanes: int | None = None
+    ) -> None:
         self.tally, self.batch_log, self.rejects, self.nuisance = tally, batch_log, rejects, nuisance
         self.n_rej = self.n_nui = 0
+        # The slow-chunk report: the best seconds per solver iteration of each mode, from this run's earlier chunks too.
+        self.lanes = lanes
+        self.best: dict[str, float] = {}
+        self.compiled: set[str] = set()
+        if lanes and batch_log is not None and batch_log.is_file():
+            for row in map(json.loads, batch_log.read_text().splitlines()):
+                if rate := _iteration_seconds(row["t"], np.asarray(row["acc"]), lanes):
+                    self.best[row["mode"]] = min(self.best.get(row["mode"], rate), rate)
         if rejects is not None:
             rejects.mkdir(parents=True, exist_ok=True)
             self.n_rej = len(list(rejects.glob("rejected_*.npz")))
@@ -163,6 +173,8 @@ class _ChunkLogs:
         if self.batch_log is not None:
             with self.batch_log.open("a") as fh:
                 fh.write(json.dumps({"t": round(t, 2), "mode": mode, "acc": acc.tolist()}) + "\n")
+        if self.lanes and (rate := _iteration_seconds(t, acc, self.lanes)):
+            self._report_if_slow(mode, rate)
         if self.rejects is not None and dead.any():
             atomic_savez(
                 self.rejects / f"rejected_{self.n_rej:05d}.npz",
@@ -187,6 +199,35 @@ class _ChunkLogs:
         ):
             self.tally[key] = self.tally.get(key, 0) + int(v)
 
+    def _report_if_slow(self, mode: str, rate: float) -> None:
+        """Warn when a chunk is far slower per solver iteration than this run's best of its mode.
+
+        A mode's first chunk in a process also pays the compile, so it is not judged.
+        """
+        best = self.best.get(mode)
+        if best is not None and mode in self.compiled and rate > constants.SLOW_CHUNK_FACTOR * best:
+            log.warning(
+                "nautilus: a %s chunk took %.3g s per solver iteration, %.1f times this run's best (%.3g). On a CPU "
+                "another job on this run's cores does this: pin the run to free cores, or start it with "
+                "OMP_NUM_THREADS=1.",
+                mode,
+                rate,
+                rate / best,
+                best,
+            )
+            self.tally["slow_chunks"] = self.tally.get("slow_chunks", 0) + 1
+        self.compiled.add(mode)
+        self.best[mode] = rate if best is None else min(best, rate)
+
+
+def _iteration_seconds(t: float, acc: np.ndarray, lanes: int) -> float | None:
+    """Return a chunk's wall seconds per solver iteration, or None when no row was solved.
+
+    The batched loop runs until its last lane ends: at least the longest solve, and at least the total over the lanes.
+    """
+    n = max(int(acc.max(initial=0)), -(-int(acc.sum()) // lanes))
+    return t / n if n else None
+
 
 def make_loglike(
     pipe: Pipeline,
@@ -198,6 +239,7 @@ def make_loglike(
     rejects: Path | None = None,
     nuisance: Path | None = None,
     startup_kzz: Callable[[np.ndarray], np.ndarray] | None = None,
+    slow_lanes: int | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Build the batched log-likelihood of unit-cube points, -inf on every rejection class.
 
@@ -227,6 +269,9 @@ def make_loglike(
     startup_kzz : callable, optional
         From theta rows [n, n_dim] to log10 Kzz (cm^2/s) at the report's reference pressure, in the case's Kzz mode;
         the first chunk is then the run's startup check.
+    slow_lanes : int, optional
+        The chemistry queue's lane count. Given, a chunk ``constants.SLOW_CHUNK_FACTOR`` times slower per solver
+        iteration than the run's best is reported in the log and counted in ``tally["slow_chunks"]``.
 
     Returns
     -------
@@ -241,7 +286,7 @@ def make_loglike(
     Y0, refs0 = P._blank_state(pipe, n_batch)
     count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
-    logs = _ChunkLogs(tally, batch_log, rejects, nuisance)
+    logs = _ChunkLogs(tally, batch_log, rejects, nuisance, slow_lanes)
     fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
@@ -511,6 +556,8 @@ def _saved_loglike(
     pipe: Pipeline, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return the run's log-likelihood, which saves the tally after each call, atomically."""
+    import jax
+
     from retrieval_framework.nautilus_report import log10_kzz_at_report_level
 
     anchors = Anchors(out / "anchors", int(pipe.n_chem_tp)) if warm else None
@@ -536,6 +583,8 @@ def _saved_loglike(
         rejects=out / "rejected",
         nuisance=out / "nuisance" if pipe.nuisance is not None else None,
         startup_kzz=None if resume else startup_kzz,
+        # Only on a CPU, where another job on the run's cores is the known cause.
+        slow_lanes=min(int(C.need(cfg.cold_lanes, "cold_lanes")), n_batch) if jax.default_backend() == "cpu" else None,
     )
     tally_path = out / TALLY_FILE
 

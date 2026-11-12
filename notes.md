@@ -37,9 +37,9 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   min (the first cold batch of 8 draws at `count_max` 2000 44.6 min, four at the cap in both stages; three warm batches
   5.2-6.2 min each), the resume 1.0 min of rebuild and 22.3 min for four warm batches. At another load the first cold
   batch took 15.8 min and the first warm batch 7.0 min [M, partial runs]. The other 14 slow tests take 21 min at `-n 8`,
-  the longest `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 12.9 min alone. At
-  `d7f3f72` that test and `test_v5_options` passed alone on 4 cores each (14.0 and 5.9 min, with xdist or without) but
-  ran past 30 min, twice, sharing 8 cores; cause not found (todo).
+  the longest `test_smoke_pipeline_scores_the_marginal_of_its_own_spectrum` (21 min); the truth test 12.9 min alone. That
+  test and `test_v5_options`, collected alone, ran past 30 min together on 8 shared cores until `tests/conftest.py`
+  set one BLAS thread; with it 23.6 min together ("HPC (NAS GH200) and daw", CPU cores).
 - Truth test [M] (`tests/test_truth_scores_highest.py`, slow): `generate_observations` at the smoke truth with the
   injected noise scaled to nothing (`truth_noise_inflation` 1e-30; the cloud at log10 kappa -3.0, so cloud_alpha acts),
   then the run's own cold batched log-likelihood (`run_nautilus.make_loglike`) on the truth and 8 points each stepped
@@ -358,6 +358,16 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   522, 23.4 GiB; 426 lanes 787.8 ms, 464, 33.4 GiB. 568 lanes projected at 44.6 GiB against the 42.8 GiB pool and not
   run. A fixed per-call cost of ~58 ms per lane (seed and loop, every lane masked) is unprofiled. CPU, one lane
   single-threaded: 57.3 ms per accepted step, so 32 such processes give ~559 lane-steps/s [E], about the GPU's best.
+- CPU cores [M, daw, `scratch/stall/`]: a process that imports scipy before the engine (`run_nautilus` does, through
+  nautilus; the engine sets `OMP_NUM_THREADS=1` only at its own import) starts scipy's OpenBLAS with one thread per
+  visible core. The solver's LU and triangular solves use them, and they busy-wait between calls. Alone on its cores the
+  run is faster (the v5 smoke solve of two draws: 70.8 s on 8 cores against 105 s with one BLAS thread on 4). Sharing
+  cores it collapses: two such solves on the same 8 cores did not finish in 490 s (104 s and 227 s with one thread), and
+  a job-path run sharing 2 of its 12 cores took 3298 s for a warm chunk that takes about 410 s. `OPENBLAS_THREAD_TIMEOUT`
+  4 (threads sleep at once) removes the collapse but costs more alone than one thread (145 s). So: pin a CPU run to
+  cores nothing else uses, or start it with `OMP_NUM_THREADS=1`. `run_nautilus` reports a chunk
+  `constants.SLOW_CHUNK_FACTOR` times slower per solver iteration than the run's best of its mode (CPU only, a log
+  line and `slow_chunks` in the tally, never a stop); that run's chunks were 0.21, 0.51, 0.21 and 1.65 s per iteration.
 - daw batched run (`fast`, no nvcc, so the lanes are `cold_lanes`): a variant spec (`base: wasp39_test1.yaml`; `runtime:
   {solver: fast, xla_flags: null}`; `config: {cold_lanes: 284}`) with `XLA_PYTHON_CLIENT_PREALLOCATE=true` in the shell
   (the lane count is in the target, so it is its own run). At 284 lanes the v4 ladder's 264 and 132 rungs stay active;
