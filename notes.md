@@ -18,13 +18,12 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   "Superseded designs"), per-instrument noise inflation and log10gamma down to -3. v4 sampled 15 parameters; v5 samples
   12 (s_o and lnM added, T1bar in place of Tint, the 2 offsets and 3 inflations integrated out: `integrate_nuisance`).
   The headline run is v5 (`runs/w39b_smc_retrieval/wasp39_test1.yaml`, the external-review configuration; "Runs",
-  wasp39_test1). WASP-107b ("Design records"): three finished runs ("Runs", w107b), specs and inputs removed (the
-  maintainer decided; last in `f1a881a`); their certificates lack the report's fixed Kzz block, so the "Runs" Kzz
-  numbers are hand-derived.
-- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`: wasp39b, wasp107b, wasp96b, wasp166b, hd189733b,
-  hd209458b; "Design records", sulfur survey case). The NAS trees are behind the pins: they need a pull,
-  the bootstrap (vulcan-forward 0.31.1 has a new dependency), the kernel test and the k-tables of H2CO and CS. The first submissions (retrieval `49badf9`) all ended unfinished (todo). The maintainer decided: at
-  most two survey runs at a time.
+  wasp39_test1). WASP-107b ("Design records"): three finished runs ("Runs", w107b), specs and inputs removed; their
+  certificates lack the report's fixed Kzz block, so the "Runs" Kzz numbers are hand-derived.
+- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`; "Design records", sulfur survey case). The NAS trees
+  are behind the pins: they need a pull, the bootstrap (vulcan-forward 0.31.1 has a new dependency), the kernel test and
+  the k-tables of H2CO and CS. The first submissions (retrieval `49badf9`) all ended unfinished (todo). The maintainer
+  decided: at most two survey runs at a time.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json lacks `network`,
   `atom_list` and `art_pbtm_bar`, so the report and the forward checks refuse them until those lines are added (the
@@ -63,13 +62,11 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   two-pass chemistry (rtol 0.1 to 3000 steps, then rtol 0.2 to 5000), per-instrument noise, log10gamma down to -3, 792
   lanes x n_batch 2376, compaction [264, 132], the nautilus fork ("Superseded designs").
 - 17.4 h, 63 batches, 147,680 calls, n_eff 5111, logZ_box 1159.120 [M]. Posterior as run: lnKzz -0.069 [-1.566, 2.200];
-  log10gamma -2.173 [-2.612, -1.728] (fixedmass -1.73: 64% of the mass below -2 once the prior reaches -3); Tint 181
-  [125, 251] K.
+  log10gamma -2.173 [-2.612, -1.728] (fixedmass -1.73: 64% below -2 once the prior reaches -3); Tint 181 [125, 251] K.
 - Problems found (postrun_93269) [M]:
   1. rtol-0.2 retry columns are not converged at 0.1 nat: vs rtol 0.05 the median |dL| is 0.28-0.35 (pass-1 rows: 0.07
      at low Kzz, 0.012 at high Kzz).
-  2. Warm-start path dependence: 97 of 1320 posterior rows certify warm but fail cold (lnKzz -1.9..-1.1); net dlogZ
-     -0.040.
+  2. Warm-start path dependence: 97 of 1320 posterior rows certify warm, fail cold (lnKzz -1.9..-1.1); dlogZ -0.040.
 - Correction (the postrun_93269 method): all 1623 retry rows and 6265 pass-1 rows at lnKzz < -0.7 re-solved at rtol 0.05
   / cap 15000, reweighted by exp(L_0.05 - L_run), uncertified rows w = 0. Every median moves <= 0.035 sigma (lnKzz
   -0.069 -> -0.002); 413/7888 rows rejected; ESS 5324; logZ 1159.092.
@@ -184,8 +181,7 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   - Hard set: 263/264 certified vs 99 (production pass 1), 183 (retry), 203 (direct rtol 0.05, cap 15000); error vs
     reference median 0.027, p90 0.25 (retry 0.26 / 1.24).
   - Representative set: 264/264; median 0.008, p90 0.072 (production 0.022 / 0.126).
-  - Production path (job 93676, 792 lanes, 2 real batches): in-window rejection 2.5% vs 6.1% (Retry C); batch 816 vs
-    1082 s compile-free.
+  - Production path (job 93676, 792 lanes, 2 real batches): in-window rejection 2.5% vs 6.1% (Retry C).
   - Dropped: direct rtol 0.05 (2.8x per batch on this hard set, 4 h faster over a full run, "Runs", v4_nopresolve_test),
     master's adaptive rtol (4.1x), master's photolysis cadence, Ros2 polish start, stage A at rtol 0.1 (1.7-2.2x).
     Flagged: nz 150 certifies 65/66 vs 48/66 at 2.36x per tick; the 2025 network changes none.
@@ -201,14 +197,11 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   (62 vs 300 layers); L(300) - L(62) median -2.8. The 67-layer RT grid and the 1e-9 bar top are converged.
 - Worst science-parameter error vs the 284-layer reference, in sigma (SE ~0.12-0.20 at nz <= 100): 62: 0.45 (lnZ, c_o);
   75: 0.45; 100: 0.43 (c_o median; 0.26 by mean); 125: 0.28; 150: 0.24; 200: 0.13; 300: 0.07.
-- Run wall [E]: 62 layers 10.4 h, 100 16.0 h, 125 21.9 h, 150 26.1 h, 200 37.5 h, 300 56.3 h (fork sampler with
-  spreading; stock needs more calls, see "Sampler").
 - 93269 reweighted to 284 layers (ESS 187): lnR0 -0.58 sigma, Tirr +0.29, c_o +0.19, log10kappa +0.18.
 - Moving the bottom to 47 bar changes ~10% of Tint >= 180 K draws, 8% uncertified: not worth it as is.
 - v4 and v5 run uniform 100 layers (the maintainer's choice; `nz: 100` in the spec; the schema default is still 62).
   Lane probe (job 94050): 528 lanes peak 64.4 GiB (cold presolve) of 85.6, 4.78 draws/s; 396 lanes 50.9 GiB, 4.59
   draws/s; 660 compiled at ~79 GiB, never timed.
-- 125-layer rehearsal (396 lanes): nsys hook overhead 1.9% in the captured batch, 0.6% elsewhere.
 
 ## Sampler
 
@@ -225,9 +218,8 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   +0.31..+0.85 on the spectrum stand-ins; pocoMC missed the funnel's width; NUTS found one mode of the bimodal and gives
   no evidence. The settings above came from a real-posterior stand-in (an MLP of log L on 81542's 83,160 points):
   enlarge 1.3 cut the mean error from 0.10-0.14 sd to 0.02-0.08 sd; 1000 live points were the most accurate row.
-- smc_mala_ab: SMC + MALA dropped. MALA costs 2.9x an RWM sweep for 3.1x the ESJD (break-even per GPU-second); gradient
-  memory caps it at ~300 lanes; projected SMC + MALA ~29 h, RWM > 100 h vs nautilus ~16 h; chemistry convergence, not
-  the kernel, drives the cost (36-45% of warm mutation solves hit the cap).
+- smc_mala_ab: SMC + MALA dropped. MALA costs 2.9x an RWM sweep for 3.1x the ESJD; gradient memory caps it at ~300
+  lanes; chemistry convergence, not the kernel, drives the cost (36-45% of warm mutation solves hit the cap).
 - sampler_options (17-D stand-in of v5 on daw CPU: a 9% narrow second mode, mass piled on the Kzz-like floor, a -inf
   hole, a banana; exact truth; 4 seeds) [M]: stock nautilus at production settings found the mode in 0 of 4 seeds (lnZ
   -0.093 +/- 0.003, the seed spread hid it; 158k calls); with the 2 offset and 3 noise dims integrated out (12-D) in 4
@@ -244,7 +236,7 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
 ## Priors and the T-P profile
 
 - evidence_noise_priors (job 92980): evidence stable (cold target 1159.53 +/- 0.02 vs warm 1159.60). NIRISS drove the
-  noise misfit -> per-instrument noise (4581e78). log10gamma lower bound -3 adopted; lnKzz kept at [ln 0.1, ln 1000] (no
+  misfit -> per-instrument noise (4581e78). log10gamma lower bound -3 adopted; lnKzz kept at [ln 0.1, ln 1000] (no
   validation solve below).
 - Tint prior (tint_prior), v4: uniform 50-600 K (8bc1425; was 100-500). v5 retrieves T at 1 bar instead.
   - Literature: heated-interior estimates 300-360 K (Thorngren+2019 1907.07777, 316-356 K but calibrated above 0.5 MJ;
@@ -281,10 +273,8 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
 
 ## Pipeline speed
 
-- speed2 (all bitwise: masked padding rows, RT only on kept rows, VULCAN3 a5b1215 / eeb4873, vulcan-forward 5e8d43a /
-  39c2c45): RT pass 256 -> 60 s on 93269's Retry C batches.
 - Warm starts on run 90302 (growing anchors): 507 steps per certified warm column against 1,119 cold (the first batch's
-  prior draws), 2.21x [M]; the CPU screen predicted 2.13x. The batch time follows the capped columns: a batch with any
+  prior draws), 2.21x [M]. The batch time follows the capped columns: a batch with any
   column at the cap runs the full cap, so a tick costs the same whether its lanes are busy or done.
 - v4 batch profile (job 94946, batch 3, warm, nz 100, 528 lanes, nsys-jax) [M]: 843 s = presolve 397 + certify 438 +
   nautilus update 8. The GPU is active 95.7% of the chemistry wall and the host waits 813 s in `cuStreamSynchronize`:
@@ -304,8 +294,7 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
 ## HPC (NAS GH200) and daw
 
 - `PROJECT_ROOT` is the parent of the submission directory (`tools/run_nas.pbs`); an entry-point change needs the
-  bootstrap again. Copy a run home with rsync, excluding `anchors/` (gigabytes) and, unless the conditioning map needs
-  it, the checkpoint.
+  bootstrap again. Rsync a run home, excluding `anchors/` and, unless the conditioning map needs it, the checkpoint.
 - Queues: the GH200 queues (`gpu_long` 120 h, `gpu_normal` 24 h, `gpu_devel` 2 h) are served by `pbs05a` and take jobs
   only from `cghfe01`/`cghfe02`; `cfe` answers `Unknown queue`; `qsub -q gpu_long@pbs05a` is rejected; `submit.py`
   submits to `gpu_long` only (the maintainer decided). Login: sfe -> `ssh -o
@@ -317,18 +306,15 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   `python3 -m vulcan_forward.fetch_exomolop --molecules <the spec's molecules>` (`module load python3`,
   `VULCAN_FORWARD_DATA` and `PYTHONPATH` set to the repo data and vulcan-forward/src); scp from home ran at 140 KB/s.
   Other files: `scp -r` through the sfe proxy. `unset https_proxy http_proxy` for git on the front end.
-- Pinning a node (`-l select=...:host=<node>`): take one with no `queue` attribute in `pbsnodes`; a node assigned to
-  another queue (`queue = app_test`) leaves the job "Can Never Run". A node that fails every start (exit -16, "job held,
-  too many failed attempts to run" after 21 tries; cgh11n04) holds the job: `qdel` and resubmit pinned. Node cgh10n04
-  has a broken GPU.
+- Pinning a node (`-l select=...:host=<node>`): pick one with no `queue` in `pbsnodes`; a node assigned to another queue
+  (`queue = app_test`) gives "Can Never Run". A node failing every start (exit -16, "job held, too many failed attempts
+  to run" after 21 tries; cgh11n04) holds the job: `qdel` and resubmit pinned. Node cgh10n04 has a broken GPU.
 - nvcc is the shared `/nasa/arm/software/cuda/bin/nvcc` (`run_nas.pbs`); `/usr/local/cuda-12.6` exists on the front ends
   and cgh14n19, not on cgh23n15 [M], and both print the same build, so the kernel stamp does not move. The kernel test
   rebuilds its two converged states (`gpu_kernel_test.pbs`): older networks' states failed on array shapes [M].
-
 - cghfe01 can lose its route to the internet while cghfe02 keeps it; both share the home folder, so tools installed in `~/.local` from cghfe02 serve both.
 - Env `pyt2_8_gh`, caches under `/nobackup/$USER/.vulcan`; jobs are read-only on the env (a per-job `pip install --user
-  -e` raced across concurrent jobs, 64961). The bootstrap installs `exogibbs==0.6.0` with `--no-deps` (its `pyfastchem`
-  does not build on aarch64).
+  -e` raced, 64961). The bootstrap installs `exogibbs==0.6.0` with `--no-deps` (its `pyfastchem` fails on aarch64).
 - Profiling (not part of `run_nas.pbs`: a profiling branch there would change `XLA_FLAGS` after the runtime export,
   which `export_runtime` refuses). One batch by hand on a GH200 node in the job's environment: nsys first on PATH (a
   one-file bin dir linking `/opt/nvidia/nsight-systems/2026.3.2/target-linux-sbsa-armv8/nsys`; cuda-12.6's nsys wrapper
@@ -348,11 +334,10 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   s of kernels in 37 s while the host waits on the stream (kernels inside CUDA-graph conditional bodies not traced per
   node, probably [I]), and CUPTI's device-to-device byte counts are unphysical (238 MB per 66 us copy): use copy
   durations, not bytes. Match kernels to HLO by the sqlite's `demangledName`.
-- daw lane benchmark [M, GPU 0 RTX 6000 Ada; `fast` solver; the v4 config: nz 100, the presolve program at rtol 0.2,
-  photolysis every step, grouped RHS; 150 accepted steps per lane, no refill, compaction off, compile excluded; memory
-  is the presolve program's]: 142 lanes 274.6 ms per tick, 459 accepted lane-steps/s, 11.4 GiB peak; 284 lanes 477.3 ms,
-  522, 23.4 GiB; 426 lanes 787.8 ms, 464, 33.4 GiB. 568 lanes projected at 44.6 GiB against the 42.8 GiB pool and not
-  run. A fixed per-call cost of ~58 ms per lane (seed and loop, every lane masked) is unprofiled. CPU, one lane
+- daw lane benchmark [M, GPU 0 RTX 6000 Ada; `fast` solver; the v4 config (nz 100, the presolve program at rtol 0.2);
+  150 accepted steps per lane, no refill, compaction off, compile excluded]: 142 lanes 459 accepted lane-steps/s, 11.4
+  GiB peak; 284 lanes 522, 23.4 GiB; 426 lanes 464, 33.4 GiB (274.6, 477.3 and 787.8 ms per tick). 568 lanes projected
+  at 44.6 GiB against the 42.8 GiB pool, not run. A fixed per-call cost of ~58 ms per lane is unprofiled. CPU, one lane
   single-threaded: 57.3 ms per accepted step, so 32 such processes give ~559 lane-steps/s [E], about the GPU's best.
 - CPU cores [M, daw]: a process that imports scipy before the engine (`run_nautilus` does, through nautilus) starts
   scipy's OpenBLAS with one thread per visible core; the solver's LU and triangular solves use them, and they busy-wait
@@ -382,11 +367,10 @@ Sampler and policy
   stayed censored at 20000.
 - Config keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the exceptions): no measurement. The manifest
   (`manifest_version` 8) binds what CLAUDE.md's run-target rule lists (not every bound solver variable moves results:
-  design) and also the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it names
-  (`provenance.case_inputs`, resolved as vulcan3 resolves them), since a path-style case (`data/...`, the survey's)
-  lives outside every tree the code state binds; it records each repository's `dirty` without hashing it. The packaged
-  network, NASA9 folder and abundance preset are bound by vulcan3's code state. Each field, changed alone, moves the
-  digest (`tests/test_provenance.py`).
+  design) and the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it names
+  (`provenance.case_inputs`; a path-style case, the survey's, lives outside every tree the code state binds); it
+  records each repository's `dirty` without hashing it. vulcan3's code state binds the packaged network, NASA9 folder
+  and abundance preset. Each field, changed alone, moves the digest (`tests/test_provenance.py`).
 - Quote from the weighted points: `nautilus_posterior.npz`'s `samples` come from `sampler.posterior(equal_weight=True)`
   (`run_nautilus.main`), which draws about sum(w)/max(w) samples (256 for 90302) [M].
 - Report from the certificate and quote the seed spread: nautilus 1.0.6 gives no logZ error; the stock sampler's seed
@@ -401,18 +385,15 @@ Convergence and the chemistry map
   draw d19: > 11000 -> 986 steps); any cap in [1e9, 1e12] changes only tightness (truth solve bitwise at 4275 steps).
 - Final-stage gate and equilibrium seed: the old max(stage 1, stage 2) count rejected 5 of 9 certified columns; from the
   seed, a draw censored from the baseline start certifies (stage 1 8012, stage 2 3126; upstream 8103).
-- One certificate for every likelihood entry point: job 65200 died with 16/864 proposals finite in L and non-finite in
-  the gradient under an accept-count-only gate; a constant "healthy" ConvDiag once left the cold gradient path ungated
-  for two weeks.
+- One certificate for every likelihood entry point: job 65200 died with 16/864 proposals finite in L, non-finite in the
+  gradient under an accept-count-only gate; a constant "healthy" ConvDiag left the gradient path ungated for two weeks.
 - Chemistry f64: rate constants span ~50 dex.
 - T-P reject, never clip: clipping into [300, 3000] K gave silently wrong finite-likelihood states.
 - Elemental map only: the retired masks map leaked ~0.6% of H per e-fold of Z; the elemental map gives d ln(X/H)/d lnZ =
   +1.0000 for O, C, N, S, 0.0000 for He.
-- `prior_c_o` upper edge 0.24: the fixed-O knob's O-only compensation b_z must stay positive (bound +0.566 on the
-  10x-solar column); beyond it draws became negative O-carriers with finite likelihoods. `build_retrieval_forward`
-  raises at the bound.
-- The positional chemistry block `[lnZ, c_o, lnKzz, <extras>]`: no measurement (a dropped entry would mislabel the
-  posterior).
+- `prior_c_o` upper edge 0.24: the fixed-O knob's compensation b_z must stay positive (bound +0.566 on the 10x-solar
+  column); beyond it draws had negative O-carriers with finite likelihoods. `build_retrieval_forward` raises there.
+- The positional chemistry block `[lnZ, c_o, lnKzz, <extras>]`: no measurement (a dropped entry mislabels it).
 
 Opacity and the RT
 - Correlated-k only: sampled line-by-line at nu_pts 1652-13216 stayed 667-857 ppm rms from the reference with a 1.30x
@@ -429,8 +410,8 @@ Lanes and batching
   79666); the ffi one-buffer kernel keeps 3 blocks per SM; the 100-layer probe fits 528 lanes (94050). `cold_lanes` is
   the number of lanes that run, under every solver: the WASP-39b and survey bases state 528 (the former code multiplied
   a stated 176 by 3 under `ffi`, so their runs are unchanged). `validation/opacity_leave_one_out.py` builds from the
-  spec, so on those two bases it now runs 528 lanes where it ran 176 [I, code]; `posterior_forward_check.py` and
-  `nautilus_report` rebuild from config.json, which already recorded 528 (the archived v5 config.json [M]).
+  spec: on those bases it now runs 528 lanes where it ran 176 [I, code]. `posterior_forward_check.py` and
+  `nautilus_report` rebuild from config.json, which recorded 528 (the archived v5 config.json [M]).
 - One route per config, regenerate across a lane change: a refilled draw enters at the tick its lane was freed at, so
   its column moves at the convergence scale (CPU A/B: one of 4 draws flipped certification; the refilled row
   moved |dlogL| 1.02e-3). Every batch through `_chem_batch_route`, no per-row vmap of solves: the photolysis and geometry
@@ -448,7 +429,6 @@ HPC
 - `module load cuda` in a JAX process breaks the compile (78981, 80074) and hides the pip CUDA plugin.
 - Command buffers on: the 1.9x primal gain (~255 -> 132 ms per step) compared XLA's default set with the WHILE set
   (78991 vs 78995), not off with on; with no flag jaxlib 0.6.2 keeps the default set, so off needs the empty value.
-  Truly-off A/B not run.
 - ugrep honours `.gitignore`: it once hid 16 of 86 engine imports.
 - The GPU validation set at the maintainer's call, the full tier before production: the maintainer's decisions.
 - Kept names (`runs/w39b_smc_retrieval`, `smc_rt_chunk`): no measurement; `nautilus_report` rebuilds a run's Config from
@@ -460,6 +440,9 @@ HPC
   on a survey case is owed, so `oracle.md` "The RT grid is converged" is unmet for the survey until then);
   `prior_noise_inflation` [1.0, 3.0] in both bases (was [0.5, 3.0]; finished runs put NRS1 at 0.899 and G102 at 0.88-0.89,
   "Runs"); `e2e_check.py warmcold` fails below an effective sample size of 100 (the recorded runs have 914 and 5324).
+  Also decided: the inflation floor stays at 1.0 against those sub-unity values (a run never claims more precision than
+  the reduction gave), and `run_nautilus`'s slow-chunk report stays a warning on a CPU, never a stop ("HPC (NAS GH200)
+  and daw", CPU cores: a stop could fire only after the slow chunk has run).
 - WASP-39b v5, the maintainer's decisions after the external science review. Each model option is a Config switch, so
   the v4 target is unchanged at the defaults.
   - The deep T-P parameter is T at 1 bar, not Tint (why: "Priors and the T-P profile"; Guillot's deep gradient 0.25
@@ -468,9 +451,9 @@ HPC
     exceeded 2980 K at the chemistry bottom [M, outside review]). Through v4 Tint was free (Khorshid et al. 2024, arXiv
     2405.12061, retrieve it log-flat).
   - The planet mass is a nuisance ln(M/M0) ~ N(0, 0.11) about M0 = 0.2785 MJ (g = 422 cm/s^2 at 1.279 RJ; W39b.yaml
-    `Mp`), applied in the RT at the fixed reference radius, so gravity trades with metallicity through the scale height.
-    The chemistry's hydrostatic column keeps M0; the few-% gravity inconsistency in H is a stated limitation. Through v4
-    the mass was fixed.
+    `Mp`; fixed through v4), applied in the RT at the fixed reference radius, so gravity trades with metallicity through
+    the scale height. The chemistry's hydrostatic column keeps M0; the few-% gravity inconsistency in H is a stated
+    limitation.
   - Sulfur is a free ln(S/O) on top of lnZ (the engine side is vulcan-forward's).
   - The certifying cap stays at 5000; the Kzz headline prior is x0.1 to x30 (x10 is the full H w_rms of the Tsai+2023
     GCM; v4 ran x0.1 to x1000). A longer step budget at low Kzz was declined ("Ideas not adopted"). Kzz is reported
@@ -794,8 +777,8 @@ HPC
 - He/H fixed at 0.0838 (present-day photospheric; the vulcan3 .dat header cites Lodders 2019 Table 8), not retrieved and
   not scaled with Z (d ln(He/H)/d lnZ = 0).
 - RT bottom [M] (the survey WASP-39b planet at its nominal state: its own T-P, every chemistry entry 0, no cloud; one
-  cold CPU solve, certified, 1680 steps; 53 G395H bins in 2.87-5.10 um; a scratch script with its own overlap binning
-  and its own log-P interpolation of the config's T, not the pipeline's; `scratch/rt_bottom/`): 67 layers to 10.0 bar
+  cold CPU solve, certified, 1680 steps; 53 G395H bins in 2.87-5.10 um; a scratch script
+  (`scratch/rt_bottom/`) with its own binning and log-P interpolation, not the pipeline's): 67 layers to 10.0 bar
   (the chemistry bottom, the engine's deepest) against 67 to 7.0 bar moves the binned depth by up to 22.8 ppm at 4.346
   um and 0.263 sigma at 4.303 um (median 1.6 ppm). 68 layers at the 7.0 bar spacing, down to 9.87 bar, move it by <=
   7.7e-5 ppm (1.3e-6 sigma): the layers below 7 bar do not matter, and the 22.8 ppm comes with the 1.6 % wider spacing
@@ -881,14 +864,13 @@ precedent found (searches through 2026-09, not exhaustive).
   chemistry batch (`cold_lanes = 0`) and the `infer_lnZ` / `infer_c_o` / `infer_lnKzz` switches; an old config.json
   still loads (`nautilus_report.config_from_json` drops unknown keys).
 - Retry C two-pass chemistry (82a0130, baseline_v2): retry columns not converged at 0.1 nat ("Runs", baseline_v2);
-  replaced by the presolve chain (cdcffd1), and the retry-only mode then removed.
+  replaced by the presolve chain (cdcffd1).
 - The presolve chain (cdcffd1 to `0a2dbf3`; baseline_v3_presolve, override at `397d8bb`, and baseline_v4, override at
   `8e3a21c`; "Low-Kzz hole"): replaced in v5 by one program at rtol 0.05 ("Design records", the chemistry program),
   Removed with it: `chem_presolve`, `chem_retry`, `chem_retry_rtol`, `chem_retry_count_max`, the retry program and
   evaluators, the two-pass branch of `run_nautilus.make_loglike` and `tests/test_chem_retry.py`; a chain run's
   certificate records its `chem_retry` block as run. A chain-off manifest's config block is byte-identical before and
-  after [M]. A v4 config.json still loads (unknown keys are dropped), so `validation/posterior_forward_check.py` refuses
-  a chain run.
+  after [M]. A v4 config.json still loads, so `validation/posterior_forward_check.py` refuses a chain run.
 - RT anchored at 7 bar with fixed g (90302 and earlier): the model's GM was e^(2 lnR0) of the planet's (g ratio 0.83 /
   0.87), scale heights 15-21% too large; replaced by fixed GM at 1 mbar. 90302's lnR0 is not comparable to later runs.
 - Prior edges: Tint fixed 150 K -> free 100-500 K (a16188e) -> 50-600 K (8bc1425) -> T(1 bar) in place of Tint (v5); Kzz
