@@ -16,7 +16,8 @@ from types import SimpleNamespace
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 # The engine sets this at its import, but a test module that imports scipy first has already started scipy's BLAS with
 # one thread per core. Those threads busy-wait between calls, and two test processes on shared cores then starve each
-# other (notes "Current state", Tests).
+# other (notes "Current state", Tests). A test that launches a job hands it the caller's environment, not this default.
+OMP_SET_BY_CALLER = "OMP_NUM_THREADS" in os.environ
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 # One network for the session: test modules import vulcan3 at collection, before any case is loaded, and vulcan3
 # freezes the network and its atoms at that first import.

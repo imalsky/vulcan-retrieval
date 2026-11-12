@@ -35,7 +35,7 @@ from retrieval_framework import constants
 from retrieval_framework import pipeline as P
 from retrieval_framework.anchors import Anchors
 from retrieval_framework.run_nautilus import NautilusSettings, _check_resume, make_loglike, make_sampler, startup_check
-from conftest import case_config
+from conftest import OMP_SET_BY_CALLER, case_config
 
 D, MU, SD, COUNT_MAX = 3, 0.5, 0.1, 50
 # log Z of the stub likelihood over the unit box with its three cut regions
@@ -340,6 +340,8 @@ def test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes(tmp_path):
 
     # one compile cache for the three calls: the resume reuses the first call's programs
     env = {**os.environ, "JAX_COMPILATION_CACHE_DIR": str(tmp_path / "jax_cache")}
+    if not OMP_SET_BY_CALLER:
+        del env["OMP_NUM_THREADS"]  # the job starts as a job does; one thread was the test session's own default
 
     def main(*args):
         return subprocess.run(
