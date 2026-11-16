@@ -7,14 +7,15 @@
 #   python tools/submit.py runs/survey/<planet>.yaml [--dry-run]
 #
 # Data: one JWST data set per planet (a NIRSpec G395H or G395M transit, or NIRCam
-# F322W2 + F444W in two visits), the authors' binning near R100 per detector or filter,
+# F322W2 + F444W in two visits), the product its paper adopts for its main result, as
+# published (WASP-107b alone is binned here, from R 950 to R 100: finer than the model takes),
 # fitted on 2.87-5.10 um only (CO2, CO, SO2, H2S, H2O, CH4 bands); one offset per group
 # after the bluest and one noise inflation per group, integrated out.
 # Machinery as the WASP-107b case: rtol 0.2 within 5000 steps (re-solve the posterior
 # rows at 0.05 after the run, in a flat variant: a spec has one base), constant Kzz,
 # 10 bar bottom. YAML reads 1e11 as text: write 1.0e+11.
 #
-# 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, T1bar,
+# 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, Tint,
 # lnR0, lnM, log10kappa_cloud, cloud_alpha.
 
 runtime:
@@ -36,7 +37,7 @@ config:
   atom_list: [H, O, C, N, S]           # the network's elements, frozen with it
 
   # ---- forward model (as the WASP-107b case) -----------------------------------------
-  nz: 100                              # log-uniform over 1e-9..10 bar (10 per decade)
+  nz: 100                              # log-uniform over 1e-9..10 bar (9.9 per decade)
   # H2CO and CS: the per-planet leave-one-out screen found each over the gate on one planet (notes "Physics
   # assumptions and limitations"); one list for all six planets.
   molecules: [H2O, CO2, CO, CH4, SO2, HCN, C2H2, H2S, NH3, OCS, SH, SO, H2CO, CS]
@@ -52,14 +53,14 @@ config:
   # ---- data window, the same for every planet ---------------------------------------
   obs_wl_lo: 2.87                      # um: G395H/G395M with F290LP, inside every product
   obs_wl_hi: 5.10
-  obs_max_bin_R: 200.0                 # drops masked-gap remnants of an R100 product
+  obs_max_bin_R: 500.0                 # the model's limit: a bin spans two bands of the R 1000 tables
   generate_synthetic_data: false
 
   # ---- T-P: Guillot profile, f = 1/4 (the planet sets prior_Tirr) --------------------
   tp_infer_Tint: true
-  tp_deep_param: T1bar
-  tp_deep_p_bar: 1.0                   # bar
-  prior_T1bar: [320.0, 2980.0]         # K, inside the 220-2980 K T-P window; out-of-window profiles are rejected
+  tp_deep_param: Tint
+  tp_deep_p_bar: 1.0                   # bar: the level the report quotes the deep temperature at
+  prior_Tint: [100.0, 550.0]           # K: the published ranges (notes "Design records"); out-of-window profiles are rejected
   prior_log10kappa: [-3.5, 0.5]        # IR opacity, cm^2/g
   prior_log10gamma: [-3.0, 0.3010299956639812]
 

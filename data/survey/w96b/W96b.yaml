@@ -40,9 +40,9 @@ const_mix:
 
 # ====== Setting up photochemistry ======
 r_star: 1.05
-# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (8.6931e+09 cm,
-# Rp/Rs 0.11900) on the nominal profile
-Rp: 8.3301e+09
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (8.7161e+09 cm,
+# Rp/Rs 0.11932) on the nominal profile
+Rp: 8.3512e+09
 orbit_radius: 0.0453
 sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
 Mp: 9.11102e+29
@@ -50,10 +50,11 @@ Mp: 9.11102e+29
 # ====== Setting up parameters for the atmosphere ======
 # 10 bar bottom, as the WASP-107b case (the T window applies on the chemistry grid too)
 P_b: 1.0e+07
-P_t: 0.1
+# 1e-9 bar: the engine puts the chemistry top at the RT top
+P_t: 1.0e-03
 
 # ====== Setting up numerical parameters for the ODE solver ======
-count_max: 30000
+count_max: 5000    # as the survey base, whose value is the one in force
 
 # ====== Advanced setup (don't change the values if not sure) ======
-ini_update_photo_frq: 5
+ini_update_photo_frq: 1    # as the survey base's cfg_overrides

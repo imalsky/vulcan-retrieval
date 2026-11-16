@@ -51,7 +51,9 @@ retrieved $(T_{\rm irr}, \kappa, \gamma)$ are flexible shape parameters of the l
 $T_{\rm int}$, a retrieved $T_{\rm int}$, or with `tp_deep_param="T1bar"` the temperature at `tp_deep_p_bar`, adds
 $\frac{3}{4} T_{\rm int}^4 \tau$ and so sets the deep column. With constant $\kappa$ the deep gradient is 0.25, below the
 adiabat, so the profile never turns convective on its own, and $T_{\rm int}$ is a deep-temperature knob, not the planet's
-measured intrinsic flux. Retrieving T at a deep level puts the prior on the quantity the validity window acts on:
+measured intrinsic flux. Retrieving T at a deep level puts the prior on the quantity the validity window acts on at that level (the window
+also acts on every level below it, where the profile is hotter, and a deep T below the irradiation-only value has
+no solution: the survey samples $T_{\rm int}$ for that reason):
 $T_{\rm int}$ follows in closed form, since $T^4$ is linear in $T_{\rm int}^4$, and a draw whose $T_{\rm int}^4$ would be
 negative evaluates to NaN and is rejected. `tp_adiabat` replaces the profile below a free boundary pressure by the
 adiabat matched there, a sensitivity model: the join is imposed.
@@ -67,7 +69,7 @@ the R1000 tables; that admits the native 0.015 um NIRCam bins of Welbanks et al.
 
 ## Likelihood
 
-Diagonal Gaussian with an optional noise inflation (Line et al. 2015 style). `make_nuisance_marginal` integrates the offsets
+Diagonal Gaussian with an optional noise inflation: one factor per group that multiplies the errors (Line et al. 2015 add a variance instead). `make_nuisance_marginal` integrates the offsets
 and the inflation(s) out at the same priors: the offset integral is closed form, the inflation a trapezoid in $\log_{10} b$.
 
 ## Sampler

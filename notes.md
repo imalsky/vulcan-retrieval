@@ -695,6 +695,22 @@ HPC
     rows solved cold with each file]: the largest bin shift is 9.1 ppm (0.49 sigma), the median row 1.4 ppm, and the
     reweighted posterior medians move by at most 0.05 sigma; the same rows solved twice in another lane order differ
     by at most 0.21 ppm.
+  - Second campaign [M] (the maintainer decided, after an audit of every choice against the papers). Data: each planet
+    is fitted on the product its paper adopts for its main result, as published. WASP-96b: the R = 300 files of the
+    same reduction (the paper sets its R = 100 retrieval aside, "the SO2 feature is not fully resolved at this
+    resolution", arXiv:2604.05049 Sec. IV.2; 164 bins fitted). WASP-166b: the constant 0.01797 um bins (Eureka! v81,
+    arXiv:2501.00609 App. A.4; 124). HD 189733b: the 139 published bins, split at the file's one wavelength reset
+    (114; the first survey's file was binned here and ran R 75-184). WASP-39b, WASP-107b and HD 209458b as before.
+    WASP-107b stays binned here from R 950 to R 100: the R 1000 tables take bins up to R 500 (`LSF_R_SAFETY`), and its
+    native points show no scatter beyond noise inside R 100 bins (chi2 40.3 for 38 dof at 3.95-4.15 um). So
+    `obs_max_bin_R` is 500, the model's own limit, and rp_cm is the median depth of the fitted bins. The conversion
+    (units, half-widths to edges, nothing else) is `scratch/survey_data/build_products.py`, with the originals and
+    their checksums in `scratch/survey_data/raw/`. Deep temperature: Tint uniform 100-550 K in place of T at 1 bar.
+    With the Guillot profile, published work fixes Tint or samples it within 30-550 K; a deep temperature is sampled
+    only in another profile family (POSEIDON's Madhusudhan-Seager profile, at 10 bar) [I, the audit's readers]. With T at 1 bar the window and the Guillot solution kept
+    13-27% of the T-P box, and 31-59% of it had no solution; with Tint they keep 62-77% [M, 2e5 draws per planet],
+    the rest lost above 2980 K at depth. A 3380 K ceiling (the k-tables end at 3400 K; it needs another H2-H2 CIA
+    table) would keep 70-83%: not done. Each case file now states the P_t, step cap and photolysis cadence that run.
   - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window); WASP-107b Sing+2024 G395H
     (copied into `data/survey/w107b` with its stellar flux: the maintainer decided the survey uses no file of the
     earlier WASP-107b case; 55); WASP-96b Zenodo 17065171 (exoTEDRF / exoUPRF, PriorLD_Slope, R100; 55 fitted, the cap
