@@ -18,8 +18,10 @@ atom_list:
 network: thermo/SNCHO_photo_network_2025.txt
 # P 10 bar .. 1e-9 bar, a nominal Guillot T (replaced per draw), constant Kzz 1e9 cm^2/s
 atm_file: data/survey/hd189b/atm_hd189b_Kzz.txt
-# Moses+2011's HD 189733 spectrum (eps Eri STIS 115-283 nm, solar / 10 above), as Fu+2024 (vulcan3's packaged file)
-sflux_file: atm/stellar_flux/sflux-HD189_Moses11.txt
+# Moses+2011's HD 189733 spectrum (eps Eri STIS 115-283 nm, solar / 10 above), as Fu+2024: vulcan3's packaged file
+# times (0.805 / 0.75)^2. The packaged file is the 1 au spectrum on the surface of a 0.805 R_Sun star; the factor
+# makes this case's r_star 0.75 give the published flux at 1 au.
+sflux_file: data/survey/hd189b/sflux-Moses11_hd189b.txt
 vul_ini: output/HD189b-nominal.vul
 out_name: HD189b.vul
 

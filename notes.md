@@ -685,6 +685,16 @@ HPC
     above; Fu+2024 ran VULCAN on it; vulcan3's packaged file, ending at 800 nm); HD 209458 the solar analog
     (Moses+2011), and WASP-166 (F9V) and WASP-96 (G8V), whose published photochemistry names no spectrum, the same:
     Gueymard solar x (Teff / 5772 K)^4.
+  - Stellar flux at the planet [M]. The engine dilutes a file by (`r_star` / `orbit_radius`)^2 and refuses an `r_star`
+    that is not `rstar_cm`, so a file must state its flux at the surface of the case's star. The packaged Moses+2011
+    file is that paper's 1 au spectrum on the surface of a 0.805 R_Sun star (above 283 nm it is 0.1543 = 0.1 /
+    0.805^2 of Gueymard's solar file at every wavelength; upstream's config pairs it with `r_star = 0.805` and calls
+    it "the flux density at the stellar surface"). `HD189b.yaml` states `r_star: 0.75`, so the first survey run of
+    HD 189733b had 0.868 of the published flux at every wavelength. The case now reads the packaged file times
+    (0.805 / 0.75)^2 (`data/survey/hd189b/sflux-Moses11_hd189b.txt`). Measured on that first run [M, 1000 posterior
+    rows solved cold with each file]: the largest bin shift is 9.1 ppm (0.49 sigma), the median row 1.4 ppm, and the
+    reweighted posterior medians move by at most 0.05 sigma; the same rows solved twice in another lane order differ
+    by at most 0.21 ppm.
   - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window); WASP-107b Sing+2024 G395H
     (copied into `data/survey/w107b` with its stellar flux: the maintainer decided the survey uses no file of the
     earlier WASP-107b case; 55); WASP-96b Zenodo 17065171 (exoTEDRF / exoUPRF, PriorLD_Slope, R100; 55 fitted, the cap
