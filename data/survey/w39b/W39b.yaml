@@ -2,8 +2,8 @@
 # case's chemistry settings with this planet's numbers. The recipe:
 # notes "Design records", sulfur survey case.
 # Paths resolve against the working directory: run from the vulcan-retrieval root.
-# System: NASA Exoplanet Archive composite table (2026-10-29): R* 0.939 R_Sun,
-# a 0.04828 AU, Mp 0.281 M_J, Teq 1166 K, Teff 5485 K.
+# System: R* 0.939 R_Sun, Mp 0.281 M_J and Teff 5485 K from Mancini+2018; a/R* 11.39 from Carter & May+2024 Table 1, so
+# a = 0.04974 AU and Teq = Teff / sqrt(2 a/R*) = 1149 K.
 # Gravity is derived as gs = G*Mp/Rp^2.
 
 # ====== Setting up the elements included in the network ======
@@ -18,8 +18,9 @@ atom_list:
 network: thermo/SNCHO_photo_network_2025.txt
 # P 10 bar .. 1e-9 bar, a nominal Guillot T (replaced per draw), constant Kzz 1e9 cm^2/s
 atm_file: data/survey/w39b/atm_w39b_Kzz.txt
-# Tsai+2023's WASP-39 spectrum (vulcan3's packaged file, as W39b.yaml)
-sflux_file: atm/stellar_flux/sflux-W39b_Tsai2023.txt
+# Tsai+2023's WASP-39 spectrum: vulcan3's packaged file times (0.932 / 0.939)^2. Upstream pairs the file with
+# r_star 0.932; the factor makes this case's r_star give the same flux at 1 au.
+sflux_file: data/survey/w39b/sflux-Tsai2023_w39b.txt
 vul_ini: output/W39b-nominal.vul
 out_name: W39b.vul
 
@@ -40,10 +41,10 @@ const_mix:
 
 # ====== Setting up photochemistry ======
 r_star: 0.939
-# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (9.5470e+09 cm,
-# Rp/Rs 0.14614) on the nominal profile
-Rp: 8.8731e+09
-orbit_radius: 0.04828
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (9.5525e+09 cm,
+# Rp/Rs 0.14623) on the nominal profile
+Rp: 8.8868e+09
+orbit_radius: 0.04974
 sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
 Mp: 5.33375e+29
 
@@ -54,7 +55,7 @@ P_b: 1.0e+07
 P_t: 1.0e-03
 
 # ====== Setting up numerical parameters for the ODE solver ======
-count_max: 5000    # as the survey base, whose value is the one in force
+count_max: 30000    # as the survey base, whose value is the one in force
 
 # ====== Advanced setup (don't change the values if not sure) ======
 ini_update_photo_frq: 1    # as the survey base's cfg_overrides

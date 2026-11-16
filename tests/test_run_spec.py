@@ -95,7 +95,7 @@ def _write(path: Path, doc) -> Path:
                 ("smoke", 8),
             )
         ],
-        *[("survey", n, 12) for n in ("wasp39b", "wasp107b", "wasp96b", "wasp166b", "hd189733b", "hd209458b")],
+        *[("survey", n, 10) for n in ("wasp39b", "wasp107b", "wasp96b", "wasp166b", "hd189733b", "hd209458b")],
     ],
 )
 def test_shipped_spec_loads_to_its_parameter_count(case, name, n_dim):

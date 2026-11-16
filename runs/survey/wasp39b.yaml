@@ -6,11 +6,11 @@ base: survey_base.yaml
 config:
   run_label: WASP-39b
   vulcan_cfg_name: data/survey/w39b/W39b.yaml
-  rp_cm: 9.546962e+09                # Rp/Rs 0.14614 (median depth in the window) x R* 0.939 R_Sun
+  rp_cm: 9.552527e+09                # Rp/Rs 0.14623 (median depth of the fitted bins) x R* 0.939 R_Sun
   rstar_cm: 6.532623e+10
-  tp_gravity_cgs: 390.58                # G Mp / rp_cm^2, Mp 0.281 M_J
+  tp_gravity_cgs: 390.12                # G Mp / rp_cm^2, Mp 0.281 M_J (Mancini+2018)
   obs_dir: data/cm24_wasp39b
   obs_products: {NRS1: [G395H_NRS1_R100.csv], NRS2: [G395H_NRS2_R100.csv]}
   combo: [NRS1, NRS2]                 # the bluest group is the offset reference
-  prior_Tirr: [659.6, 2308.6]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1166 K
-  prior_lnM_sigma: 0.1139             # the archive mass error
+  prior_Tirr: [650.1, 2275.3]            # [0.4, 1.4] x sqrt(2) Teq, Teq 1149 K
+  prior_lnM_sigma: 0.1139             # the mass error of Mancini+2018 (the mass is fixed: read by the mass check only)

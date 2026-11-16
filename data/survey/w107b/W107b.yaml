@@ -2,8 +2,8 @@
 # case's chemistry settings with this planet's numbers. The recipe:
 # notes "Design records", sulfur survey case.
 # Paths resolve against the working directory: run from the vulcan-retrieval root.
-# System: NASA Exoplanet Archive composite table (2026-10-29): R* 0.657 R_Sun,
-# a 0.055 AU, Mp 0.1039 M_J, Teq 736 K, Teff 4425 K.
+# System: R* 0.67 R_Sun, Mp 0.096 M_J and Teff 4425 K from Piaulet+2021; a/R* 18.0923 from Sing+2024 Extended Data Table 1, so
+# a = 0.05637 AU and Teq = Teff / sqrt(2 a/R*) = 736 K.
 # Gravity is derived as gs = G*Mp/Rp^2.
 
 # ====== Setting up the elements included in the network ======
@@ -39,13 +39,13 @@ const_mix:
   H2: 0.9764
 
 # ====== Setting up photochemistry ======
-r_star: 0.657
-# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (6.5679e+09 cm,
-# Rp/Rs 0.14369) on the nominal profile
-Rp: 6.0182e+09
-orbit_radius: 0.055
+r_star: 0.67
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (6.7012e+09 cm,
+# Rp/Rs 0.14377) on the nominal profile
+Rp: 6.0846e+09
+orbit_radius: 0.05637
 sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
-Mp: 1.97216e+29
+Mp: 1.82220e+29
 
 # ====== Setting up parameters for the atmosphere ======
 # 10 bar bottom, as the WASP-107b case (the T window applies on the chemistry grid too)
@@ -54,7 +54,7 @@ P_b: 1.0e+07
 P_t: 1.0e-03
 
 # ====== Setting up numerical parameters for the ODE solver ======
-count_max: 5000    # as the survey base, whose value is the one in force
+count_max: 30000    # as the survey base, whose value is the one in force
 
 # ====== Advanced setup (don't change the values if not sure) ======
 ini_update_photo_frq: 1    # as the survey base's cfg_overrides

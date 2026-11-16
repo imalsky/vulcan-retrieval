@@ -9,14 +9,13 @@
 # Data: one JWST data set per planet (a NIRSpec G395H or G395M transit, or NIRCam
 # F322W2 + F444W in two visits), the product its paper adopts for its main result, as
 # published (WASP-107b alone is binned here, from R 950 to R 100: finer than the model takes),
-# fitted on 2.87-5.10 um only (CO2, CO, SO2, H2S, H2O, CH4 bands); one offset per group
-# after the bluest and one noise inflation per group, integrated out.
-# Machinery as the WASP-107b case: rtol 0.2 within 5000 steps (re-solve the posterior
-# rows at 0.05 after the run, in a flat variant: a spec has one base), constant Kzz,
-# 10 bar bottom. YAML reads 1e11 as text: write 1.0e+11.
+# fitted on every published bin the model band covers; one offset per group after the
+# bluest and one noise inflation per group, integrated out.
+# Chemistry: rtol 0.2 within 30000 steps (VULCAN's defaults), constant Kzz, 10 bar bottom.
+# YAML reads 1e11 as text: write 1.0e+11.
 #
-# 12 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, Tint,
-# lnR0, lnM, log10kappa_cloud, cloud_alpha.
+# 10 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, Tint,
+# lnR0, log10P_deck.
 
 runtime:
   solver: ffi
@@ -26,8 +25,8 @@ runtime:
   xla_flags: "--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
 
 sampler:
-  n_live: 1000
-  n_eff: 5000
+  n_live: 2000                         # nautilus's default
+  n_eff: 10000                         # nautilus's default and documented minimum
   n_batch: null
   warm_starts: true
 
@@ -47,12 +46,12 @@ config:
   art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
   cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
-  count_max: 5000
+  count_max: 30000                     # VULCAN's default step cap
   p_ref_bar: 1.0e-3                    # rp_cm and g apply at 1 mbar
 
   # ---- data window, the same for every planet ---------------------------------------
-  obs_wl_lo: 2.87                      # um: G395H/G395M with F290LP, inside every product
-  obs_wl_hi: 5.10
+  obs_wl_lo: 2.30                      # um: every published bin inside the model band (1.01-5.26 um)
+  obs_wl_hi: 5.25
   obs_max_bin_R: 500.0                 # the model's limit: a bin spans two bands of the R 1000 tables
   generate_synthetic_data: false
 
@@ -65,19 +64,18 @@ config:
   prior_log10gamma: [-3.0, 0.3010299956639812]
 
   # ---- composition and mixing --------------------------------------------------------
-  prior_lnZ: [-3.506557897319982, 3.4011973816621555]   # 0.3x-300x solar about the 10x baseline
+  prior_lnZ: [-3.506557897319982, 4.605170185988092]    # 0.3x-1000x solar about the 10x baseline
   baseline_metallicity_solar: 10.0
   prior_c_o: [-3.08922261664133, 0.24]  # C/O 0.025-0.70 about the 0.549 baseline
   prior_lnKzz: [-4.605170185988091, 9.210340371976184]  # constant Kzz 1e7-1e13 about 1e9 cm^2/s
   infer_s_o: true
   prior_s_o: [-2.302585092994046, 2.302585092994046]    # S/O x0.1-10 about the baseline
-  prior_lnR0: [-0.1, 0.1]
-  infer_lnM: true                      # lnM ~ N(0, prior_lnM_sigma), RT-only
+  prior_lnR0: [-0.2, 0.2]              # -18% to +22% in radius
+  infer_lnM: false                     # the mass is fixed at the published value
 
   # ---- clouds and noise, stated so the campaign cannot drift -------------------------
-  cloud_model: powerlaw
-  prior_log10kappa_cloud: [-7.0, 1.0]  # cm^2/g at 3.5 um
-  prior_cloud_alpha: [0.0, 6.0]        # 0 grey, 4 Rayleigh-like
+  cloud_model: deck                    # an opaque grey deck below a free top pressure
+  prior_log10P_deck: [-8.0, 0.8]       # bar: 1e-8 bar to the RT grid's bottom (a deck there is a clear column)
   prior_offset_ppm: [-800.0, 800.0]    # per extra detector
   infer_noise_inflation: true
   prior_noise_inflation: [1.0, 3.0]    # log10-uniform, one per detector; never below 1 (errors are not shrunk)

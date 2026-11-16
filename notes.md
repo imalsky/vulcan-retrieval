@@ -712,6 +712,22 @@ HPC
     13-27% of the T-P box, and 31-59% of it had no solution; with Tint they keep 62-77% [M, 2e5 draws per planet],
     the rest lost above 2980 K at depth. A 3380 K ceiling (the k-tables end at 3400 K; it needs another H2-H2 CIA
     table) would keep 70-83%: not done. Each case file now states the P_t, step cap and photolysis cadence that run.
+  - Second campaign, shared choices (the maintainer decided: the published or default choice wherever one exists;
+    sources and sizes in `docs/survey_choices.md`, Part 1). System: R*, Mp and Teff from one published solution per
+    planet (Mancini+2018, Piaulet+2021, Hellier+2014, Hellier+2019, Stassun+2017 for both HD planets); a/R* from the
+    JWST data paper's own fit (11.390, 18.0923, 8.9890, 11.57, 8.88, 8.84), so a = (a/R*) R* and Teq = Teff / sqrt(2
+    a/R*). No data paper states a full set of system numbers, so this is the nearest rule to "the paper's own
+    values". The mass is fixed (`infer_lnM: false`): it acted in the RT only. Stellar flux: the three Sun-like hosts
+    read upstream's solar file with their own radius and no Teff scaling (upstream's HD 209458b recipe); WASP-39's
+    file is scaled by (0.932 / 0.939)^2, the rule of the HD 189733 file. Data: every published bin the model band
+    covers (2.30-5.25 um in the spec; 59, 61, 176, 132, 139 and 69 bins); HD 209458b is the Eureka! columns as
+    published, one group and no offset, as its authors fitted it (no row is assigned to a visit here). Cloud: the
+    grey deck with a free top pressure, 1e-8 bar to the RT bottom (every data paper has a top pressure or a cloud
+    fraction). Sampler: nautilus's defaults, 2000 live points and an effective sample size of 10000. Step cap
+    30000, VULCAN's default. Priors: metallicity to 1000x solar, radius -18% to +22%. Warm starts stay on: a run is
+    kept only if its warm-against-cold check passes the 0.1 sigma gate, and is repeated cold if not. The planet
+    numbers and the nominal atmosphere files come from `scratch/survey_data/build_cases.py`, whose recipe rebuilds
+    the first survey's atmosphere files byte for byte and its 1 bar radii to 1e-6.
   - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window); WASP-107b Sing+2024 G395H
     (copied into `data/survey/w107b` with its stellar flux: the maintainer decided the survey uses no file of the
     earlier WASP-107b case; 55); WASP-96b Zenodo 17065171 (exoTEDRF / exoUPRF, PriorLD_Slope, R100; 55 fitted, the cap

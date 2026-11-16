@@ -2,8 +2,8 @@
 # case's chemistry settings with this planet's numbers. The recipe:
 # notes "Design records", sulfur survey case.
 # Paths resolve against the working directory: run from the vulcan-retrieval root.
-# System: NASA Exoplanet Archive composite table (2026-10-29): R* 1.19 R_Sun,
-# a 0.04707 AU, Mp 0.73 M_J, Teq 1459 K, Teff 6091 K.
+# System: R* 1.19 R_Sun, Mp 0.73 M_J and Teff 6091 K from Stassun+2017; a/R* 8.84 from Xue+2024 Table 1, so
+# a = 0.04892 AU and Teq = Teff / sqrt(2 a/R*) = 1449 K.
 # Gravity is derived as gs = G*Mp/Rp^2.
 
 # ====== Setting up the elements included in the network ======
@@ -18,8 +18,9 @@ atom_list:
 network: thermo/SNCHO_photo_network_2025.txt
 # P 10 bar .. 1e-9 bar, a nominal Guillot T (replaced per draw), constant Kzz 1e9 cm^2/s
 atm_file: data/survey/hd209b/atm_hd209b_Kzz.txt
-# Gueymard solar x (Teff 6091 K / 5772 K)^4 (the solar analog, Moses+2011)
-sflux_file: data/survey/hd209b/sflux-solar_hd209b.txt
+# The solar spectrum (Gueymard) on this star's surface, with no temperature scaling: upstream VULCAN's recipe
+# for this planet (its HD 209458b example; Moses+2011 place the Sun at the orbit).
+sflux_file: atm/stellar_flux/Gueymard_solar.txt
 vul_ini: output/HD209b-nominal.vul
 out_name: HD209b.vul
 
@@ -40,10 +41,10 @@ const_mix:
 
 # ====== Setting up photochemistry ======
 r_star: 1.19
-# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (9.9863e+09 cm,
-# Rp/Rs 0.12062) on the nominal profile
-Rp: 9.6282e+09
-orbit_radius: 0.04707
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (9.9949e+09 cm,
+# Rp/Rs 0.12073) on the nominal profile
+Rp: 9.6386e+09
+orbit_radius: 0.04892
 sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
 Mp: 1.38563e+30
 
@@ -54,7 +55,7 @@ P_b: 1.0e+07
 P_t: 1.0e-03
 
 # ====== Setting up numerical parameters for the ODE solver ======
-count_max: 5000    # as the survey base, whose value is the one in force
+count_max: 30000    # as the survey base, whose value is the one in force
 
 # ====== Advanced setup (don't change the values if not sure) ======
 ini_update_photo_frq: 1    # as the survey base's cfg_overrides

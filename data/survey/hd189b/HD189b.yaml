@@ -2,8 +2,8 @@
 # case's chemistry settings with this planet's numbers. The recipe:
 # notes "Design records", sulfur survey case.
 # Paths resolve against the working directory: run from the vulcan-retrieval root.
-# System: NASA Exoplanet Archive composite table (2026-10-29): R* 0.75 R_Sun,
-# a 0.03126 AU, Mp 1.13 M_J, Teq 1209 K, Teff 5052 K.
+# System: R* 0.75 R_Sun, Mp 1.13 M_J and Teff 5052 K from Stassun+2017; a/R* 8.88 from Fu+2024 Methods, so
+# a = 0.03097 AU and Teq = Teff / sqrt(2 a/R*) = 1199 K.
 # Gravity is derived as gs = G*Mp/Rp^2.
 
 # ====== Setting up the elements included in the network ======
@@ -42,10 +42,10 @@ const_mix:
 
 # ====== Setting up photochemistry ======
 r_star: 0.75
-# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (8.1066e+09 cm,
-# Rp/Rs 0.15537) on the nominal profile
-Rp: 7.9810e+09
-orbit_radius: 0.03126
+# Rp: the radius at 1 bar, hydrostatic below the 1 mbar transit radius (8.1138e+09 cm,
+# Rp/Rs 0.15550) on the nominal profile
+Rp: 7.9890e+09
+orbit_radius: 0.03097
 sl_angle: 1.4486220555555556    # 83 deg, as W39b.yaml
 Mp: 2.14489e+30
 
@@ -56,7 +56,7 @@ P_b: 1.0e+07
 P_t: 1.0e-03
 
 # ====== Setting up numerical parameters for the ODE solver ======
-count_max: 5000    # as the survey base, whose value is the one in force
+count_max: 30000    # as the survey base, whose value is the one in force
 
 # ====== Advanced setup (don't change the values if not sure) ======
 ini_update_photo_frq: 1    # as the survey base's cfg_overrides
