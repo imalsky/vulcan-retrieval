@@ -318,6 +318,56 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   distinct lost draws (10 rows each of WASP-39b and HD 209458b) 17 certify cold, at the warm run's log L (median
   difference +0.005 and -0.001, largest 0.065); two do not certify by 30000. Two control rows per planet reproduce the
   GPU cold log L to 0.008. Not separated: whether the cap, the batch or the GPU solver lost them.
+- A warm solve that certifies gives the cold answer [M, daw CPU, `fast`, one row per process, cap 30000,
+  `scratch/warm_cold/path/`]: 12 posterior draws each of WASP-39b and HD 209458b solved cold, then warm from the
+  nearest, the median and the farthest of the other draws' cold columns (unit-cube distance 0.17-1.46). 63 of 72 warm
+  solves certify, with |L_warm - L_cold| median 0.0009 and 0.0001, 90% 0.017 and 0.018, largest 0.022 and 0.142. Warm
+  takes 1.1-1.5 times the cold solve's second-stage steps from the nearest column and 2.1-2.7 times from the others;
+  5 certify only past 5000 steps, where the cold solve took at most 1573.
+- A warm start can fail where the draw is good [M]. 9 of the 36 WASP-39b starts end at 0 steps, not finite: the
+  composition guess from the other draw's column has a repair factor that is not positive, and the engine then fills
+  the column with NaN (vulcan-forward `_chem_model._physical_start`) [I, the code]. The runs did the same: in the last
+  12 chunks of the WASP-39b and HD 209458b runs every "stalled" row took 0 steps, 522 and 896 of 19,008 calls (2.7%
+  and 4.7%); over each whole run the stalled class is 1.9-4.6% of the calls and the exhausted class 2.2-6.7%. Of 24
+  such rows solved cold alone (10 stalled and 2 exhausted per planet, `scratch/warm_cold/rejected/`), 21 certify, 20
+  of them within 5000 steps, and 8 at a log L inside the posterior's own range (above its 1% point). So a warm run
+  rejected draws a cold solve keeps, and a re-solve of the run's posterior rows cannot see it: `make_loglike` now
+  solves again cold every row a warm solve would reject.
+- What that rule costs [M, one GH200, WASP-96b at the second campaign's settings, the first five batches]: a cold
+  batch 1,959 s; four warm batches 1,733, 1,474, 1,523 and 1,491 s, of which the cold re-solve of 254-294 rows took
+  812, 776, 839 and 829 s (+88%, +111%, +123% and +125% on the rest of the batch); it kept 450 of 1,099 rows. The
+  time follows the slowest row, which runs to the cap in both stages, not the row count [I]. At the first campaign's
+  rates a doubled batch time leaves WASP-107b, HD 209458b and WASP-39b near n_eff 1,500, 2,300 and 1,400 at 46 h [E].
+- The two warm rejection classes, first campaign [M, each run's `rejected/` logs]: every run has both in every phase.
+  Of the in-window draws of the sampling phase, the step-zero class is 2.2-4.9% and the exhausted class 2.2-7.3%
+  (exploration: 1.8-4.2% and 2.7-6.9%); a batch holds 60-146 such rows, 23-76 of them step-zero; no other class
+  occurs. So a re-solve in the sampling phase alone pays the same per batch, on 68-88% of the slow planets' calls.
+  The step-zero draws sit low in Kzz (mean unit-cube lnKzz 0.23-0.29 against 0.64-0.77 for the kept draws, three runs).
+- What the rejected draws cost the posterior [E, `scratch/warm_cold/cheap_patches/posterior_effect.py`]: a warm
+  solve's outcome depends on the eight chemistry and T-P parameters alone, so each kept draw of the sampling phase is
+  weighted by 1 / (1 - r), r the share of its 100 nearest in-window draws (those eight coordinates) that the warm
+  solve rejected. A sensitivity estimate, not a bound: it takes every such draw to certify cold (17 of 20 and 4 of 4
+  did), and it misses a region that kept no draw (the weights stand for 0.65-0.93 of the rejected draws). Worst
+  shift of a 16th,
+  50th or 84th percentile, both classes / step-zero alone / exhausted alone, in sigma: WASP-96b 0.14 / 0.12 / 0.03,
+  HD 189733b 0.93 / 0.59 / 0.19, WASP-166b 0.18 / 0.16 / 0.04, WASP-107b 0.07 / 0.05 / 0.02, HD 209458b 0.15 / 0.09 /
+  0.04, WASP-39b 0.43 / 0.32 / 0.06; the lower edge of lnKzz except WASP-39b (the cloud opacity) and HD 209458b (the
+  lnKzz median). lnZ, c_o and s_o move by 0.10 sigma or less in every run, and the lnKzz median by 0.15 or less.
+  Deleting kept draws at the same local rates and recovering them, the estimate is within 0.04 sigma
+  of the true shift (0.48 against 0.50, 0.16 against 0.20, 0.33 against 0.33). The run's cold re-solve of posterior
+  rows cannot see any of this.
+- A step-zero failure belongs to the pair of draw and column [M]. Path test (`scratch/warm_cold/path/`, WASP-39b):
+  the 9 failed starts are 7 posterior draws, each of which certified from another draw's column; 3 low-Kzz columns
+  gave all 9. The cost test's own draws, the engine's guess and repair applied with no solve
+  (`scratch/warm_cold/anchor_check/`, three warm batches): 6.0-6.8% of the in-window draws have no physical start
+  from the nearest column (a finite guess with a negative density in 72-84% of them, a repair factor at or below
+  zero in 10-23%, the rest not finite); 97-98% of those have one from one of the 4 nearest columns (78-86% from the
+  second), at a median 1.12 times the nearest distance. 30 such draws solved on daw CPU (`fast`, one row per
+  process, cap 5000): from the nearest column all 30 stop at step zero; from the first physical column 25 certify
+  (338-4,819 steps, median 1,137) and 5 run out of steps; cold alone 25 of 30 certify. Over the 23 certified both
+  ways |L_warm - L_cold| has median 0.001 and is above 0.05 in 4 (0.08, 0.17, 0.28, 0.58). Two draws certify warm
+  where the cold solve stops at step zero, and two certify cold where the warm solve runs out of steps. Not built:
+  choosing, before the solve, the nearest column whose repaired start is physical.
 - Decided by the maintainer: the survey runs warm, 1000 live points, cap 5000 and n_eff 5000, one 46 h job per
   planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
