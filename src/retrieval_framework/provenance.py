@@ -474,7 +474,7 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
 
     return {
         # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
-        "manifest_version": 8,
+        "manifest_version": 9,
         "config": cfg_bound,
         "params": {
             "names": list(pipe.names),

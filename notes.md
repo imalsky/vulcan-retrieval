@@ -399,7 +399,7 @@ Sampler and policy
   nautilus solves replayed on CPU: "Do not retry". Caps of 3e4 / 1e4 gave open-ended init tails (64073, 64163); 29%
   stayed censored at 20000.
 - Config keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the exceptions): no measurement. The manifest
-  (`manifest_version` 8) binds what CLAUDE.md's run-target rule lists (not every bound solver variable moves results:
+  (`manifest_version` 9) binds what CLAUDE.md's run-target rule lists (not every bound solver variable moves results:
   design) and the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it names
   (`provenance.case_inputs`; a path-style case, the survey's, lives outside every tree the code state binds); it
   records each repository's `dirty` without hashing it. vulcan3's code state binds the packaged network, NASA9 folder

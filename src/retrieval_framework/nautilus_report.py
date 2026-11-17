@@ -548,7 +548,10 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
             "mode": "warm" if warm else "cold",
             "warm_of_n_eval": tally.get("n_warm", 0) / n if n else None,
             "cold_of_n_eval": tally.get("n_cold", 0) / n if n else None,
-            # Such a row stays in n_warm and warm_certified, by its cold verdict.
+            # Warm rows solved again cold, those of them kept, and those that had frozen at dt_min. Such a row stays
+            # in n_warm, and in warm_certified by its cold verdict.
+            "warm_resolved_cold": tally.get("warm_resolved_cold", 0),
+            "warm_resolved_cold_kept": tally.get("warm_resolved_cold_kept", 0),
             "warm_frozen_resolved_cold": tally.get("warm_frozen_resolved_cold", 0),
             "warm_cold_check": check,
         },

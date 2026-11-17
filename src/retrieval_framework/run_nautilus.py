@@ -164,14 +164,28 @@ class _ChunkLogs:
             self.n_nui = len(list(nuisance.glob("nuisance_*.npz")))
 
     def write(
-        self, z: np.ndarray, log_l: np.ndarray, rej: _Rejections, acc: np.ndarray, warm: bool, t: float, nuis: Any
+        self,
+        z: np.ndarray,
+        log_l: np.ndarray,
+        rej: _Rejections,
+        acc: np.ndarray,
+        warm: bool,
+        t: float,
+        nuis: Any,
+        cold_again: tuple[int, float] = (0, 0.0),
     ) -> None:
-        """Log one chunk of ``len(z)`` rows; ``nuis`` holds the evaluator's group statistics, one row per input row."""
+        """Log one chunk of ``len(z)`` rows; ``nuis`` holds the evaluator's group statistics, one row per input row.
+
+        ``cold_again`` is the count of the warm rows solved again cold and the seconds that took, inside ``t``.
+        """
         dead = rej.dead
         mode = "warm" if warm else "cold"
         if self.batch_log is not None:
+            row = {"t": round(t, 2), "mode": mode, "acc": acc.tolist()}
+            if cold_again[0]:
+                row.update(n_cold_again=cold_again[0], t_cold_again=round(cold_again[1], 2))
             with self.batch_log.open("a") as fh:
-                fh.write(json.dumps({"t": round(t, 2), "mode": mode, "acc": acc.tolist()}) + "\n")
+                fh.write(json.dumps(row) + "\n")
         if self.lanes and (rate := _iteration_seconds(t, acc, self.lanes)):
             self._report_if_slow(mode, rate)
         if self.rejects is not None and dead.any():
@@ -308,16 +322,28 @@ def make_loglike(
                 prof.batch_begin()
             t0 = time.perf_counter()
             warm = False
+            cold_again = (0, 0.0)
             if anchors is not None and len(anchors) > 0:
                 warm = True
                 idx, dist = anchors.nearest(Zc[:, :k])
                 Yw, rw = anchors.columns(idx)
                 L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype), jnp.asarray(rw, pipe.dtype), act)
-                # A warm start that froze at dt_min is re-solved cold, alone; a cold freeze still stops the run.
-                fz = act & (st.reason == constants.TERM_DT_MIN_FROZEN)
-                if n_fz := int(fz.sum()):
-                    L, Ynew, rnew, st = P.take_rows(fz, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, fz))
-                    tally["warm_frozen_resolved_cold"] = tally.get("warm_frozen_resolved_cold", 0) + n_fz
+                # A warm start decides nothing against a draw: a guess built from another draw's column can fail to
+                # start, freeze or run out of steps where the draw's own cold solve certifies. So every row the warm
+                # solve would reject is solved again cold, and only a cold solve rejects; a cold freeze stops the run.
+                again = act & (L <= constants.REJECT_BELOW)
+                if n_again := int(again.sum()):
+                    t1 = time.perf_counter()
+                    n_fz = int((again & (st.reason == constants.TERM_DT_MIN_FROZEN)).sum())
+                    L, Ynew, rnew, st = P.take_rows(again, (L, Ynew, rnew, st), fns["cold"](Uj, Y0, refs0, again))
+                    n_kept = int((again & st.conv_ok & (L > constants.REJECT_BELOW)).sum())
+                    cold_again = (n_again, time.perf_counter() - t1)
+                    for key, n in (
+                        ("warm_resolved_cold", n_again),
+                        ("warm_resolved_cold_kept", n_kept),
+                        ("warm_frozen_resolved_cold", n_fz),
+                    ):
+                        tally[key] = tally.get(key, 0) + n
             else:
                 L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
             P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)
@@ -338,7 +364,8 @@ def make_loglike(
                 for line in startup_check(startup_kzz(th), ~rej.tp_out, ~dead, counts):
                     log.info(line)
                 startup_kzz = None
-            logs.write(Zc[:m], out[i : i + m], rej, acc, warm, time.perf_counter() - t0, st.nuis if nuisance else None)
+            nuis = st.nuis if nuisance else None
+            logs.write(Zc[:m], out[i : i + m], rej, acc, warm, time.perf_counter() - t0, nuis, cold_again)
             if warm:
                 tally["warm_anchor_dist_sum"] = tally.get("warm_anchor_dist_sum", 0.0) + float(dist[:m].sum())
             if anchors is not None:
