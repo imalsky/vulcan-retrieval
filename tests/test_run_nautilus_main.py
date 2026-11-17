@@ -37,8 +37,8 @@ LOG_Z, N_EFF = -4.5, 321.0
 class _Sampler:
     """Stands for nautilus: ``run`` evaluates seeded points through the run's own likelihood, and hands them back."""
 
-    def __init__(self, like, done=True):
-        self.like, self.done = like, done
+    def __init__(self, like, done=True, explored=True, shell_n=(24,)):
+        self.like, self.done, self.explored, self.shell_n = like, done, explored, np.asarray(shell_n)
         self.n_like, self.log_z, self.n_eff = 0, LOG_Z, N_EFF
 
     def run(self, **kw):
@@ -75,7 +75,7 @@ def job(tmp_path, monkeypatch):
     def make_sampler(like, n_dim, settings, filepath=None, resume=False):
         events.append("sampler")
         sampler["args"] = (n_dim, settings.n_live, settings.n_batch, settings.seed, filepath, resume)
-        sampler["s"] = _Sampler(like, sampler.get("done", True))
+        sampler["s"] = _Sampler(like, sampler.get("done", True), **sampler.get("state", {}))
         return sampler["s"]
 
     monkeypatch.setattr(RN, "export_runtime", lambda _rt: None)
@@ -160,6 +160,7 @@ def test_a_finished_run_writes_its_posterior_summary_and_identity(job):
     assert (summary["n_live"], summary["n_batch"], summary["n_update"]) == (N_LIVE, N_BATCH, N_LIVE // 2)
     assert summary["chem_rtol"] == 0.05
     assert summary["starts"] == "anchored warm (growing)"
+    assert summary["finished"] is True
     assert "APPROXIMATE" in summary["evidence_note"]
 
 
@@ -185,12 +186,34 @@ def test_a_resume_continues_the_tally_and_skips_the_startup_check(job, monkeypat
         raise AssertionError("the startup check is the first chunk of a fresh run only")
 
     monkeypatch.setattr(RN, "startup_check", no_check)
-    job.sampler["done"] = False  # the wall budget ends it: a checkpoint, and no posterior
+    job.sampler["done"] = False  # the wall budget ends it while exploring: a checkpoint, and no posterior
+    job.sampler["state"] = {"explored": False}
     RN.main([job.spec, "--resume"])
     assert job.sampler["args"][5] is True
     assert json.loads((job.out / RN.TALLY_FILE).read_text())["n_eval"] == 124
     assert not (job.out / "nautilus_posterior.npz").exists()
     assert "certificate" not in job.events
+
+
+def test_a_run_stopped_while_its_shells_refill_writes_no_posterior(job):
+    """After exploration nautilus discards its points, then samples each shell again in turn: a posterior from before
+    the last of them holds points is missing that shell.
+    """
+    job.sampler["done"] = False
+    job.sampler["state"] = {"shell_n": (24, 0)}
+    RN.main([job.spec])
+    assert not (job.out / "nautilus_posterior.npz").exists()
+    assert "certificate" not in job.events
+
+
+def test_a_run_the_wall_budget_stops_after_exploration_writes_what_it_has(job):
+    job.sampler["done"] = False
+    RN.main([job.spec])
+    assert (job.out / "nautilus_posterior.npz").exists()
+    summary = json.loads((job.out / "nautilus_summary.json").read_text())
+    assert summary["finished"] is False
+    assert (summary["n_eff"], summary["n_eff_target"]) == (N_EFF, RN.nautilus_settings(RN.load_spec(job.spec)).n_eff)
+    assert job.events[-1] == "certificate"
 
 
 def test_a_fresh_run_over_a_previous_one_is_refused(job):

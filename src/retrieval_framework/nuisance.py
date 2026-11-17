@@ -16,13 +16,16 @@ from retrieval_framework import config_schema as C, constants, observations as O
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from pathlib import Path
     from types import ModuleType
 
     from jax import Array
     from jax.typing import ArrayLike
 
+    from retrieval_framework.pipeline import Pipeline
 
-__all__ = ["make_nuisance_marginal"]
+
+__all__ = ["make_nuisance_marginal", "nuisance_posterior"]
 
 _LOG2PI = math.log(2.0 * math.pi)
 
@@ -164,3 +167,56 @@ def make_nuisance_marginal(cfg: C.Config, groups: Iterable[str], group_per_bin: 
         return mu, mult
 
     return SimpleNamespace(names=names, groups=groups, stats=stats, log_marginal=log_marginal, draw=draw, apply=apply)
+
+
+def nuisance_posterior(
+    pipe: Pipeline, folder: Path, queries: Iterable[tuple[np.ndarray, np.ndarray]], rng: np.random.Generator
+) -> list[np.ndarray]:
+    """Return the integrated nuisances' posterior, one conditional draw per row of each query.
+
+    Drawn from the group statistics logged with the evaluation that gave the point its log L; NaN on a rejected row. A
+    point logged twice, as a batch redrawn after a resume is, matches by its log L too.
+
+    Parameters
+    ----------
+    pipe : pipeline.Pipeline
+        The pipeline.
+    folder : pathlib.Path
+        The run's nuisance/ directory.
+    queries : iterable of tuple
+        ``(z, log_l)`` rows.
+    rng : numpy.random.Generator
+        The generator.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        One array [n, len(names)] per query.
+
+    Raises
+    ------
+    RuntimeError
+        If a finite row has no logged statistics.
+    """
+    table: dict[bytes, list[tuple[float, np.ndarray]]] = {}
+    for f in sorted(folder.glob("nuisance_*.npz")):
+        with np.load(f) as d:
+            for zz, ll, ss in zip(d["z"], d["log_l"], d["stats"], strict=True):
+                table.setdefault(zz.tobytes(), []).append((float(ll), ss))
+    res = []
+    for z_query, lq in queries:
+        zq = np.asarray(z_query, np.float64)
+        st = np.full((len(zq), 2 * len(pipe.nuisance.groups)), np.nan)
+        for i, (zz, ll) in enumerate(zip(zq, np.asarray(lq, np.float64), strict=True)):
+            if not np.isfinite(ll):
+                continue
+            hit = [s for lg, s in table.get(zz.tobytes(), []) if lg == ll]
+            if not hit:
+                raise RuntimeError(f"posterior row {i} (log L {ll}) has no logged nuisance statistics in {folder}")
+            st[i] = hit[0]
+        nu = np.full((len(zq), len(pipe.nuisance.names)), np.nan)
+        ok = np.isfinite(st[:, 0])
+        if ok.any():
+            nu[ok] = pipe.nuisance.draw(st[ok], pipe.obs_sigma, rng)
+        res.append(nu)
+    return res

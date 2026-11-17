@@ -34,7 +34,7 @@ from retrieval_framework.run_setup import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable
     from pathlib import Path
 
     import nautilus
@@ -50,7 +50,6 @@ __all__ = [
     "make_loglike",
     "make_sampler",
     "nautilus_settings",
-    "nuisance_posterior",
     "startup_check",
 ]
 
@@ -354,59 +353,6 @@ def make_loglike(
     return loglike
 
 
-def nuisance_posterior(
-    pipe: Pipeline, folder: Path, queries: Iterable[tuple[np.ndarray, np.ndarray]], rng: np.random.Generator
-) -> list[np.ndarray]:
-    """Return the integrated nuisances' posterior, one conditional draw per row of each query.
-
-    Drawn from the group statistics logged with the evaluation that gave the point its log L; NaN on a rejected row. A
-    point logged twice, as a batch redrawn after a resume is, matches by its log L too.
-
-    Parameters
-    ----------
-    pipe : pipeline.Pipeline
-        The pipeline.
-    folder : pathlib.Path
-        The run's nuisance/ directory.
-    queries : iterable of tuple
-        ``(z, log_l)`` rows.
-    rng : numpy.random.Generator
-        The generator.
-
-    Returns
-    -------
-    list of numpy.ndarray
-        One array [n, len(names)] per query.
-
-    Raises
-    ------
-    RuntimeError
-        If a finite row has no logged statistics.
-    """
-    table: dict[bytes, list[tuple[float, np.ndarray]]] = {}
-    for f in sorted(folder.glob("nuisance_*.npz")):
-        with np.load(f) as d:
-            for zz, ll, ss in zip(d["z"], d["log_l"], d["stats"], strict=True):
-                table.setdefault(zz.tobytes(), []).append((float(ll), ss))
-    res = []
-    for z_query, lq in queries:
-        zq = np.asarray(z_query, np.float64)
-        st = np.full((len(zq), 2 * len(pipe.nuisance.groups)), np.nan)
-        for i, (zz, ll) in enumerate(zip(zq, np.asarray(lq, np.float64), strict=True)):
-            if not np.isfinite(ll):
-                continue
-            hit = [s for lg, s in table.get(zz.tobytes(), []) if lg == ll]
-            if not hit:
-                raise RuntimeError(f"posterior row {i} (log L {ll}) has no logged nuisance statistics in {folder}")
-            st[i] = hit[0]
-        nu = np.full((len(zq), len(pipe.nuisance.names)), np.nan)
-        ok = np.isfinite(st[:, 0])
-        if ok.any():
-            nu[ok] = pipe.nuisance.draw(st[ok], pipe.obs_sigma, rng)
-        res.append(nu)
-    return res
-
-
 class NautilusSettings(NamedTuple):
     """A run's nautilus settings, built once from its specification and the fixed choices in ``constants``.
 
@@ -607,6 +553,8 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
     z_eq, _, log_l_eq = sampler.posterior(equal_weight=True)
     extra = {}
     if pipe.nuisance is not None:
+        from retrieval_framework.nuisance import nuisance_posterior
+
         nu, nu_eq = nuisance_posterior(
             pipe, out / "nuisance", [(z, log_l), (z_eq, log_l_eq)], np.random.default_rng(seed + 2)
         )
@@ -634,9 +582,9 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
 
 
 def _write_summary(
-    sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, settings: NautilusSettings, tally: dict
+    sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, settings: NautilusSettings, tally: dict, done: bool
 ) -> None:
-    """Write nautilus_summary.json."""
+    """Write nautilus_summary.json; ``done`` is False for a run the wall budget stopped short of its ``n_eff``."""
     import nautilus
 
     warm = settings.warm
@@ -644,6 +592,8 @@ def _write_summary(
         "logZ_box": float(sampler.log_z),
         "n_like": int(sampler.n_like),
         "n_eff": float(sampler.n_eff),
+        "n_eff_target": settings.n_eff,
+        "finished": bool(done),
         **settings.record(),
         "nautilus": f"{nautilus.__version__} (stock)",
         "starts": _starts(warm),
@@ -779,10 +729,19 @@ def main(argv: list[str] | None = None) -> None:
     done = _sample(sampler, settings, timeout, tally)
     if not done:
         log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is %s).", ckpt)
-        return
+        # The posterior discards the exploration phase, and nautilus then refills its shells one at a time: until
+        # each holds points again the posterior is missing whole shells.
+        if not (sampler.explored and np.all(sampler.shell_n > 0)):
+            log.warning("It stopped before every shell was sampled again after exploration: no posterior is written.")
+            return
+        log.warning(
+            "Writing the posterior at n_eff %.0f of the %s asked for; the summary records finished: false.",
+            sampler.n_eff,
+            settings.n_eff,
+        )
 
     _write_posterior(sampler, pipe, out, want, settings.seed)
-    _write_summary(sampler, pipe, spec, out, settings, tally)
+    _write_summary(sampler, pipe, spec, out, settings, tally, done)
     log.info("wrote %s and nautilus_summary.json", out / "nautilus_posterior.npz")
     from retrieval_framework.nautilus_report import write_certificate
 

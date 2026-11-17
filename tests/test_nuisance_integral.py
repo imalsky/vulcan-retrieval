@@ -23,7 +23,8 @@ from retrieval_framework import config_schema as C
 from retrieval_framework import constants
 from retrieval_framework import pipeline as P
 from retrieval_framework.nuisance import make_nuisance_marginal
-from retrieval_framework.run_nautilus import make_loglike, nuisance_posterior
+from retrieval_framework.nuisance import nuisance_posterior
+from retrieval_framework.run_nautilus import make_loglike
 from conftest import case_config
 
 GROUPS = ["NIRISS", "G395H_NRS1", "G395H_NRS2"]
