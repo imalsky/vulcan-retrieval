@@ -291,6 +291,39 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   batches (the shells hold far fewer [I]). Not bitwise for the kept draws: fewer jobs on the lane queue shift the shared
   tick cadence. `batches.jsonl` records acc 0 for those rows.
 
+## Warm starts
+
+First campaign, six warm runs (1000 live points, cap 5000, one GH200) and their cold re-solves of 1000 weighted
+posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live points, cap 10000).
+
+- Cost [M, the runs' logs]. Warm: 7,300-11,400 likelihood calls per hour (WASP-107b lowest), a batch of 1584 in
+  500-650 s. Cold: 2,000-2,200 calls per hour, a batch in 2,400-3,500 s. A cold batch is two queue runs
+  (`chem_solve_cold_diag_batch`: the baseline composition from equilibrium, then the draw's composition from that
+  column), each under the cap, and the logged step count is the second's [I, from the code]; the cap was also 10000
+  against 5000. The second campaign's cold runs were at 14 bounds and n_eff 1-3 after 24-27 thousand calls.
+- Calls a run needs [M, nautilus's status lines]. Exploration ended at 36, 59, 51, 103, 52 and 82 thousand calls
+  (WASP-96b, HD 189733b, WASP-166b, WASP-107b, HD 209458b, WASP-39b; 22-37 bounds). After it n_eff grew in proportion
+  to the calls: 9.3, 13.6, 20.1, 43.0, 74.1 and 100.3 calls per effective sample. Wall time to n_eff 5000: 9.0, 11.1,
+  16.5, 43.7 and 43.1 h, and WASP-39b 46.1 h to n_eff 3,692 (about 66 h to 5000, over two jobs). To n_eff 3000 at
+  those rates [E]: 7, 9, 12, 32, 28 and 39 h. The second campaign's priors, cloud and data may move the calls: not
+  measured.
+- What the 0.1 sigma gate measured [M, `scratch/warm_cold/decompose.py` on the five saved re-solves]. The cold
+  re-solve (cap 5000) lost 4.3-8.6% of the rows (43-86 of 1000). Worst median shift, then the shift from the lost
+  rows alone and from the change in log L alone: WASP-39b -0.104 / -0.111 / +0.002 (log10 kappa; lnKzz +0.093),
+  HD 209458b +0.113 / +0.111 / +0.001 (lnKzz), WASP-107b +0.066 / +0.061 / +0.011, WASP-166b -0.041 / -0.041 / -0.002,
+  WASP-96b -0.036 / -0.036 / 0.000. Over the rows certified both ways the median |L_cold - L_warm| is 0.0002-0.007;
+  |dL| above 0.5 in 0, 0, 1, 7 and 44 rows (WASP-107b, largest 3.2). The lost rows sit low in Kzz on WASP-39b and
+  HD 209458b (-1.3 sigma). So the gate's failures were the rows the cold re-solve lost, not a change in log L.
+- The lost rows are real [M, daw CPU, `fast`, one row per process, the first campaign's specs at cap 30000]: of 19
+  distinct lost draws (10 rows each of WASP-39b and HD 209458b) 17 certify cold, at the warm run's log L (median
+  difference +0.005 and -0.001, largest 0.065); two do not certify by 30000. Two control rows per planet reproduce the
+  GPU cold log L to 0.008. Not separated: whether the cap, the batch or the GPU solver lost them.
+- Decided by the maintainer: the survey runs warm, 1000 live points, cap 5000 and n_eff 5000, one 46 h job per
+  planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
+  (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
+  run is reported only after its cold re-solve passes (`docs/method.md` "Warm starts"), with the re-solve's cap at
+  30000 so that it reaches the columns a warm start reaches.
+
 ## HPC (NAS GH200) and daw
 
 - `PROJECT_ROOT` is the parent of the submission directory (`tools/run_nas.pbs`); an entry-point change needs the
@@ -728,12 +761,11 @@ HPC
     covers (2.30-5.25 um in the spec; 59, 61, 176, 132, 139 and 69 bins); HD 209458b is the Eureka! columns as
     published, one group and no offset, as its authors fitted it (no row is assigned to a visit here). Cloud: the
     grey deck with a free top pressure, 1e-8 bar to the RT bottom (every data paper has a top pressure or a cloud
-    fraction). Sampler: 2000 live points, nautilus's default, and an effective sample size of 5000 (the maintainer's
-    choice; nautilus documents 10000 as its minimum). Step cap 10000, vulcan3's default (VULCAN 2's is 30000).
+    fraction). Sampler and step cap: 1000 live points, n_eff 5000, cap 5000 and warm starts ("Warm starts").
     Priors: metallicity 0.1x to 1000x solar (a published WASP-96b value is 0.23x; a cold nominal solve at 0.1x
     certifies on WASP-96b in 1076 steps and on HD 209458b in 1250 [M, daw CPU, the first campaign's case files]),
     radius -18% to +22%; the Kzz and C/O edges stay, and a planet whose posterior piles at Kzz 1e7 is rerun to 1e5.
-    Every solve starts cold: warm starts are experimental until a warm-against-cold check passes (todo). WASP-107b
+    WASP-107b
     stays binned to R 100, the one exception to "as published"; a side run at R 500 only if its NRS1 error factor
     comes out clearly above 1. Offsets and error inflation are one rule for every planet, though WASP-107b's paper
     fits neither: its fitted offset is reported. The planet

@@ -1,11 +1,11 @@
-# WASP-96b with warm starts (experimental): wasp96b.yaml with each chemistry solve continued from the nearest
-# certified column, so the likelihood depends on the evaluation order. The pair measures what warm starts do to a
-# posterior (notes "Design records", second campaign).
+# WASP-96b with cold starts: wasp96b.yaml with every chemistry solve started from equilibrium, so the likelihood is
+# a fixed function of the parameters. The pair is the test of what warm starts do to a whole posterior, the part a
+# re-solve of the warm run's own rows cannot see (docs/method.md "Warm starts").
 #
-#   python tools/submit.py runs/survey/wasp96b_warm.yaml [--dry-run]
+#   python tools/submit.py runs/survey/wasp96b_cold.yaml [--dry-run]
 base: survey_base.yaml
 sampler:
-  warm_starts: true
+  warm_starts: false
 config:
   run_label: WASP-96b
   vulcan_cfg_name: data/survey/w96b/W96b.yaml

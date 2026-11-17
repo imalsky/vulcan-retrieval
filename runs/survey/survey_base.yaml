@@ -11,7 +11,8 @@
 # published (WASP-107b alone is binned here, from R 950 to R 100: finer than the model takes),
 # fitted on every published bin the model band covers; one offset per group after the
 # bluest and one noise inflation per group, integrated out.
-# Chemistry: rtol 0.2 (VULCAN's default) within 10000 steps, every solve started cold, constant Kzz, 10 bar bottom.
+# Chemistry: rtol 0.2 (VULCAN's default) within 5000 steps, warm starts (each run's cold re-solve must pass
+# before it is reported: docs/method.md "Warm starts"), constant Kzz, 10 bar bottom.
 # YAML reads 1e11 as text: write 1.0e+11.
 #
 # 10 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, Tint,
@@ -25,10 +26,11 @@ runtime:
   xla_flags: "--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL,WHILE"
 
 sampler:
-  n_live: 2000                         # nautilus's default
-  n_eff: 5000                          # the maintainer's choice; nautilus's default and documented minimum is 10000
+  n_live: 1000                         # the most accurate setting tested on this posterior (notes "Sampler")
+  n_eff: 5000                          # the maintainer's choice; nautilus's default is 10000. A run the 46 h wall stops
+                                       # short of it writes the posterior it has (notes "Warm starts")
   n_batch: null
-  warm_starts: false                   # warm starts are experimental (docs/method.md "Warm starts")
+  warm_starts: true                    # a cold run costs 4-5 times the wall time (notes "Warm starts")
 
 config:
   seed: 20261029
@@ -46,7 +48,7 @@ config:
   art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
   cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
-  count_max: 10000                     # vulcan3's default step cap (VULCAN 2's is 30000; notes "Design records")
+  count_max: 5000                      # the first campaign's cap, the one its timings are for (notes "Warm starts")
   p_ref_bar: 1.0e-3                    # rp_cm and g apply at 1 mbar
 
   # ---- data window, the same for every planet ---------------------------------------
