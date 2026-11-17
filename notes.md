@@ -436,8 +436,13 @@ HPC
 
 ## Design records
 
-- The maintainer decided, before the survey's restart: `art_nlayer` 101 in `survey_base.yaml` (was 67; the ladder at 101
-  on a survey case is owed, so `oracle.md` "The RT grid is converged" is unmet for the survey until then);
+- The maintainer decided: `art_nlayer` 100 in `survey_base.yaml`, ExoJAX's default (was 67, then 101, the ladder's
+  second rung from 67). The ladder on the survey WASP-39b case [M, cold nominal column, daw CPU, vulcan3 `ae17ec8`]:
+  100 against 150 layers moves the binned depth by 2.55 ppm (gate 5) and the lnZ Jacobian by 1.127% (gate 1%), so the
+  depth gate passes and the Jacobian gate does not. No count passes it for a reason: against 225 layers the figure is
+  1.095% (100), 0.943% (101), 1.125% (120) and 0.925% (180), and 100 against 101 layers differ by 1.476%, in bins at
+  0.33-0.78 of the peak response. It has a floor near 1% that the layer count does not lower; the depth is within 2.83
+  ppm at every count. `oracle.md` "The RT grid is converged" asks for both gates, so it is met for the depth only;
   `prior_noise_inflation` [1.0, 3.0] in both bases (was [0.5, 3.0]; finished runs put NRS1 at 0.899 and G102 at 0.88-0.89,
   "Runs"); `e2e_check.py warmcold` fails below an effective sample size of 100 (the recorded runs have 914 and 5324).
   Also decided: the inflation floor stays at 1.0 against those sub-unity values (a run never claims more precision than
@@ -836,8 +841,7 @@ HPC
   10.0 bar bottoms differ by 0.71 ppm; on a uniform (well-mixed) column of the same mean T and mmw every one of these is
   under 1.5 ppm. So `art_nlayer` 67 sits at the 5 ppm ladder gate in the CO2 band of the survey's WASP-39b column, where
   the WASP-39b case's ladder measured 1.02 ppm ("Evidence behind the rules"; that ladder used the case's own column and
-  band). The maintainer decided 101 for the survey ("Design records"); the ladder on a survey case
-  (`validation/resolution_ladder.py --spec runs/survey/<planet>.yaml`) is owed (todo). `art_pbtm_bar` 7.0 stays, stated
+  band). The maintainer decided 100 for the survey, with its ladder ("Design records"). `art_pbtm_bar` 7.0 stays, stated
   in every base.
 - RT: 12 molecules, H2-H2 / H2-He CIA, power-law clouds uniformly mixed, H2/He Rayleigh, inverse-square gravity (+1.5
   ppm against -102 ppm for constant g on a test slab). 13 produced species with installed tables are out of the RT (CS
