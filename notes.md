@@ -713,7 +713,7 @@ HPC
     the rest lost above 2980 K at depth. A 3380 K ceiling (the k-tables end at 3400 K; it needs another H2-H2 CIA
     table) would keep 70-83%: not done. Each case file now states the P_t, step cap and photolysis cadence that run.
   - Second campaign, shared choices (the maintainer decided: the published or default choice wherever one exists;
-    sources and sizes in `docs/survey_choices.md`, Part 1). System: R*, Mp and Teff from one published solution per
+    sources and sizes in the audit of the first survey, the git-ignored `scratch/survey_audit/survey_choices.md`). System: R*, Mp and Teff from one published solution per
     planet (Mancini+2018, Piaulet+2021, Hellier+2014, Hellier+2019, Stassun+2017 for both HD planets); a/R* from the
     JWST data paper's own fit (11.390, 18.0923, 8.9890, 11.57, 8.88, 8.84), so a = (a/R*) R* and Teq = Teff / sqrt(2
     a/R*). No data paper states a full set of system numbers, so this is the nearest rule to "the paper's own
@@ -723,9 +723,15 @@ HPC
     covers (2.30-5.25 um in the spec; 59, 61, 176, 132, 139 and 69 bins); HD 209458b is the Eureka! columns as
     published, one group and no offset, as its authors fitted it (no row is assigned to a visit here). Cloud: the
     grey deck with a free top pressure, 1e-8 bar to the RT bottom (every data paper has a top pressure or a cloud
-    fraction). Sampler: nautilus's defaults, 2000 live points and an effective sample size of 10000. Step cap
-    30000, VULCAN's default. Priors: metallicity to 1000x solar, radius -18% to +22%. Warm starts stay on: a run is
-    kept only if its warm-against-cold check passes the 0.1 sigma gate, and is repeated cold if not. The planet
+    fraction). Sampler: 2000 live points, nautilus's default, and an effective sample size of 5000 (the maintainer's
+    choice; nautilus documents 10000 as its minimum). Step cap 10000, vulcan3's default (VULCAN 2's is 30000).
+    Priors: metallicity 0.1x to 1000x solar (a published WASP-96b value is 0.23x; a cold nominal solve at 0.1x
+    certifies on WASP-96b in 1076 steps and on HD 209458b in 1250 [M, daw CPU, the first campaign's case files]),
+    radius -18% to +22%; the Kzz and C/O edges stay, and a planet whose posterior piles at Kzz 1e7 is rerun to 1e5.
+    Every solve starts cold: warm starts are experimental until a warm-against-cold check passes (todo). WASP-107b
+    stays binned to R 100, the one exception to "as published"; a side run at R 500 only if its NRS1 error factor
+    comes out clearly above 1. Offsets and error inflation are one rule for every planet, though WASP-107b's paper
+    fits neither: its fitted offset is reported. The planet
     numbers and the nominal atmosphere files come from `scratch/survey_data/build_cases.py`, whose recipe rebuilds
     the first survey's atmosphere files byte for byte and its 1 bar radii to 1e-6.
   - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window); WASP-107b Sing+2024 G395H
