@@ -739,6 +739,19 @@ HPC
     fits neither: its fitted offset is reported. The planet
     numbers and the nominal atmosphere files come from `scratch/survey_data/build_cases.py`, whose recipe rebuilds
     the first survey's atmosphere files byte for byte and its 1 bar radii to 1e-6.
+  - Second campaign, two choices kept with their measured size (the maintainer decided). Network: the survey keeps
+    vulcan3's `N + CS -> S + CN` row. Against upstream's `S + CN -> N + CS` on 528 cold prior draws [M, GH200, vulcan3
+    `ae17ec8`, `e2e_check.py compare`]: WASP-39b 415 draws certified on both, worst bin 2.69 sigma, columns to 1.61
+    dex (p95 0.0035), |dlogL| of good fits to 0.56; WASP-107b 424, 10.3 sigma, 2.78 dex (p95 0.0068), 1.05. Most
+    draws do not move and a tail does: an uncertainty in HCN to state, and a planet whose result rests on HCN is
+    re-solved with upstream's row. The other rewritten row (`CN + HNCO`) moves nothing, and vulcan3 `d3855be` against
+    `ae17ec8` is identical on the same draws. Stellar UV: the three Sun-like hosts keep the plain solar file. HST
+    spectra of HD 209458 and WASP-166 put the measured flux at 1.8-3.0 times the solar file at 125-300 nm. On the
+    nominal columns [M, cold solves, daw CPU, the solar file with its 114-400 nm rows replaced by the measured ones]
+    that moves SO2 by up to 1.2-1.3 dex near 5e-6 bar, and the R = 100 depth by at most 18.1 ppm on HD 209458b (2.9
+    um; SO2 band -3.3 ppm mean; median data error 30.5 ppm) and 6.4 ppm on WASP-166b (4.3 um; SO2 band -1.1 ppm;
+    median error 52.4 ppm). No retrieval with the measured files is planned; they are an in-house splice, kept
+    untracked.
   - Data [M]: WASP-39b Carter & May G395H (`data/cm24_wasp39b`, 53 bins in the window); WASP-107b Sing+2024 G395H
     (copied into `data/survey/w107b` with its stellar flux: the maintainer decided the survey uses no file of the
     earlier WASP-107b case; 55); WASP-96b Zenodo 17065171 (exoTEDRF / exoUPRF, PriorLD_Slope, R100; 55 fitted, the cap
