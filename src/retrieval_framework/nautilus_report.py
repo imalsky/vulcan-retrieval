@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from vulcan_forward.constants import BAR_CGS, KZZ_P_REF_BAR
 
-from retrieval_framework import config_schema as C, constants, hardware, provenance
+from retrieval_framework import config_schema as C, constants, hardware, provenance, warm_cold
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -361,7 +361,9 @@ def _n_rejected(tally: dict) -> int:
     return sum(tally.get(k, 0) for k in ("exhausted", "stalled", "nonfinite"))
 
 
-def _model_caveats(cfg: dict, summ: dict, tally: dict, rejections: dict, cond: dict | None) -> list[str]:
+def _model_caveats(
+    cfg: dict, summ: dict, tally: dict, rejections: dict, cond: dict | None, warm_caveat: str | None
+) -> list[str]:
     """Return the caveats on what the run's numbers mean, from its settings, tally and conditioning map."""
     rejected = _n_rejected(tally)
     caveats = [
@@ -374,12 +376,12 @@ def _model_caveats(cfg: dict, summ: dict, tally: dict, rejections: dict, cond: d
         ),
         "nautilus reports no logZ error: quote the spread over independent seeds.",
     ]
-    if summ["starts"] != "cold":
+    if warm_caveat:
+        caveats.append(warm_caveat)
+    if not summ.get("finished", True):
         caveats.append(
-            "Warm starts: each solve continued from the nearest certified column, so the "
-            "likelihood and which draws were rejected depend on the evaluation order. The "
-            "posterior and logZ_box are approximate; an evidence claim needs a cold run "
-            "(warm_starts: false in the spec)."
+            f"Stopped at the wall budget at n_eff {summ['n_eff']:.0f} of the {summ['n_eff_target']} asked for: the "
+            "posterior is the sampler's at that point. Resume the run to reach the target."
         )
     if cond is None:
         caveats.append("No conditioning map: the run kept no anchors/ or no rejected/ log.")
@@ -498,7 +500,8 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
     warm = summ["starts"] != "cold"
     rejections = _rejection_fractions(tally)
     cond = _conditioning_map(out)
-    caveats = _model_caveats(cfg, summ, tally, rejections, cond)
+    check = warm_cold.check(out, summ)
+    caveats = _model_caveats(cfg, summ, tally, rejections, cond, warm_cold.caveat(out, check) if warm else None)
     caveats.append(_unmodeled_caveat(out))
     caveats += _identity_caveats(manifest, manifest_digest, digest, code_now)
 
@@ -532,14 +535,25 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
                 "spec",
             )
         },
-        "result": {"logZ_box": summ["logZ_box"], "logZ_err": None, "n_eff": summ["n_eff"], "n_like": summ["n_like"]},
+        "result": {
+            "logZ_box": summ["logZ_box"],
+            "logZ_err": None,
+            "n_eff": summ["n_eff"],
+            # A run from before the summary recorded them finished at its target.
+            "n_eff_target": summ.get("n_eff_target"),
+            "finished": summ.get("finished", True),
+            "n_like": summ["n_like"],
+        },
         "starts": {
             "mode": "warm" if warm else "cold",
             "warm_of_n_eval": tally.get("n_warm", 0) / n if n else None,
             "cold_of_n_eval": tally.get("n_cold", 0) / n if n else None,
             # Such a row stays in n_warm and warm_certified, by its cold verdict.
             "warm_frozen_resolved_cold": tally.get("warm_frozen_resolved_cold", 0),
+            "warm_cold_check": check,
         },
+        # A warm run's numbers are quoted only after its cold re-solve passes.
+        "quotable": check["status"] in warm_cold.QUOTABLE,
         "rejections": rejections,
         "chemistry": {
             "rtol": summ.get("chem_rtol"),
@@ -735,6 +749,11 @@ def main(argv: list[str] | None = None) -> None:
     ----------
     argv : list of str, optional
         The arguments; default ``sys.argv``.
+
+    Raises
+    ------
+    RuntimeError
+        For a warm run whose warm-against-cold check has not passed.
     """
     from retrieval_framework.report_figures import plot
     from retrieval_framework.run_setup import setup_logging
@@ -752,6 +771,9 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging()
     out = Path(args.out_dir).resolve()
     cfg = config_from_json(out / "config.json")  # refuses an archived config.json before any figure
+    check = warm_cold.check(out, read_json(out, "nautilus_summary.json"))
+    if check["status"] not in warm_cold.QUOTABLE:
+        raise RuntimeError(f"no report of {out}. " + warm_cold.caveat(out, check).split("NOT QUOTABLE: ", 1)[1])
     # the forward build comes first: the certificate's version record imports
     # exojax, which must not precede vulcan_chem
     spectra = _model_spectra(out, cfg, args.spectra) if args.spectra > 0 else None

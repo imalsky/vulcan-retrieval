@@ -13,6 +13,8 @@ data's sigma and the photosphere column of six species, so a disagreement names 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import logging
 import os
@@ -34,6 +36,17 @@ WARM_COLD_SHIFT_SIGMA = 0.1
 # Effective sample size the reweighted rows must keep. A weighted median's own standard error is about
 # 1.25 / sqrt(ESS) sigma: 0.125 sigma at 100, already above the shift gate, so below it the shift cannot be read.
 WARM_COLD_MIN_ESS = 100.0
+# Step cap of the cold re-solve of a run's posterior rows. A cold start needs more steps than the warm start that
+# reached the same column, and a row the re-solve loses to its cap looks like a warm-start error: at the run's own
+# 5000 steps the re-solve lost 4-9% of the rows, and 17 of 19 of those certify by 30000 at the warm run's log L
+# (notes "Warm starts").
+WARM_COLD_COUNT_MAX = 30000
+# The fewest rows a verdict is given on: a weighted quantile's own error is about 1.25 / sqrt(rows) sigma, 0.04 at 1000.
+WARM_COLD_MIN_ROWS = 1000
+# The quantiles gated: the median and both ends of the 68% interval, so a change of width fails as a shift does.
+WARM_COLD_QUANTILES = (0.16, 0.5, 0.84)
+# What every part of one check shares.
+_ONE_CHECK = ("posterior", "spec", "network", "rung", "seed", "draws", "count_max")
 LOW_KZZ = -0.7
 CORNER_Z = (0.02, 0.98)
 CORNER_PARAMS = ("lnZ", "c_o", "lnKzz", "s_o", "Tirr", "T1bar", "log10kappa")
@@ -114,14 +127,17 @@ def _draw_set(args, pipe, names):
     import jax
 
     if args.posterior:
-        post = np.load(Path(args.posterior) / "nautilus_posterior.npz")
+        # One read: the hash names the bytes the rows are drawn from, whatever a resume writes there meanwhile.
+        raw = (Path(args.posterior) / "nautilus_posterior.npz").read_bytes()
+        post = np.load(io.BytesIO(raw))
         if list(post["param_names"]) != names:
             raise RuntimeError(f"the posterior's parameters {list(post['param_names'])} are not the spec's {names}")
         from retrieval_framework.nautilus_report import weights
 
         w = weights(post["log_w"])
         idx = np.random.default_rng(args.seed).choice(len(w), size=args.draws, p=w)
-        return np.array(post["u"][idx], np.float64), (), {"post_row": idx, "logL_run": post["log_l"][idx]}
+        sha = np.full(len(idx), hashlib.sha256(raw).hexdigest())
+        return np.array(post["u"][idx], np.float64), (), {"post_row": idx, "logL_run": post["log_l"][idx], "sha": sha}
     if args.u_from:  # another machine's draw set, row for row
         z = np.load(args.u_from)
         if not np.array_equal(z["rows"], np.arange(len(z["rows"]))):
@@ -154,6 +170,21 @@ def _solve_rows(pipe, u_rows, batched):
     return tuple(jnp.concatenate([p[k] for p in parts]) for k in range(4))
 
 
+def _refuse_another_spec(spec, run):
+    """The check re-solves the run's own model: refuse a spec that is not the one the run archived."""
+    from retrieval_framework.run_setup import spec_digest
+
+    h = hashlib.sha256()
+    for f in (run / "spec.yaml", run / "spec_base.yaml"):
+        if f.exists():
+            h.update(f.read_bytes())
+    if h.hexdigest() != spec_digest(spec):
+        raise RuntimeError(
+            f"{spec.path} is not the specification {run} ran (its copies are spec.yaml and spec_base.yaml there). "
+            "Pass the spec the run was submitted with, at the commit it ran."
+        )
+
+
 def solve(args) -> int:
     from retrieval_framework.run_setup import load_spec, set_observations
 
@@ -168,6 +199,9 @@ def solve(args) -> int:
     from retrieval_framework import pipeline as P
 
     cfg = spec.cfg
+    if args.posterior:
+        _refuse_another_spec(spec, Path(args.posterior))
+        cfg = replace(cfg, count_max=max(int(cfg.count_max or 0), WARM_COLD_COUNT_MAX))
     lanes = int(cfg.cold_lanes)
     pipe = P.build_pipeline(cfg)
     set_observations(cfg, pipe, P)
@@ -195,6 +229,7 @@ def solve(args) -> int:
         "posterior": str(args.posterior or ""),
         "rows": args.rows,
         "lanes": lanes,
+        "count_max": int(pipe.fwd.chem.count_max),
         "runtime": rt.env(),
         "n_corners": len(C),
         "device": str(jax.devices()[0]),
@@ -231,7 +266,7 @@ def _load(paths):
     zs = [np.load(p) for p in paths]
     rows = np.concatenate([z["rows"] for z in zs])
     out = {k: np.concatenate([z[k] for z in zs]) for k in ("u", "theta", "logL", "acc", "certified", "mu", "vmr")}
-    for k in ("post_row", "logL_run"):
+    for k in ("post_row", "logL_run", "sha"):
         if k in zs[0]:
             out[k] = np.concatenate([z[k] for z in zs])
     out.update(
@@ -341,20 +376,44 @@ def compare(args) -> int:
     return int(bool(fails))
 
 
-def _wmedian(x, w):
-    o = np.argsort(x)
-    c = np.cumsum(w[o])
-    return float(x[o][np.searchsorted(c, 0.5 * c[-1])])
-
-
 def _warm_cold_fails(worst_shift_sigma, ess):
     """Return the warm-against-cold gates a run is over; a NaN fails its gate."""
     fails = []
     if not abs(worst_shift_sigma) <= WARM_COLD_SHIFT_SIGMA:
-        fails.append("median_shift")
+        fails.append("quantile_shift")
     if not ess >= WARM_COLD_MIN_ESS:
         fails.append("ess")
     return fails
+
+
+def _wquant(x, w, q):
+    """The row of ``x`` at the weighted quantile ``q``: one rule for a weighted and an unweighted set."""
+    o = np.argsort(x)
+    c = np.cumsum(w[o])
+    return float(x[o][min(np.searchsorted(c, q * c[-1]), len(x) - 1)])
+
+
+def _wmedian(x, w):
+    return _wquant(x, w, 0.5)
+
+
+def _one_complete_check(paths, z):
+    """Refuse parts of different checks, and a set of rows that is short, repeated or too small for a verdict."""
+    first = z["meta"]
+    for p in paths[1:]:
+        other = json.loads(str(np.load(p)["meta"]))
+        differ = [k for k in _ONE_CHECK if other.get(k) != first.get(k)]
+        if differ:
+            raise RuntimeError(f"{p} is a part of another check than {paths[0]}: they differ in {differ}")
+    if len(set(z["sha"])) != 1:
+        raise RuntimeError(f"the parts were drawn from {len(set(z['sha']))} posterior files: one check, one posterior")
+    draws = int(first["draws"])
+    if not np.array_equal(np.sort(z["rows"]), np.arange(draws)):
+        raise RuntimeError(
+            f"the parts hold {len(z['rows'])} rows, not each of the {draws} drawn once: pass every part, once"
+        )
+    if draws < WARM_COLD_MIN_ROWS:
+        raise RuntimeError(f"{draws} rows: a verdict needs at least {WARM_COLD_MIN_ROWS} (--draws)")
 
 
 def warmcold(args) -> int:
@@ -363,38 +422,58 @@ def warmcold(args) -> int:
     z = _load(args.cold)
     if "logL_run" not in z:
         raise RuntimeError(f"{args.cold} was not solved with --posterior")
+    _one_complete_check(args.cold, z)
     ok = z["certified"] & (z["logL"] > constants.REJECT_BELOW)
-    dL = np.where(ok, z["logL"] - z["logL_run"], -np.inf)
-    w = np.exp(dL - np.max(dL[ok]))
     names, th = z["names"], z["theta"]
-    i_kzz = names.index("lnKzz")
-    low = th[:, i_kzz] < LOW_KZZ
-    shifts = {}
-    for j, n in enumerate(names):
-        sd = float(np.std(th[:, j]))
-        shifts[n] = (_wmedian(th[:, j], w) - float(np.median(th[:, j]))) / sd if sd > 0 else 0.0
-    worst = max(shifts, key=lambda n: abs(shifts[n]))
+    low = th[:, names.index("lnKzz")] < LOW_KZZ
+    sd = np.std(th, axis=0)
+    flat = np.ones(len(ok))
+
+    def worst_shift(weight):
+        """(label, shift in sigma) of the gated quantile that moves most from the unweighted rows' own."""
+        if not weight.any():
+            return "every row", float("nan")
+        shifts = {
+            f"{n} q{round(100 * q)}": (_wquant(th[:, j], weight, q) - _wquant(th[:, j], flat, q)) / sd[j]
+            for j, n in enumerate(names)
+            if sd[j] > 0
+            for q in WARM_COLD_QUANTILES
+        }
+        label = max(shifts, key=lambda k: abs(shifts[k]))
+        return label, float(shifts[label])
+
+    # A row the cold solve does not certify has weight 0: it counts against the run.
+    dL = np.where(ok, z["logL"] - z["logL_run"], -np.inf)
+    top = np.max(dL[ok]) if ok.any() else 0.0
+    w = np.exp(dL - top)
+    worst, shift = worst_shift(w)
     m = {
         "rows": len(dL),
+        "posterior_sha256": str(z["sha"][0]),
+        "cold_count_max": z["meta"].get("count_max"),
         "cold_certified": int(ok.sum()),
         "cold_certified_low_kzz": int(ok[low].sum()),
         "low_kzz_rows": int(low.sum()),
-        "median_abs_dL": float(np.median(np.abs(dL[ok]))),
+        "median_abs_dL": float(np.median(np.abs(dL[ok]))) if ok.any() else None,
         "median_abs_dL_low_kzz": float(np.median(np.abs(dL[ok & low]))) if (ok & low).any() else None,
         "median_abs_dL_high_kzz": float(np.median(np.abs(dL[ok & ~low]))) if (ok & ~low).any() else None,
-        "ess": float(w.sum() ** 2 / np.sum(w**2)),
-        "median_shift_sigma": shifts,
+        "ess": float(w.sum() ** 2 / np.sum(w**2)) if ok.any() else 0.0,
+        "quantiles": list(WARM_COLD_QUANTILES),
         "worst": worst,
-        "worst_shift_sigma": float(shifts[worst]),
+        "worst_shift_sigma": shift,
+        # The shift's two parts, apart: the rows the cold solve lost (the others at weight 1), and the change in
+        # log L of the rows it kept (a lost row at its warm value).
+        "worst_shift_lost_rows_sigma": worst_shift(ok.astype(float))[1],
+        "worst_shift_log_l_sigma": worst_shift(np.where(ok, w, np.exp(-top)))[1],
     }
-    fails = _warm_cold_fails(m["worst_shift_sigma"], m["ess"])
+    fails = _warm_cold_fails(shift, m["ess"])
     status = "FAIL" if fails else "PASS"
     summary = (
-        f"warm vs cold on {m['rows']} weighted posterior rows: {m['cold_certified']} certify "
-        f"cold ({m['cold_certified_low_kzz']}/{m['low_kzz_rows']} at low Kzz); median |dL| "
-        f"{m['median_abs_dL']:.3g}; worst median shift {worst} {shifts[worst]:+.3f} sigma "
-        f"(gate {WARM_COLD_SHIFT_SIGMA}); ESS {m['ess']:.0f} (gate {WARM_COLD_MIN_ESS:.0f})"
-        + (f"; over: {', '.join(fails)}" if fails else "")
+        f"warm vs cold on {m['rows']} weighted posterior rows: {m['cold_certified']} certify cold within "
+        f"{m['cold_count_max']} steps ({m['cold_certified_low_kzz']}/{m['low_kzz_rows']} at low Kzz); worst quantile "
+        f"shift {worst} {shift:+.3f} sigma (gate {WARM_COLD_SHIFT_SIGMA}; the lost rows alone "
+        f"{m['worst_shift_lost_rows_sigma']:+.3f}, the change in log L alone {m['worst_shift_log_l_sigma']:+.3f}); "
+        f"ESS {m['ess']:.0f} (gate {WARM_COLD_MIN_ESS:.0f})" + (f"; over: {', '.join(fails)}" if fails else "")
     )
     print(summary)
     _artifact.emit(
@@ -434,13 +513,15 @@ def main() -> int:
             "--results",
             type=Path,
             default=None,
-            help="the results directory (default: solve, the spec's case validation folder; compare and warmcold, "
-            "beside their first input)",
+            help="the results directory (default: solve, the spec's case validation folder, or with --posterior "
+            "that run's own validation folder; compare and warmcold, beside their first input)",
         )
     args = ap.parse_args()
     if args.results is None:
         args.results = {
-            "solve": lambda: _artifact.spec_case(args.spec)[1],
+            "solve": lambda: (
+                Path(args.posterior).resolve() / "validation" if args.posterior else _artifact.spec_case(args.spec)[1]
+            ),
             "compare": lambda: Path(args.a).resolve().parent,
             "warmcold": lambda: Path(args.cold[0]).resolve().parent,
         }[args.cmd]()

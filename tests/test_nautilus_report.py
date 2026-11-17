@@ -19,6 +19,7 @@ from retrieval_framework import constants
 from retrieval_framework import hardware
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import provenance
+from retrieval_framework import warm_cold
 from retrieval_framework import report_figures
 from conftest import case_config
 
@@ -221,9 +222,56 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
     assert not (tmp_path / "nautilus_spectra.npz").exists()
 
 
+def _warm_cold_artifact(out, status="PASS", sha=None):
+    """Write the warm-against-cold check's verdict where the report looks for it."""
+    m = {
+        "rows": 1000,
+        "posterior_sha256": sha or provenance._sha256(out / "nautilus_posterior.npz"),
+        "cold_count_max": 30000,
+        "cold_certified": 991,
+        "worst": "lnKzz q16",
+        "worst_shift_sigma": -0.031,
+        "ess": 950.0,
+    }
+    (out / warm_cold.WARM_COLD_DIR).mkdir(exist_ok=True)
+    path = out / warm_cold.WARM_COLD_DIR / f"warm_cold_{out.name}.json"
+    path.write_text(json.dumps({"verdict": {"status": status}, "measurements": [m]}))
+
+
+@pytest.mark.parametrize(
+    ("artifact", "status"),
+    [(None, "NOT RUN"), ({"status": "FAIL"}, "FAIL"), ({"sha": "0" * 64}, "STALE")],
+)
+def test_a_warm_run_is_not_reported_until_its_cold_re_solve_passes(tmp_path, monkeypatch, artifact, status):
+    """No check, a failed check and the check of another posterior file (a resumed run) all stop the report."""
+    _run_dir(tmp_path)
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    if artifact is not None:
+        _warm_cold_artifact(tmp_path, **artifact)
+    cert = NR.certificate(tmp_path)
+    assert cert["starts"]["warm_cold_check"]["status"] == status
+    assert cert["quotable"] is False
+    assert any("NOT QUOTABLE" in c for c in cert["caveats"])
+    with pytest.raises(RuntimeError, match=f"warm-against-cold check is {status}.*e2e_check.py warmcold"):
+        NR.main([str(tmp_path), "--spectra", "0"])
+    assert not (tmp_path / "plots").exists()
+
+
+def test_a_cold_run_needs_no_check(tmp_path, monkeypatch):
+    _run_dir(tmp_path)
+    monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
+    summ = json.loads((tmp_path / "nautilus_summary.json").read_text())
+    (tmp_path / "nautilus_summary.json").write_text(json.dumps({**summ, "starts": "cold"}))
+    cert = NR.certificate(tmp_path)
+    assert cert["starts"]["warm_cold_check"] == {"status": "NOT NEEDED"}
+    assert cert["quotable"] is True
+    assert not any("Warm starts" in c for c in cert["caveats"])
+
+
 def test_certificate_and_figures(tmp_path, monkeypatch):
     pytest.importorskip("corner")
     theta, depth = _run_dir(tmp_path)
+    _warm_cold_artifact(tmp_path)
     # the version record imports exojax, which must not precede vulcan_chem in a worker
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
     NR.main([str(tmp_path), "--spectra", "0"])
@@ -234,8 +282,17 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert rej["rejected_of_in_window"] == pytest.approx(45 / 900)
     assert rej["exhausted_of_in_window"] == pytest.approx(40 / 900)
     assert rej["warm_certified_of_warm"] == pytest.approx(849 / 992)
-    assert cert["result"] == {"logZ_box": -12.3, "logZ_err": None, "n_eff": 1234.0, "n_like": 990}
+    assert cert["result"] == {
+        "logZ_box": -12.3,
+        "logZ_err": None,
+        "n_eff": 1234.0,
+        "n_eff_target": None,
+        "finished": True,
+        "n_like": 990,
+    }
     assert cert["starts"]["mode"] == "warm"
+    assert cert["starts"]["warm_cold_check"]["status"] == "PASS"
+    assert cert["quotable"] is True
     assert cert["chemistry"]["rtol"] == 0.2
     # the derived quantities: weighted 16/50/84% of what the paper quotes
     der = cert["derived"]
@@ -278,6 +335,7 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
         "5.0% of the draws",
         "no logZ error",
         "Warm starts",
+        "re-solved cold within 30000 steps move no 16th, 50th or 84th percentile by more than 0.031 sigma (lnKzz q16)",
         "Lane queue",
         "counted twice",
         "52.6% of the in-window draws in the lowest bin",

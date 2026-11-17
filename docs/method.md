@@ -20,6 +20,7 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `case_keys` | Which Config keys a specification states: required, or refused when its mode does not read them |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
+| `warm_cold` | A warm run's cold re-solve verdict: where it is written and what the report makes of it |
 | `report_figures` | The three figures |
 | `validate_env` | Environment validation, run first by every job |
 | `hardware` | The device a process runs on, for a run's record, and the solver an analysis tool picks |
@@ -95,8 +96,9 @@ SM resident, so the GH200 specs state 528. `--dry-run` prints the lanes and the 
 
 ### Warm starts
 
-Experimental, and off by default (`sampler.warm_starts: false`): a run for a result starts every solve cold. A warm run
-counts only after its warm-against-cold check (`validation/e2e_check.py warmcold`) passes.
+Off by default (`sampler.warm_starts: false`). A warm run is reported only after its warm-against-cold check passes:
+`nautilus_report` refuses a warm run whose check is missing, failed or made on an earlier posterior of a resumed run, and
+the run's certificate says `quotable: false`. A run that fails is repeated cold.
 
 With `warm_starts: true` every certified column becomes an anchor keyed by its unit-cube chemistry and T-P coordinates, and each later solve continues
 from its nearest anchor; batches before the first certified column run cold. The certified state and which draws are rejected
@@ -167,9 +169,17 @@ not a verdict by itself.
 
 `warmcold` is the warm-against-cold check on posterior rows solved cold by the production rung: the subsample reweighted by
 $\exp(L_{\rm cold} - L_{\rm run})$, a row that does not certify cold given weight 0, and every parameter's median shift in
-posterior sigma, low-Kzz rows ($\ln K_{zz} < -0.7$) apart. Gates: every median within 0.1 sigma, and an effective sample size of the weights of at least 100
-(below it the weighted median's own error, about $1.25/\sqrt{\rm ESS}$ sigma, exceeds the shift gate). A warm run's numbers are
-quotable only after it passes.
+posterior sigma, low-Kzz rows ($\ln K_{zz} < -0.7$) apart. The cold solve runs within `WARM_COLD_COUNT_MAX` steps, above the
+run's own cap: a cold start needs more steps than the warm start that reached the same column, and a row it loses to its cap
+reads as a warm-start error. The verdict gives the shift's two parts apart, the lost rows and the change in $\log L$.
+Gates: the 16th, 50th and 84th percentiles of every parameter within 0.1 sigma of the unweighted rows' own (one quantile
+rule for both, so equal likelihoods are no shift, and a change of width fails as a shift does), and an effective sample size
+of the weights of at least 100 (below it a weighted quantile's own error, about $1.25/\sqrt{\rm ESS}$ sigma, exceeds the
+gate). The solve refuses a spec that is not the one the run archived; the verdict refuses parts of different checks and a
+row set that is not each of the rows drawn, once, 1000 or more. It is written to the run's own `validation/` folder with
+the hash of the posterior file it drew its rows from, where the run's certificate and `nautilus_report` read it. Not
+covered: a draw the warm run rejected that a cold run would accept, a rare row of small warm weight and large cold
+likelihood, and a change of the joint shape that leaves every marginal; a planet run both ways is the test of those.
 
 ### posterior_forward_check variants
 
@@ -182,8 +192,8 @@ quotable only after it passes.
 | `spot` | The transit-light-source factor of a spotted star: `--spot-t-phot`, `--spot-dt`, `--spot-f`, required |
 
 Every validation artifact records the case's own data identity: the product files its config names and the run's
-`observations.npz` where there is one. `e2e_check.py --results` defaults to the spec's case folder for `solve` and to the
-folder of the first input for `compare` and `warmcold`. A draw the engine refuses to start (a repair factor not > 0) is a
+`observations.npz` where there is one. `e2e_check.py --results` defaults to the spec's case folder for `solve` (with `--posterior`, to that run's
+`validation/` folder) and to the folder of the first input for `compare` and `warmcold`. A draw the engine refuses to start (a repair factor not > 0) is a
 FAIL row of `elemental_audit.py`, with the refusal recorded.
 
 The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`

@@ -100,9 +100,10 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 ### Sampler and policy
 
 - `run_nautilus` on the stock nautilus-sampler pinned in pyproject is the only sampler.
-- Cold starts are the default. Warm starts (`sampler.warm_starts: true`) are experimental: each solve continues from the
-  nearest certified column, so the likelihood depends on the evaluation order. A run for a result is cold (notes
-  "Design records").
+- Cold starts are the default. With `sampler.warm_starts: true` each solve continues from the nearest certified
+  column, so the likelihood depends on the evaluation order: `nautilus_report` refuses such a run until its
+  warm-against-cold check passes (`docs/method.md` "Warm starts"; notes "Warm starts"). Never loosen that refusal, the
+  gate or the cold re-solve's cap to pass a run; a run that fails is repeated cold.
 - The chemistry policy is the spec's: one program per draw, at the spec's `rtol` (`cfg_overrides`) within `count_max`
   accepted steps, and only its VULCAN certificate keeps a draw. A second program (a presolve chain) needs a full-run A/B
   first (notes "Design records"); the cold re-solve of a frozen warm start is not one (the maintainer decided).
@@ -191,7 +192,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - Name the case: a setting belongs to a case's spec (the WASP-39b case, a survey planet), never to "the retrieval"; say
   where it is set.
 - Report a finished run from `nautilus_certificate.json` (a run stopped by the governor has none yet) and
-  `nautilus_report`'s figures. The certificate has no pass/fail verdict: read its caveats. Quote the paper's quantities
+  `nautilus_report`'s figures. The certificate has no pass/fail verdict but `quotable` (a warm run's cold re-solve):
+  read its caveats. Quote the paper's quantities
   from its `derived` block, never re-derived by hand; a T1bar run is reported against its accepted joint prior (notes
   "Physics assumptions and limitations"). Forward checks at a run's draws: `validation/posterior_forward_check.py`.
 - Quote posterior numbers from the weighted points (`theta`, `log_w`) in `nautilus_posterior.npz`, never its
