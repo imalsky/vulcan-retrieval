@@ -4,9 +4,9 @@
 
 Every likelihood call goes through the pipeline's batched chemistry and RT on the lane queue. A non-finite forward, a
 T-P draw outside the window, and a solve that does not certify (count_max exhausted or stalled) get log L = -inf, so
-the evidence is a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. With
-``sampler.warm_starts`` each solve continues from its nearest certified column, so the posterior and evidence are
-approximate; an evidence claim uses ``warm_starts: false``. docs/method.md describes the output files, the sampler
+the evidence is a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. Every solve starts
+cold by default. With the experimental ``sampler.warm_starts`` each solve continues from its nearest certified
+column, so the posterior and evidence are approximate. docs/method.md describes the output files, the sampler
 settings, the startup check and the lanes.
 """
 

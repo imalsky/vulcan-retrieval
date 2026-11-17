@@ -120,6 +120,11 @@ def test_variant_replaces_a_base_value_whole(tmp_path):
     assert spec.base == (tmp_path / "base.yaml").resolve()
 
 
+def test_a_spec_that_names_no_start_mode_starts_every_solve_cold(tmp_path):
+    spec = R.load_spec(_write(tmp_path / "s.yaml", {"config": MINIMAL}))
+    assert spec.sampler.warm_starts is False  # warm starts are experimental: a spec must ask for them
+
+
 @pytest.mark.parametrize(
     ("doc", "match"),
     [

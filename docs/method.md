@@ -95,7 +95,10 @@ SM resident, so the GH200 specs state 528. `--dry-run` prints the lanes and the 
 
 ### Warm starts
 
-Every certified column becomes an anchor keyed by its unit-cube chemistry and T-P coordinates, and each later solve continues
+Experimental, and off by default (`sampler.warm_starts: false`): a run for a result starts every solve cold. A warm run
+counts only after its warm-against-cold check (`validation/e2e_check.py warmcold`) passes.
+
+With `warm_starts: true` every certified column becomes an anchor keyed by its unit-cube chemistry and T-P coordinates, and each later solve continues
 from its nearest anchor; batches before the first certified column run cold. The certified state and which draws are rejected
 then depend on the evaluation order at the convergence tolerance. Anchors are written inside the likelihood call, before
 nautilus checkpoints the batch, so a job killed in between resumes by redrawing that batch, and the tally counts it twice.

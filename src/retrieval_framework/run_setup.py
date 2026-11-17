@@ -118,13 +118,14 @@ class Sampler:
     n_batch : int, optional
         Points per batch; None is ``constants.BATCH_PER_LANE`` times the lanes.
     warm_starts : bool
-        Continue each solve from the nearest certified column.
+        Experimental: continue each solve from the nearest certified column, so the likelihood depends on the
+        evaluation order. Off by default: a run for a result starts every solve cold.
     """
 
     n_live: int = 1000
     n_eff: int = 10_000
     n_batch: int | None = None
-    warm_starts: bool = True
+    warm_starts: bool = False
 
 
 @dataclass(frozen=True)
