@@ -23,6 +23,7 @@ from retrieval_framework import nautilus_report as NR
 from retrieval_framework import pipeline as P
 from retrieval_framework import run_nautilus as RN
 from retrieval_framework import run_setup as R
+from retrieval_framework import warm_checks
 from conftest import case_config
 
 DIGEST = "d" * 64
@@ -162,6 +163,90 @@ def test_a_finished_run_writes_its_posterior_summary_and_identity(job):
     assert summary["starts"] == "anchored warm (growing)"
     assert summary["finished"] is True
     assert "APPROXIMATE" in summary["evidence_note"]
+
+
+def _tilt_cold(pipe, tilt):
+    """Make the stub's cold solve score each certified row ``tilt * p0`` higher than its warm solve does."""
+    make = pipe._make_batch_eval
+
+    def tilted(mode):
+        ev = make(mode)
+        if mode != "cold":
+            return ev
+
+        def cold(U, Y, refs, active):
+            L, Ynew, rnew, st = ev(U, Y, refs, active)
+            return L + tilt * jax.nn.sigmoid(U[:, 0]), Ynew, rnew, st
+
+        return cold
+
+    pipe._make_batch_eval = tilted
+
+
+@pytest.mark.parametrize("tilt", [0.0, 20.0])
+def test_a_finished_warm_run_spot_checks_its_rows_cold(job, monkeypatch, caplog, tilt):
+    """At the end of a warm run, posterior rows drawn by weight and the warm rows rejected at the step cap are solved by
+    the run's own cold evaluator: a cold likelihood equal to the warm one moves nothing, one that rises with p0 moves
+    the posterior's quantiles past the limit, and that is a warning in the log, the file and the summary, never a stop.
+    """
+    _tilt_cold(job.pipe, tilt)
+    stub = _Sampler.posterior
+
+    def posterior(self, equal_weight=False):
+        """As nautilus's: a rejected row has no weight."""
+        z, log_w, log_l = stub(self, equal_weight)
+        return z, None if log_w is None else np.where(np.isfinite(log_l), log_w, -np.inf), log_l
+
+    monkeypatch.setattr(_Sampler, "posterior", posterior)
+    with caplog.at_level("INFO", logger="retrieval"):
+        RN.main([job.spec])
+    assert job.events[-1] == "certificate"
+    spot = json.loads((job.out / "spot_check.json").read_text())
+    summary = json.loads((job.out / "nautilus_summary.json").read_text())
+    assert summary["spot_check"] == spot
+    assert summary["warm_start_guards"]["warm_in_window"] == summary["rejections_and_starts"]["warm_in_window"] > 0
+    capped = 0
+    for f in (job.out / "rejected").glob("rejected_*.npz"):
+        with np.load(f) as d:
+            capped += int(d["warm"]) * int((d["cls"] == 1).sum())
+    assert capped > 0
+    assert spot["status"] == "done"
+    assert (spot["posterior_rows"], spot["rejected_rows"]) == (constants.SPOT_CHECK_POSTERIOR_ROWS, capped)
+    assert spot["rejected_certified_cold"] == spot["rejected_above_posterior_1pct"] == 0  # the stub caps them cold too
+    assert spot["posterior_certified_cold"] == spot["posterior_rows"]
+    assert spot["estimate_seconds"] > 0
+    if tilt == 0.0:
+        assert (spot["median_abs_dlog_l"], spot["max_abs_dlog_l"], spot["worst_shift_sigma"]) == (0.0, 0.0, 0.0)
+        assert spot["warnings"] == []
+    else:
+        assert spot["max_abs_dlog_l"] > 1.0
+        assert abs(spot["worst_shift_sigma"]) > constants.SPOT_CHECK_SHIFT_SIGMA
+        assert len(spot["warnings"]) == 1
+        assert f"spot-check: {spot['warnings'][0]}" in caplog.text
+
+
+@pytest.mark.parametrize("why", ["no time", "failure"])
+def test_a_spot_check_with_no_time_or_a_failure_is_recorded_and_the_run_goes_on(job, monkeypatch, why):
+    if why == "no time":
+        monkeypatch.setattr(constants, "JOB_HEADROOM_S", 0)  # the governor is the whole budget, and it is spent
+        Path(job.spec).write_text(
+            Path(job.spec).read_text().replace("cold_lanes: 8", "cold_lanes: 8, walltime_seconds: 1.0e-9")
+        )
+    else:
+
+        def broken(*_a):
+            raise ValueError("a broken posterior file")
+
+        monkeypatch.setattr(warm_checks, "_spot_check", broken)
+    RN.main([job.spec])
+    assert job.events[-1] == "certificate"
+    spot = json.loads((job.out / "nautilus_summary.json").read_text())["spot_check"]
+    assert spot == json.loads((job.out / "spot_check.json").read_text())
+    if why == "no time":
+        assert spot["status"] == "skipped"
+        assert " s are left before half the job's headroom" in spot["reason"]
+    else:
+        assert spot == {"status": "failed", "error": "ValueError: a broken posterior file"}
 
 
 def test_a_changed_target_is_refused_before_the_run_writes_anything(job):

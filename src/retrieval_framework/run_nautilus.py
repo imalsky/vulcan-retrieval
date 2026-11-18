@@ -6,8 +6,9 @@ Every likelihood call goes through the pipeline's batched chemistry and RT on th
 T-P draw outside the window, and a solve that does not certify (count_max exhausted or stalled) get log L = -inf, so
 the evidence is a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. Every solve starts
 cold by default. With the experimental ``sampler.warm_starts`` each solve continues from its nearest certified
-column, so the posterior and evidence are approximate. docs/method.md describes the output files, the sampler
-settings, the startup check and the lanes.
+column, so the posterior and evidence are approximate, and the run warns from its own guards and an end-of-run cold
+spot-check (``warm_checks``). docs/method.md describes the output files, the sampler settings, the startup check and the
+lanes.
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
-from retrieval_framework import config_schema as C, constants, hardware
+from retrieval_framework import config_schema as C, constants, hardware, warm_checks
 from retrieval_framework.anchors import Anchors, atomic_savez
 from retrieval_framework.batch_profiler import BatchProfiler
+from retrieval_framework.chunks import Rejections, cold_log_l, pad, verdict
 from retrieval_framework.run_setup import (
     check_run_dir,
     export_runtime,
@@ -108,39 +110,6 @@ def startup_check(log10_kzz: ArrayLike, in_window: np.ndarray, kept: np.ndarray,
     return lines
 
 
-class _Rejections(NamedTuple):
-    """A chunk's rejected rows, one mask per class."""
-
-    tp_out: np.ndarray
-    exhausted: np.ndarray
-    stalled: np.ndarray
-    nonfinite: np.ndarray
-
-    @property
-    def dead(self) -> np.ndarray:
-        """Return the rows of any class."""
-        return self.tp_out | self.exhausted | self.stalled | self.nonfinite
-
-    def code(self) -> np.ndarray:
-        """Return each row's class: 0 T-P out, 1 exhausted, 2 stalled, 3 otherwise."""
-        return np.where(self.tp_out, 0, np.where(self.exhausted, 1, np.where(self.stalled, 2, 3)))
-
-
-def _classify(
-    tp_in: np.ndarray, conv: np.ndarray, acc: np.ndarray, L: np.ndarray, count_max: int, reject_below: float
-) -> _Rejections:
-    """Sort a chunk's rows into the rejection classes.
-
-    Solver state first: the warm evaluator already floors L on a stalled or exhausted exit, which is not a non-finite
-    forward. A solve certified at cap or cap + 1 is kept.
-    """
-    tp_out = ~tp_in
-    exhausted = ~tp_out & ~conv & (acc >= count_max)
-    stalled = ~tp_out & ~exhausted & ~conv
-    nonfinite = ~tp_out & ~exhausted & conv & (~np.isfinite(L) | (L <= reject_below))
-    return _Rejections(tp_out, exhausted, stalled, nonfinite)
-
-
 class _ChunkLogs:
     """What a run keeps per chunk: the tally, the batch log, and the rejected and nuisance files."""
 
@@ -165,7 +134,7 @@ class _ChunkLogs:
             self.n_nui = len(list(nuisance.glob("nuisance_*.npz")))
 
     def write(
-        self, z: np.ndarray, log_l: np.ndarray, rej: _Rejections, acc: np.ndarray, warm: bool, t: float, nuis: Any
+        self, z: np.ndarray, log_l: np.ndarray, rej: Rejections, acc: np.ndarray, warm: bool, t: float, nuis: Any
     ) -> None:
         """Log one chunk of ``len(z)`` rows; ``nuis`` holds the evaluator's group statistics, one row per input row."""
         dead = rej.dead
@@ -196,6 +165,9 @@ class _ChunkLogs:
             (f"n_{mode}", len(z)),
             (f"{mode}_certified", (~dead).sum()),
             (f"{mode}_steps_certified", acc[~dead].sum()),
+            # The warm-start guards compare the modes' step-cap rejections (warm_checks.guards).
+            (f"{mode}_in_window", (~rej.tp_out).sum()),
+            (f"{mode}_exhausted", rej.exhausted.sum()),
         ):
             self.tally[key] = self.tally.get(key, 0) + int(v)
 
@@ -240,6 +212,7 @@ def make_loglike(
     nuisance: Path | None = None,
     startup_kzz: Callable[[np.ndarray], np.ndarray] | None = None,
     slow_lanes: int | None = None,
+    cold: Callable[..., Any] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Build the batched log-likelihood of unit-cube points, -inf on every rejection class.
 
@@ -272,6 +245,9 @@ def make_loglike(
     slow_lanes : int, optional
         The chemistry queue's lane count. Given, a chunk ``constants.SLOW_CHUNK_FACTOR`` times slower per solver
         iteration than the run's best is reported in the log and counted in ``tally["slow_chunks"]``.
+    cold : callable, optional
+        The jitted cold evaluator, ``jax.jit(pipe._make_batch_eval("cold"))``; built here if not given. A caller that
+        solves more rows cold later (``chunks.cold_log_l``) passes its own, so it compiles once.
 
     Returns
     -------
@@ -284,10 +260,9 @@ def make_loglike(
     from retrieval_framework import pipeline as P
 
     Y0, refs0 = P._blank_state(pipe, n_batch)
-    count_max = int(pipe.fwd.chem.count_max)
     k = int(pipe.n_chem_tp)
     logs = _ChunkLogs(tally, batch_log, rejects, nuisance, slow_lanes)
-    fns = {"cold": jax.jit(pipe._make_batch_eval("cold"))}
+    fns = {"cold": cold or jax.jit(pipe._make_batch_eval("cold"))}
     if anchors is not None:
         fns["warm"] = jax.jit(pipe._make_batch_eval("warm"))
 
@@ -297,14 +272,8 @@ def make_loglike(
         Z = np.atleast_2d(np.asarray(Z, np.float64))
         out = np.empty(len(Z))
         for i in range(0, len(Z), n_batch):
-            Zc = Z[i : i + n_batch]
-            m = len(Zc)
-            if m < n_batch:
-                Zc = np.concatenate([Zc, np.repeat(Zc[-1:], n_batch - m, axis=0)])
-            Uj = jnp.asarray(np.log(Zc) - np.log1p(-Zc), pipe.dtype)
-            # Not bitwise for the kept rows: fewer jobs on the lane queue shift the shared refresh cadence.
-            tp_in = np.asarray(jax.device_get(pipe.tp_valid_batch(Uj)), bool)
-            act = jnp.asarray((np.arange(n_batch) < m) & tp_in)
+            m = min(n_batch, len(Z) - i)
+            Zc, Uj, tp_in, act = pad(pipe, Z[i : i + m], n_batch)
             if prof is not None:
                 prof.batch_begin()
             t0 = time.perf_counter()
@@ -326,11 +295,7 @@ def make_loglike(
                     tally["warm_frozen_resolved_cold"] = tally.get("warm_frozen_resolved_cold", 0) + n_fz
             else:
                 L, Ynew, rnew, st = fns["cold"](Uj, Y0, refs0, act)
-            P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)
-            L = np.asarray(jax.device_get(L), np.float64)[:m]
-            acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
-            conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
-            rej = _classify(tp_in[:m], conv, acc, L, count_max, constants.REJECT_BELOW)
+            L, acc, rej = verdict(pipe, Zc, m, tp_in, L, st)
             dead = rej.dead
             out[i : i + m] = np.where(dead, -np.inf, L)
             if startup_kzz is not None:
@@ -506,8 +471,8 @@ def _log_settings(spec: Any, cfg: C.Config, settings: NautilusSettings) -> None:
 
 def _saved_loglike(
     pipe: Pipeline, cfg: C.Config, out: Path, n_batch: int, warm: bool, resume: bool, tally: dict
-) -> Callable[[np.ndarray], np.ndarray]:
-    """Return the run's log-likelihood, which saves the tally after each call, atomically."""
+) -> tuple[Callable[[np.ndarray], np.ndarray], Callable[..., Any]]:
+    """Return the run's log-likelihood, which saves the tally after each call, atomically, and its cold evaluator."""
     import jax
 
     from retrieval_framework.nautilus_report import log10_kzz_at_report_level
@@ -525,6 +490,7 @@ def _saved_loglike(
             C.need(cfg.vulcan_cfg_name, "vulcan_cfg_name"), cfg.cfg_overrides, p_ref, th[:, names.index("lnKzz")], slope
         )
 
+    cold = jax.jit(pipe._make_batch_eval("cold"))
     like = make_loglike(
         pipe,
         n_batch,
@@ -537,6 +503,7 @@ def _saved_loglike(
         startup_kzz=None if resume else startup_kzz,
         # Only on a CPU, where another job on the run's cores is the known cause.
         slow_lanes=min(int(C.need(cfg.cold_lanes, "cold_lanes")), n_batch) if jax.default_backend() == "cpu" else None,
+        cold=cold,
     )
     tally_path = out / TALLY_FILE
 
@@ -548,7 +515,7 @@ def _saved_loglike(
         tmp.replace(tally_path)
         return L
 
-    return loglike_saved
+    return loglike_saved, cold
 
 
 def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want: str, seed: int) -> None:
@@ -588,9 +555,19 @@ def _write_posterior(sampler: nautilus.Sampler, pipe: Pipeline, out: Path, want:
 
 
 def _write_summary(
-    sampler: nautilus.Sampler, pipe: Pipeline, spec: Any, out: Path, settings: NautilusSettings, tally: dict, done: bool
+    sampler: nautilus.Sampler,
+    pipe: Pipeline,
+    spec: Any,
+    out: Path,
+    settings: NautilusSettings,
+    tally: dict,
+    done: bool,
+    warm_record: dict,
 ) -> None:
-    """Write nautilus_summary.json; ``done`` is False for a run the wall budget stopped short of its ``n_eff``."""
+    """Write nautilus_summary.json; ``done`` is False for a run the wall budget stopped short of its ``n_eff``.
+
+    ``warm_record`` holds a warm run's guards and spot-check, and is empty for a cold run.
+    """
     import nautilus
 
     warm = settings.warm
@@ -614,6 +591,7 @@ def _write_summary(
             if warm
             else ""
         ),
+        **warm_record,
     }
     (out / "nautilus_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
@@ -728,11 +706,12 @@ def main(argv: list[str] | None = None) -> None:
 
     tally_path = out / TALLY_FILE
     tally = json.loads(tally_path.read_text()) if (resume and tally_path.exists()) else {}
-    like = _saved_loglike(pipe, cfg, out, n_batch, settings.warm, resume, tally)
+    like, cold = _saved_loglike(pipe, cfg, out, n_batch, settings.warm, resume, tally)
     sampler = make_sampler(like, pipe.n_dim, settings, filepath=str(ckpt), resume=resume)
     budget = float(cfg.walltime_seconds)
     timeout = max(budget - (time.time() - t_start), 60.0) if budget > 0 else float("inf")
     done = _sample(sampler, settings, timeout, tally)
+    warm_record = {"warm_start_guards": warm_checks.guards(tally)} if settings.warm else {}
     if not done:
         log.warning("nautilus did not finish: resubmit with --resume (the checkpoint is %s).", ckpt)
         # The posterior discards the exploration phase, and nautilus then refills its shells one at a time: until
@@ -747,7 +726,12 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     _write_posterior(sampler, pipe, out, want, settings.seed)
-    _write_summary(sampler, pipe, spec, out, settings, tally, done)
+    if settings.warm:
+        # The job's wall is the governor plus JOB_HEADROOM_S (tools/submit.py): the check may use half of that.
+        left = budget + constants.JOB_HEADROOM_S / 2 - (time.time() - t_start) if budget > 0 else float("inf")
+        solve = partial(cold_log_l, pipe, cold, n_batch)
+        warm_record["spot_check"] = warm_checks.spot_check(out, solve, settings.seed, n_batch, left)
+    _write_summary(sampler, pipe, spec, out, settings, tally, done, warm_record)
     log.info("wrote %s and nautilus_summary.json", out / "nautilus_posterior.npz")
     from retrieval_framework.nautilus_report import write_certificate
 

@@ -33,6 +33,7 @@ jax.config.update("jax_enable_x64", True)
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
 from retrieval_framework import pipeline as P
+from retrieval_framework import warm_checks
 from retrieval_framework.anchors import Anchors
 from retrieval_framework.run_nautilus import NautilusSettings, _check_resume, make_loglike, make_sampler, startup_check
 from conftest import OMP_SET_BY_CALLER, case_config
@@ -217,6 +218,36 @@ def test_a_warm_start_takes_the_nearest_anchor_whose_start_is_physical(tmp_path)
     assert (alive & (rank > 0)).any()
     used = anchors.columns(np.arange(len(z_a), len(anchors)))[0][:, 0, 0]  # the stub's warm solve returns its start
     assert np.array_equal(used, code_a[order[np.arange(64), rank]][alive])
+
+
+def test_the_warm_start_guards_count_each_mode_and_warn_only_past_their_limits(tmp_path, caplog):
+    """The tally counts each mode's in-window and step-cap rows; a guard warns (never stops) only past its limit, and
+    one it cannot compute is named as skipped.
+    """
+    rng = np.random.default_rng(3)
+    tally = {}
+    like = make_loglike(_stub_pipe(), 64, tally, Anchors(tmp_path, 2))
+    zs = {"cold": rng.uniform(0.02, 0.98, (64, D)), "warm": rng.uniform(0.02, 0.98, (64, D))}
+    like(zs["cold"])
+    like(zs["warm"])
+    for mode, z in zs.items():
+        win = z[:, 2] <= 0.7  # theta = z on the unit box
+        assert tally[f"{mode}_in_window"] == win.sum()
+        assert tally[f"{mode}_exhausted"] == (win & (z[:, 0] > 0.6)).sum() > 0
+
+    edge = {"warm_in_window": 1000, "cold_in_window": 500, "warm_exhausted": 100, "cold_exhausted": 26}
+    with caplog.at_level("WARNING", logger="retrieval"):
+        quiet = warm_checks.guards({**edge, "warm_start_none": 5})  # 0.5 % and 10.0 - 5.2 = 4.8 points: at the limits
+        assert not caplog.records
+        loud = warm_checks.guards({**edge, "warm_start_none": 6, "warm_exhausted": 103})
+    assert (quiet["warnings"], quiet["skipped"]) == ([], [])
+    assert quiet["warm_start_none_frac"] == pytest.approx(0.005)
+    assert (loud["warm_exhausted_frac"], loud["cold_exhausted_frac"]) == (pytest.approx(0.103), pytest.approx(0.052))
+    assert [w.split()[0] for w in loud["warnings"]] == ["0.60%", "10.3%"]
+    assert len(caplog.records) == 2
+    no_cold = warm_checks.guards({**edge, "cold_in_window": 0, "warm_start_none": 0})
+    assert (no_cold["warnings"], no_cold["skipped"]) == ([], ["step-cap guard: 0 in-window cold and 1000 warm rows"])
+    assert warm_checks.guards({})["skipped"][0] == "no-start guard: no in-window warm row"
 
 
 @pytest.mark.parametrize("n_anchors", [1, 7, 8, 9, 40])

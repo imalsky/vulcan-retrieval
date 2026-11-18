@@ -19,7 +19,6 @@ from retrieval_framework import constants
 from retrieval_framework import hardware
 from retrieval_framework import nautilus_report as NR
 from retrieval_framework import provenance
-from retrieval_framework import warm_cold
 from retrieval_framework import report_figures
 from conftest import case_config
 
@@ -222,56 +221,73 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
     assert not (tmp_path / "nautilus_spectra.npz").exists()
 
 
-def _warm_cold_artifact(out, status="PASS", sha=None):
-    """Write the warm-against-cold check's verdict where the report looks for it."""
-    m = {
-        "rows": 1000,
-        "posterior_sha256": sha or provenance._sha256(out / "nautilus_posterior.npz"),
-        "cold_count_max": 30000,
-        "cold_certified": 991,
-        "worst": "lnKzz q16",
-        "worst_shift_sigma": -0.031,
-        "ess": 950.0,
-    }
-    (out / warm_cold.WARM_COLD_DIR).mkdir(exist_ok=True)
-    path = out / warm_cold.WARM_COLD_DIR / f"warm_cold_{out.name}.json"
-    path.write_text(json.dumps({"verdict": {"status": status}, "measurements": [m]}))
+GUARD_WARNING = "1.00% of the in-window warm rows had no physical start among the 8 nearest anchors"
+SPOT_WARNING = "reweighted by the cold likelihood, 200 posterior rows move lnKzz q16 by -0.140 sigma (limit 0.1)."
+SPOT = {
+    "status": "done",
+    "posterior_rows": 200,
+    "posterior_certified_cold": 196,
+    "median_abs_dlog_l": 0.002,
+    "max_abs_dlog_l": 0.31,
+    "worst": "lnKzz q16",
+    "worst_shift_sigma": -0.14,
+    "rejected_rows": 100,
+    "rejected_certified_cold": 61,
+    "rejected_above_posterior_1pct": 9,
+    "warnings": [SPOT_WARNING],
+}
 
 
 @pytest.mark.parametrize(
-    ("artifact", "status"),
-    [(None, "NOT RUN"), ({"status": "FAIL"}, "FAIL"), ({"sha": "0" * 64}, "STALE")],
+    ("record", "says"),
+    [
+        (
+            {"warm_start_guards": {"warnings": [GUARD_WARNING], "skipped": []}, "spot_check": SPOT},
+            [f"Warning: {GUARD_WARNING}", "Spot-check: 196 of 200", "61 certified cold, 9 above", SPOT_WARNING],
+        ),
+        (
+            {
+                "warm_start_guards": {"warnings": [], "skipped": ["step-cap guard: 0 in-window cold and 9 warm rows"]},
+                "spot_check": {"status": "skipped", "reason": "it needs about 900 s"},
+            },
+            ["Not computed: step-cap guard", "spot-check was skipped: it needs about 900 s"],
+        ),
+        ({}, ["records no warm-start guards", "records no end-of-run spot-check"]),
+    ],
 )
-def test_a_warm_run_is_not_reported_until_its_cold_re_solve_passes(tmp_path, monkeypatch, artifact, status):
-    """No check, a failed check and the check of another posterior file (a resumed run) all stop the report."""
+def test_a_warm_run_is_reported_with_its_own_guards_and_spot_check(tmp_path, monkeypatch, record, says):
+    """No check after the run: the certificate carries the run's guards and spot-check, and the warm caveat states the
+    order dependence and the step-cap limit, then what the guards and the spot-check found, or that they are missing.
+    """
     _run_dir(tmp_path)
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
-    if artifact is not None:
-        _warm_cold_artifact(tmp_path, **artifact)
+    summ = json.loads((tmp_path / "nautilus_summary.json").read_text())
+    (tmp_path / "nautilus_summary.json").write_text(json.dumps({**summ, **record}))
     cert = NR.certificate(tmp_path)
-    assert cert["starts"]["warm_cold_check"]["status"] == status
-    assert cert["quotable"] is False
-    assert any("NOT QUOTABLE" in c for c in cert["caveats"])
-    with pytest.raises(RuntimeError, match=f"warm-against-cold check is {status}.*e2e_check.py warmcold"):
-        NR.main([str(tmp_path), "--spectra", "0"])
-    assert not (tmp_path / "plots").exists()
+    assert "quotable" not in cert
+    assert cert["starts"]["warm_start_guards"] == record.get("warm_start_guards")
+    assert cert["starts"]["spot_check"] == record.get("spot_check")
+    (warm,) = [c for c in cert["caveats"] if c.startswith("Warm starts")]
+    assert "evaluation order" in warm
+    assert "logZ_box is approximate" in warm
+    assert "The draws rejected at the step cap are not solved cold per run" in warm
+    for text in says:
+        assert text in warm
 
 
-def test_a_cold_run_needs_no_check(tmp_path, monkeypatch):
+def test_a_cold_run_has_no_warm_caveat(tmp_path, monkeypatch):
     _run_dir(tmp_path)
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
     summ = json.loads((tmp_path / "nautilus_summary.json").read_text())
     (tmp_path / "nautilus_summary.json").write_text(json.dumps({**summ, "starts": "cold"}))
     cert = NR.certificate(tmp_path)
-    assert cert["starts"]["warm_cold_check"] == {"status": "NOT NEEDED"}
-    assert cert["quotable"] is True
+    assert (cert["starts"]["warm_start_guards"], cert["starts"]["spot_check"]) == (None, None)
     assert not any("Warm starts" in c for c in cert["caveats"])
 
 
 def test_certificate_and_figures(tmp_path, monkeypatch):
     pytest.importorskip("corner")
-    theta, depth = _run_dir(tmp_path)
-    _warm_cold_artifact(tmp_path)
+    theta, depth = _run_dir(tmp_path)  # a warm run, reported with no check beside it
     # the version record imports exojax, which must not precede vulcan_chem in a worker
     monkeypatch.setattr(provenance, "_versions", lambda: {"jax": "0.6.2"})
     NR.main([str(tmp_path), "--spectra", "0"])
@@ -291,8 +307,6 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
         "n_like": 990,
     }
     assert cert["starts"]["mode"] == "warm"
-    assert cert["starts"]["warm_cold_check"]["status"] == "PASS"
-    assert cert["quotable"] is True
     assert cert["chemistry"]["rtol"] == 0.2
     # the derived quantities: weighted 16/50/84% of what the paper quotes
     der = cert["derived"]
@@ -335,7 +349,7 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
         "5.0% of the draws",
         "no logZ error",
         "Warm starts",
-        "re-solved cold within 30000 steps move no 16th, 50th or 84th percentile by more than 0.031 sigma (lnKzz q16)",
+        "records no warm-start guards",
         "Lane queue",
         "counted twice",
         "52.6% of the in-window draws in the lowest bin",

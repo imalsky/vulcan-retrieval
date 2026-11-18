@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from vulcan_forward.constants import BAR_CGS, KZZ_P_REF_BAR
 
-from retrieval_framework import config_schema as C, constants, hardware, provenance, warm_cold
+from retrieval_framework import config_schema as C, constants, hardware, provenance, warm_checks
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -500,8 +500,7 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
     warm = summ["starts"] != "cold"
     rejections = _rejection_fractions(tally)
     cond = _conditioning_map(out)
-    check = warm_cold.check(out, summ)
-    caveats = _model_caveats(cfg, summ, tally, rejections, cond, warm_cold.caveat(out, check) if warm else None)
+    caveats = _model_caveats(cfg, summ, tally, rejections, cond, warm_checks.caveat(summ) if warm else None)
     caveats.append(_unmodeled_caveat(out))
     caveats += _identity_caveats(manifest, manifest_digest, digest, code_now)
 
@@ -554,10 +553,10 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
             # physical start among the anchors tried.
             "warm_start_moved": tally.get("warm_start_moved", 0),
             "warm_start_none": tally.get("warm_start_none", 0),
-            "warm_cold_check": check,
+            # A warm run's guards on its tally and its end-of-run spot-check (warm_checks); None for a cold run.
+            "warm_start_guards": summ.get("warm_start_guards"),
+            "spot_check": summ.get("spot_check"),
         },
-        # A warm run's numbers are quoted only after its cold re-solve passes.
-        "quotable": check["status"] in warm_cold.QUOTABLE,
         "rejections": rejections,
         "chemistry": {
             "rtol": summ.get("chem_rtol"),
@@ -753,11 +752,6 @@ def main(argv: list[str] | None = None) -> None:
     ----------
     argv : list of str, optional
         The arguments; default ``sys.argv``.
-
-    Raises
-    ------
-    RuntimeError
-        For a warm run whose warm-against-cold check has not passed.
     """
     from retrieval_framework.report_figures import plot
     from retrieval_framework.run_setup import setup_logging
@@ -775,9 +769,6 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging()
     out = Path(args.out_dir).resolve()
     cfg = config_from_json(out / "config.json")  # refuses an archived config.json before any figure
-    check = warm_cold.check(out, read_json(out, "nautilus_summary.json"))
-    if check["status"] not in warm_cold.QUOTABLE:
-        raise RuntimeError(f"no report of {out}. " + warm_cold.caveat(out, check).split("NOT QUOTABLE: ", 1)[1])
     # the forward build comes first: the certificate's version record imports
     # exojax, which must not precede vulcan_chem
     spectra = _model_spectra(out, cfg, args.spectra) if args.spectra > 0 else None

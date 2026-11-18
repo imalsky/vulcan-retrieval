@@ -16,11 +16,12 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `nuisance` | The integrated offsets and inflations |
 | `provenance` | Code and data identity, the target manifest and digest |
 | `run_nautilus` | The sampler driver: the likelihood's chunks, the nautilus settings, the resume refusal |
+| `chunks` | One padded chunk through a batched evaluator: the active mask, the rejection classes, a cold solve of extra rows |
 | `anchors` | The warm-start anchors: every certified column, keyed by its unit-cube coordinates, and the choice of start |
 | `case_keys` | Which Config keys a specification states: required, or refused when its mode does not read them |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
-| `warm_cold` | A warm run's cold re-solve verdict: where it is written and what the report makes of it |
+| `warm_checks` | A warm run's guards on its tally, its end-of-run spot-check, and the report's caveat from them |
 | `report_figures` | The three figures |
 | `validate_env` | Environment validation, run first by every job |
 | `hardware` | The device a process runs on, for a run's record, and the solver an analysis tool picks |
@@ -96,9 +97,7 @@ SM resident, so the GH200 specs state 528. `--dry-run` prints the lanes and the 
 
 ### Warm starts
 
-Off by default (`sampler.warm_starts: false`). A warm run is reported only after its warm-against-cold check passes:
-`nautilus_report` refuses a warm run whose check is missing, failed or made on an earlier posterior of a resumed run, and
-the run's certificate says `quotable: false`. A run that fails is repeated cold.
+Off by default (`sampler.warm_starts: false`).
 
 With `warm_starts: true` every certified column becomes an anchor keyed by its unit-cube chemistry and T-P coordinates, and each later solve continues
 from the nearest anchor that gives it a physical start; batches before the first certified column run cold. A guess built
@@ -110,6 +109,30 @@ is taken. A draw with none keeps its nearest anchor and is rejected at step zero
 then depend on the evaluation order at the convergence tolerance. Anchors are written inside the likelihood call, before
 nautilus checkpoints the batch, so a job killed in between resumes by redrawing that batch, and the tally counts it twice.
 The set is never pruned: `8 nz ni` bytes per certified column (74 KB at `nz` 100 and 93 species), on disk and in memory.
+
+A warm run checks itself, and needs no check after it. Both checks only warn: they change no likelihood, stop no run
+and stop no report. The certificate's `starts` block carries both, and the warm caveat states each warning.
+
+- Guards on the tally, at the run's end. The share of in-window warm rows with no physical start among the anchors
+  tried, above `WARM_NONE_WARN_FRAC`. The share of in-window warm rows rejected at the step cap against the share of
+  cold rows (the first batches, before any anchor), more than `WARM_EXHAUSTED_EXCESS` above it. A guard with no rows to
+  count says so.
+- A spot-check once the posterior is written. `SPOT_CHECK_POSTERIOR_ROWS` posterior rows drawn by weight and up to
+  `SPOT_CHECK_REJECTED_ROWS` warm rows rejected at the step cap (`rejected/`, class 1) are solved cold by the run's own
+  cold evaluator, in padded batches of `n_batch`, as a cold batch is. The posterior rows give
+  $|L_{\rm cold} - L_{\rm run}|$ over the rows certified both ways, and the largest shift of a 16th, 50th or 84th
+  percentile, in posterior sigma, when the rows are reweighted by $\exp(L_{\rm cold} - L_{\rm run})$; a row that does
+  not certify cold has weight 0, and the reference is the same rows unweighted, through the same quantile rule. A shift
+  above `SPOT_CHECK_SHIFT_SIGMA` is a warning. The rejected rows give how many certify cold and how many land above the
+  posterior's 1% log-L point, with no limit. The check runs only if the run's first cold batch time, per batch of rows,
+  ends before the governor plus half of `JOB_HEADROOM_S`; otherwise it is skipped with the reason, and an error is
+  recorded, not raised.
+
+Not covered: a change of the joint shape that leaves every marginal (no planet is run both warm and cold), and the
+draws a warm run rejects at its step cap beyond that sample, which are not solved cold per run. In three
+first-campaign runs every such draw, solved cold and put back, moved no 16th, 50th or 84th percentile by more than 0.08
+sigma, and the lower edge of Kzz by 0.07 dex at most (notes "Warm starts"). The draws whose warm start was not physical,
+at low Kzz, moved it by up to 0.43 sigma: the start choice above removes them, and the first guard counts any left.
 
 ### Startup check
 
@@ -125,8 +148,8 @@ In `output/<case>/<name>_nautilus`: the run's identity, written at every start (
 columns per batch; `rejected/`, one npz per chunk of the rejected draws (`z`, class `cls` 0 T-P out, 1 exhausted, 2 stalled,
 3 non-finite, `acc`, `warm`); with integrated nuisances `nuisance/`, one npz per chunk of the certified rows (`z`, `log_l`,
 `stats`); `batches.jsonl`, each chunk's wall time, start mode and accepted steps; `nautilus_tally.json`, the rejection and
-warm-start counts summed over jobs. A finished run adds `nautilus_posterior.npz`, `nautilus_summary.json` and
-`nautilus_certificate.json`. The run stops at `cfg.walltime_seconds` and exits 0 unfinished; resubmit with `--resume`.
+warm-start counts summed over jobs. A finished run adds `nautilus_posterior.npz`, `nautilus_summary.json` (with a warm
+run's guards and spot-check), a warm run's `spot_check.json`, and `nautilus_certificate.json`. The run stops at `cfg.walltime_seconds` and exits 0 unfinished; resubmit with `--resume`.
 
 ## Report
 
@@ -171,25 +194,6 @@ $D = \sqrt{\sum (\delta\mu/\sigma)^2}$, $|\delta\log_{10}{\rm VMR}|$ of the six 
 draws within 50 nats of the best, and every certificate mismatch. Gates, provisional: worst bin 0.1 sigma, $D$ 0.5, 95th
 percentile 0.03 dex and worst 0.1 dex, $|\delta\log L|$ 0.5, no certificate mismatch. An exceedance is a disagreement to explain,
 not a verdict by itself.
-
-`warmcold` is the warm-against-cold check on posterior rows solved cold by the production rung: the subsample reweighted by
-$\exp(L_{\rm cold} - L_{\rm run})$, a row that does not certify cold given weight 0, and every parameter's median shift in
-posterior sigma, low-Kzz rows ($\ln K_{zz} < -0.7$) apart. The cold solve runs within `WARM_COLD_COUNT_MAX` steps, above the
-run's own cap: a cold start needs more steps than the warm start that reached the same column, and a row it loses to its cap
-reads as a warm-start error. The verdict gives the shift's two parts apart, the lost rows and the change in $\log L$.
-Gates: the 16th, 50th and 84th percentiles of every parameter within 0.1 sigma of the unweighted rows' own (one quantile
-rule for both, so equal likelihoods are no shift, and a change of width fails as a shift does), and an effective sample size
-of the weights of at least 100 (below it a weighted quantile's own error, about $1.25/\sqrt{\rm ESS}$ sigma, exceeds the
-gate). The solve refuses a spec that is not the one the run archived; the verdict refuses parts of different checks and a
-row set that is not each of the rows drawn, once, 1000 or more. It is written to the run's own `validation/` folder with
-the hash of the posterior file it drew its rows from, where the run's certificate and `nautilus_report` read it. Not
-covered: a rare row of small warm weight and large cold likelihood, a change of the joint shape that leaves every
-marginal (a planet run both ways is the test of those), and a draw the warm run rejected that a cold run would accept.
-Of the last, the draws whose warm solve ran out of its step cap remain; they lie inside the posterior, not at an edge.
-Every such draw of three first-campaign runs, solved cold and put back, moved no 16th, 50th or 84th percentile by more
-than 0.08 sigma, and the lower edge of Kzz by 0.07 dex at most (notes "Warm starts"); it is not measured for each run.
-The draws whose warm start was not physical, at low Kzz, moved it by up to 0.43 sigma: the start choice above removes
-them.
 
 ### posterior_forward_check variants
 
