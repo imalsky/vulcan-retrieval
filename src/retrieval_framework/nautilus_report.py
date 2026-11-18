@@ -89,13 +89,8 @@ def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[f
     if "T1bar" in names:
         from retrieval_framework.tp_profile import tint_from_deep
 
-        T_inv, p_inv = float(t[names.index("T1bar")]), float(cfgj["tp_deep_p_bar"])
-        if "log10P_rcb" in names:
-            # the deep level may sit on the adiabat (tp_profile._phys)
-            p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
-            T_inv = T_inv * (min(p_rcb, p_inv) / p_inv) ** float(cfgj["tp_nabla_ad"])
-            p_inv = min(p_rcb, p_inv)
-        Tint = float(np.asarray(tint_from_deep(T_inv, Tirr, kappa, gamma, g, constants.GUILLOT_F, p_inv)))
+        T_deep, p_deep = float(t[names.index("T1bar")]), float(cfgj["tp_deep_p_bar"])
+        Tint = float(np.asarray(tint_from_deep(T_deep, Tirr, kappa, gamma, g, constants.GUILLOT_F, p_deep)))
     elif "Tint" in names:
         Tint = float(t[names.index("Tint")])
     else:
@@ -104,16 +99,9 @@ def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[f
 
 
 def tp_curve(t: np.ndarray, names: list[str], cfgj: dict[str, Any], p_bar: ArrayLike) -> np.ndarray:
-    """Return T(p_bar), K, of one posterior row: the Guillot profile, with the adiabat below the retrieved boundary."""
-    g = float(cfgj["tp_gravity_cgs"])
+    """Return T(p_bar), K, of one posterior row: the Guillot profile."""
     Tirr, kappa, gamma, Tint = _tp_params(t, names, cfgj)
-    T = _guillot_T(p_bar, g, kappa, gamma, Tint, Tirr, constants.GUILLOT_F)
-    if "log10P_rcb" in names:
-        p_rcb = 10.0 ** float(t[names.index("log10P_rcb")])
-        T_rcb = _guillot_T(p_rcb, g, kappa, gamma, Tint, Tirr, constants.GUILLOT_F)
-        nabla = float(cfgj["tp_nabla_ad"])
-        T = np.where(np.asarray(p_bar) > p_rcb, T_rcb * (np.asarray(p_bar) / p_rcb) ** nabla, T)
-    return T
+    return _guillot_T(p_bar, float(cfgj["tp_gravity_cgs"]), kappa, gamma, Tint, Tirr, constants.GUILLOT_F)
 
 
 def kzz_at_ref(vulcan_cfg_name: str, cfg_overrides: dict[str, Any], p_bar: float = KZZ_P_REF_BAR) -> float:
@@ -157,17 +145,8 @@ def kzz_at_ref(vulcan_cfg_name: str, cfg_overrides: dict[str, Any], p_bar: float
     return float(np.interp(p_bar, p[o], np.asarray(t["Kzz"], np.float64)[o]))
 
 
-def log10_kzz_at_report_level(
-    vulcan_cfg_name: str,
-    cfg_overrides: dict[str, Any],
-    powerlaw_p_ref_bar: float | None,
-    lnkzz: np.ndarray,
-    slope: np.ndarray | None,
-) -> np.ndarray:
-    """Return log10 Kzz at ``KZZ_P_REF_BAR`` of each row, on the engine's profile.
-
-    The power law anchors the base at its reference pressure and tilts it as (P / P_anchor)^-slope; at the default
-    anchor the tilt is 1. Otherwise e^lnKzz scales the case's profile.
+def log10_kzz_at_report_level(vulcan_cfg_name: str, cfg_overrides: dict[str, Any], lnkzz: np.ndarray) -> np.ndarray:
+    """Return log10 Kzz at ``KZZ_P_REF_BAR`` of each row: the case's profile there, scaled by e^lnKzz.
 
     Parameters
     ----------
@@ -175,29 +154,15 @@ def log10_kzz_at_report_level(
         The case's vulcan3 config name or path.
     cfg_overrides : dict
         Overrides of the file's settings.
-    powerlaw_p_ref_bar : float or None
-        The power law's ``kzz_p_ref_bar``, bar; None for ``kzz_mode: scale``.
     lnkzz : numpy.ndarray [n]
         Each row's lnKzz.
-    slope : numpy.ndarray [n] or None
-        Each row's power-law slope; None under the scale mode.
 
     Returns
     -------
     numpy.ndarray [n]
         log10 Kzz, cm^2/s.
     """
-    kzz = np.exp(lnkzz)
-    if powerlaw_p_ref_bar is None:
-        return np.log10(kzz_at_ref(vulcan_cfg_name, cfg_overrides) * kzz)
-    anchor = float(powerlaw_p_ref_bar)
-    tilt = (KZZ_P_REF_BAR / anchor) ** (-(0.0 if slope is None else slope))
-    return np.log10(kzz_at_ref(vulcan_cfg_name, cfg_overrides, anchor) * kzz * tilt)
-
-
-def _powerlaw_p_ref(cfgj: dict[str, Any]) -> float | None:
-    """Return a config.json's power-law reference pressure, None under the scale mode."""
-    return float(cfgj["kzz_p_ref_bar"]) if cfgj["kzz_mode"] == "powerlaw" else None
+    return np.log10(kzz_at_ref(vulcan_cfg_name, cfg_overrides) * np.exp(lnkzz))
 
 
 def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
@@ -244,14 +209,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         "kzz_factor": _wquant(kzz, w),
         "kzz_ref_p_bar": KZZ_P_REF_BAR,
         "log10_kzz_ref_cgs": _wquant(
-            log10_kzz_at_report_level(
-                cfgj["vulcan_cfg_name"],
-                cfgj["cfg_overrides"],
-                _powerlaw_p_ref(cfgj),
-                col("lnKzz"),
-                col("kzz_slope") if "kzz_slope" in names else None,
-            ),
-            w,
+            log10_kzz_at_report_level(cfgj["vulcan_cfg_name"], cfgj["cfg_overrides"], col("lnKzz")), w
         ),
         "kzz_prior_floor_factor": floor,
         **{f"kzz_weight_below_{m:g}x_floor": float(w[kzz < m * floor].sum()) for m in constants.KZZ_FLOOR_MULTIPLES},
@@ -271,8 +229,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
         }
     if "Tirr" in names:
         p_deep = np.array([float(cfgj["tp_deep_p_bar"])])
-        # the full profile (adiabat included) at the deep level, and the Tint
-        # behind it
+        # the profile at the deep level, and the Tint behind it
         T_deep = np.asarray([tp_curve(t, names, cfgj, p_deep)[0] for t in theta])
         Tint = np.asarray([_tp_params(t, names, cfgj)[3] for t in theta])
         d.update(T_deep_p_bar=float(p_deep[0]), T_deep_K=_wquant(T_deep, w), Tint_K=_wquant(Tint, w))

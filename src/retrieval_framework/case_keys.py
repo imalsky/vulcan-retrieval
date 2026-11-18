@@ -55,8 +55,6 @@ MODE_KEYS = (
     ModeKey(("tp_Tint_K",), lambda c: not c.tp_infer_Tint, "tp_infer_Tint: false", True),
     ModeKey(("tp_deep_param",), lambda c: c.tp_infer_Tint, "tp_infer_Tint: true", False),
     ModeKey(("tp_gamma_fixed",), lambda c: not c.tp_infer_gamma, "tp_infer_gamma: false", True),
-    ModeKey(("tp_nabla_ad",), lambda c: c.tp_adiabat, "tp_adiabat: true", True),
-    ModeKey(("kzz_p_ref_bar",), lambda c: c.kzz_mode == "powerlaw", "kzz_mode: powerlaw", True),
     ModeKey(("noise_inflation_per_group",), lambda c: c.infer_noise_inflation, "infer_noise_inflation: true", False),
     ModeKey(("combo", "obs_wl_lo", "obs_wl_hi"), lambda c: bool(c.obs_dir), "a data source (obs_dir)", True),
     ModeKey(("obs_max_bin_R",), lambda c: bool(c.obs_dir), "a data source (obs_dir)", False),

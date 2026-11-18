@@ -1,4 +1,4 @@
-"""Differentiable T-P profile from exojax's ``atmprof_Guillot``, with an optional deep level and adiabat.
+"""Differentiable T-P profile from exojax's ``atmprof_Guillot``, with an optional deep level.
 
 ``build_tp_model`` maps the retrieved T-P entries and the fixed constants to a temperature on any pressure grid, bar.
 The retrieval evaluates the same curve on the VULCAN grid and the ART grid. exojax implements Guillot (2010) with a
@@ -102,7 +102,7 @@ def tint_from_deep(
 def build_tp_model(cfg: Config) -> SimpleNamespace:
     """Build the T-P evaluator for this Config.
 
-    The entries are ``[Tirr, log10kappa, (log10gamma), (Tint | T1bar), (log10P_rcb)]``, the order of
+    The entries are ``[Tirr, log10kappa, (log10gamma), (Tint | T1bar)]``, the order of
     ``config_schema.specs_from_config``.
 
     Parameters
@@ -114,7 +114,7 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
     -------
     types.SimpleNamespace
         ``eval(tp_params, p_bar)``, ``n_params``, ``T_min``, ``T_max``, ``tint_of(tp_params)``, ``deep_param``,
-        ``p_deep_bar``, ``adiabat``, ``nabla_ad``.
+        ``p_deep_bar``.
     """
     from exojax.atm.atmprof import atmprof_Guillot
 
@@ -122,16 +122,13 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
     f = constants.GUILLOT_F
     infer_gamma = bool(cfg.tp_infer_gamma)
     infer_Tint = bool(cfg.tp_infer_Tint)
-    adiabat = bool(cfg.tp_adiabat)
     # each fixed value only in the mode that reads it: the others are unset
     Tint = math.nan if infer_Tint else float(C.need(cfg.tp_Tint_K, "tp_Tint_K"))
     gamma_fixed = math.nan if infer_gamma else float(C.need(cfg.tp_gamma_fixed, "tp_gamma_fixed"))
     deep_param = str(cfg.tp_deep_param) if infer_Tint else "fixed"
     p_deep = float(C.need(cfg.tp_deep_p_bar, "tp_deep_p_bar"))
-    nabla = float(C.need(cfg.tp_nabla_ad, "tp_nabla_ad")) if adiabat else math.nan
     i_deep = 2 + int(infer_gamma)
-    i_rcb = i_deep + int(infer_Tint)
-    n_params = i_rcb + int(adiabat)
+    n_params = i_deep + int(infer_Tint)
 
     def _phys(tp: Array) -> tuple[Array, Array, Array, Array]:
         """Return (Tirr, kappa, gamma, Tint) of one T-P vector."""
@@ -141,14 +138,7 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
         if not infer_Tint:
             Tint_t = jnp.asarray(Tint, dtype=tp.dtype)
         elif deep_param == "T1bar":
-            T_inv = tp[i_deep]
-            p_inv: Array | float = p_deep
-            if adiabat:
-                # The deep level may sit on the adiabat: the Guillot part must then pass through
-                # T_deep (P_rcb / p_deep)^nabla at P_rcb.
-                p_inv = jnp.minimum(10.0 ** tp[i_rcb], p_deep)
-                T_inv = T_inv * (p_inv / p_deep) ** nabla
-            Tint_t = tint_from_deep(T_inv, Tirr, kappa, gamma, g, f, p_inv)
+            Tint_t = tint_from_deep(tp[i_deep], Tirr, kappa, gamma, g, f, p_deep)
         else:
             Tint_t = tp[i_deep]
         return Tirr, kappa, gamma, Tint_t
@@ -158,12 +148,7 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
         tp = jnp.asarray(tp_params)
         p = jnp.asarray(p_bar, dtype=tp.dtype)
         Tirr, kappa, gamma, Tint_t = _phys(tp)
-        T = atmprof_Guillot(p, g, kappa, gamma, Tint_t, Tirr, f)
-        if adiabat:
-            p_rcb = 10.0 ** tp[i_rcb]
-            T_rcb = atmprof_Guillot(p_rcb, g, kappa, gamma, Tint_t, Tirr, f)
-            T = jnp.where(p > p_rcb, T_rcb * (p / p_rcb) ** nabla, T)
-        return T
+        return atmprof_Guillot(p, g, kappa, gamma, Tint_t, Tirr, f)
 
     def tint_of(tp_params: ArrayLike) -> Array:
         """Return the Tint of one T-P vector, retrieved or reconstructed from the deep level."""
@@ -177,6 +162,4 @@ def build_tp_model(cfg: Config) -> SimpleNamespace:
         tint_of=tint_of,
         deep_param=deep_param,
         p_deep_bar=p_deep,
-        adiabat=adiabat,
-        nabla_ad=nabla,
     )

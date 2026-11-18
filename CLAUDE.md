@@ -91,8 +91,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   only in `active_parameters`. A number that belongs to a case is a spec key, never a value in the code.
   The synthetic bin grid is only for a spec that names no data source.
 - The chemistry block `[lnZ, c_o, lnKzz, <extras>]` is positional (`theta[0:n_chem]`, then the T-P entries; the extras
-  are `config_schema.chem_extras`: `s_o` with `infer_s_o`, `kzz_slope` with `kzz_mode="powerlaw"`, in that order), and
-  the first three are always inferred: never add a drop path. Read the block through `pipe.n_chem` / `pipe.n_chem_tp`,
+  are `config_schema.chem_extras`: `s_o` with `infer_s_o`), and the first three are always inferred: never add a drop
+  path. Read the block through `pipe.n_chem` / `pipe.n_chem_tp`,
   never a literal 3.
 - `set_observations` validates at the API boundary (`pipeline.validate_observations`): mask invalid bins before
   injection.

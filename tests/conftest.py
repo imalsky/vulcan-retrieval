@@ -65,19 +65,15 @@ CASE = {
     "tp_Tint_K": 150.0,
     "tp_gamma_fixed": 0.4,
     "tp_deep_p_bar": 1.0,
-    "tp_nabla_ad": 0.29,
-    "kzz_p_ref_bar": 1.0e-3,
     "prior_lnZ": (-2.302585092994046, 2.302585092994046),
     "prior_c_o": (-1.6, 0.45),
     "prior_lnKzz": (-5.0, 5.0),
     "prior_s_o": (-2.302585092994046, 2.302585092994046),
-    "prior_kzz_slope": (-1.0, 1.0),
     "prior_Tirr": (800.0, 2600.0),
     "prior_log10kappa": (-3.5, 0.5),
     "prior_log10gamma": (-2.0, 0.7),
     "prior_Tint": (100.0, 500.0),
     "prior_T1bar": (320.0, 2980.0),
-    "prior_log10P_rcb": (-1.0, 0.88),
     "prior_lnR0": (-0.08, 0.08),
     "prior_lnM_sigma": 0.11,
     "prior_log10kappa_cloud": (-7.0, 1.0),
@@ -92,13 +88,11 @@ CASE = {
             "c_o": 0.0,
             "lnKzz": 0.0,
             "s_o": 0.0,
-            "kzz_slope": 0.0,
             "Tirr": 1650.0,
             "log10kappa": -2.0,
             "log10gamma": -0.4,
             "Tint": 150.0,
             "T1bar": 1500.0,
-            "log10P_rcb": 0.5,
             "lnR0": 0.0,
             "lnM": 0.0,
             "log10kappa_cloud": -6.5,
@@ -156,25 +150,16 @@ def capped_smoke_pipe():
     return build_smoke_pipe(count_max=CAPPED_COLD_CMAX)
 
 
-# Every v5 model option at once (tests/test_v5_options.py): sulfur free, the
-# Kzz power law, T at 1 bar as the deep parameter with the adiabat below a free
-# boundary, the Gaussian mass nuisance, the grey deck.
+# Every v5 model option at once (tests/test_v5_options.py): sulfur free, T at 1 bar as the deep parameter, the
+# Gaussian mass nuisance, the grey deck.
 V5_SMOKE = {
     "infer_s_o": True,
     "prior_s_o": (-2.302585092994046, 2.302585092994046),  # a factor of ten either way
     "truth_s_o": 0.0,
-    "kzz_mode": "powerlaw",
-    "kzz_p_ref_bar": 1.0e-3,
-    "prior_kzz_slope": (-1.0, 1.0),
-    "truth_kzz_slope": 0.0,
     "tp_infer_Tint": True,
     "tp_deep_param": "T1bar",
     "prior_T1bar": (600.0, 2500.0),
     "truth_T1bar": 1500.0,
-    "tp_adiabat": True,
-    "tp_nabla_ad": 0.29,
-    "prior_log10P_rcb": (-1.0, 0.88),
-    "truth_log10P_rcb": 0.5,
     "infer_lnM": True,
     "truth_lnM": 0.0,
     "cloud_model": "deck",

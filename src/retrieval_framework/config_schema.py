@@ -3,7 +3,7 @@
 The planet and the run live in the spec, ``runs/<case>/<name>.yaml`` (``run_setup.load_spec``). The parameter vector
 is
 
-    theta = [lnZ, dln(C/O), lnKzz, [s_o], [kzz_slope], <T-P>, lnR0, [lnM], <cloud>, offset_g ..., <noise inflation>]
+    theta = [lnZ, dln(C/O), lnKzz, [s_o], <T-P>, lnR0, [lnM], <cloud>, offset_g ..., <noise inflation>]
 
 The chemistry and T-P entries re-converge VULCAN, the expensive part of a likelihood call; the rest enter only the RT or
 apply after it. Imports no jax. docs/method.md describes the parameters.
@@ -148,10 +148,6 @@ class Config:
     tp_infer_Tint: bool = False
     tp_deep_param: str = "Tint"  # {"Tint", "T1bar"}, with tp_infer_Tint
     tp_deep_p_bar: float | None = None  # bar: the level T1bar is quoted at, and the report's deep temperature
-    # A sensitivity model: an adiabat below a free boundary pressure (one more T-P entry,
-    # log10P_rcb), matched to the Guillot profile there; with constant kappa the join is imposed.
-    tp_adiabat: bool = False
-    tp_nabla_ad: float | None = None  # dlnT/dlnP of the adiabat
 
     # ---- clouds: "powerlaw" is ExoJax's kappa(nu) = kappac0 (nu / CLOUD_NUC0)^alphac, cm^2 per gram
     #      of atmosphere, uniformly mixed; "deck" is an opaque grey deck below a free pressure; "none" is a clear
@@ -183,13 +179,6 @@ class Config:
     infer_s_o: bool = False
     prior_s_o: tuple[float, float] | None = None
     truth_s_o: float | None = None
-    # Kzz shape: "scale" multiplies the vulcan cfg's profile by e^lnKzz;
-    # "powerlaw" is Kzz0(kzz_p_ref_bar) e^lnKzz (P / P_ref)^-kzz_slope, with the
-    # slope a chemistry entry after s_o (engine kzz_mode).
-    kzz_mode: str = "scale"
-    kzz_p_ref_bar: float | None = None  # bar
-    prior_kzz_slope: tuple[float, float] | None = None
-    truth_kzz_slope: float | None = None
     # The vulcan cfg's baseline metallicity in solar units (its <X>_H over the
     # Lodders 2020 photospheric values): the report quotes e^lnZ times this.
     baseline_metallicity_solar: float | None = None
@@ -207,8 +196,6 @@ class Config:
     # shape the accepted prior (report it).
     prior_T1bar: tuple[float, float] | None = None
     truth_T1bar: float | None = None
-    prior_log10P_rcb: tuple[float, float] | None = None  # bar
-    truth_log10P_rcb: float | None = None
     prior_lnR0: tuple[float, float] | None = None  # reference-radius log scaling
     truth_lnR0: float | None = None
     # Planet mass as a nuisance: lnM = ln(M / M0) ~ N(0, prior_lnM_sigma), applied
@@ -282,14 +269,11 @@ class Config:
             "art_ptop_bar": float(self.art_ptop_bar),
             "rt_integration": str(self.rt_integration),
             "use_rayleigh": bool(self.use_rayleigh),
-            "kzz_mode": str(self.kzz_mode),
             "cfg_overrides": dict(self.cfg_overrides),
             "gs_cgs": float(need(self.tp_gravity_cgs, "tp_gravity_cgs")),  # RT g at rp_cm = the T-P gravity
             "network": str(self.network),
             "atom_list": list(need(self.atom_list, "atom_list")),
         }
-        if self.kzz_mode == "powerlaw":  # the engine refuses the key under any other mode
-            p["kzz_p_ref_bar"] = float(need(self.kzz_p_ref_bar, "kzz_p_ref_bar"))
         # is not None: an explicit 0 must reach the engine.
         if self.count_min is not None:
             p["count_min"] = int(self.count_min)
@@ -354,12 +338,7 @@ def chem_extras(cfg: Config) -> tuple[str, ...]:
     tuple of str
         A subset of ``vulcan_chem.CHEM_EXTRAS``.
     """
-    out = []
-    if cfg.infer_s_o:
-        out.append("s_o")
-    if cfg.kzz_mode == "powerlaw":
-        out.append("kzz_slope")
-    return tuple(out)
+    return ("s_o",) if cfg.infer_s_o else ()
 
 
 class Parameter(NamedTuple):
@@ -403,11 +382,8 @@ def active_parameters(cfg: Config, groups: list[str] | None = None) -> list[Para
         p("c_o", r"$\Delta\ln(\mathrm{C/O})$", "chem"),
         p("lnKzz", r"$\ln K_{zz}$", "chem"),
     ]
-    for e in chem_extras(cfg):
-        if e == "s_o":
-            out.append(p("s_o", r"$\Delta\ln(\mathrm{S/O})$", "chem"))
-        else:
-            out.append(p("kzz_slope", r"$\alpha_{K}$", "chem"))
+    if cfg.infer_s_o:
+        out.append(p("s_o", r"$\Delta\ln(\mathrm{S/O})$", "chem"))
 
     out += [p("Tirr", r"$T_{\rm irr}$ (K)", "tp"), p("log10kappa", r"$\log_{10}\kappa_{\rm IR}$", "tp")]
     if cfg.tp_infer_gamma:
@@ -418,8 +394,6 @@ def active_parameters(cfg: Config, groups: list[str] | None = None) -> list[Para
             out.append(p("T1bar", rf"$T_{{{level}\,\rm bar}}$ (K)", "tp"))
         else:
             out.append(p("Tint", r"$T_{\rm int}$ (K)", "tp"))
-    if cfg.tp_adiabat:
-        out.append(p("log10P_rcb", r"$\log_{10}P_{\rm rcb}$", "tp"))
 
     out.append(p("lnR0", r"$\ln R_0$", "lnR0"))
     if cfg.infer_lnM:
@@ -577,8 +551,6 @@ def validate_config(cfg: Config) -> None:  # noqa: C901  # one refusal per knob
             raise ValueError(f"prior_noise_inflation needs 0 < lo < hi, got {noise}")
     if cfg.tp_deep_param not in ("Tint", "T1bar"):
         raise ValueError(f"tp_deep_param={cfg.tp_deep_param!r}: expected 'Tint' or 'T1bar'")
-    if cfg.kzz_mode not in ("scale", "powerlaw"):
-        raise ValueError(f"kzz_mode={cfg.kzz_mode!r}: expected 'scale' or 'powerlaw'")
     if cfg.cloud_model not in ("powerlaw", "deck", "none"):
         raise ValueError(f"cloud_model={cfg.cloud_model!r}: expected 'powerlaw', 'deck' or 'none'")
     if not cfg.use_rayleigh:
@@ -700,20 +672,22 @@ def describe_config(cfg: Config, name: str = "") -> str:
         f"    yconv_cri={cfg.yconv_cri:g}   count_max={cmax}   count_min={cmin}",
         f"    dt_max={dtmax} s   (physical step cap; master default 1e17 balloons dt -> high-Kzz non-convergence)",
         rule("T-P profile"),
-        f"    model=guillot   deep={('free ' + cfg.tp_deep_param) if cfg.tp_infer_Tint else f'Tint {cfg.tp_Tint_K:g}K'}"
-        f"   f={constants.GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
-        f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}"
-        + (f"   adiabat below a free P_rcb (nabla {cfg.tp_nabla_ad:g})" if cfg.tp_adiabat else ""),
+        (
+            "    model=guillot   deep="
+            f"{('free ' + cfg.tp_deep_param) if cfg.tp_infer_Tint else f'Tint {cfg.tp_Tint_K:g}K'}"
+            f"   f={constants.GUILLOT_F:g}   g={cfg.tp_gravity_cgs:g}cgs"
+            f"   infer_gamma={'on' if cfg.tp_infer_gamma else 'off'}"
+        ),
         (
             "    drawn RAW (no clip); profiles leaving the modelable T window on the RT or the "
             "chemistry grid are REJECTED + REDRAWN"
         ),
         rule("composition, Kzz, mass, clouds"),
-        f"    sulfur={'free (s_o)' if cfg.infer_s_o else 'scales with lnZ'}"
-        f"   kzz_mode={cfg.kzz_mode}"
-        + (f" (ref {cfg.kzz_p_ref_bar:g} bar)" if cfg.kzz_mode == "powerlaw" else "")
-        + f"   mass={('N(0, ' + format(cfg.prior_lnM_sigma, 'g') + ') in lnM') if cfg.infer_lnM else 'fixed'}"
-        f"   cloud_model={cfg.cloud_model}",
+        (
+            f"    sulfur={'free (s_o)' if cfg.infer_s_o else 'scales with lnZ'}"
+            f"   mass={('N(0, ' + format(cfg.prior_lnM_sigma, 'g') + ') in lnM') if cfg.infer_lnM else 'fixed'}"
+            f"   cloud_model={cfg.cloud_model}"
+        ),
         rule("data"),
         f"    {data}   "
         + (f"band {cfg.obs_wl_lo:g}-{cfg.obs_wl_hi:g} um   groups={groups}" if cfg.obs_dir else "synthetic bin grid"),

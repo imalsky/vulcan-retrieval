@@ -505,7 +505,6 @@ VALID = {
         ({"cfg_overrides": {"use_condense": True}}, "use_condense"),
         ({"tp_deep_param": "T_1bar", "tp_infer_Tint": True}, "tp_deep_param"),
         ({"tp_deep_p_bar": 0.0, "tp_infer_Tint": True}, "tp_deep_p_bar"),
-        ({"kzz_mode": "const"}, "kzz_mode"),
         ({"cloud_model": "patchy"}, "cloud_model"),
         ({"infer_lnM": True, "prior_lnM_sigma": 0.0}, "prior_lnM_sigma"),
         ({"network": ""}, r"\['network'\] unset"),  # no default network
@@ -534,9 +533,7 @@ VALID = {
             {
                 "tp_infer_Tint": True,
                 "tp_deep_param": "T1bar",
-                "tp_adiabat": True,
                 "infer_s_o": True,
-                "kzz_mode": "powerlaw",
                 "infer_lnM": True,
                 "cloud_model": "deck",
             },

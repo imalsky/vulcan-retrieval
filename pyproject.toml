@@ -172,7 +172,7 @@ max-complexity = 15
 extend-ignore-names = [
     "N_j", "T", "T_*", "*_T", "*_T_*", "Tirr", "Tint*", "*Tint*", "*T1bar*", "*Tirr*", "P", "M", "R", "S", "W", "G", "N", "Nm", "B", "B_jax",
     "O_*", "A", "C", "C_", "L", "L0", "Y", "Y*", "U", "U5", "Uj", "Z", "Zc", "*lnZ*", "*Kzz*", "lnR0*", "*lnR0*", "lnM*", "*lnM*",
-    "*_R", "*_log10P_deck", "*_log10P_rcb", "*_log10P_*", "CD", "AUX", "Theta", "ACC", "LO", "HI", "D", "OBS", "RF", "P_*", "T_inv", "*_rcb", "_REJECT", "_T_MIN", "_T_MAX",
+    "*_R", "*_log10P_deck", "*_log10P_*", "CD", "AUX", "Theta", "ACC", "LO", "HI", "D", "OBS", "RF", "P_*", "_REJECT", "_T_MIN", "_T_MAX",
 ]
 
 [tool.ruff.lint.per-file-ignores]

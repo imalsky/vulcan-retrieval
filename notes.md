@@ -7,12 +7,11 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 ## Current state
 
 - Version 0.28.0: the v5 model options (T at a deep level in place of Tint, the window on the chemistry grid, `s_o`, a
-  Gaussian `lnM`, the Kzz power law, the grey deck and the adiabat; "Design records"), the rejected-draw log and the
-  certificate's derived quantities. pyproject floors: vulcan-forward>=0.32.0 (`warm_start_ok`, which the warm-start
-  choice calls), vulcan3>=0.18.0. `requirements-hpc.txt` pins vulcan3 `6698920` and vulcan-forward `b224861` (0.32.0;
-  the second campaign's code, with `warm_start_ok`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6.
-  TestPyPI releases, tags confirmed by the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0,
-  jwst-transit-authority 0.72.0.
+  Gaussian `lnM` and the grey deck; "Design records"), the rejected-draw log and the certificate's derived quantities.
+  pyproject floors: vulcan-forward>=0.32.0 (`warm_start_ok`, which the warm-start choice calls), vulcan3>=0.18.0.
+  `requirements-hpc.txt` pins vulcan3 `6698920` and vulcan-forward `b224861` (0.32.0; the second campaign's code, with
+  `warm_start_ok`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. TestPyPI releases, tags confirmed by
+  the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0, jwst-transit-authority 0.72.0.
 - Production: `run_nautilus`, the only sampler, warm starts from a growing anchor set, solver `ffi` (the spec's
   `runtime` block), one chemistry program per draw (v5: rtol 0.05 within 5000 accepted steps; v4 ran the presolve chain,
   "Superseded designs"), per-instrument noise inflation and log10gamma down to -3. v4 sampled 15 parameters; v5 samples
@@ -252,7 +251,7 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
     Tint's median moves 325 -> 278 K, 16-84% 121-481 K. At 7 bar and kappa 1 cm2/g the deep term alone caps Tint at ~282
     K. Read a Tint posterior against this effective prior, not the uniform one.
   - Fix options: (A) the window only above ~1 bar (lets 4000 K deep layers into the chemistry); (B) T at 1 bar in place
-    of Tint: adopted for v5; (C) the review's imposed adiabat below a free boundary: the `tp_adiabat` option.
+    of Tint: adopted for v5; (C) the review's imposed adiabat below a free boundary: dropped unrun ("Design records").
 - Earlier prior edges and why they moved: "Superseded designs".
 
 ## Rate sensitivities (adjoint_w39b, 5.4 GPU-h)
@@ -607,10 +606,9 @@ HPC
     GCM; v4 ran x0.1 to x1000). A longer step budget at low Kzz was declined ("Ideas not adopted"). Kzz is reported
     truncated at x10 with the weight at the x0.1 floor, and as an upper limit if that weight grows. The Kzz bounds are
     confirmed by the maintainer; the paper states that the x1000 ceiling was set after seeing the data.
-  - Four sensitivity runs the external review asked for, `base: wasp39_test1.yaml` variants at the base's solver
-    settings, by referee risk (sampled parameters): `wasp39_test1_kzz1000` (12), `_deck` (11), `_kzz_powerlaw` (13;
-    compare Kzz at stated pressures, not the amplitude) and `_adiabat` (13); each header says what it changes. Each is
-    compared with v5 on O/H and total metals, C/O, S/O, Kzz and SO2. Not run (the maintainer decided); specs stay.
+  - The four sensitivity runs the external review asked for (the Kzz prior to x1000, the grey deck, a Kzz power law, an
+    adiabat below a free boundary) were dropped unrun, with the Kzz power-law and adiabat options (the maintainer
+    decided).
   - The chemistry program: every draw is solved once, at rtol 0.05 within 5000 accepted steps with photolysis every
     step, and only its VULCAN certificate keeps it; the presolve chain is removed (the maintainer decided, on the
     full-run A/B "Runs", v4_nopresolve_test; it also needs no second compile).
@@ -629,17 +627,13 @@ HPC
   result work (sensitivity runs, how a number is quoted) waits for the paper plan, which designs those tests.
 - v5 model options (0.28.0; the chemistry block's order is a CLAUDE.md rule): the warm references and the anchors are
   three wide (lnZ, c_o, s_o; an old two-wide anchor file reads as s_o = 0) and stage 1 zeroes all three composition
-  knobs. The T-P block's deep entry (docs/method.md "T-P profile") is followed by `log10P_rcb` with `tp_adiabat`; with
-  both, the Guillot part is inverted at min(P_rcb, p_deep) for T_deep (P_rcb / p_deep)^nabla so T at p_deep stays the
-  retrieved value, and a T_deep below the deep irradiation floor times (p_deep / P_rcb)^nabla has no profile (at gamma
-  0.03 and P_rcb 0.1 bar, T1bar under ~2700 K [E]): a run with `tp_adiabat` reports the (T1bar, P_rcb) pairs with no
-  Guillot solution as its accepted joint prior. `lnM` follows `lnR0` with the first Gaussian prior type (`make_uspace`:
-  mean + sigma Phi^-1(z)); `cloud_model="deck"` replaces the two power-law entries by `log10P_deck` (an opaque grey deck
-  below a free pressure). `make_loglike(rejects=)` writes every rejected draw with its class (`rejected/`); the
-  certificate's `derived` block (docs/method.md "Report") reads Kzz at 1 mbar on the case's own profile, its floor
-  weights at 1.5x and 2x the prior's floor (v5: x0.15 and x0.2), and, when the spec states `report_kzz_ceiling_x`, the
-  posterior truncated there: the WASP-39b case states x10. The key is target-free (`provenance.TARGET_FREE_KEYS`): only
-  the report reads it, so a resume may change it. An archived config.json without it gets no truncated block (logged).
+  knobs. `lnM` follows `lnR0` with the first Gaussian prior type (`make_uspace`: mean + sigma Phi^-1(z));
+  `cloud_model="deck"` replaces the two power-law entries by `log10P_deck` (an opaque grey deck below a free pressure).
+  `make_loglike(rejects=)` writes every rejected draw with its class (`rejected/`); the certificate's `derived` block
+  (docs/method.md "Report") reads Kzz at 1 mbar on the case's own profile, its floor weights at 1.5x and 2x the prior's
+  floor (v5: x0.15 and x0.2), and, when the spec states `report_kzz_ceiling_x`, the posterior truncated there: the
+  WASP-39b case states x10. The key is target-free (`provenance.TARGET_FREE_KEYS`): only the report reads it, so a
+  resume may change it. An archived config.json without it gets no truncated block (logged).
 - Storage convention (the maintainer's, with an outside design review): `output/<case>/` holds the run directories
   (`run_setup.output_base`) and `validation/` (`_artifact.emit`). Rejected: renaming `runs/` to `cases/` (the kept
   names), moving the observed spectra out of the engine's data root (`forward/config.py` uses them as the tracked

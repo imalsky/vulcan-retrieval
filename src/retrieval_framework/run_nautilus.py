@@ -481,13 +481,11 @@ def _saved_loglike(
     if anchors is not None:
         log.info("nautilus: %s anchor column(s) loaded", len(anchors))
     names = list(pipe.names)
-    p_ref = cfg.kzz_p_ref_bar if cfg.kzz_mode == "powerlaw" else None
 
     def startup_kzz(th: np.ndarray) -> np.ndarray:
-        """Return log10 Kzz at the report's reference pressure of theta rows, in the case's Kzz mode."""
-        slope = th[:, names.index("kzz_slope")] if "kzz_slope" in names else None
+        """Return log10 Kzz at the report's reference pressure of theta rows."""
         return log10_kzz_at_report_level(
-            C.need(cfg.vulcan_cfg_name, "vulcan_cfg_name"), cfg.cfg_overrides, p_ref, th[:, names.index("lnKzz")], slope
+            C.need(cfg.vulcan_cfg_name, "vulcan_cfg_name"), cfg.cfg_overrides, th[:, names.index("lnKzz")]
         )
 
     cold = jax.jit(pipe._make_batch_eval("cold"))

@@ -106,7 +106,7 @@ def _run_dir(out):
 
 @pytest.mark.parametrize(
     "key",
-    ["baseline_metallicity_solar", "kzz_mode", "cfg_overrides", "tp_deep_p_bar", "integrate_nuisance", "cold_lanes"],
+    ["baseline_metallicity_solar", "cfg_overrides", "tp_deep_p_bar", "integrate_nuisance", "cold_lanes"],
 )
 def test_a_config_without_a_key_the_report_reads_is_refused(tmp_path, monkeypatch, key):
     """A run's config.json holds every Config field, so a missing one must not be read as today's default."""
@@ -386,7 +386,6 @@ def test_derived_quantiles_are_weighted(tmp_path, monkeypatch):
         {"tp_infer_gamma": False},
         {"tp_infer_Tint": True},
         {"tp_infer_Tint": True, "tp_deep_param": "T1bar", "tp_deep_p_bar": 1.0},
-        {"tp_infer_Tint": True, "tp_deep_param": "T1bar", "tp_deep_p_bar": 3.0, "tp_adiabat": True},
     ],
 )
 def test_the_reported_tp_curve_is_the_model_s_profile(over):
@@ -405,7 +404,6 @@ def test_the_reported_tp_curve_is_the_model_s_profile(over):
         "log10gamma": -1.1,
         "Tint": 250.0,
         "T1bar": 2500.0,
-        "log10P_rcb": 0.2,
     }
     t = np.array([values.get(n, 0.0) for n in names])
     tp = t[[names.index(s.name) for s in specs if s.kind == "tp"]]
@@ -420,29 +418,19 @@ def test_the_reported_tp_curve_is_the_model_s_profile(over):
     )
 
 
-def test_the_reported_kzz_follows_the_power_law_anchor_and_slope(tmp_path, monkeypatch):
-    """A base of 1e9 at 0.1 bar, sloped 0.5: at 1 mbar the law gives 10^9 x 10^(0.5 x 2) = 10^10, through the report."""
+def test_the_reported_kzz_is_the_base_at_the_report_level_times_e_lnkzz(tmp_path, monkeypatch):
+    """A base of 1e9 at 0.1 bar falling as P is 1e7 at 1 mbar; lnKzz = ln 100 makes it 1e9, through the report."""
     _run_dir(tmp_path)
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
     # the stub's base depends on the level it is read at, so reading it at the wrong level shows
     monkeypatch.setattr(NR, "kzz_at_ref", lambda _name, _over, p_bar=NR.KZZ_P_REF_BAR: 1.0e9 * (p_bar / 0.1))
-    cfgj = json.loads((tmp_path / "config.json").read_text())
-    (tmp_path / "config.json").write_text(json.dumps({**cfgj, "kzz_mode": "powerlaw", "kzz_p_ref_bar": 0.1}))
-    names = [*NAMES, "kzz_slope"]
-    theta = np.tile(np.r_[MEAN, 0.5], (40, 1))
-    theta[:, names.index("lnKzz")] = 0.0
+    theta = np.tile(MEAN, (40, 1))
+    theta[:, NAMES.index("lnKzz")] = np.log(100.0)
     np.savez(
         tmp_path / "nautilus_posterior.npz",
-        param_names=np.asarray(names),
+        param_names=np.asarray(NAMES),
         theta=theta,
         log_w=np.full(40, -np.log(40.0)),
     )
     got = NR.derived_quantities(tmp_path)["log10_kzz_ref_cgs"]
-    np.testing.assert_allclose(got, 10.0, rtol=1e-12, atol=0)
-    # at the default anchor the slope tilts nothing, and lnKzz scales it
-    at_default = NR.log10_kzz_at_report_level(
-        cfgj["vulcan_cfg_name"], {}, NR.KZZ_P_REF_BAR, np.array([np.log(10.0)]), np.array([0.5])
-    )
-    np.testing.assert_allclose(at_default, np.log10(1.0e9 * (NR.KZZ_P_REF_BAR / 0.1) * 10.0), rtol=1e-12, atol=0)
-    got = NR.log10_kzz_at_report_level(cfgj["vulcan_cfg_name"], {}, None, np.array([np.log(100.0)]), None)
-    np.testing.assert_allclose(got, np.log10(1.0e9 * (NR.KZZ_P_REF_BAR / 0.1) * 100.0), rtol=1e-12, atol=0)
+    np.testing.assert_allclose(got, 9.0, rtol=1e-12, atol=0)

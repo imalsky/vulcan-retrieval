@@ -32,13 +32,11 @@ def _keys(name: str) -> tuple[str, str]:
 
 
 def _modes():
-    for gamma, deep, adiabat, cloud, s_o, kzz, lnm, off, noise, integrate, synth in itertools.product(
+    for gamma, deep, cloud, s_o, lnm, off, noise, integrate, synth in itertools.product(
         (True, False),
         ((False, "Tint"), (True, "Tint"), (True, "T1bar")),
-        (True, False),
         ("powerlaw", "deck", "none"),
         (True, False),
-        ("scale", "powerlaw"),
         (True, False),
         (True, False),
         ((False, False), (True, False), (True, True)),
@@ -51,10 +49,8 @@ def _modes():
             tp_infer_gamma=gamma,
             tp_infer_Tint=deep[0],
             tp_deep_param=deep[1],
-            tp_adiabat=adiabat,
             cloud_model=cloud,
             infer_s_o=s_o,
-            kzz_mode=kzz,
             infer_lnM=lnm,
             infer_offsets=off,
             infer_noise_inflation=noise[0],

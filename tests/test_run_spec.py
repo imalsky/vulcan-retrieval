@@ -88,10 +88,6 @@ def _write(path: Path, doc) -> Path:
             (RUN_DIR.name, n, d)
             for n, d in (
                 ("wasp39_test1", 12),
-                ("wasp39_test1_kzz1000", 12),
-                ("wasp39_test1_deck", 11),
-                ("wasp39_test1_kzz_powerlaw", 13),
-                ("wasp39_test1_adiabat", 13),
                 ("smoke", 8),
             )
         ],
@@ -152,7 +148,6 @@ def test_a_spec_that_names_no_start_mode_starts_every_solve_cold(tmp_path):
             {"config": dict(_drop("prior_log10kappa_cloud", "prior_cloud_alpha"), cloud_model="deck")},
             r"\['prior_log10P_deck'\] unset",
         ),
-        ({"config": dict(MINIMAL, tp_adiabat=True)}, r"\['prior_log10P_rcb', 'tp_nabla_ad'\] unset"),
         ({"config": _drop("prior_log10kappa")}, r"\['prior_log10kappa'\] unset"),
         ({"config": _drop("prior_offset_ppm")}, r"\['prior_offset_ppm'\] unset"),
         ({"config": dict(MINIMAL, infer_noise_inflation=True)}, r"\['prior_noise_inflation'\] unset"),
@@ -204,8 +199,6 @@ def test_a_spec_that_names_no_start_mode_starts_every_solve_cold(tmp_path):
         # what validate_config no longer repeats: the table refuses a deep parameter or a per-group split nobody reads
         ({"config": dict(MINIMAL, tp_deep_param="T1bar")}, "tp_deep_param: it is read only with tp_infer_Tint: true"),
         ({"config": dict(MINIMAL, noise_inflation_per_group=True)}, "noise_inflation_per_group: it is read only"),
-        ({"config": dict(MINIMAL, kzz_p_ref_bar=1.0e-3)}, "only with kzz_mode: powerlaw"),
-        ({"config": dict(MINIMAL, tp_nabla_ad=0.3)}, "only with tp_adiabat"),
         ({"config": dict(MINIMAL, truth_lnZ=0.5)}, "only with generate_synthetic_data"),
         ({"config": dict(MINIMAL, obs_wl_lo=2.0)}, "only with a data source"),
     ],

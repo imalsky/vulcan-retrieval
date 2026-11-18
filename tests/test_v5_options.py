@@ -1,6 +1,5 @@
-"""The v5 model options together on the real smoke pipeline: sulfur free, the Kzz
-power law, T at 1 bar as the deep parameter with the adiabat below a free
-boundary, the Gaussian mass nuisance and the grey deck. One invariant: the
+"""The v5 model options together on the real smoke pipeline: sulfur free, T at 1 bar
+as the deep parameter, the Gaussian mass nuisance and the grey deck. One invariant: the
 pipeline builds, its layout is the engine's, a prior draw evaluates through the
 cold batched evaluator with three-wide references, and the v4 layout is
 unchanged when every option is off. Slow (full tier): builds and compiles the
@@ -27,25 +26,12 @@ def test_v5_options_build_sample_and_evaluate(v5_smoke_pipe, smoke_pipe):
     cfg = pipe.cfg
     # the tolerance baked into the program is the case's, not any positive number
     assert pipe.fwd.chem_rtol == cfg.cfg_overrides.get("rtol", vulcan3.load_config(cfg.vulcan_cfg_name).rtol)
-    # the layout: the engine's chemistry block, then the T-P block with T1bar and
-    # the boundary, lnR0, the Gaussian lnM, the deck
-    assert pipe.n_chem == 5
-    assert pipe.fwd.chem.chem_extras == ("s_o", "kzz_slope")
-    assert pipe.names[: pipe.n_chem_tp] == [
-        "lnZ",
-        "c_o",
-        "lnKzz",
-        "s_o",
-        "kzz_slope",
-        "Tirr",
-        "log10kappa",
-        "T1bar",
-        "log10P_rcb",
-    ]
+    # the layout: the engine's chemistry block, then the T-P block with T1bar, lnR0, the Gaussian lnM, the deck
+    assert pipe.n_chem == 4
+    assert pipe.fwd.chem.chem_extras == ("s_o",)
+    assert pipe.names[: pipe.n_chem_tp] == ["lnZ", "c_o", "lnKzz", "s_o", "Tirr", "log10kappa", "T1bar"]
     assert pipe.names[pipe.n_chem_tp : pipe.n_chem_tp + 3] == ["lnR0", "lnM", "log10P_deck"]
     assert pipe.fwd.tp_model.deep_param == "T1bar"
-    assert pipe.fwd.tp_model.adiabat
-    assert pipe.fwd.chem.kzz_mode == "powerlaw"
     assert next(s for s in C.specs_from_config(cfg, groups=pipe.groups) if s.name == "lnM").prior_type == "gaussian"
     # the window holds on the chemistry grid too: every accepted prior draw's
     # profile is inside it down to the chemistry bottom
@@ -57,8 +43,8 @@ def test_v5_options_build_sample_and_evaluate(v5_smoke_pipe, smoke_pipe):
         assert np.all(np.isfinite(T))
         assert T.min() >= pipe.fwd.tp_model.T_min
         assert T.max() <= pipe.fwd.tp_model.T_max
-    # the cold batched evaluator keeps both of these draws, which certify with every option on (657 and 761 steps), with
-    # the references (lnZ, c_o, s_o) of each; a padding row is the reject sentinel with references zero
+    # the cold batched evaluator keeps both of these draws, which certify with every option on, with the references
+    # (lnZ, c_o, s_o) of each; a padding row is the reject sentinel with references zero
     Y0, refs0 = P._blank_state(pipe, 2)
     assert refs0.shape == (2, 3)
     ev = jax.jit(pipe._make_batch_eval("cold"))

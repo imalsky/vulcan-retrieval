@@ -29,9 +29,10 @@ What the retrieval does, with the source of each method. Results and the reasons
 
 ## Parameters
 
-$$\theta = [\ln Z,\ \Delta\ln({\rm C/O}),\ \ln K_{zz},\ [s_o],\ [\alpha_K],\ \text{T-P},\ \ln R_0,\ [\ln M],\ \text{cloud},\ \text{offsets},\ \text{noise}]$$
+$$\theta = [\ln Z,\ \Delta\ln({\rm C/O}),\ \ln K_{zz},\ [s_o],\ \text{T-P},\ \ln R_0,\ [\ln M],\ \text{cloud},\ \text{offsets},\ \text{noise}]$$
 
-$s_o$ is ln of the S/O multiple of the baseline, $\alpha_K$ the Kzz power-law slope, and brackets mark optional entries.
+$s_o$ is ln of the S/O multiple of the baseline, and brackets mark optional entries. $e^{\ln K_{zz}}$ scales the vulcan3
+config's own Kzz profile.
 The chemistry and T-P entries re-converge VULCAN (Tsai et al. 2021) and are the expensive part of every likelihood call.
 $\ln R_0$, $\ln M$ (Gaussian, RT-only) and the cloud parameters (two for `powerlaw`, one for `deck`, none for `none`)
 enter only the RT, and the instrument offsets apply after the spectrum. Planet identity enters through what the spec
@@ -57,8 +58,7 @@ measured intrinsic flux. Retrieving T at a deep level puts the prior on the quan
 also acts on every level below it, where the profile is hotter, and a deep T below the irradiation-only value has
 no solution: the survey samples $T_{\rm int}$ for that reason):
 $T_{\rm int}$ follows in closed form, since $T^4$ is linear in $T_{\rm int}^4$, and a draw whose $T_{\rm int}^4$ would be
-negative evaluates to NaN and is rejected. `tp_adiabat` replaces the profile below a free boundary pressure by the
-adiabat matched there, a sensitivity model: the join is imposed.
+negative evaluates to NaN and is rejected.
 
 ## Observations
 
@@ -208,7 +208,7 @@ FAIL row of `elemental_audit.py`, with the refusal recorded.
 
 The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`
 and `opacity_leave_one_out.py` each need `--spec runs/<case>/<name>.yaml` and write to `output/<case>/validation/`. The
-elemental audit draws the case's whole chemistry block, `s_o` and `kzz_slope` included when the case infers them. The
+elemental audit draws the case's whole chemistry block, `s_o` included when the case infers it. The
 resolution ladder's rungs are the case's `art_nlayer` times 1, 1.5 and 2.25, rounded up (67, 101, 151 for 67).
 `posterior_forward_check.py` writes its solves and their comparison into the run's own `validation/` folder.
 
@@ -217,10 +217,9 @@ resolution ladder's rungs are the case's `art_nlayer` times 1, 1.5 and 2.25, rou
 | Symbol | Meaning |
 |---|---|
 | `lnZ`, `c_o`, `s_o` | ln of the metallicity, C/O and S/O multiples of the baseline |
-| `lnKzz`, `kzz_slope` | ln of the eddy-diffusion multiple, the power-law slope |
+| `lnKzz` | ln of the eddy-diffusion multiple |
 | `Tirr`, `Tint`, `T1bar` | Irradiation and interior temperature, the temperature at the deep level |
 | `lnR0`, `lnM` | ln of the radius and mass multiples, RT-only |
-| `P_rcb` | The radiative-convective boundary pressure |
 | `B`, `O_*`, `N`, `Nm` | Binning, offset and group matrices |
 | `R`, `S`, `G`, `W` | The group statistics of the integrated nuisances, the group count, the group weight |
 | `b`, `o_g`, `K` | A noise inflation, group g's offset, the trapezoid node count in $\log_{10} b$ |

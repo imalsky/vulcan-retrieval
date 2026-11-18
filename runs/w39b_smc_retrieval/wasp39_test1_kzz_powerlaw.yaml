@@ -1,9 +1,0 @@
-# Sensitivity run beside wasp39_test1: Kzz as a power law in pressure,
-# Kzz0(1 mbar) e^lnKzz (P / 1 mbar)^-kzz_slope, the slope a chemistry parameter after
-# s_o. 13 sampled parameters.
-base: wasp39_test1.yaml
-
-config:
-  kzz_mode: powerlaw
-  kzz_p_ref_bar: 1.0e-3                # bar, where Kzz0 is read off the profile
-  prior_kzz_slope: [-1.0, 1.0]
