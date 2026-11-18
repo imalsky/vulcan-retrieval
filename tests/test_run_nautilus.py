@@ -237,7 +237,7 @@ def test_the_start_search_is_the_stable_order_of_distance(tmp_path, n_anchors):
     idx, dist = anchors.nearest(zq, k)
     assert np.array_equal(idx, want)
     assert np.array_equal(dist, np.sqrt(np.take_along_axis(d2, want, axis=1)))
-    # The order the search is given at Sol's case: the nearest are newer, the k-th place is a tie with the oldest.
+    # A case where the nearest anchors are newer and the k-th place is a tie with the oldest.
     tie = Anchors(tmp_path / "tie", 1)
     zt = np.array([[0.875], [0.125], [0.375], [0.5625], [0.25], [0.4375], [0.5], [0.625], [0.75]])
     tie.add(zt, np.zeros((9, 1, 1)), np.zeros((9, 3)))
