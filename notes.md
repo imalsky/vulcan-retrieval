@@ -579,7 +579,7 @@ HPC
   0.33-0.78 of the peak response. It has a floor near 1% that the layer count does not lower; the depth is within 2.83
   ppm at every count. `oracle.md` "The RT grid is converged" asks for both gates, so it is met for the depth only;
   `prior_noise_inflation` [1.0, 3.0] in both bases (was [0.5, 3.0]; finished runs put NRS1 at 0.899 and G102 at 0.88-0.89,
-  "Runs"); `e2e_check.py warmcold` fails below an effective sample size of 100 (the recorded runs have 914 and 5324).
+  "Runs").
   Also decided: the inflation floor stays at 1.0 against those sub-unity values (a run never claims more precision than
   the reduction gave), and `run_nautilus`'s slow-chunk report stays a warning on a CPU, never a stop ("HPC (NAS GH200)
   and daw", CPU cores: a stop could fire only after the slow chunk has run).

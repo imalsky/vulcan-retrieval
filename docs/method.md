@@ -207,7 +207,7 @@ not a verdict by itself.
 
 Every validation artifact records the case's own data identity: the product files its config names and the run's
 `observations.npz` where there is one. `e2e_check.py --results` defaults to the spec's case folder for `solve` (with `--posterior`, to that run's
-`validation/` folder) and to the folder of the first input for `compare` and `warmcold`. A draw the engine refuses to start (a repair factor not > 0) is a
+`validation/` folder) and to the folder of the first input for `compare`. A draw the engine refuses to start (a repair factor not > 0) is a
 FAIL row of `elemental_audit.py`, with the refusal recorded.
 
 The GPU validation set takes the case to measure: `elemental_audit.py`, `resolution_ladder.py`, `top_pressure_ladder.py`

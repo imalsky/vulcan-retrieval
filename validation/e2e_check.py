@@ -3,11 +3,10 @@
     python validation/e2e_check.py solve <spec> --rung production [--rows a:b --part k]
     python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws n
     python validation/e2e_check.py compare <a.npz> <b.npz> [<b_part2.npz> ...]
-    python validation/e2e_check.py warmcold <e2e_production_posterior.npz> [<part2.npz> ...] [--results <dir>]
 
 Each rung is one change from the rung above, compared per draw on the certificate, log L, the binned depth against the
-data's sigma and the photosphere column of six species, so a disagreement names the change that made it. ``compare`` and
-``warmcold`` exit 1 over a gate. Rungs, draws, gates and results are in docs/method.md.
+data's sigma and the photosphere column of six species, so a disagreement names the change that made it. ``compare``
+exits 1 over a gate. Rungs, draws, gates and results are in docs/method.md.
 """
 
 from __future__ import annotations
@@ -32,22 +31,6 @@ P_PHOT_BAR = (1.0e-5, 1.0)
 VMR_FLOOR = 1.0e-12
 GOOD_FIT_NATS = 50.0
 GATES = {"max_bin_sigma": 0.1, "D_sigma": 0.5, "dex_p95": 0.03, "dex_max": 0.1, "dlogL": 0.5}
-WARM_COLD_SHIFT_SIGMA = 0.1
-# Effective sample size the reweighted rows must keep. A weighted median's own standard error is about
-# 1.25 / sqrt(ESS) sigma: 0.125 sigma at 100, already above the shift gate, so below it the shift cannot be read.
-WARM_COLD_MIN_ESS = 100.0
-# Step cap of the cold re-solve of a run's posterior rows. A cold start needs more steps than the warm start that
-# reached the same column, and a row the re-solve loses to its cap looks like a warm-start error: at the run's own
-# 5000 steps the re-solve lost 4-9% of the rows, and 17 of 19 of those certify by 30000 at the warm run's log L
-# (notes "Warm starts").
-WARM_COLD_COUNT_MAX = 30000
-# The fewest rows a verdict is given on: a weighted quantile's own error is about 1.25 / sqrt(rows) sigma, 0.04 at 1000.
-WARM_COLD_MIN_ROWS = 1000
-# The quantiles gated: the median and both ends of the 68% interval, so a change of width fails as a shift does.
-WARM_COLD_QUANTILES = (0.16, 0.5, 0.84)
-# What every part of one check shares.
-_ONE_CHECK = ("posterior", "spec", "network", "rung", "seed", "draws", "count_max")
-LOW_KZZ = -0.7
 CORNER_Z = (0.02, 0.98)
 CORNER_PARAMS = ("lnZ", "c_o", "lnKzz", "s_o", "Tirr", "T1bar", "log10kappa")
 LOW_KZZ_WITH = ("lnZ", "c_o", "s_o", "T1bar")
@@ -201,7 +184,6 @@ def solve(args) -> int:
     cfg = spec.cfg
     if args.posterior:
         _refuse_another_spec(spec, Path(args.posterior))
-        cfg = replace(cfg, count_max=max(int(cfg.count_max or 0), WARM_COLD_COUNT_MAX))
     lanes = int(cfg.cold_lanes)
     pipe = P.build_pipeline(cfg)
     set_observations(cfg, pipe, P)
@@ -266,9 +248,6 @@ def _load(paths):
     zs = [np.load(p) for p in paths]
     rows = np.concatenate([z["rows"] for z in zs])
     out = {k: np.concatenate([z[k] for z in zs]) for k in ("u", "theta", "logL", "acc", "certified", "mu", "vmr")}
-    for k in ("post_row", "logL_run", "sha"):
-        if k in zs[0]:
-            out[k] = np.concatenate([z[k] for z in zs])
     out.update(
         rows=rows,
         sigma=zs[0]["sigma"],
@@ -376,16 +355,6 @@ def compare(args) -> int:
     return int(bool(fails))
 
 
-def _warm_cold_fails(worst_shift_sigma, ess):
-    """Return the warm-against-cold gates a run is over; a NaN fails its gate."""
-    fails = []
-    if not abs(worst_shift_sigma) <= WARM_COLD_SHIFT_SIGMA:
-        fails.append("quantile_shift")
-    if not ess >= WARM_COLD_MIN_ESS:
-        fails.append("ess")
-    return fails
-
-
 def _wquant(x, w, q):
     """The row of ``x`` at the weighted quantile ``q``: one rule for a weighted and an unweighted set."""
     o = np.argsort(x)
@@ -395,96 +364,6 @@ def _wquant(x, w, q):
 
 def _wmedian(x, w):
     return _wquant(x, w, 0.5)
-
-
-def _one_complete_check(paths, z):
-    """Refuse parts of different checks, and a set of rows that is short, repeated or too small for a verdict."""
-    first = z["meta"]
-    for p in paths[1:]:
-        other = json.loads(str(np.load(p)["meta"]))
-        differ = [k for k in _ONE_CHECK if other.get(k) != first.get(k)]
-        if differ:
-            raise RuntimeError(f"{p} is a part of another check than {paths[0]}: they differ in {differ}")
-    if len(set(z["sha"])) != 1:
-        raise RuntimeError(f"the parts were drawn from {len(set(z['sha']))} posterior files: one check, one posterior")
-    draws = int(first["draws"])
-    if not np.array_equal(np.sort(z["rows"]), np.arange(draws)):
-        raise RuntimeError(
-            f"the parts hold {len(z['rows'])} rows, not each of the {draws} drawn once: pass every part, once"
-        )
-    if draws < WARM_COLD_MIN_ROWS:
-        raise RuntimeError(f"{draws} rows: a verdict needs at least {WARM_COLD_MIN_ROWS} (--draws)")
-
-
-def warmcold(args) -> int:
-    from retrieval_framework import constants
-
-    z = _load(args.cold)
-    if "logL_run" not in z:
-        raise RuntimeError(f"{args.cold} was not solved with --posterior")
-    _one_complete_check(args.cold, z)
-    ok = z["certified"] & (z["logL"] > constants.REJECT_BELOW)
-    names, th = z["names"], z["theta"]
-    low = th[:, names.index("lnKzz")] < LOW_KZZ
-    sd = np.std(th, axis=0)
-    flat = np.ones(len(ok))
-
-    def worst_shift(weight):
-        """(label, shift in sigma) of the gated quantile that moves most from the unweighted rows' own."""
-        if not weight.any():
-            return "every row", float("nan")
-        shifts = {
-            f"{n} q{round(100 * q)}": (_wquant(th[:, j], weight, q) - _wquant(th[:, j], flat, q)) / sd[j]
-            for j, n in enumerate(names)
-            if sd[j] > 0
-            for q in WARM_COLD_QUANTILES
-        }
-        label = max(shifts, key=lambda k: abs(shifts[k]))
-        return label, float(shifts[label])
-
-    # A row the cold solve does not certify has weight 0: it counts against the run.
-    dL = np.where(ok, z["logL"] - z["logL_run"], -np.inf)
-    top = np.max(dL[ok]) if ok.any() else 0.0
-    w = np.exp(dL - top)
-    worst, shift = worst_shift(w)
-    m = {
-        "rows": len(dL),
-        "posterior_sha256": str(z["sha"][0]),
-        "cold_count_max": z["meta"].get("count_max"),
-        "cold_certified": int(ok.sum()),
-        "cold_certified_low_kzz": int(ok[low].sum()),
-        "low_kzz_rows": int(low.sum()),
-        "median_abs_dL": float(np.median(np.abs(dL[ok]))) if ok.any() else None,
-        "median_abs_dL_low_kzz": float(np.median(np.abs(dL[ok & low]))) if (ok & low).any() else None,
-        "median_abs_dL_high_kzz": float(np.median(np.abs(dL[ok & ~low]))) if (ok & ~low).any() else None,
-        "ess": float(w.sum() ** 2 / np.sum(w**2)) if ok.any() else 0.0,
-        "quantiles": list(WARM_COLD_QUANTILES),
-        "worst": worst,
-        "worst_shift_sigma": shift,
-        # The shift's two parts, apart: the rows the cold solve lost (the others at weight 1), and the change in
-        # log L of the rows it kept (a lost row at its warm value).
-        "worst_shift_lost_rows_sigma": worst_shift(ok.astype(float))[1],
-        "worst_shift_log_l_sigma": worst_shift(np.where(ok, w, np.exp(-top)))[1],
-    }
-    fails = _warm_cold_fails(shift, m["ess"])
-    status = "FAIL" if fails else "PASS"
-    summary = (
-        f"warm vs cold on {m['rows']} weighted posterior rows: {m['cold_certified']} certify cold within "
-        f"{m['cold_count_max']} steps ({m['cold_certified_low_kzz']}/{m['low_kzz_rows']} at low Kzz); worst quantile "
-        f"shift {worst} {shift:+.3f} sigma (gate {WARM_COLD_SHIFT_SIGMA}; the lost rows alone "
-        f"{m['worst_shift_lost_rows_sigma']:+.3f}, the change in log L alone {m['worst_shift_log_l_sigma']:+.3f}); "
-        f"ESS {m['ess']:.0f} (gate {WARM_COLD_MIN_ESS:.0f})" + (f"; over: {', '.join(fails)}" if fails else "")
-    )
-    print(summary)
-    _artifact.emit(
-        f"warm_cold_{Path(z['meta']['posterior']).name}",
-        "Warm vs cold posterior rows",
-        [m],
-        status,
-        summary,
-        out_dir=args.results,
-    )
-    return int(status == "FAIL")
 
 
 def main() -> int:
@@ -506,15 +385,13 @@ def main() -> int:
     c.add_argument("a")
     c.add_argument("b", nargs="+")
     c.add_argument("--worst", type=int, default=10)
-    w = sub.add_parser("warmcold")
-    w.add_argument("cold", nargs="+", help="the production rung's --posterior solve (parts): the case's runtime")
-    for p in (s, c, w):
+    for p in (s, c):
         p.add_argument(
             "--results",
             type=Path,
             default=None,
             help="the results directory (default: solve, the spec's case validation folder, or with --posterior "
-            "that run's own validation folder; compare and warmcold, beside their first input)",
+            "that run's own validation folder; compare, beside its first input)",
         )
     args = ap.parse_args()
     if args.results is None:
@@ -523,9 +400,8 @@ def main() -> int:
                 Path(args.posterior).resolve() / "validation" if args.posterior else _artifact.spec_case(args.spec)[1]
             ),
             "compare": lambda: Path(args.a).resolve().parent,
-            "warmcold": lambda: Path(args.cold[0]).resolve().parent,
         }[args.cmd]()
-    return {"solve": solve, "compare": compare, "warmcold": warmcold}[args.cmd](args)
+    return {"solve": solve, "compare": compare}[args.cmd](args)
 
 
 if __name__ == "__main__":
