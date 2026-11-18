@@ -369,7 +369,7 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   where the cold solve stops at step zero, and two certify cold where the warm solve runs out of steps. Built:
   `make_loglike` starts a warm solve from the nearest of `WARM_START_TRIES` columns whose repaired start is physical
   (`Anchors.nearest_physical`, the engine's `warm_start_ok`); the cold re-solve inside the batch is for frozen rows
-  only, as before. Not yet run on the GPU.
+  only, as before. Run on the GPU: the next entry.
 - The rejected draws solved cold, measured [M, one GH200 each, the first campaign's tree and cap;
   `scratch/warm_cold/deferred/`]: every sampling-phase draw the warm run rejected, put back at nautilus's own weight
   (its shell's volume over the shell's point count, times the cold likelihood). HD 189733b: 1,711 of 3,678 certify
