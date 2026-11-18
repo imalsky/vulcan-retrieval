@@ -16,7 +16,7 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `nuisance` | The integrated offsets and inflations |
 | `provenance` | Code and data identity, the target manifest and digest |
 | `run_nautilus` | The sampler driver: the likelihood's chunks, the nautilus settings, the resume refusal |
-| `anchors` | The warm-start anchors: every certified column, keyed by its unit-cube coordinates |
+| `anchors` | The warm-start anchors: every certified column, keyed by its unit-cube coordinates, and the choice of start |
 | `case_keys` | Which Config keys a specification states: required, or refused when its mode does not read them |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |

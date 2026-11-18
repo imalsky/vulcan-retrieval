@@ -100,10 +100,11 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 ### Sampler and policy
 
 - `run_nautilus` on the stock nautilus-sampler pinned in pyproject is the only sampler.
-- Cold starts are the default. With `sampler.warm_starts: true` each solve continues from the nearest certified
-  column, so the likelihood depends on the evaluation order: `nautilus_report` refuses such a run until its
-  warm-against-cold check passes (`docs/method.md` "Warm starts"; notes "Warm starts"). Never loosen that refusal, the
-  gate or the cold re-solve's cap to pass a run; a run that fails is repeated cold.
+- Cold starts are the default. With `sampler.warm_starts: true` each solve continues from the nearest certified column
+  whose start is physical (the engine's `warm_start_ok`; never the nearest alone), so the likelihood depends on the
+  evaluation order: `nautilus_report` refuses such a run until its warm-against-cold check passes (`docs/method.md`
+  "Warm starts"; notes "Warm starts"). Never loosen that refusal, the gate or the cold re-solve's cap to pass a run; a
+  run that fails is repeated cold.
 - The chemistry policy is the spec's: one program per draw, at the spec's `rtol` (`cfg_overrides`) within `count_max`
   accepted steps, and only its VULCAN certificate keeps a draw. A second program (a presolve chain) needs a full-run A/B
   first (notes "Design records"); the cold re-solve of a frozen warm start is not one (the maintainer decided).
