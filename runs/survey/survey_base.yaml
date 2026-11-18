@@ -47,7 +47,10 @@ config:
   art_nlayer: 100                      # ExoJAX's default (notes "Design records")
   art_pbtm_bar: 7.0                    # bar: the RT grid bottom, above the chemistry's
   dt_max: 1.0e+11
-  cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, queue_compact: [396, 264, 132]}
+  # update_frq 1: the geometry refreshed every step, so the geometry term passes once the column has settled: on 36
+  # WASP-96b draws 2 more certify and the CPU time falls 13% against every 100 steps (notes "Pipeline speed").
+  cfg_overrides: {rtol: 0.2, ini_update_photo_frq: 1, final_update_photo_frq: 1, update_frq: 1,
+                  queue_compact: [396, 264, 132]}
   count_max: 5000                      # the first campaign's cap, the one its timings are for (notes "Warm starts")
   p_ref_bar: 1.0e-3                    # rp_cm and g apply at 1 mbar
 
