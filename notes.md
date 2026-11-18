@@ -1118,6 +1118,11 @@ accept-count-only gate and P0/P2 predicates, the constant ConvDiag, T-P clipping
 without a flag.
 
 Convergence and solver
+- Moving a batch's slow rows to the GH200's 72 Grace cores [M, NAS jobs 121008 and 121013, survey WASP-39b spec,
+  `solo_cpu` path]: one core runs 49.8 ms per accepted stage-2 step alone but 108-118 ms with 64-70 running (3.6-3.9 GB
+  each), so a capped row (5000 steps) takes ~590 s, longer than a whole GPU batch (556-586 s); the cores together reach
+  0.20-0.24 of the GPU's lane-step rate, and loading them slows the GPU batch 1.7% (585.5 -> 595.3 s). A replay of 410
+  WASP-39b batches gives 0.63x at the loaded rate [E]. NAS has no multi-GPU node: all 816 pbs05a nodes are one GH200.
 - Raise if > 10% of cold draws fail: wrong for a real ~27% minority; reject with log L = -inf.
 - A separate primal diag solve for the accept count: doubled chemistry wall; it rides the jvp carry.
 - Single-stage cold solve with the eq seed: 2/4 production draws certify against 3/4 for two stages.
