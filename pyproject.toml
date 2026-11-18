@@ -37,9 +37,9 @@ dependencies = [
     "scipy>=1.12",
     "PyYAML>=6",        # the run specification files (run_setup.load_spec)
     # The forward-model engine (chemistry + ExoJAX RT) owns the exojax pin.
-    # Floor: the caller names the network and its atoms (select_network) and the
-    # RT bottom (art_pbtm_bar), with no engine default, which this package assumes.
-    "vulcan-forward>=0.31.0",
+    # Floor: warm_start_ok, which the warm-start choice calls (0.32.0); before it, the
+    # caller names the network, its atoms and the RT bottom (0.31.0).
+    "vulcan-forward>=0.32.0",
     # Floor: conv_normal and validate_overrides (vulcan-forward's own floor).
     "vulcan3>=0.18.0",
 ]
