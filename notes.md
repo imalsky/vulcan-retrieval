@@ -821,9 +821,9 @@ HPC
     2.87-5.10 um, `obs_max_bin_R` 200. One model and one prior set in `survey_base.yaml` (never a run: it names no
     planet); a planet file adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and lnM's
     sigma. Machinery as the WASP-107b case (2025 network, rtol 0.2 within 5000, constant Kzz 1e7-1e13 about 1e9, 10 bar
-    bottom, 83 deg; the maintainer decided the 1e7 floor from the pre-launch check below, run at 1e6); after a run its
-    posterior rows are re-solved at rtol 0.05 within 15000 steps (the maintainer decided; the postrun_93269 method,
-    "Runs"), the rows that do not certify reported apart; T1bar over the whole window; the schema-default cloud, offset
+    bottom, 83 deg; the maintainer decided the 1e7 floor from the pre-launch check below, run at 1e6); no re-solve of
+    the posterior rows at a tighter rtol follows a run (the maintainer decided): the rtol 0.2 map is a stated limit;
+    T1bar over the whole window; the schema-default cloud, offset
     and inflation priors are stated in the base.
   - Rules. System: NASA Exoplanet Archive composite table (`pscomppars`, queried 2026-10-29; R*, a, Mp and its error,
     Teq, Teff). rp_cm = sqrt(median depth in the window) x R*; vulcan3 Rp = R(1 bar), hydrostatic below it on a nominal
@@ -874,10 +874,9 @@ HPC
     fraction). Sampler and step cap: 1000 live points, n_eff 5000, cap 5000 and warm starts ("Warm starts").
     Priors: metallicity 0.1x to 1000x solar (a published WASP-96b value is 0.23x; a cold nominal solve at 0.1x
     certifies on WASP-96b in 1076 steps and on HD 209458b in 1250 [M, daw CPU, the first campaign's case files]),
-    radius -18% to +22%; the Kzz and C/O edges stay, and a planet whose posterior piles at Kzz 1e7 is rerun to 1e5.
-    WASP-107b
-    stays binned to R 100, the one exception to "as published"; a side run at R 500 only if its NRS1 error factor
-    comes out clearly above 1. Offsets and error inflation are one rule for every planet, though WASP-107b's paper
+    radius -18% to +22%; the Kzz and C/O edges stay, and a posterior that piles at the Kzz 1e7 floor is reported as an
+    upper limit, with no rerun (the maintainer decided). WASP-107b stays binned to R 100, the one exception to "as
+    published", with no side run at R 500. Offsets and error inflation are one rule for every planet, though WASP-107b's paper
     fits neither: its fitted offset is reported. The planet
     numbers and the nominal atmosphere files come from `scratch/survey_data/build_cases.py`, whose recipe rebuilds
     the first survey's atmosphere files byte for byte and its 1 bar radii to 1e-6.
@@ -885,8 +884,8 @@ HPC
     vulcan3's `N + CS -> S + CN` row. Against upstream's `S + CN -> N + CS` on 528 cold prior draws [M, GH200, vulcan3
     `ae17ec8`, `e2e_check.py compare`]: WASP-39b 415 draws certified on both, worst bin 2.69 sigma, columns to 1.61
     dex (p95 0.0035), |dlogL| of good fits to 0.56; WASP-107b 424, 10.3 sigma, 2.78 dex (p95 0.0068), 1.05. Most
-    draws do not move and a tail does: an uncertainty in HCN to state, and a planet whose result rests on HCN is
-    re-solved with upstream's row. The other rewritten row (`CN + HNCO`) moves nothing, and vulcan3 `d3855be` against
+    draws do not move and a tail does: an uncertainty in HCN to state beside any result that rests on HCN, with no
+    re-solve on upstream's row (the maintainer decided). The other rewritten row (`CN + HNCO`) moves nothing, and vulcan3 `d3855be` against
     `ae17ec8` is identical on the same draws. Stellar UV: the three Sun-like hosts keep the plain solar file. HST
     spectra of HD 209458 and WASP-166 put the measured flux at 1.8-3.0 times the solar file at 125-300 nm. On the
     nominal columns [M, cold solves, daw CPU, the solar file with its 114-400 nm rows replaced by the measured ones]
