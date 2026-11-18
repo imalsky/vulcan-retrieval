@@ -273,6 +273,16 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
 
 ## Pipeline speed
 
+- What VULCAN 3.0's step rules cost a survey draw [M, daw CPU, one row per process, `scratch/step_diag/`: 36
+  WASP-96b draws of the second campaign's GPU run (30 kept, 6 capped), each solved cold through the production
+  two-stage route at the survey settings and with one rule changed]. Without the geometry term 3 of 26 draws more
+  certify (capped -> 770, 2850, 3743 steps), 2.2% fewer steps, |dlog L| <= 0.010 on the rest. Without the element-budget
+  term nothing moves. With VULCAN 2's zeroing of gas negatives (`nega_cut: -.inf`) 4.0% fewer steps, one draw 2313 ->
+  880 steps (494 negativity rejections), one 1321 -> 898, |dlog L| <= 0.011; one capped draw had 4512 negativity
+  rejections. Photolysis every 5 steps in place of every step: 22% more steps and 3 fewer certified. Two kept draws
+  ended stage 1 with a non-finite column under the survey rules, so their stage 2 had no start: one solves with
+  zeroing, one without the geometry term (8 more rows of those workers were not reached). A restart from the draw's own
+  converged column takes 121 steps (the `count_min` floor) in 8 of 19 and a median 144.
 - Where a warm run's steps go [M, the first campaign's six `batches.jsonl`, 1.55 M warm solves]: the median solve
   under the cap takes 258-1022 steps (10th percentile 128-280); draws that reach the 5000-step cap and are rejected
   take 14-32% of all steps. The 121-step floor (`count_min` 120) binds 0.1-4.0% of solves, so a floor of 30 would
