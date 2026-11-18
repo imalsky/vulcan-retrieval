@@ -119,6 +119,8 @@ def _repo_states(workspace: Path | None = None) -> dict:
         diff = _src_state(repo)
         out[name] = {
             "commit": head,
+            # The committed source tree: a commit that changes no file under src/ (docs, notes, a PBS script) keeps it.
+            "src_tree": _git(repo, "rev-parse", "HEAD:src"),
             "dirty": None if dirty is None else bool(dirty),
             "dirty_files": [] if dirty is None else dirty.splitlines()[:20],
             "src_diff": (None if diff is None else hashlib.sha256(diff.encode()).hexdigest()),
@@ -474,7 +476,7 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
 
     return {
         # Bumped when the manifest's fields change, or the evaluators' keep/reject or start logic changes the target.
-        "manifest_version": 10,
+        "manifest_version": 11,
         "config": cfg_bound,
         "params": {
             "names": list(pipe.names),
@@ -487,11 +489,12 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
         "n_bin": int(pipe.n_bin),
         **science_data_identity(C.need(cfg.molecules, "molecules")),
         "case_inputs": case_inputs(cfg.vulcan_cfg_name, cfg.cfg_overrides),
-        # Not dirty_files: that list churns with any scratch edit, while src_diff moves only when the code changes.
+        # The source tree, not the commit: a docs-only commit must not refuse a resume. Not dirty_files: that list
+        # churns with any scratch edit, while src_diff moves only when the uncommitted code changes.
         "code": {
             r: None
             if s is None
-            else {"commit": s.get("commit"), "dirty": s.get("dirty"), "src_diff": s.get("src_diff")}
+            else {"src_tree": s.get("src_tree"), "dirty": s.get("dirty"), "src_diff": s.get("src_diff")}
             for r, s in _repo_states().items()
         },
         "versions": _versions(),

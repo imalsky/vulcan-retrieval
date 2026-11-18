@@ -102,7 +102,7 @@ def test_target_digest_binds_each_runtime_input_and_fixed_number_alone(digest_pi
     for var in ("XLA_FLAGS", "XLA_PYTHON_CLIENT_MEM_FRACTION"):
         monkeypatch.delenv(var, raising=False)
     m = provenance.target_manifest(cfg, digest_pipe)
-    assert m["manifest_version"] == 10
+    assert m["manifest_version"] == 11
     assert m["composition_file"]["path"] == str(table.resolve())
     d0 = provenance.manifest_digest(m)
 
@@ -188,7 +188,7 @@ def test_target_digest_moves_with_the_observations(digest_pipe):
 
 
 def _repo(**over):
-    st = {"commit": "a" * 40, "dirty": True, "dirty_files": ["a.py"], "src_diff": "d" * 64}
+    st = {"commit": "a" * 40, "src_tree": "t" * 40, "dirty": True, "dirty_files": ["a.py"], "src_diff": "d" * 64}
     st.update(over)
     return {"r": st}
 
@@ -201,7 +201,8 @@ def _repo(**over):
         ({"dirty": True}, False),
         ({"dirty": False, "dirty_files": [], "src_diff": None}, True),
         ({"src_diff": "e" * 64}, True),  # a DIFFERENT uncommitted src edit
-        ({"commit": "b" * 40}, True),  # a different commit
+        ({"commit": "b" * 40}, False),  # a commit that changes no source (docs, notes)
+        ({"commit": "b" * 40, "src_tree": "u" * 40}, True),  # a commit that changes the source
     ],
 )
 def test_target_digest_binds_code_state_not_file_churn(state, moves, digest_pipe, monkeypatch):
