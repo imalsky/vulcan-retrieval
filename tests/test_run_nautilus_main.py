@@ -15,7 +15,7 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from test_run_nautilus import D, _FrozenStats, _freezing, _stub_pipe
+from test_run_nautilus import D, _FrozenStats, _stub_pipe
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
@@ -272,41 +272,100 @@ def _spot_run(out, z, log_l, capped=None):
         np.savez(out / "rejected" / "rejected_00000.npz", z=capped, cls=np.ones(len(capped), np.int8), warm=np.int8(1))
 
 
-def test_a_posterior_row_lost_cold_shifts_nothing_and_is_counted_apart(tmp_path):
-    """The shift compares the same rows at the same weights on both sides: rows certified warm and cold at equal log L
-    move nothing, though another posterior row does not certify cold, and that row is counted with its weight.
+def test_the_shift_compares_matched_rows_reweighted_and_counts_a_row_lost_cold(tmp_path):
+    """Rows A and B certify warm and cold, C only warm. The cold log L is 50 above the run's on B alone, so reweighted,
+    every quantile of p0 sits at B; unweighted, the 16th sits at A. The worst shift is then (p0_B - p0_A) / sd(p0) at
+    the 16th, positive, whatever the draw; p1 differs only on C, so it moves only if C enters the comparison.
     """
     pipe = _stub_pipe()
     cold = jax.jit(pipe._make_batch_eval("cold"))
-    z = np.vstack([SPOT_Z, [[0.4, 0.3, 0.5]]])  # the last row stalls cold (p1 < 0.35); the warm run kept it
+    z = np.array([[0.42, 0.5, 0.5], [0.55, 0.5, 0.5], [0.4, 0.3, 0.5]])  # A, B, and C, which stalls cold (p1 < 0.35)
     log_l, _ = cold_log_l(pipe, cold, N_BATCH, z)
-    assert np.isneginf(log_l[-1])
-    assert np.isfinite(log_l[:-1]).all()
-    _spot_run(tmp_path, z, np.where(np.isfinite(log_l), log_l, log_l[0]))
+    assert np.isfinite(log_l[:2]).all()
+    assert np.isneginf(log_l[2])
+    _spot_run(tmp_path, z, np.array([log_l[0], log_l[1] - 50.0, log_l[0]]))
     spot = warm_checks.spot_check(tmp_path, partial(cold_log_l, pipe, cold, N_BATCH), 0, N_BATCH, np.inf)
     assert spot["status"] == "done"
-    assert (spot["worst_shift_sigma"], spot["max_abs_dlog_l"], spot["warnings"]) == (0.0, 0.0, [])
-    lost = spot["posterior_not_certified_cold"]
-    assert 0 < lost == spot["posterior_rows"] - spot["posterior_certified_cold"]
-    assert spot["posterior_not_certified_cold_weight_frac"] == lost / spot["posterior_rows"]
+    assert spot["worst"] == "p0 q16"
+    assert spot["worst_shift_sigma"] == pytest.approx((0.55 - 0.42) / np.std(z[:, 0]), rel=1e-12)
+    assert spot["max_abs_dlog_l"] == pytest.approx(50.0, rel=1e-12)
+    # The draw, as the spot-check makes it: seed + 3, three rows of equal weight.
+    drawn = np.random.default_rng(0 + 3).choice(3, size=constants.SPOT_CHECK_POSTERIOR_ROWS, p=np.full(3, 1 / 3))
+    lost = int((drawn == 2).sum())
+    assert 0 < lost == spot["posterior_not_certified_cold"]
+    assert spot["posterior_not_certified_cold_weight_frac"] == pytest.approx(lost / constants.SPOT_CHECK_POSTERIOR_ROWS)
     assert spot["frozen_rows"] == 0
 
 
+def test_no_posterior_row_certified_cold_is_a_warning_with_no_shift(tmp_path):
+    pipe = _stub_pipe()
+    cold = jax.jit(pipe._make_batch_eval("cold"))
+    z = np.array([[0.4, 0.3, 0.5], [0.5, 0.2, 0.4]])  # both stall cold
+    _spot_run(tmp_path, z, np.zeros(len(z)))
+    spot = warm_checks.spot_check(tmp_path, partial(cold_log_l, pipe, cold, N_BATCH), 0, N_BATCH, np.inf)
+    n = constants.SPOT_CHECK_POSTERIOR_ROWS
+    assert spot["status"] == "done"
+    assert (spot["posterior_certified_cold"], spot["posterior_not_certified_cold"]) == (0, n)
+    assert spot["posterior_not_certified_cold_weight_frac"] == 1.0
+    assert (spot["worst"], spot["worst_shift_sigma"], spot["median_abs_dlog_l"]) == (None, None, None)
+    assert spot["warnings"] == [f"none of the {n} posterior rows certified cold: no shift could be measured."]
+
+
+@pytest.mark.parametrize("lost", [20, 30, 40])
+def test_a_spot_check_on_too_few_matched_rows_warns(tmp_path, lost):
+    """With more than SPOT_CHECK_LOST_WARN_FRAC of the posterior rows lost cold, the shift rests on few rows: a warning
+    naming the share, though the shift itself is zero. 30 of 200 is at the limit.
+    """
+    _spot_run(tmp_path, SPOT_Z, np.zeros(len(SPOT_Z)))
+
+    def cold(Z):  # the first ``lost`` posterior rows do not certify; the rest score the run's log L
+        return np.where(np.arange(len(Z)) < lost, -np.inf, 0.0), np.zeros(len(Z), bool)
+
+    spot = warm_checks.spot_check(tmp_path, cold, 0, N_BATCH, np.inf)
+    n = constants.SPOT_CHECK_POSTERIOR_ROWS
+    assert (spot["status"], spot["posterior_not_certified_cold"], spot["worst_shift_sigma"]) == ("done", lost, 0.0)
+    msg = (
+        f"the shift was measured on only {n - lost} of {n} posterior rows: ~{lost / n:.1%} of the posterior weight "
+        "(estimated) did not certify cold (limit 15%)."
+    )
+    assert spot["warnings"] == ([] if lost <= 30 else [msg])
+
+
+def _flag_frozen(fn, where):
+    """Wrap a stub evaluator: rows where ``where(U)`` report a freeze at dt_min, and are otherwise as ``fn`` gives."""
+
+    def ev(U, Y, refs, active):
+        L, Ynew, rnew, st = fn(U, Y, refs, active)
+        fz = jnp.asarray(active, bool) & where(U)
+        reason = jnp.where(fz, constants.TERM_DT_MIN_FROZEN, 1)
+        return L, Ynew, rnew, _FrozenStats(st.acc, st.conv_ok, reason, jnp.zeros_like(L))
+
+    return ev
+
+
 def test_a_row_frozen_in_the_spot_check_is_counted_and_the_rest_computed(tmp_path):
-    """A column frozen at dt_min in the spot-check's cold solve is a row that does not certify, counted: the check
-    still finishes, where a run's own chunk would stop.
+    """A column frozen at dt_min in the spot-check's cold solve is a row that does not certify, by its freeze alone
+    (the stub certifies it otherwise), and is counted: the check still finishes, where a run's own chunk would stop.
     """
     pipe = _stub_pipe()
+    plain = jax.jit(pipe._make_batch_eval("cold"))
+    cold = jax.jit(_flag_frozen(plain, lambda U: jnp.abs(jax.nn.sigmoid(U[:, 1]) - 0.52) < 1e-9))
+    # The last posterior row freezes, as does the rejected row; nine rows keep its share under the lost-row limit.
+    z = np.vstack([SPOT_Z, SPOT_Z + 0.03, [[0.5, 0.52, 0.45]]])
     stuck = np.array([[0.5, 0.52, 0.5]])
-    cold = jax.jit(_freezing(pipe._make_batch_eval("cold"), lambda U: jnp.abs(jax.nn.sigmoid(U[:, 1]) - 0.52) < 1e-9))
-    log_l, frozen = cold_log_l(pipe, cold, N_BATCH, SPOT_Z)
-    assert np.isfinite(log_l).all()
-    assert not frozen.any()
-    _spot_run(tmp_path, SPOT_Z, log_l, capped=stuck)
+    want, none = cold_log_l(pipe, plain, N_BATCH, np.vstack([z, stuck]))
+    assert np.isfinite(want).all()
+    assert not none.any()
+    log_l, frozen = cold_log_l(pipe, cold, N_BATCH, np.vstack([z, stuck]))
+    assert frozen.tolist() == [False] * (len(z) - 1) + [True, True]
+    assert np.array_equal(log_l, np.where(frozen, -np.inf, want))
+    _spot_run(tmp_path, z, want[: len(z)], capped=stuck)
     spot = warm_checks.spot_check(tmp_path, partial(cold_log_l, pipe, cold, N_BATCH), 0, N_BATCH, np.inf)
     assert spot["status"] == "done"
-    assert (spot["frozen_rows"], spot["rejected_rows"], spot["rejected_certified_cold"]) == (1, 1, 0)
-    assert spot["posterior_certified_cold"] == spot["posterior_rows"] == constants.SPOT_CHECK_POSTERIOR_ROWS
+    assert (spot["rejected_rows"], spot["rejected_certified_cold"]) == (1, 0)
+    lost = spot["posterior_not_certified_cold"]
+    assert 0 < lost == spot["frozen_rows"] - 1
+    assert spot["posterior_certified_cold"] == constants.SPOT_CHECK_POSTERIOR_ROWS - lost
     assert (spot["worst_shift_sigma"], spot["warnings"]) == (0.0, [])
 
 

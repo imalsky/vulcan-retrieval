@@ -34,6 +34,7 @@ __all__ = [
     "REJECT_BELOW",
     "REJECT_LOGL",
     "SLOW_CHUNK_FACTOR",
+    "SPOT_CHECK_LOST_WARN_FRAC",
     "SPOT_CHECK_POSTERIOR_ROWS",
     "SPOT_CHECK_REJECTED_ROWS",
     "SPOT_CHECK_SHIFT_SIGMA",
@@ -98,6 +99,11 @@ SPOT_CHECK_REJECTED_ROWS = 100
 # The spot-check warns when reweighting by the cold likelihood moves a 16th, 50th or 84th percentile by more than this
 # many posterior sigma: the limit the first campaign's warm runs were judged at (notes "Warm starts").
 SPOT_CHECK_SHIFT_SIGMA = 0.1
+# The spot-check warns when more than this estimated share of its posterior rows does not certify cold, since its shift
+# is then measured on few rows: the first campaign's cold re-solve at cap 5000 lost 4.3-8.6 % of the posterior rows
+# (notes "Warm starts", "What the 0.1 sigma gate measured"), and 15 % is about 3 sigma of the 200-draw binomial noise
+# above the worst.
+SPOT_CHECK_LOST_WARN_FRAC = 0.15
 # s. A PBS job's wall ends this long after the run's governor (tools/submit.py), for the posterior, the summary and
 # the spot-check, which runs only if its estimated end is within half of this.
 JOB_HEADROOM_S = 7200

@@ -121,17 +121,18 @@ and stop no report. The certificate's `starts` block carries both, and the warm 
   cold solve of rejected warm rows measures that question on the same draws.
 - A spot-check once the posterior is written. `SPOT_CHECK_POSTERIOR_ROWS` posterior rows drawn by weight and up to
   `SPOT_CHECK_REJECTED_ROWS` warm rows rejected at the step cap (`rejected/`, class 1) are solved cold by the run's own
-  cold evaluator, in padded batches of `n_batch`, as a cold batch is. Every posterior row certified warm; only the
-  rows that also certify cold are compared. Over them the check gives $|L_{\rm cold} - L_{\rm run}|$ and the largest
-  shift of a 16th, 50th or 84th percentile, in posterior sigma, between the rows reweighted by
-  $\exp(L_{\rm cold} - L_{\rm run})$ and the same rows unweighted, through the same quantile rule. A shift above
-  `SPOT_CHECK_SHIFT_SIGMA` is a warning. The posterior rows that do not certify cold are counted apart, with their
-  share of the posterior weight (each row drawn by weight carries an equal share): left in the comparison at weight
-  0, they would shift the quantiles by their absence alone. The rejected rows give how many certify cold and how many
-  land above the posterior's 1% log-L point, with no limit. A column frozen at `dt_min` in this cold solve does not
-  stop the check, as it stops a run's chunk: it is a row that does not certify, and the frozen rows are counted. The check runs only if the run's first cold batch time, per batch of rows,
-  ends before the governor plus half of `JOB_HEADROOM_S`; otherwise it is skipped with the reason, and an error is
-  recorded, not raised.
+  cold evaluator, in padded batches of `n_batch`, as a cold batch is. Every posterior row certified warm; only the rows
+  that also certify cold are compared. Over them the check gives $|L_{\rm cold} - L_{\rm run}|$ and the largest shift of
+  a 16th, 50th or 84th percentile, in posterior sigma, between the rows reweighted by $\exp(L_{\rm cold} - L_{\rm run})$
+  and the same rows unweighted, through the same quantile rule. A shift above `SPOT_CHECK_SHIFT_SIGMA` is a warning. The
+  posterior rows that do not certify cold are counted apart, with their share of the posterior weight, estimated from
+  the draws (each row drawn by weight, with replacement, carries an equal share): left in the comparison at weight 0,
+  they would shift the quantiles by their absence alone. A share above `SPOT_CHECK_LOST_WARN_FRAC` is a warning, since
+  the shift then rests on few rows. The rejected rows give how many certify cold and how many land above the posterior's
+  1% log-L point, with no limit. A column frozen at `dt_min` in this cold solve does not stop the check, as it stops a
+  run's chunk: it is a row that does not certify, and the frozen rows are counted. The check runs only if the run's
+  first cold batch time, per batch of rows, ends before the governor plus half of `JOB_HEADROOM_S`; otherwise it is
+  skipped with the reason, and an error is recorded, not raised.
 
 Not covered: a change of the joint shape that leaves every marginal (no planet is run both warm and cold), and the
 draws a warm run rejects at its step cap beyond that sample, which are not solved cold per run. In three

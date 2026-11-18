@@ -133,7 +133,7 @@ def _spot_check(
         "posterior_rows": len(idx),
         "posterior_certified_cold": int(ok.sum()),
         "posterior_not_certified_cold": int((~ok).sum()),
-        # Drawn by weight, each row carries 1 / posterior_rows of the posterior.
+        # Drawn by weight with replacement, each row carries 1 / posterior_rows of the posterior: an estimate.
         "posterior_not_certified_cold_weight_frac": float((~ok).mean()),
         "frozen_rows": int(frozen.sum()),
         "median_abs_dlog_l": float(np.median(dl)) if dl.size else None,
@@ -147,7 +147,12 @@ def _spot_check(
     }
     if worst is None:
         rec["warnings"].append(f"none of the {len(idx)} posterior rows certified cold: no shift could be measured.")
-    elif abs(shifts[worst]) > constants.SPOT_CHECK_SHIFT_SIGMA:
+    elif (~ok).mean() > constants.SPOT_CHECK_LOST_WARN_FRAC:
+        rec["warnings"].append(
+            f"the shift was measured on only {int(ok.sum())} of {len(idx)} posterior rows: ~{(~ok).mean():.1%} of the "
+            f"posterior weight (estimated) did not certify cold (limit {constants.SPOT_CHECK_LOST_WARN_FRAC:.0%})."
+        )
+    if worst is not None and abs(shifts[worst]) > constants.SPOT_CHECK_SHIFT_SIGMA:
         rec["warnings"].append(
             f"reweighted by the cold likelihood, the {int(ok.sum())} posterior rows certified cold move {worst} by "
             f"{shifts[worst]:+.3f} sigma (limit {constants.SPOT_CHECK_SHIFT_SIGMA})."
@@ -168,7 +173,8 @@ def spot_check(
     ``constants.SPOT_CHECK_REJECTED_ROWS`` drawn uniformly from the warm rows the run rejected at the step cap, are
     solved together through ``cold_log_l``. Over the posterior rows that certify cold, they give |L_cold - L_run| and
     the largest shift of a 16th, 50th or 84th percentile, in posterior sigma, when those rows are reweighted by
-    exp(L_cold - L_run); the rows that do not certify cold are counted apart, with their share of the posterior weight.
+    exp(L_cold - L_run); the rows that do not certify cold are counted apart, with their estimated share of the
+    posterior weight.
     The rejected rows give how many certify cold and how many land above the posterior's 1 % log-L point. A row frozen
     at dt_min does not certify, and is counted. It runs only when the run's first cold batch time, per ``n_batch``
     rows, fits in ``seconds_left``. It never raises.
@@ -230,7 +236,8 @@ def _spot_line(spot: dict | None) -> str:
     return (
         f"Spot-check: {spot['posterior_certified_cold']} of {spot['posterior_rows']} weighted posterior rows certified "
         f"cold; {spot['posterior_not_certified_cold']} did not "
-        f"({spot['posterior_not_certified_cold_weight_frac']:.1%} of the posterior weight). Over the rows certified "
+        f"(~{spot['posterior_not_certified_cold_weight_frac']:.1%} of the posterior weight, estimated from "
+        f"{spot['posterior_rows']} draws). Over the rows certified "
         f"cold, |L_cold - L_run| median {num(spot['median_abs_dlog_l'])} and max {num(spot['max_abs_dlog_l'])}; "
         f"reweighted by the cold likelihood, the worst 16th, 50th or 84th percentile shift is {shift}. Of "
         f"{spot['rejected_rows']} draws rejected at the step cap, {spot['rejected_certified_cold']} certified cold, "

@@ -252,7 +252,7 @@ SPOT = {
             [
                 f"Warning: {GUARD_WARNING}",
                 "Spot-check: 196 of 200",
-                "4 did not (2.0% of the posterior weight)",
+                "4 did not (~2.0% of the posterior weight, estimated from 200 draws)",
                 "61 certified cold, 9 above",
                 "1 of the rows solved cold froze at dt_min",
                 SPOT_WARNING,
