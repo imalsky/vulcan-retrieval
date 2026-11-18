@@ -273,6 +273,11 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
 
 ## Pipeline speed
 
+- Where a warm run's steps go [M, the first campaign's six `batches.jsonl`, 1.55 M warm solves]: the median solve
+  under the cap takes 258-1022 steps (10th percentile 128-280); draws that reach the 5000-step cap and are rejected
+  take 14-32% of all steps. The 121-step floor (`count_min` 120) binds 0.1-4.0% of solves, so a floor of 30 would
+  save at most 0.5% of the steps. A solve started from its own converged column still takes 121-654 steps (WASP-39b)
+  and 121-1577 (HD 209458b) [M, daw CPU, `scratch/warm_cold/path/`]: what sets that floor above 121 is not measured.
 - Warm starts on run 90302 (growing anchors): 507 steps per certified warm column against 1,119 cold (the first batch's
   prior draws), 2.21x [M]. The batch time follows the capped columns: a batch with any
   column at the cap runs the full cap, so a tick costs the same whether its lanes are busy or done.
