@@ -1,6 +1,7 @@
 """The warm-start anchors of a run: every certified column, keyed by its unit-cube chemistry and T-P coordinates.
 
-``run_nautilus.make_loglike`` starts each solve from the nearest anchor; docs/method.md "Warm starts".
+``run_nautilus.make_loglike`` starts each solve from the nearest anchor that gives it a physical start; docs/method.md
+"Warm starts".
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 __all__ = ["Anchors", "atomic_savez"]
@@ -74,26 +76,68 @@ class Anchors:
             atomic_savez(self.folder / f"anchors_{len(self.parts):05d}.npz", z=z, Y=Y, refs=refs)
             self._append(z, Y, refs)
 
-    def nearest(self, zq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Return each query's nearest anchor, Euclidean in the unit cube.
+    def nearest(self, zq: np.ndarray, k: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """Return each query's ``k`` nearest anchors, nearest first, Euclidean in the unit cube.
 
         Parameters
         ----------
         zq : numpy.ndarray [n, n_key]
             The queries.
+        k : int
+            Anchors per query; at most the number held.
 
         Returns
         -------
-        tuple of numpy.ndarray
+        tuple of numpy.ndarray [n, k]
             ``(index, distance)``.
         """
-        idx = np.empty(len(zq), int)
-        dist = np.empty(len(zq))
+        k = min(k, len(self.z))
+        idx = np.empty((len(zq), k), int)
+        dist = np.empty((len(zq), k))
         for j in range(0, len(zq), 64):
             d2 = ((zq[j : j + 64, None, :] - self.z[None]) ** 2).sum(-1)
-            idx[j : j + 64] = d2.argmin(1)
-            dist[j : j + 64] = np.sqrt(d2.min(1))
+            near = np.argsort(d2, axis=1, kind="stable")[:, :k]  # stable: a tie goes to the older anchor
+            idx[j : j + 64] = near
+            dist[j : j + 64] = np.sqrt(np.take_along_axis(d2, near, axis=1))
         return idx, dist
+
+    def nearest_physical(
+        self, zq: np.ndarray, ok: Callable[[np.ndarray, np.ndarray], np.ndarray], k: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return each query's nearest anchor whose warm start is physical, among its ``k`` nearest.
+
+        A guess built from another draw's column can be no physical state for this draw while the next nearest column
+        gives one (notes "Warm starts").
+
+        Parameters
+        ----------
+        zq : numpy.ndarray [n, n_key]
+            The queries.
+        ok : callable
+            From the columns [n, nz, ni] and references [n, 3] of one candidate per query to whether each start is
+            physical, [n].
+        k : int
+            Candidates tried per query.
+
+        Returns
+        -------
+        tuple of numpy.ndarray [n]
+            ``(index, distance, rank)``: the anchor taken, its distance and its place among the nearest (0 the
+            nearest); rank -1 marks a query with no physical start among the ``k``, which keeps its nearest anchor.
+        """
+        cand, dist = self.nearest(zq, k)
+        rows = np.arange(len(zq))
+        rank = np.zeros(len(zq), int)
+        left = rows
+        for j in range(cand.shape[1]):
+            rank[left] = j
+            left = left[~np.asarray(ok(*self.columns(cand[rows, rank])), bool)[left]]
+            if not len(left):
+                break
+        rank[left] = 0
+        out = rank.copy()
+        out[left] = -1
+        return cand[rows, rank], dist[rows, rank], out
 
     def columns(self, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Return the columns and references of anchors ``idx``.

@@ -44,6 +44,7 @@ __all__ = [
     "T_EDGE_INSET_K",
     "UNDERFLOW_DENOM",
     "UNMODELED_VMR",
+    "WARM_START_TRIES",
     "fixed_values",
 ]
 
@@ -79,6 +80,9 @@ REJECT_BELOW = -1.0e29
 # vulcan3.state.TERM_DT_MIN_FROZEN, held here because the pipeline imports no engine: vulcan3's first import must
 # follow the network selection. tests/test_run_nautilus_main.py compares the two.
 TERM_DT_MIN_FROZEN = 4
+# Anchors tried, nearest first, for a warm start that is physical: of the starts the nearest anchor cannot give, 97-98 %
+# come from one of the 4 nearest (notes "Warm starts").
+WARM_START_TRIES = 8
 # Trapezoid nodes in log10 b for an integrated noise inflation. On the WASP-39b case's bins the error against brute
 # force falls as h^2: 3.6e-3 nats at 513 nodes in the worst case tried (b piled at its floor), <= 5e-5 on realistic
 # spectra (notes "Design records", the integrated nuisances).

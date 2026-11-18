@@ -102,7 +102,7 @@ def test_target_digest_binds_each_runtime_input_and_fixed_number_alone(digest_pi
     for var in ("XLA_FLAGS", "XLA_PYTHON_CLIENT_MEM_FRACTION"):
         monkeypatch.delenv(var, raising=False)
     m = provenance.target_manifest(cfg, digest_pipe)
-    assert m["manifest_version"] == 9
+    assert m["manifest_version"] == 10
     assert m["composition_file"]["path"] == str(table.resolve())
     d0 = provenance.manifest_digest(m)
 

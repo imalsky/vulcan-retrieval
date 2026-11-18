@@ -64,7 +64,7 @@ def _masked(name, seen, active, L, acc, conv):
     return (jnp.where(active, L, constants.REJECT_LOGL), jnp.where(active, acc, 0), active & conv)
 
 
-def _stub_pipe(seen=None):
+def _stub_pipe(seen=None, start_ok=None):
     specs = [C.ParamSpec(f"p{i}", f"p{i}", "uniform", 0.0, 1.0, MU, "chem") for i in range(D)]
     theta_from_u, _ = P.make_uspace(specs, jnp.float64)
 
@@ -101,6 +101,7 @@ def _stub_pipe(seen=None):
         theta_from_u=theta_from_u,
         theta_batch=jax.vmap(theta_from_u),
         tp_valid_batch=jax.vmap(lambda u: theta_from_u(u)[2] <= 0.7),
+        warm_start_ok_batch=start_ok or (lambda U, _Y, _refs: jnp.ones(U.shape[0], bool)),
         dtype=jnp.float64,
         n_chem_tp=2,
         y_baseline=jnp.zeros((1, 1)),
@@ -187,6 +188,37 @@ def test_warm_starts_from_the_nearest_certified_column(tmp_path):
     assert [(r["mode"], len(r["acc"])) for r in rows] == [("cold", 16), ("warm", 16)]
 
 
+def test_a_warm_start_takes_the_nearest_anchor_whose_start_is_physical(tmp_path):
+    """The stub's start is physical only from a column whose second reference is not below the draw's own (as the
+    engine's fixed-O map refuses a C/O above the column's margin): each warm row starts from the nearest such anchor
+    among the nearest ``WARM_START_TRIES``, a row with none keeps its nearest, and both are counted.
+    """
+    rng = np.random.default_rng(3)
+
+    def start_ok(U, _Y, refs):
+        return refs[:, 1] >= jax.nn.sigmoid(U[:, 1])  # theta = z on the unit box
+
+    anchors, tally = Anchors(tmp_path, 2), {}
+    like = make_loglike(_stub_pipe(start_ok=start_ok), 64, tally, anchors)
+    like(rng.uniform(0.02, 0.98, (64, D)))  # cold: the anchors
+    z_a, code_a = anchors.z.copy(), anchors.columns(np.arange(len(anchors)))[0][:, 0, 0]
+    assert len(z_a) > constants.WARM_START_TRIES
+    z2 = rng.uniform(0.02, 0.98, (64, D))
+    L2 = like(z2)
+    order = np.argsort(((z2[:, None, :2] - z_a[None]) ** 2).sum(-1), axis=1, kind="stable")[
+        :, : constants.WARM_START_TRIES
+    ]
+    fits = z_a[order][:, :, 1] >= z2[:, 1][:, None]
+    rank = np.where(fits.any(1), fits.argmax(1), 0)
+    in_window = z2[:, 2] <= 0.7
+    assert tally["warm_start_moved"] == (in_window & (rank > 0)).sum() > 0
+    assert tally["warm_start_none"] == (in_window & ~fits.any(1)).sum() > 0
+    alive = np.isfinite(L2)
+    assert (alive & (rank > 0)).any()
+    used = anchors.columns(np.arange(len(z_a), len(anchors)))[0][:, 0, 0]  # the stub's warm solve returns its start
+    assert np.array_equal(used, code_a[order[np.arange(64), rank]][alive])
+
+
 def test_a_chunk_far_slower_than_the_runs_best_is_reported(tmp_path, caplog):
     """Seconds per solver iteration against the run's best of the mode, carried over a resume; a first chunk is not
     judged (it also pays the compile), and the report is a log line and a count, never a rejection.
@@ -221,20 +253,21 @@ class _FrozenStats(NamedTuple):
     nuis: None = None
 
 
-def _failing(fn, where, reason=constants.TERM_DT_MIN_FROZEN, steps=7):
-    """Wrap a stub evaluator: rows where ``where(theta)`` holds end uncertified at the reject sentinel, with the
-    solver's ``reason`` after ``steps`` accepted steps (the default: frozen at dt_min).
-    """
+def _freezing(fn, where):
+    """Wrap a stub evaluator: rows where ``where(theta)`` holds freeze at dt_min, uncertified at the reject sentinel."""
 
     def ev(U, Y, refs, active):
         L, Ynew, rnew, st = fn(U, Y, refs, active)
-        bad = jnp.asarray(active, bool) & where(U)
+        fz = jnp.asarray(active, bool) & where(U)
         return (
-            jnp.where(bad, constants.REJECT_LOGL, L),
+            jnp.where(fz, constants.REJECT_LOGL, L),
             Ynew,
             rnew,
             _FrozenStats(
-                jnp.where(bad, steps, st.acc), st.conv_ok & ~bad, jnp.where(bad, reason, 1), jnp.where(bad, 0.3, 0.0)
+                jnp.where(fz, 7, st.acc),
+                st.conv_ok & ~fz,
+                jnp.where(fz, constants.TERM_DT_MIN_FROZEN, 1),
+                jnp.where(fz, 0.3, 0.0),
             ),
         )
 
@@ -249,14 +282,8 @@ def _never(U):
     return jnp.zeros(U.shape[0], bool)
 
 
-NOT_FINITE = 5  # vulcan3.state.TERM_NONFINITE: a warm guess that is not a physical column ends so, at 0 steps
-
-
-@pytest.mark.parametrize(("reason", "steps"), [(constants.TERM_DT_MIN_FROZEN, 7), (NOT_FINITE, 0)])
-def test_a_warm_row_the_run_would_reject_is_solved_again_cold(tmp_path, reason, steps):
-    """Only a cold solve rejects: a warm row that froze, could not start or did not certify is solved again cold, and
-    takes that verdict, column and step count; a cold freeze still stops the run.
-    """
+def test_a_frozen_warm_draw_is_re_solved_cold(tmp_path):
+    """A warm column frozen at dt_min is re-solved cold, alone, and counted; a cold freeze still stops the run."""
     from vulcan_forward import vulcan_chem  # noqa: F401  # before vulcan3
 
     import vulcan3
@@ -265,9 +292,7 @@ def test_a_warm_row_the_run_would_reject_is_solved_again_cold(tmp_path, reason, 
     seen = []
     stub = _stub_pipe(seen)
     cold, warm = stub._make_batch_eval("cold"), stub._make_batch_eval("warm")
-    stub._make_batch_eval = lambda mode: (
-        _failing(cold, _never) if mode == "cold" else _failing(warm, _hot, reason, steps)
-    )
+    stub._make_batch_eval = lambda mode: _freezing(cold, _never) if mode == "cold" else _freezing(warm, _hot)
     anchors, tally = Anchors(tmp_path, 2), {}
     like = make_loglike(stub, 16, tally, anchors, tmp_path / "batches.jsonl")
     like(rng.uniform(0.02, 0.98, (16, D)))
@@ -275,34 +300,26 @@ def test_a_warm_row_the_run_would_reject_is_solved_again_cold(tmp_path, reason, 
     z2 = rng.uniform(0.02, 0.98, (16, D))
     seen.clear()
     L2 = like(z2)
-    in_window = z2[:, 2] <= 0.7
-    failed = (z2[:, 1] > 0.5) & in_window  # the wrapper's rows
-    uncertified = in_window & ~((z2[:, 1] >= 0.35) & (z2[:, 0] <= 0.6))  # the stub's own stalled and exhausted rows
-    again = failed | uncertified
-    assert 0 < failed.sum() < again.sum() < 16
+    fz = (z2[:, 1] > 0.5) & (z2[:, 2] <= 0.7)
+    assert 0 < fz.sum() < 16
     assert [name for name, _ in seen] == ["warm", "cold"]
-    assert seen[1][1] == again.tolist()  # every row the warm solve would reject, and no other, takes the cold solve
-    frozen = reason == constants.TERM_DT_MIN_FROZEN
-    assert tally["warm_resolved_cold"] == again.sum()
-    assert tally["warm_frozen_resolved_cold"] == (failed.sum() if frozen else 0)
+    assert seen[1][1] == fz.tolist()  # only the frozen rows take the cold solve
+    assert tally["warm_frozen_resolved_cold"] == fz.sum()
     want = make_loglike(_stub_pipe(), 16, {})(z2)
-    assert np.array_equal(L2, want)  # those rows take the cold verdict, the others keep the warm one
+    assert np.array_equal(L2, want)  # the frozen rows take the cold verdict, the others keep the warm one
     alive = np.isfinite(L2)
-    assert tally["warm_resolved_cold_kept"] == (alive & again).sum() > 0
-    assert (~alive & again).any()  # a row the cold solve rejects too
-    assert (alive & ~again).any()
+    assert (alive & fz).any()
+    assert (alive & ~fz).any()
     Yn, rn = anchors.columns(np.arange(n_a, len(anchors)))
     own = z2[alive][:, 0] + 1000 * z2[alive][:, 1]
-    f = again[alive]
+    f = fz[alive]
     assert np.allclose(Yn[f, 0, 0], own[f])  # its own cold column and references, not the anchor's
     assert np.allclose(rn[f], np.c_[z2[alive][f, :2], np.zeros(f.sum())])
     assert not np.isclose(Yn[~f, 0, 0], own[~f]).any()
-    row = json.loads((tmp_path / "batches.jsonl").read_text().splitlines()[-1])
-    assert row["n_cold_again"] == again.sum()
-    assert 0.0 <= row["t_cold_again"] <= row["t"]
-    assert (np.array(row["acc"])[failed] != steps).all()  # the cold step count, not the failed warm one
+    acc = np.array(json.loads((tmp_path / "batches.jsonl").read_text().splitlines()[-1])["acc"])
+    assert (acc != 7).all()  # the frozen rows log the cold step count, not the warm one
 
-    stub._make_batch_eval = lambda mode: _failing(cold, _hot) if mode == "cold" else _failing(warm, _hot)
+    stub._make_batch_eval = lambda mode: _freezing(cold, _hot) if mode == "cold" else _freezing(warm, _hot)
     like = make_loglike(stub, 16, {}, anchors)
     with pytest.raises(vulcan3.DtMinFrozenError, match="froze at dt_min"):
         like(z2)

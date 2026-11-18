@@ -76,10 +76,8 @@ and the inflation(s) out at the same priors: the offset integral is closed form,
 ## Sampler
 
 A draw that does not certify within `count_max` is rejected, with log L = -inf. A column frozen at `dt_min` is different:
-it is a solver failure rather than a verdict on the draw. Only a cold solve rejects: a warm start is a guess built from
-another draw's column, and it can fail to start, freeze or run out of steps where the draw's own cold solve certifies, so
-every row a warm solve would reject is solved again cold, in one more call on the lane queue, and that result stands (the
-batch log records the rows and the seconds, the tally the rows kept); each chunk's `termination_reason` is then checked and a cold freeze stops the run with `DtMinFrozenError`. `nautilus_report` and the forward checks re-solve finished runs'
+it is a solver failure rather than a verdict on the draw. A warm start that froze is re-solved cold, alone, and that
+result stands; each chunk's `termination_reason` is then checked and a cold freeze stops the run with `DtMinFrozenError`. `nautilus_report` and the forward checks re-solve finished runs'
 draws and stop the same way; `nautilus_report --spectra 0` still writes the certificate and the figures that need no solve.
 
 Stock nautilus-sampler 1.0.6 (Lange 2023) with its default networks, `N_NETWORKS` ReLU MLPs, $n_{\rm update} = n_{\rm live}/2$,
@@ -103,7 +101,12 @@ Off by default (`sampler.warm_starts: false`). A warm run is reported only after
 the run's certificate says `quotable: false`. A run that fails is repeated cold.
 
 With `warm_starts: true` every certified column becomes an anchor keyed by its unit-cube chemistry and T-P coordinates, and each later solve continues
-from its nearest anchor; batches before the first certified column run cold. The certified state and which draws are rejected
+from the nearest anchor that gives it a physical start; batches before the first certified column run cold. A guess built
+from another draw's column can be no physical state for this draw (a negative density from the fixed-O C/O map, or an
+elemental repair factor at or below zero), and the solve then ends at step zero: so the engine's own start test
+(`warm_start_ok`, no solve) is applied to the `WARM_START_TRIES` nearest anchors, nearest first, and the first that passes
+is taken. A draw with none keeps its nearest anchor and is rejected at step zero; the tally counts both
+(`warm_start_moved`, `warm_start_none`). The certified state and which draws are rejected
 then depend on the evaluation order at the convergence tolerance. Anchors are written inside the likelihood call, before
 nautilus checkpoints the batch, so a job killed in between resumes by redrawing that batch, and the tally counts it twice.
 The set is never pruned: `8 nz ni` bytes per certified column (74 KB at `nz` 100 and 93 species), on disk and in memory.

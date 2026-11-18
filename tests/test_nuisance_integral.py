@@ -207,6 +207,7 @@ def test_run_logs_and_joins_the_statistics(tmp_path):
         theta_from_u=lambda u: u,
         theta_batch=lambda U: U,
         tp_valid_batch=lambda U: jnp.ones(U.shape[0], bool),
+        warm_start_ok_batch=lambda U, _Y, _refs: jnp.ones(U.shape[0], bool),
         n_chem_tp=2,
         y_baseline=jnp.zeros((1, 1)),
         nuisance=nuis,

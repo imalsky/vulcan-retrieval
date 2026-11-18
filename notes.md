@@ -331,10 +331,9 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   and 4.7%); over each whole run the stalled class is 1.9-4.6% of the calls and the exhausted class 2.2-6.7%. Of 24
   such rows solved cold alone (10 stalled and 2 exhausted per planet, `scratch/warm_cold/rejected/`), 21 certify, 20
   of them within 5000 steps, and 8 at a log L inside the posterior's own range (above its 1% point). So a warm run
-  rejected draws a cold solve keeps, and a re-solve of the run's posterior rows cannot see it: `make_loglike` now
-  solves again cold every row a warm solve would reject.
-- What that rule costs [M, one GH200, WASP-96b at the second campaign's settings, the first five batches]: a cold
-  batch 1,959 s; four warm batches 1,733, 1,474, 1,523 and 1,491 s, of which the cold re-solve of 254-294 rows took
+  rejected draws a cold solve keeps, and a re-solve of the run's posterior rows cannot see it.
+- What solving again cold, inside the batch, every row a warm solve would reject costs [M, one GH200, WASP-96b at
+  the second campaign's settings, the first five batches]: a cold batch 1,959 s; four warm batches 1,733, 1,474, 1,523 and 1,491 s, of which the cold re-solve of 254-294 rows took
   812, 776, 839 and 829 s (+88%, +111%, +123% and +125% on the rest of the batch); it kept 450 of 1,099 rows. The
   time follows the slowest row, which runs to the cap in both stages, not the row count [I]. At the first campaign's
   rates a doubled batch time leaves WASP-107b, HD 209458b and WASP-39b near n_eff 1,500, 2,300 and 1,400 at 46 h [E].
@@ -366,8 +365,10 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   process, cap 5000): from the nearest column all 30 stop at step zero; from the first physical column 25 certify
   (338-4,819 steps, median 1,137) and 5 run out of steps; cold alone 25 of 30 certify. Over the 23 certified both
   ways |L_warm - L_cold| has median 0.001 and is above 0.05 in 4 (0.08, 0.17, 0.28, 0.58). Two draws certify warm
-  where the cold solve stops at step zero, and two certify cold where the warm solve runs out of steps. Not built:
-  choosing, before the solve, the nearest column whose repaired start is physical.
+  where the cold solve stops at step zero, and two certify cold where the warm solve runs out of steps. Built:
+  `make_loglike` starts a warm solve from the nearest of `WARM_START_TRIES` columns whose repaired start is physical
+  (`Anchors.nearest_physical`, the engine's `warm_start_ok`); the cold re-solve inside the batch is for frozen rows
+  only, as before. Not yet run on the GPU.
 - Decided by the maintainer: the survey runs warm, 1000 live points, cap 5000 and n_eff 5000, one 46 h job per
   planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
@@ -449,7 +450,7 @@ Sampler and policy
   nautilus solves replayed on CPU: "Do not retry". Caps of 3e4 / 1e4 gave open-ended init tails (64073, 64163); 29%
   stayed censored at 20000.
 - Config keys enter the target digest (`provenance.TARGET_FREE_KEYS` lists the exceptions): no measurement. The manifest
-  (`manifest_version` 9) binds what CLAUDE.md's run-target rule lists (not every bound solver variable moves results:
+  (`manifest_version` 10) binds what CLAUDE.md's run-target rule lists (not every bound solver variable moves results:
   design) and the sha256 of the case's vulcan3 config and of the atm and stellar-flux files it names
   (`provenance.case_inputs`; a path-style case, the survey's, lives outside every tree the code state binds); it
   records each repository's `dirty` without hashing it. vulcan3's code state binds the packaged network, NASA9 folder

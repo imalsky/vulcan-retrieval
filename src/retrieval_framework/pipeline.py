@@ -275,6 +275,8 @@ class Pipeline:
         The priors, the truth, the map from u to theta and its jitted batch [n, n_dim].
     tp_valid_batch
         Whether each u of a batch [n, n_dim] has its T-P inside the window, jitted.
+    warm_start_ok_batch
+        Whether each u of a batch has a physical warm start from its column [n, nz, ni] and references [n, 3], jitted.
     y_baseline, observed_depth_from_y_jit, binned_ok_jit
         The column a rejected solve is pinned to, the ungated binned depth of columns, the certified one of a theta.
     obs_depth, obs_sigma, obs_depth_jax, obs_sigma_jax, target_manifest, target_digest
@@ -358,6 +360,7 @@ class Pipeline:
         # The effective prior is the box intersected with the T-P window.
         self.tp_valid_batch = jax.jit(lambda U: jax.vmap(lambda u: self.tp_valid(self.theta_from_u(u)))(U))  # noqa: PLW0108  # a fresh trace
         self.theta_batch = jax.jit(jax.vmap(self.theta_from_u))
+        self.warm_start_ok_batch = jax.jit(self._warm_start_ok)
 
         self.binned_ok_jit = jax.jit(self._binned_ok)
 
@@ -476,6 +479,11 @@ class Pipeline:
         mu = np.asarray(self.observed_depth_from_y_jit(Y, th), np.float64)
         ok = (np.asarray(cd.conv_normal) > 0.5) & np.all(np.isfinite(mu), axis=1)
         return Y, mu, ok
+
+    def _warm_start_ok(self, U: Array, Y: Array, refs: Array) -> Array:
+        """Return whether each u [n, n_dim] has a physical warm start from its column of ``Y`` and row of ``refs``."""
+        C_ = jax.vmap(self.theta_from_u)(U)[:, : self.n_chem_tp]
+        return jax.vmap(self.fwd.chem.warm_start_ok)(C_, Y, refs[:, 0], refs[:, 1], refs[:, 2])
 
     def _comp_refs(self, C_: Array) -> Array:
         """Return the composition references (lnZ, c_o, s_o) of a chemistry block, [N, 3]; s_o is 0 if not inferred."""

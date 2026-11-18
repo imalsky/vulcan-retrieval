@@ -106,9 +106,9 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
   gate or the cold re-solve's cap to pass a run; a run that fails is repeated cold.
 - The chemistry policy is the spec's: one program per draw, at the spec's `rtol` (`cfg_overrides`) within `count_max`
   accepted steps, and only its VULCAN certificate keeps a draw. A second program (a presolve chain) needs a full-run A/B
-  first (notes "Design records"); the cold re-solve of a warm row that did not certify is not one.
+  first (notes "Design records"); the cold re-solve of a frozen warm start is not one (the maintainer decided).
 - `count_max` is the certifying cap: a draw that does not certify within it is rejected (log L = -inf), never extended.
-  Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection, and only a cold solve rejects: `run_nautilus` solves again cold every warm row it would reject, then checks
+  Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection: `run_nautilus` re-solves a frozen warm row cold, then checks
   each chunk's `termination_reason` and aborts on a cold freeze (notes "Design records"); `nautilus_report` and the forward
   checks abort on any freeze in the draws they re-solve.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
