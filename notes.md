@@ -332,11 +332,12 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   such rows solved cold alone (10 stalled and 2 exhausted per planet, `scratch/warm_cold/rejected/`), 21 certify, 20
   of them within 5000 steps, and 8 at a log L inside the posterior's own range (above its 1% point). So a warm run
   rejected draws a cold solve keeps, and a re-solve of the run's posterior rows cannot see it.
-- What solving again cold, inside the batch, every row a warm solve would reject costs [M, one GH200, WASP-96b at
-  the second campaign's settings, the first five batches]: a cold batch 1,959 s; four warm batches 1,733, 1,474, 1,523 and 1,491 s, of which the cold re-solve of 254-294 rows took
-  812, 776, 839 and 829 s (+88%, +111%, +123% and +125% on the rest of the batch); it kept 450 of 1,099 rows. The
-  time follows the slowest row, which runs to the cap in both stages, not the row count [I]. At the first campaign's
-  rates a doubled batch time leaves WASP-107b, HD 209458b and WASP-39b near n_eff 1,500, 2,300 and 1,400 at 46 h [E].
+- What solving again cold, inside the batch, every row a warm solve would reject costs [M, one GH200, WASP-96b at the
+  second campaign's settings, the first five batches]: a cold batch 1,959 s; four warm batches 1,733, 1,474, 1,523 and
+  1,491 s, of which the cold re-solve of 254-294 rows took 812, 776, 839 and 829 s (+88%, +111%, +123% and +125% on the
+  rest of the batch); it kept 450 of 1,099 rows. The time follows the slowest row, which runs to the cap in both stages,
+  not the row count [I]. At the first campaign's rates a doubled batch time leaves WASP-107b, HD 209458b and WASP-39b
+  near n_eff 1,500, 2,300 and 1,400 at 46 h [E].
 - The two warm rejection classes, first campaign [M, each run's `rejected/` logs]: every run has both in every phase.
   Of the in-window draws of the sampling phase, the step-zero class is 2.2-4.9% and the exhausted class 2.2-7.3%
   (exploration: 1.8-4.2% and 2.7-6.9%); a batch holds 60-146 such rows, 23-76 of them step-zero; no other class
@@ -373,19 +374,21 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   `scratch/warm_cold/deferred/`]: every sampling-phase draw the warm run rejected, put back at nautilus's own weight
   (its shell's volume over the shell's point count, times the cold likelihood). HD 189733b: 1,711 of 3,678 certify
   (step-zero 61%, exhausted 34%) and hold 2.5% of the corrected posterior. WASP-96b: 1,912 of 3,966 (77%, 34%), 7.0%.
-  WASP-39b, the first 4,752 of 28,275 in random order: 63% (75%, 48%), 7.1%. Worst shift of a 16th, 50th or 84th
+  WASP-39b, the first 6,336 of 28,275 in random order: 63% (76%, 48%), 6.6%. Worst shift of a 16th, 50th or 84th
   percentile, both classes / step-zero alone / exhausted alone, in sigma: HD 189733b 0.52 / 0.43 / 0.08 (lnKzz, 16th);
-  WASP-96b 0.29 / 0.27 / 0.04 (lnKzz, 16th); WASP-39b 0.33 / 0.34 / 0.02 (the cloud opacity, 16th; lnKzz 0.16 and
-  0.10 at the 16th and 50th). lnZ, c_o and s_o move by 0.07 or less. The posterior's effective size goes from 5,373
-  to 5,218, 5,341 to 4,028 and 5,008 to 3,104. So the estimate above had the class and the place right and the size
-  within a factor of two, and the exhausted class alone stays under the 0.1 sigma gate. A CPU sample of 246 of
-  HD 189733b's draws (daw, `fast`) gave 0.84 +- 0.28. The cold solve of 1,584 such draws takes 47-56 min (70 min on
-  WASP-39b): 2.1-2.3 h for the two short runs, about 21 h for all of WASP-39b's.
-- The start from the nearest physical anchor on the GPU [M, one GH200, WASP-96b at the second campaign's settings,
-  2.5 h]: a cold batch 1,656 s, then 11 warm batches of 577-756 s. 1,077 of 17,424 warm rows took another anchor
-  than the nearest, 7 had no physical start among the 8 tried, and those 7 are the only rows that ended at step
-  zero. 158 rows per warm batch ran out of steps (10% of the in-window rows). Solving the rejected rows again cold
-  inside the batch left 157 per batch rejected, at 2.2 times the batch time.
+  WASP-96b 0.29 / 0.27 / 0.04 (lnKzz, 16th); WASP-39b 0.21 +- 0.17 / 0.23 / 0.02 (the cloud opacity, 16th; lnKzz 0.14
+  and 0.09 at the 16th and 50th; the spread from resampling the partial set). lnZ, c_o and s_o move by 0.07 or less. The
+  posterior's effective size goes from 5,373 to 5,218, 5,341 to 4,028 and 5,008 to 3,773. So the estimate above had the
+  class and the place right and the size within a factor of two, and the exhausted class alone stays under the 0.1 sigma
+  gate. A CPU sample of 246 of HD 189733b's draws (daw, `fast`) gave 0.84 +- 0.28. The cold solve of 1,584 such draws
+  takes 47-56 min (part times, the step cap 5000): 2.1-2.3 h for the two short runs, about 16 h for all of WASP-39b's.
+- The start from the nearest physical anchor on the GPU [M, one GH200, WASP-96b at the second campaign's settings, 2.5
+  h]: a cold batch 1,656 s, then 11 warm batches of 577-756 s. 1,077 of 17,424 warm rows took another anchor than the
+  nearest, 7 had no physical start among the 8 tried, and those 7 are the only rows that ended at step zero. 158 rows
+  per warm batch ran out of steps (10% of the in-window rows). The cost test's warm batches, the same case and settings
+  on another node, took 643-921 s before their cold re-solve (its cold batch 1,959 s against 1,656 s here: the two nodes
+  differ by about 15%). Rebuilt from the saved anchors with the tracked code, the run's own start choice moves the same
+  1,084 rows the tally counts.
 - Decided by the maintainer: the survey runs warm, 1000 live points, cap 5000 and n_eff 5000, one 46 h job per
   planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
