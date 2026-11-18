@@ -283,6 +283,13 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   ended stage 1 with a non-finite column under the survey rules, so their stage 2 had no start: one solves with
   zeroing, one without the geometry term (8 more rows of those workers were not reached). A restart from the draw's own
   converged column takes 121 steps (the `count_min` floor) in 8 of 19 and a median 144.
+- The same draws after the two step-rule fixes [M, vulcan3 `f3e82fd` on PYTHONPATH, `scratch/step_diag/compare_fixed.py`;
+  33 rows every variant finished]: certified 17 -> 27 (the old rule left 9 kept draws with no physical stage-2 start;
+  each certifies now), |dlog L| <= 0.005 against the old code where both certify. The populated-gas rejection costs
+  some draws steps against plain zeroing (1883 against 898; 2151 against 880). Geometry refreshed every step
+  (`update_frq` 1, the check kept): 29 certified, 22% fewer steps and 13% less CPU time than every 100 steps,
+  |dlog L| <= 0.005; without the geometry term 30 certified, |dlog L| <= 0.040; `update_frq` 10 in between. The GPU
+  cost of a refresh on every tick is not measured.
 - Where a warm run's steps go [M, the first campaign's six `batches.jsonl`, 1.55 M warm solves]: the median solve
   under the cap takes 258-1022 steps (10th percentile 128-280); draws that reach the 5000-step cap and are rejected
   take 14-32% of all steps. The 121-step floor (`count_min` 120) binds 0.1-4.0% of solves, so a floor of 30 would
