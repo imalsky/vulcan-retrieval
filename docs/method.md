@@ -177,12 +177,8 @@ Rungs, top to bottom; batch rungs run on the run's GPU, and each fixes every oth
 |---|---|
 | `production` | The spec's runtime and lanes, one batch of every draw through the production cold evaluator |
 | `shuffled` | The draws in another order; production against shuffled is the noise floor between two equivalent solves |
-| `cmdbuf_off` | Command buffers off, the other XLA flags kept |
-| `no_xla_flags` | `XLA_FLAGS` unset |
-| `codegen` | The codegen chemistry RHS |
 | `fast` | The fast solver (JAX scans) in place of the CUDA kernel |
-| `solo_gpu` | Each draw alone, fast and codegen, on the GPU |
-| `solo_cpu` | The same on the CPU |
+| `solo_cpu` | Each draw alone, fast and codegen, on the CPU |
 | `reference_cpu` | The reference solver on the CPU: the parity pair behind the VULCAN 2 gates |
 
 The draws are `--draws` seeded in-window prior draws with the first rows replaced by designed corners. `--rows a:b` solves a

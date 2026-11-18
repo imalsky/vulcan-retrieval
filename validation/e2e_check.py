@@ -4,9 +4,9 @@
     python validation/e2e_check.py solve <spec> --rung production --posterior <out_dir> --draws n
     python validation/e2e_check.py compare <a.npz> <b.npz> [<b_part2.npz> ...]
 
-Each rung is one change from the rung above, compared per draw on the certificate, log L, the binned depth against the
-data's sigma and the photosphere column of six species, so a disagreement names the change that made it. ``compare``
-exits 1 over a gate. Rungs, draws, gates and results are in docs/method.md.
+Each rung changes the solver route from the rung above, compared per draw on the certificate, log L, the binned depth
+against the data's sigma and the photosphere column of six species, so a disagreement names the change that made it.
+``compare`` exits 1 over a gate. Rungs, draws, gates and results are in docs/method.md.
 """
 
 from __future__ import annotations
@@ -38,11 +38,7 @@ LOW_KZZ_WITH = ("lnZ", "c_o", "s_o", "T1bar")
 RUNGS = {
     "production": ({}, True),
     "shuffled": ({}, True),
-    "cmdbuf_off": ({"XLA_FLAGS": "cmdbuf_off"}, True),
-    "no_xla_flags": ({"XLA_FLAGS": ""}, True),
-    "codegen": ({"XLA_FLAGS": "", "VULCAN3_CHEM_RHS": "codegen"}, True),
     "fast": ({"XLA_FLAGS": "", "VULCAN3_CHEM_RHS": "codegen", "VULCAN3_SOLVER": "fast"}, True),
-    "solo_gpu": ({"XLA_FLAGS": "", "VULCAN3_CHEM_RHS": "codegen", "VULCAN3_SOLVER": "fast"}, False),
     "solo_cpu": (
         {"XLA_FLAGS": "", "VULCAN3_CHEM_RHS": "codegen", "VULCAN3_SOLVER": "fast", "JAX_PLATFORMS": "cpu"},
         False,
@@ -60,11 +56,7 @@ def _set_environment(spec, rung):
 
     env = spec.runtime.env()
     for k, v in RUNGS[rung][0].items():
-        if k == "XLA_FLAGS" and v == "cmdbuf_off":
-            flags = [f for f in (env["XLA_FLAGS"] or "").split() if not f.startswith("--xla_gpu_enable_command_buffer")]
-            env[k] = " ".join([*flags, "--xla_gpu_enable_command_buffer="])
-        else:
-            env[k] = v or None
+        env[k] = v or None
     rt = replace(
         spec.runtime, solver=env["VULCAN3_SOLVER"], chem_rhs=env["VULCAN3_CHEM_RHS"], xla_flags=env["XLA_FLAGS"]
     )

@@ -14,8 +14,7 @@
 #   qsub -W "group_list=${PBS_GROUP:?}" -v CHECK=e2e,RUNGS=production:shuffled tools/check_nas.pbs
 #
 # CHECK=e2e: validation/e2e_check.py's GPU rungs on VR_SPEC (default the production
-#   spec), RUNGS colon-separated (default every batch rung, then solo_gpu on the first
-#   128 draws); then the W39b and HD189 configs through the vulcan3 CLI under ffi +
+#   spec), RUNGS colon-separated (default every GPU rung); then the W39b and HD189 configs through the vulcan3 CLI under ffi +
 #   grouped, the .vul files for VULCAN-JAX/tools/compare_vul.py against VULCAN 2.
 #   The job only solves: the comparisons (e2e_check.py compare, compare_vul.py) run
 #   after it and exit 1 over a gate, so a clean job exit is not a pass.
@@ -66,13 +65,9 @@ cd -P "${REPO_DIR}"
 rc=0
 step() { echo "== $* ($(date))"; "$@" || { rc=$?; echo "!! failed rc=${rc}: $*"; }; }
 if [ "${CHECK}" = "e2e" ]; then
-  RUNGS="${RUNGS:-production:shuffled:cmdbuf_off:no_xla_flags:codegen:fast:solo_gpu}"
+  RUNGS="${RUNGS:-production:shuffled:fast}"
   for r in ${RUNGS//:/ }; do
-    if [ "${r}" = "solo_gpu" ]; then
-      step python validation/e2e_check.py solve "${VR_SPEC}" --rung solo_gpu --rows 0:128
-    else
-      step python validation/e2e_check.py solve "${VR_SPEC}" --rung "${r}"
-    fi
+    step python validation/e2e_check.py solve "${VR_SPEC}" --rung "${r}"
   done
   for cfgname in W39b HD189; do                  # the CLI writes ./output/<name>.vul
     D="${RES}/vul_ffi_grouped_${cfgname}"; mkdir -p "${D}"; cd "${D}"

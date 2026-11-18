@@ -686,12 +686,12 @@ HPC
   docs/method.md "e2e_check". Against VULCAN 2: the CPU port's W39b column is within 0.003 dex on those six species (CH4
   worst; VULCAN-JAX `output/W39b.vul` against the stored VULCAN 2 columns, `VULCAN-JAX/tools/compare_vul.py`) [M].
   Results on v5 (NAS GH200, 1584 in-window prior draws, cold) [M]: command buffers off, no XLA flags and the codegen RHS
-  are bitwise the production rung (908 certified, every metric 0). The noise floor (production vs shuffled, 17-D): worst
+  are bitwise the production rung (908 certified, every metric 0), so the ladder no longer has those rungs. The noise floor (production vs shuffled, 17-D): worst
   bin 0.050 sigma, 4 certificate flips, good-fit |dlogL| <= 0.118. ffi vs fast: p95 9e-6 dex, good-fit |dlogL| <= 3e-4,
   3 flips; one poor fit (row 1352, 171 nats below the best; lnZ 1.25, lnKzz 3.13, T1bar 979 K) differs by 1.24 sigma in
   one bin and 0.14 dex. The W39b and HD189 configs through the CLI under ffi + grouped against the CPU port: W39b 4.6e-8
-  dex, HD189 1.6e-7 dex, both at their gate step counts (1202, 1495). The rest of the ladder (the one-at-a-time GPU
-  rung, the daw CPU rungs, a replay of row 1352 under ffi and fast) is not run (the maintainer decided). On the survey's
+  dex, HD189 1.6e-7 dex, both at their gate step counts (1202, 1495). The one-at-a-time GPU rung was dropped
+  unrun, and the daw CPU rungs and a replay of row 1352 under ffi and fast are not run (the maintainer decided). On the survey's
   WASP-39b spec (NAS job 104972, 1584 in-window prior draws, cold, rtol 0.2, the survey's pins) [M]: 1204 certify. The
   noise floor: 59 certificate flips, worst bin 0.254 sigma, D 0.529, 0.199 dex worst (p95 2.3e-4), good-fit |dlogL| <=
   0.039. ffi vs fast: 65 flips, worst bin 0.757 sigma, D 1.73, 0.295 dex worst (p95 2.9e-4), good-fit |dlogL| <= 0.021.
