@@ -811,7 +811,8 @@ HPC
     the same three end on the cap; certified depths agree to 0.002 ppm, and each certified column, held to 1500 more
     steps, certifies again within 0.006 ppm on both. The maintainer decided the survey runs on the pin with the limit.
     Not covered: `ffi` on a GH200 (the end-to-end check) and more draws.
-  - Standard. One NIRSpec transit (G395H; WASP-166b G395M, one group), the authors' R100 product per detector, fitted on
+  - Standard, first campaign (the "Second campaign" entries below replace its data window, data products and priors).
+    One NIRSpec transit (G395H; WASP-166b G395M, one group), the authors' R100 product per detector, fitted on
     2.87-5.10 um, `obs_max_bin_R` 200. One model and one prior set in `survey_base.yaml` (never a run: it names no
     planet); a planet file adds only its system numbers, data files, Tirr prior [0.4, 1.4] x sqrt(2) Teq and lnM's
     sigma. Machinery as the WASP-107b case (2025 network, rtol 0.2 within 5000, constant Kzz 1e7-1e13 about 1e9, 10 bar
@@ -936,8 +937,8 @@ HPC
     fit; the 1x metallicity floor sat near HD 209458b's 3 +4/-1x; the bolometric solar scaling keeps the solar UV shape,
     3-5x above a 5052 K photosphere's ratio at 170-230 nm (HD 189733) and ~0.7x at 6050-6091 K (WASP-166, HD 209458), a
     host-temperature-correlated UV in the SO2-destroying band, and HD 189733's Ly-alpha in the solar-scaled file is ~5x
-    below its measured value [I, review]. The maintainer decided: the C/O floor 0.025 and the metallicity floor 0.3x
-    solar (`survey_base.yaml`), and each host's published UV ("Rules"). Inferred, disclose: the G395H detector gap
+    below its measured value [I, review]. The maintainer decided: the C/O floor 0.025 and, for the first campaign,
+    the metallicity floor 0.3x solar (the second campaign's is 0.1x, `survey_base.yaml`), and each host's published UV ("Rules"). Inferred, disclose: the G395H detector gap
     (3.72-3.82 um) removes part of the H2S band for the three G395H planets, which NIRCam and G395M keep.
   - Absorber screen [M] (`validation/opacity_leave_one_out.py --spec runs/survey/<planet>.yaml`, the 13 tabled species
     the survey's 12-molecule list left out, gate min(5 ppm, 0.1 sigma) per bin; daw CPU, retrieval `33ba761` with
