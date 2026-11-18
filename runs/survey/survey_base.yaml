@@ -11,8 +11,8 @@
 # published (WASP-107b alone is binned here, from R 950 to R 100: finer than the model takes),
 # fitted on every published bin the model band covers; one offset per group after the
 # bluest and one noise inflation per group, integrated out.
-# Chemistry: rtol 0.2 (VULCAN's default) within 5000 steps, warm starts (each run's cold re-solve must pass
-# before it is reported: docs/method.md "Warm starts"), constant Kzz, 10 bar bottom.
+# Chemistry: rtol 0.2 (VULCAN's default) within 5000 steps, warm starts (each run checks itself with guards
+# and a cold spot-check, warnings only: docs/method.md "Warm starts"), constant Kzz, 10 bar bottom.
 # YAML reads 1e11 as text: write 1.0e+11.
 #
 # 10 sampled parameters: lnZ, c_o, lnKzz, s_o, Tirr, log10kappa, log10gamma, Tint,
