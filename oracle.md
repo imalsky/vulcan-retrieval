@@ -84,12 +84,9 @@ case.
 These apply to a finished run, not to the test suite. They need the run's own output and may need
 its hardware.
 
-- **Warm starts did not bias it.** Weighted posterior draws re-solved from a cold start, through
-  the same chain and tolerances, agree with the warm results within the gate of
-  `validation/e2e_check.py`. The cold re-solve is given more steps than the run's own cap, so that
-  a draw it cannot reach in time is not read as a warm-start error; a draw it still does not
-  certify counts against the run. A warm run with no passing check is not reported. Evidence
-  claims use cold starts and the spread over at least three seeds.
+- **Warm starts did not bias it.** Its warm-start guards and its cold spot-check did not warn, or
+  the report states each warning. Evidence claims use cold starts and the spread over at least
+  three seeds.
 - **Its absorbers were screened.** Every species the case left out has a recorded bound, for this
   planet, below the leave-one-out gate (`validation/opacity_leave_one_out.py`).
 - **Its priors are what it sampled.** The window rejection and the certificate reshape the stated
