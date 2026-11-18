@@ -423,10 +423,16 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm solve starts from the
   nearest anchor whose start is physical. The maintainer replaced the post-run warm-against-cold check (`e2e_check.py
   warmcold`, which a report needed before it would run) with checks inside every warm run, so that no user has to run a
-  check after it: guards on the tally (warm rows with no physical start; warm step-cap rejections against cold) and a
-  cold spot-check at the run's end of 200 posterior rows and up to 100 warm rows rejected at the step cap
-  (`warm_checks`; `docs/method.md` "Warm starts"). Both only warn, and the report carries them; the cold re-solve's
-  30000-step cap and its effective-sample-size gate went with the check. The WASP-96b cold twin
+  check after it: a guard on the tally (warm rows with no physical start) and a cold spot-check at the run's end of
+  200 posterior rows and up to 100 warm rows rejected at the step cap (`warm_checks`; `docs/method.md` "Warm starts").
+  Both only warn, and the report carries them; the cold re-solve's 30000-step cap and its effective-sample-size gate
+  went with the check. The maintainer then dropped a second guard, warm step-cap rejections against cold: a warm
+  run's cold rows are its first batches, drawn from the whole prior, and its warm rows sit near the posterior, so it
+  compared prior with posterior [I]; the spot-check's cold solve of rejected warm rows asks the same on matched draws.
+  The spot-check's shift is taken over the posterior rows certified cold alone, with the same weights on both sides,
+  and the rows that do not certify cold are counted apart with their weight share: at weight 0 they re-created the
+  lost-row shift above ("What the 0.1 sigma gate measured"). A column frozen at `dt_min` in the spot-check counts as a
+  row that does not certify, and is counted, instead of failing the check. The WASP-96b cold twin
   (`runs/survey/wasp96b_cold.yaml`, one comparison of the whole posterior run both ways) is dropped. The draws a warm
   run rejects at the step cap are a stated limit, not solved cold per run beyond the spot-check's sample: in three
   first-campaign runs, solved cold and put back, they moved no 16th, 50th or 84th percentile by more than 0.08 sigma

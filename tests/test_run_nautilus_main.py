@@ -3,6 +3,7 @@ is checked against, and the order of that check against everything the run write
 """
 
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple
@@ -14,7 +15,7 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from test_run_nautilus import D, _FrozenStats, _stub_pipe
+from test_run_nautilus import D, _FrozenStats, _freezing, _stub_pipe
 
 from retrieval_framework import config_schema as C
 from retrieval_framework import constants
@@ -24,6 +25,7 @@ from retrieval_framework import pipeline as P
 from retrieval_framework import run_nautilus as RN
 from retrieval_framework import run_setup as R
 from retrieval_framework import warm_checks
+from retrieval_framework.chunks import cold_log_l
 from conftest import case_config
 
 DIGEST = "d" * 64
@@ -212,6 +214,7 @@ def test_a_finished_warm_run_spot_checks_its_rows_cold(job, monkeypatch, caplog,
     assert (spot["posterior_rows"], spot["rejected_rows"]) == (constants.SPOT_CHECK_POSTERIOR_ROWS, capped)
     assert spot["rejected_certified_cold"] == spot["rejected_above_posterior_1pct"] == 0  # the stub caps them cold too
     assert spot["posterior_certified_cold"] == spot["posterior_rows"]
+    assert (spot["posterior_not_certified_cold"], spot["frozen_rows"]) == (0, 0)
     assert spot["estimate_seconds"] > 0
     if tilt == 0.0:
         assert (spot["median_abs_dlog_l"], spot["max_abs_dlog_l"], spot["worst_shift_sigma"]) == (0.0, 0.0, 0.0)
@@ -245,6 +248,66 @@ def test_a_spot_check_with_no_time_or_a_failure_is_recorded_and_the_run_goes_on(
         assert " s are left before half the job's headroom" in spot["reason"]
     else:
         assert spot == {"status": "failed", "error": "ValueError: a broken posterior file"}
+
+
+# Posterior rows that certify on the stub's cold solve (T-P window, p1 >= 0.35, p0 <= 0.6), with theta = z.
+SPOT_Z = np.array([[0.45, 0.5, 0.5], [0.5, 0.45, 0.4], [0.55, 0.55, 0.6], [0.5, 0.6, 0.5]])
+
+
+def _spot_run(out, z, log_l, capped=None):
+    """Write the files the spot-check reads: equal-weight posterior rows at ``z``, one cold batch, and ``capped`` as
+    warm rows rejected at the step cap.
+    """
+    np.savez(
+        out / "nautilus_posterior.npz",
+        u=np.log(z) - np.log1p(-z),
+        log_l=log_l,
+        theta=z,
+        log_w=np.zeros(len(z)),
+        param_names=np.array(["p0", "p1", "p2"]),
+    )
+    (out / "batches.jsonl").write_text(json.dumps({"t": 1.0, "mode": "cold", "acc": []}) + "\n")
+    if capped is not None:
+        (out / "rejected").mkdir()
+        np.savez(out / "rejected" / "rejected_00000.npz", z=capped, cls=np.ones(len(capped), np.int8), warm=np.int8(1))
+
+
+def test_a_posterior_row_lost_cold_shifts_nothing_and_is_counted_apart(tmp_path):
+    """The shift compares the same rows at the same weights on both sides: rows certified warm and cold at equal log L
+    move nothing, though another posterior row does not certify cold, and that row is counted with its weight.
+    """
+    pipe = _stub_pipe()
+    cold = jax.jit(pipe._make_batch_eval("cold"))
+    z = np.vstack([SPOT_Z, [[0.4, 0.3, 0.5]]])  # the last row stalls cold (p1 < 0.35); the warm run kept it
+    log_l, _ = cold_log_l(pipe, cold, N_BATCH, z)
+    assert np.isneginf(log_l[-1])
+    assert np.isfinite(log_l[:-1]).all()
+    _spot_run(tmp_path, z, np.where(np.isfinite(log_l), log_l, log_l[0]))
+    spot = warm_checks.spot_check(tmp_path, partial(cold_log_l, pipe, cold, N_BATCH), 0, N_BATCH, np.inf)
+    assert spot["status"] == "done"
+    assert (spot["worst_shift_sigma"], spot["max_abs_dlog_l"], spot["warnings"]) == (0.0, 0.0, [])
+    lost = spot["posterior_not_certified_cold"]
+    assert 0 < lost == spot["posterior_rows"] - spot["posterior_certified_cold"]
+    assert spot["posterior_not_certified_cold_weight_frac"] == lost / spot["posterior_rows"]
+    assert spot["frozen_rows"] == 0
+
+
+def test_a_row_frozen_in_the_spot_check_is_counted_and_the_rest_computed(tmp_path):
+    """A column frozen at dt_min in the spot-check's cold solve is a row that does not certify, counted: the check
+    still finishes, where a run's own chunk would stop.
+    """
+    pipe = _stub_pipe()
+    stuck = np.array([[0.5, 0.52, 0.5]])
+    cold = jax.jit(_freezing(pipe._make_batch_eval("cold"), lambda U: jnp.abs(jax.nn.sigmoid(U[:, 1]) - 0.52) < 1e-9))
+    log_l, frozen = cold_log_l(pipe, cold, N_BATCH, SPOT_Z)
+    assert np.isfinite(log_l).all()
+    assert not frozen.any()
+    _spot_run(tmp_path, SPOT_Z, log_l, capped=stuck)
+    spot = warm_checks.spot_check(tmp_path, partial(cold_log_l, pipe, cold, N_BATCH), 0, N_BATCH, np.inf)
+    assert spot["status"] == "done"
+    assert (spot["frozen_rows"], spot["rejected_rows"], spot["rejected_certified_cold"]) == (1, 1, 0)
+    assert spot["posterior_certified_cold"] == spot["posterior_rows"] == constants.SPOT_CHECK_POSTERIOR_ROWS
+    assert (spot["worst_shift_sigma"], spot["warnings"]) == (0.0, [])
 
 
 def test_a_changed_target_is_refused_before_the_run_writes_anything(job):

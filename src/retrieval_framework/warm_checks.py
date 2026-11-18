@@ -1,4 +1,4 @@
-"""A warm-started run's own checks: the guards on its tally and the spot-check at its end, and the caveat they give.
+"""A warm-started run's own checks: the guard on its tally and the spot-check at its end, and the caveat they give.
 
 Both only warn: neither changes the likelihood, stops the run or stops its report. docs/method.md "Warm starts" states
 them; notes.md "Warm starts" holds the measurements behind their limits.
@@ -28,7 +28,7 @@ SPOT_CHECK_FILE = "spot_check.json"
 
 
 def guards(tally: dict) -> dict[str, Any]:
-    """Return a warm run's guards on its tally: the numbers, and one warning for each limit passed.
+    """Return a warm run's guard on its tally: the numbers, and a warning if its limit is passed.
 
     Parameters
     ----------
@@ -39,11 +39,10 @@ def guards(tally: dict) -> dict[str, Any]:
     -------
     dict
         ``warm_start_none_frac``: the share of the in-window warm rows with no physical start among the anchors tried;
-        ``warm_exhausted_frac`` and ``cold_exhausted_frac``: the share of each mode's in-window rows rejected at the
-        step cap; ``skipped``: a guard that could not be computed, and why; ``warnings``: the limits passed.
+        ``skipped``: the guard, if it could not be computed, and why; ``warnings``: the limit passed.
     """
-    warm_in, cold_in = tally.get("warm_in_window", 0), tally.get("cold_in_window", 0)
-    out: dict[str, Any] = {"warm_in_window": warm_in, "cold_in_window": cold_in, "skipped": [], "warnings": []}
+    warm_in = tally.get("warm_in_window", 0)
+    out: dict[str, Any] = {"warm_in_window": warm_in, "skipped": [], "warnings": []}
     if warm_in:
         none = out["warm_start_none_frac"] = tally.get("warm_start_none", 0) / warm_in
         if none > constants.WARM_NONE_WARN_FRAC:
@@ -53,16 +52,6 @@ def guards(tally: dict) -> dict[str, Any]:
             )
     else:
         out["skipped"].append("no-start guard: no in-window warm row")
-    if warm_in and cold_in:
-        warm = out["warm_exhausted_frac"] = tally.get("warm_exhausted", 0) / warm_in
-        cold = out["cold_exhausted_frac"] = tally.get("cold_exhausted", 0) / cold_in
-        if warm - cold > constants.WARM_EXHAUSTED_EXCESS:
-            out["warnings"].append(
-                f"{warm:.1%} of the in-window warm rows ran out of steps against {cold:.1%} of the cold rows (limit "
-                f"{constants.WARM_EXHAUSTED_EXCESS:.0%} more): warm starts lose draws a cold solve may keep."
-            )
-    else:
-        out["skipped"].append(f"step-cap guard: {cold_in} in-window cold and {warm_in} warm rows")
     for w in out["warnings"]:
         log.warning("warm-start guard: %s", w)
     return out
@@ -89,7 +78,11 @@ def _rejected_at_cap(rejects: Path, n_dim: int) -> np.ndarray:
 
 
 def _spot_check(
-    out: Path, cold_log_l: Callable[[np.ndarray], np.ndarray], seed: int, n_batch: int, seconds_left: float
+    out: Path,
+    cold_log_l: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
+    seed: int,
+    n_batch: int,
+    seconds_left: float,
 ) -> dict[str, Any]:
     """Run the spot-check; ``spot_check`` holds the contract."""
     from retrieval_framework.nautilus_report import _wquant, weights
@@ -111,27 +104,24 @@ def _spot_check(
             "reason": f"it needs about {estimate:.0f} s (the run's first cold batch per batch of rows) and "
             f"{max(seconds_left, 0.0):.0f} s are left before half the job's headroom",
         }
-    L = cold_log_l(np.concatenate([1.0 / (1.0 + np.exp(-u[idx])), capped]))
+    L, frozen = cold_log_l(np.concatenate([1.0 / (1.0 + np.exp(-u[idx])), capped]))
     l_cold, l_run, l_capped = L[: len(idx)], log_l[idx], L[len(idx) :]
+    # Every posterior row certified warm. The shift compares only the rows that also certified cold, with the same
+    # weights on both sides: a row lost cold would shift the quantiles by its absence alone (notes "Warm starts"), so
+    # it is counted apart.
     ok = np.isfinite(l_cold)
     dl = l_cold[ok] - l_run[ok]
-    # A row that does not certify cold has weight 0: it counts against the run.
-    rew = np.zeros(len(idx))
-    if ok.any():
-        rew[ok] = np.exp(dl - dl.max())
+    rew = np.exp(dl - dl.max()) if ok.any() else dl
     dl = np.abs(dl)
-    keep = rew > 0
+    th = theta[idx][ok]
     mean = w @ theta
     sd = np.sqrt(w @ (theta - mean) ** 2)
     shifts = {
         f"{name} q{round(100 * q)}": (new - ref) / sd[j]
         for j, name in enumerate(names)
-        if sd[j] > 0 and keep.any()
+        if sd[j] > 0 and ok.any()
         for q, ref, new in zip(
-            (0.16, 0.5, 0.84),
-            _wquant(theta[idx, j], np.ones(len(idx))),
-            _wquant(theta[idx, j][keep], rew[keep]),
-            strict=True,
+            (0.16, 0.5, 0.84), _wquant(th[:, j], np.ones(len(th))), _wquant(th[:, j], rew), strict=True
         )
     }
     worst = max(shifts, key=lambda k: abs(shifts[k])) if shifts else None
@@ -142,6 +132,10 @@ def _spot_check(
         "estimate_seconds": round(estimate, 1),
         "posterior_rows": len(idx),
         "posterior_certified_cold": int(ok.sum()),
+        "posterior_not_certified_cold": int((~ok).sum()),
+        # Drawn by weight, each row carries 1 / posterior_rows of the posterior.
+        "posterior_not_certified_cold_weight_frac": float((~ok).mean()),
+        "frozen_rows": int(frozen.sum()),
         "median_abs_dlog_l": float(np.median(dl)) if dl.size else None,
         "max_abs_dlog_l": float(dl.max()) if dl.size else None,
         "worst": worst,
@@ -155,30 +149,37 @@ def _spot_check(
         rec["warnings"].append(f"none of the {len(idx)} posterior rows certified cold: no shift could be measured.")
     elif abs(shifts[worst]) > constants.SPOT_CHECK_SHIFT_SIGMA:
         rec["warnings"].append(
-            f"reweighted by the cold likelihood, {len(idx)} posterior rows move {worst} by {shifts[worst]:+.3f} sigma "
-            f"(limit {constants.SPOT_CHECK_SHIFT_SIGMA})."
+            f"reweighted by the cold likelihood, the {int(ok.sum())} posterior rows certified cold move {worst} by "
+            f"{shifts[worst]:+.3f} sigma (limit {constants.SPOT_CHECK_SHIFT_SIGMA})."
         )
     return rec
 
 
 def spot_check(
-    out: Path, cold_log_l: Callable[[np.ndarray], np.ndarray], seed: int, n_batch: int, seconds_left: float
+    out: Path,
+    cold_log_l: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
+    seed: int,
+    n_batch: int,
+    seconds_left: float,
 ) -> dict[str, Any]:
     """Solve a sample of a finished warm run's rows cold, and write what it finds to ``spot_check.json`` in ``out``.
 
     ``constants.SPOT_CHECK_POSTERIOR_ROWS`` posterior rows drawn by weight, and up to
     ``constants.SPOT_CHECK_REJECTED_ROWS`` drawn uniformly from the warm rows the run rejected at the step cap, are
-    solved together through ``cold_log_l``. The posterior rows give |L_cold - L_run| and the largest shift of a 16th,
-    50th or 84th percentile, in posterior sigma, when the rows are reweighted by exp(L_cold - L_run); the rejected rows,
-    how many certify cold and how many land above the posterior's 1 % log-L point. It runs only when the run's first
-    cold batch time, per ``n_batch`` rows, fits in ``seconds_left``. It never raises.
+    solved together through ``cold_log_l``. Over the posterior rows that certify cold, they give |L_cold - L_run| and
+    the largest shift of a 16th, 50th or 84th percentile, in posterior sigma, when those rows are reweighted by
+    exp(L_cold - L_run); the rows that do not certify cold are counted apart, with their share of the posterior weight.
+    The rejected rows give how many certify cold and how many land above the posterior's 1 % log-L point. A row frozen
+    at dt_min does not certify, and is counted. It runs only when the run's first cold batch time, per ``n_batch``
+    rows, fits in ``seconds_left``. It never raises.
 
     Parameters
     ----------
     out : pathlib.Path
         The run's output directory, holding ``nautilus_posterior.npz``, ``batches.jsonl`` and ``rejected/``.
     cold_log_l : callable
-        From unit-cube points [n, n_dim] to log L [n], -inf on every rejection: the run's own cold evaluator.
+        From unit-cube points [n, n_dim] to log L [n], -inf on every rejection, and the rows frozen at dt_min [n]
+        (``chunks.cold_log_l``): the run's own cold evaluator.
     seed : int
         The run's seed.
     n_batch : int
@@ -228,16 +229,18 @@ def _spot_line(spot: dict | None) -> str:
     )
     return (
         f"Spot-check: {spot['posterior_certified_cold']} of {spot['posterior_rows']} weighted posterior rows certified "
+        f"cold; {spot['posterior_not_certified_cold']} did not "
+        f"({spot['posterior_not_certified_cold_weight_frac']:.1%} of the posterior weight). Over the rows certified "
         f"cold, |L_cold - L_run| median {num(spot['median_abs_dlog_l'])} and max {num(spot['max_abs_dlog_l'])}; "
         f"reweighted by the cold likelihood, the worst 16th, 50th or 84th percentile shift is {shift}. Of "
         f"{spot['rejected_rows']} draws rejected at the step cap, {spot['rejected_certified_cold']} certified cold, "
-        f"{spot['rejected_above_posterior_1pct']} above the posterior's 1% log L."
-        + "".join(f" Warning: {w}" for w in spot["warnings"])
+        f"{spot['rejected_above_posterior_1pct']} above the posterior's 1% log L. {spot['frozen_rows']} of the rows "
+        "solved cold froze at dt_min and count as not certified." + "".join(f" Warning: {w}" for w in spot["warnings"])
     )
 
 
 def caveat(summ: dict) -> str:
-    """Return the report's caveat of a warm run: what warm starts do, the stated limit, the guards and the spot-check.
+    """Return the report's caveat of a warm run: what warm starts do, the stated limit, the guard and the spot-check.
 
     Parameters
     ----------

@@ -510,7 +510,7 @@ def certificate(out_dir: str | Path) -> dict[str, Any]:
             # physical start among the anchors tried.
             "warm_start_moved": tally.get("warm_start_moved", 0),
             "warm_start_none": tally.get("warm_start_none", 0),
-            # A warm run's guards on its tally and its end-of-run spot-check (warm_checks); None for a cold run.
+            # A warm run's guard on its tally and its end-of-run spot-check (warm_checks); None for a cold run.
             "warm_start_guards": summ.get("warm_start_guards"),
             "spot_check": summ.get("spot_check"),
         },

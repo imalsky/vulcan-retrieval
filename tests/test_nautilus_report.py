@@ -222,11 +222,17 @@ def test_a_frozen_draw_stops_the_report_naming_the_row(tmp_path, monkeypatch):
 
 
 GUARD_WARNING = "1.00% of the in-window warm rows had no physical start among the 8 nearest anchors"
-SPOT_WARNING = "reweighted by the cold likelihood, 200 posterior rows move lnKzz q16 by -0.140 sigma (limit 0.1)."
+SPOT_WARNING = (
+    "reweighted by the cold likelihood, the 196 posterior rows certified cold move lnKzz q16 by -0.140 sigma "
+    "(limit 0.1)."
+)
 SPOT = {
     "status": "done",
     "posterior_rows": 200,
     "posterior_certified_cold": 196,
+    "posterior_not_certified_cold": 4,
+    "posterior_not_certified_cold_weight_frac": 0.02,
+    "frozen_rows": 1,
     "median_abs_dlog_l": 0.002,
     "max_abs_dlog_l": 0.31,
     "worst": "lnKzz q16",
@@ -243,7 +249,14 @@ SPOT = {
     [
         (
             {"warm_start_guards": {"warnings": [GUARD_WARNING], "skipped": []}, "spot_check": SPOT},
-            [f"Warning: {GUARD_WARNING}", "Spot-check: 196 of 200", "61 certified cold, 9 above", SPOT_WARNING],
+            [
+                f"Warning: {GUARD_WARNING}",
+                "Spot-check: 196 of 200",
+                "4 did not (2.0% of the posterior weight)",
+                "61 certified cold, 9 above",
+                "1 of the rows solved cold froze at dt_min",
+                SPOT_WARNING,
+            ],
         ),
         (
             {

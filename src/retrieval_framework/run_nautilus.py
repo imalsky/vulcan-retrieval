@@ -6,7 +6,7 @@ Every likelihood call goes through the pipeline's batched chemistry and RT on th
 T-P draw outside the window, and a solve that does not certify (count_max exhausted or stalled) get log L = -inf, so
 the evidence is a zero-filled box evidence, ``logZ_box``, which depends on the solver settings. Every solve starts
 cold by default. With the experimental ``sampler.warm_starts`` each solve continues from its nearest certified
-column, so the posterior and evidence are approximate, and the run warns from its own guards and an end-of-run cold
+column, so the posterior and evidence are approximate, and the run warns from its own guard and an end-of-run cold
 spot-check (``warm_checks``). docs/method.md describes the output files, the sampler settings, the startup check and the
 lanes.
 """
@@ -165,11 +165,10 @@ class _ChunkLogs:
             (f"n_{mode}", len(z)),
             (f"{mode}_certified", (~dead).sum()),
             (f"{mode}_steps_certified", acc[~dead].sum()),
-            # The warm-start guards compare the modes' step-cap rejections (warm_checks.guards).
-            (f"{mode}_in_window", (~rej.tp_out).sum()),
-            (f"{mode}_exhausted", rej.exhausted.sum()),
         ):
             self.tally[key] = self.tally.get(key, 0) + int(v)
+        if warm:  # the no-start guard's denominator (warm_checks.guards)
+            self.tally["warm_in_window"] = self.tally.get("warm_in_window", 0) + int((~rej.tp_out).sum())
 
     def _report_if_slow(self, mode: str, rate: float) -> None:
         """Warn when a chunk is far slower per solver iteration than this run's best of its mode.
@@ -564,7 +563,7 @@ def _write_summary(
 ) -> None:
     """Write nautilus_summary.json; ``done`` is False for a run the wall budget stopped short of its ``n_eff``.
 
-    ``warm_record`` holds a warm run's guards and spot-check, and is empty for a cold run.
+    ``warm_record`` holds a warm run's guard and spot-check, and is empty for a cold run.
     """
     import nautilus
 

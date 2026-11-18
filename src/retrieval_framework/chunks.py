@@ -104,7 +104,7 @@ def pad(pipe: Pipeline, Zc: np.ndarray, n_batch: int) -> tuple[np.ndarray, Any, 
 
 
 def verdict(
-    pipe: Pipeline, Zc: np.ndarray, m: int, tp_in: np.ndarray, L: Any, st: Any
+    pipe: Pipeline, Zc: np.ndarray, m: int, tp_in: np.ndarray, L: Any, st: Any, *, abort_on_frozen: bool = True
 ) -> tuple[np.ndarray, np.ndarray, Rejections]:
     """Stop on a column frozen at dt_min, then bring a chunk's first ``m`` rows to the host and classify them.
 
@@ -122,6 +122,8 @@ def verdict(
         The evaluator's log L.
     st : stats
         The evaluator's solver statistics (``acc``, ``conv_ok``, ``reason``, ``last_delta``).
+    abort_on_frozen : bool
+        False only for the spot-check's cold solve, which counts a frozen row instead (``cold_log_l``).
 
     Returns
     -------
@@ -132,15 +134,19 @@ def verdict(
 
     from retrieval_framework import pipeline as P
 
-    P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)
+    if abort_on_frozen:
+        P._abort_if_frozen(st.reason, st.last_delta, Zc[:m], pipe.fwd.chem_rtol)
     L = np.asarray(jax.device_get(L), np.float64)[:m]
     acc = np.asarray(jax.device_get(st.acc), np.int64)[:m]
     conv = np.asarray(jax.device_get(st.conv_ok), bool)[:m]
     return L, acc, classify(tp_in[:m], conv, acc, L, int(pipe.fwd.chem.count_max), constants.REJECT_BELOW)
 
 
-def cold_log_l(pipe: Pipeline, cold: Callable[..., Any], n_batch: int, Z: np.ndarray) -> np.ndarray:
+def cold_log_l(pipe: Pipeline, cold: Callable[..., Any], n_batch: int, Z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return the log-likelihood of unit-cube points solved cold, as the run's cold chunks are; nothing is logged.
+
+    Unlike a run's chunk, a column frozen at dt_min stops nothing here: the end-of-run spot-check counts it as a row
+    that does not certify.
 
     Parameters
     ----------
@@ -155,17 +161,21 @@ def cold_log_l(pipe: Pipeline, cold: Callable[..., Any], n_batch: int, Z: np.nda
 
     Returns
     -------
-    numpy.ndarray [n]
-        log L, -inf on every rejection class.
+    tuple of numpy.ndarray
+        log L [n], -inf on every rejection class and every frozen row, and the rows frozen at dt_min [n] (bool).
     """
+    import jax
+
     from retrieval_framework import pipeline as P
 
     Y0, refs0 = P._blank_state(pipe, n_batch)
     out = np.empty(len(Z))
+    frozen = np.zeros(len(Z), bool)
     for i in range(0, len(Z), n_batch):
         m = min(n_batch, len(Z) - i)
         Zc, Uj, tp_in, act = pad(pipe, Z[i : i + m], n_batch)
         L, _, _, st = cold(Uj, Y0, refs0, act)
-        L, _, rej = verdict(pipe, Zc, m, tp_in, L, st)
-        out[i : i + m] = np.where(rej.dead, -np.inf, L)
-    return out
+        L, _, rej = verdict(pipe, Zc, m, tp_in, L, st, abort_on_frozen=False)
+        frozen[i : i + m] = np.asarray(jax.device_get(st.reason))[:m] == constants.TERM_DT_MIN_FROZEN
+        out[i : i + m] = np.where(rej.dead | frozen[i : i + m], -np.inf, L)
+    return out, frozen

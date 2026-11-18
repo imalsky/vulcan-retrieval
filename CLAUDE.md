@@ -102,7 +102,7 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - `run_nautilus` on the stock nautilus-sampler pinned in pyproject is the only sampler.
 - Cold starts are the default. With `sampler.warm_starts: true` each solve continues from the nearest certified column
   whose start is physical (the engine's `warm_start_ok`; never the nearest alone), so the likelihood depends on the
-  evaluation order. Every warm run checks itself: guards on its tally and a cold spot-check of its rows at its end
+  evaluation order. Every warm run checks itself: a guard on its tally and a cold spot-check of its rows at its end
   (`warm_checks`; `docs/method.md` "Warm starts"; notes "Warm starts"). Both only warn, and the report carries what they
   found; no check runs after the run. Never raise their limits to quiet a run.
 - The chemistry policy is the spec's: one program per draw, at the spec's `rtol` (`cfg_overrides`) within `count_max`
@@ -111,7 +111,8 @@ Run these only when the maintainer explicitly asks for NAS work; otherwise give 
 - `count_max` is the certifying cap: a draw that does not certify within it is rejected (log L = -inf), never extended.
   Do not raise the cap without a measured reason. A column frozen at `dt_min` is not a rejection: `run_nautilus` re-solves a frozen warm row cold, then checks
   each chunk's `termination_reason` and aborts on a cold freeze (notes "Design records"); `nautilus_report` and the forward
-  checks abort on any freeze in the draws they re-solve.
+  checks abort on any freeze in the draws they re-solve; only a warm run's end-of-run spot-check counts a frozen row
+  as not certified.
 - The run target is every Config key outside `provenance.TARGET_FREE_KEYS`, the solver env choices (`VULCAN3_SOLVER`,
   `VULCAN3_CHEM_RHS`, `VULCAN3_BT_BUFFERS`) and the rest of the runtime block, the composition table, the network and
   its thermo data and abundance preset when they resolve outside vulcan3's package, the JAX backend, both packages'

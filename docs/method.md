@@ -21,7 +21,7 @@ What the retrieval does, with the source of each method. Results and the reasons
 | `case_keys` | Which Config keys a specification states: required, or refused when its mode does not read them |
 | `batch_profiler` | The environment-gated CUDA profiling hook of the likelihood batches |
 | `nautilus_report` | Certificate of a finished run, and the command that writes it and the figures |
-| `warm_checks` | A warm run's guards on its tally, its end-of-run spot-check, and the report's caveat from them |
+| `warm_checks` | A warm run's guard on its tally, its end-of-run spot-check, and the report's caveat from them |
 | `report_figures` | The three figures |
 | `validate_env` | Environment validation, run first by every job |
 | `hardware` | The device a process runs on, for a run's record, and the solver an analysis tool picks |
@@ -79,7 +79,8 @@ and the inflation(s) out at the same priors: the offset integral is closed form,
 A draw that does not certify within `count_max` is rejected, with log L = -inf. A column frozen at `dt_min` is different:
 it is a solver failure rather than a verdict on the draw. A warm start that froze is re-solved cold, alone, and that
 result stands; each chunk's `termination_reason` is then checked and a cold freeze stops the run with `DtMinFrozenError`. `nautilus_report` and the forward checks re-solve finished runs'
-draws and stop the same way; `nautilus_report --spectra 0` still writes the certificate and the figures that need no solve.
+draws and stop the same way. Only a warm run's end-of-run spot-check counts a frozen row as not certified ("Warm
+starts"). `nautilus_report --spectra 0` still writes the certificate and the figures that need no solve.
 
 Stock nautilus-sampler 1.0.6 (Lange 2023) with its default networks, `N_NETWORKS` ReLU MLPs, $n_{\rm update} = n_{\rm live}/2$,
 exploration until `f_live = F_LIVE`, bounds enlarged by `ENLARGE_PER_DIM`, and the exploration phase discarded
@@ -113,18 +114,22 @@ The set is never pruned: `8 nz ni` bytes per certified column (74 KB at `nz` 100
 A warm run checks itself, and needs no check after it. Both checks only warn: they change no likelihood, stop no run
 and stop no report. The certificate's `starts` block carries both, and the warm caveat states each warning.
 
-- Guards on the tally, at the run's end. The share of in-window warm rows with no physical start among the anchors
-  tried, above `WARM_NONE_WARN_FRAC`. The share of in-window warm rows rejected at the step cap against the share of
-  cold rows (the first batches, before any anchor), more than `WARM_EXHAUSTED_EXCESS` above it. A guard with no rows to
-  count says so.
+- A guard on the tally, at the run's end: the share of in-window warm rows with no physical start among the anchors
+  tried, above `WARM_NONE_WARN_FRAC`. With no in-window warm row it says so. There is no guard comparing warm with cold
+  step-cap rejections: a warm run's cold rows are its first batches, before any anchor, drawn from the whole prior,
+  while its warm rows sit near the posterior, so such a guard would compare prior with posterior. The spot-check's
+  cold solve of rejected warm rows measures that question on the same draws.
 - A spot-check once the posterior is written. `SPOT_CHECK_POSTERIOR_ROWS` posterior rows drawn by weight and up to
   `SPOT_CHECK_REJECTED_ROWS` warm rows rejected at the step cap (`rejected/`, class 1) are solved cold by the run's own
-  cold evaluator, in padded batches of `n_batch`, as a cold batch is. The posterior rows give
-  $|L_{\rm cold} - L_{\rm run}|$ over the rows certified both ways, and the largest shift of a 16th, 50th or 84th
-  percentile, in posterior sigma, when the rows are reweighted by $\exp(L_{\rm cold} - L_{\rm run})$; a row that does
-  not certify cold has weight 0, and the reference is the same rows unweighted, through the same quantile rule. A shift
-  above `SPOT_CHECK_SHIFT_SIGMA` is a warning. The rejected rows give how many certify cold and how many land above the
-  posterior's 1% log-L point, with no limit. The check runs only if the run's first cold batch time, per batch of rows,
+  cold evaluator, in padded batches of `n_batch`, as a cold batch is. Every posterior row certified warm; only the
+  rows that also certify cold are compared. Over them the check gives $|L_{\rm cold} - L_{\rm run}|$ and the largest
+  shift of a 16th, 50th or 84th percentile, in posterior sigma, between the rows reweighted by
+  $\exp(L_{\rm cold} - L_{\rm run})$ and the same rows unweighted, through the same quantile rule. A shift above
+  `SPOT_CHECK_SHIFT_SIGMA` is a warning. The posterior rows that do not certify cold are counted apart, with their
+  share of the posterior weight (each row drawn by weight carries an equal share): left in the comparison at weight
+  0, they would shift the quantiles by their absence alone. The rejected rows give how many certify cold and how many
+  land above the posterior's 1% log-L point, with no limit. A column frozen at `dt_min` in this cold solve does not
+  stop the check, as it stops a run's chunk: it is a row that does not certify, and the frozen rows are counted. The check runs only if the run's first cold batch time, per batch of rows,
   ends before the governor plus half of `JOB_HEADROOM_S`; otherwise it is skipped with the reason, and an error is
   recorded, not raised.
 
@@ -132,7 +137,7 @@ Not covered: a change of the joint shape that leaves every marginal (no planet i
 draws a warm run rejects at its step cap beyond that sample, which are not solved cold per run. In three
 first-campaign runs every such draw, solved cold and put back, moved no 16th, 50th or 84th percentile by more than 0.08
 sigma, and the lower edge of Kzz by 0.07 dex at most (notes "Warm starts"). The draws whose warm start was not physical,
-at low Kzz, moved it by up to 0.43 sigma: the start choice above removes them, and the first guard counts any left.
+at low Kzz, moved it by up to 0.43 sigma: the start choice above removes them, and the guard counts any left.
 
 ### Startup check
 
@@ -149,7 +154,7 @@ columns per batch; `rejected/`, one npz per chunk of the rejected draws (`z`, cl
 3 non-finite, `acc`, `warm`); with integrated nuisances `nuisance/`, one npz per chunk of the certified rows (`z`, `log_l`,
 `stats`); `batches.jsonl`, each chunk's wall time, start mode and accepted steps; `nautilus_tally.json`, the rejection and
 warm-start counts summed over jobs. A finished run adds `nautilus_posterior.npz`, `nautilus_summary.json` (with a warm
-run's guards and spot-check), a warm run's `spot_check.json`, and `nautilus_certificate.json`. The run stops at `cfg.walltime_seconds` and exits 0 unfinished; resubmit with `--resume`.
+run's guard and spot-check), a warm run's `spot_check.json`, and `nautilus_certificate.json`. The run stops at `cfg.walltime_seconds` and exits 0 unfinished; resubmit with `--resume`.
 
 ## Report
 

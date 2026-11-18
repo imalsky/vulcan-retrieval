@@ -48,7 +48,6 @@ __all__ = [
     "T_EDGE_INSET_K",
     "UNDERFLOW_DENOM",
     "UNMODELED_VMR",
-    "WARM_EXHAUSTED_EXCESS",
     "WARM_NONE_WARN_FRAC",
     "WARM_START_TRIES",
     "fixed_values",
@@ -92,9 +91,6 @@ WARM_START_TRIES = 8
 # A warm run warns when more than this share of its in-window warm rows had no physical start among the anchors tried:
 # 7 of 17,424 warm rows (0.04 %) in the GPU test of the start choice (notes "Warm starts").
 WARM_NONE_WARN_FRAC = 0.005
-# A warm run warns when the share of its in-window warm rows rejected at the step cap exceeds the cold rows' share by
-# more than this (absolute): the exhausted class was 2.2-7.3 % of the first campaign's warm draws (notes "Warm starts").
-WARM_EXHAUSTED_EXCESS = 0.05
 # The end-of-run spot-check of a warm run: posterior rows drawn by weight and rows rejected at the step cap, solved
 # cold. 300 rows fit one batch of a GH200 run (1584), so the check costs about one cold batch.
 SPOT_CHECK_POSTERIOR_ROWS = 200
