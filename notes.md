@@ -374,14 +374,15 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   `scratch/warm_cold/deferred/`]: every sampling-phase draw the warm run rejected, put back at nautilus's own weight
   (its shell's volume over the shell's point count, times the cold likelihood). HD 189733b: 1,711 of 3,678 certify
   (step-zero 61%, exhausted 34%) and hold 2.5% of the corrected posterior. WASP-96b: 1,912 of 3,966 (77%, 34%), 7.0%.
-  WASP-39b, the first 6,336 of 28,275 in random order: 63% (76%, 48%), 6.6%. Worst shift of a 16th, 50th or 84th
-  percentile, both classes / step-zero alone / exhausted alone, in sigma: HD 189733b 0.52 / 0.43 / 0.08 (lnKzz, 16th);
-  WASP-96b 0.29 / 0.27 / 0.04 (lnKzz, 16th); WASP-39b 0.21 +- 0.17 / 0.23 / 0.02 (the cloud opacity, 16th; lnKzz 0.14
-  and 0.09 at the 16th and 50th; the spread from resampling the partial set). lnZ, c_o and s_o move by 0.07 or less. The
-  posterior's effective size goes from 5,373 to 5,218, 5,341 to 4,028 and 5,008 to 3,773. So the estimate above had the
-  class and the place right and the size within a factor of two, and the exhausted class alone stays under the 0.1 sigma
-  gate. A CPU sample of 246 of HD 189733b's draws (daw, `fast`) gave 0.84 +- 0.28. The cold solve of 1,584 such draws
-  takes 47-56 min (part times, the step cap 5000): 2.1-2.3 h for the two short runs, about 16 h for all of WASP-39b's.
+  WASP-39b, 26,928 of 28,275 in random order (the job's 16 h ran out): 64% (76%, 48%), 6.7%. Worst shift of a 16th, 50th
+  or 84th percentile, both classes / step-zero alone / exhausted alone, in sigma: HD 189733b 0.52 / 0.43 / 0.08 (lnKzz,
+  16th); WASP-96b 0.29 / 0.27 / 0.04 (lnKzz, 16th); WASP-39b 0.40 / 0.30 / 0.05 (the cloud opacity, 16th; resampled
+  spread 0.08 / 0.08 / 0.035; lnKzz 0.14 at the 16th). lnZ, c_o and s_o move by 0.07 or less. The posterior's effective
+  size goes from 5,373 to 5,218, 5,341 to 4,028 and 5,008 to 5,037. So the estimate above had the class and the place
+  right and the size within a factor of two, and the exhausted class alone stays under the 0.1 sigma gate. A CPU sample
+  of 246 of HD 189733b's draws (daw, `fast`) gave 0.84 +- 0.28. The cold solve of 1,584 such draws takes 47-56 min (part
+  times, the step cap 5000): 2.1-2.3 h for the two short runs, about 16 h for all of WASP-39b's (measured: 17 parts in
+  16 h).
 - The start from the nearest physical anchor on the GPU [M, one GH200, WASP-96b at the second campaign's settings, 2.5
   h]: a cold batch 1,656 s, then 11 warm batches of 577-756 s. 1,077 of 17,424 warm rows took another anchor than the
   nearest, 7 had no physical start among the 8 tried, and those 7 are the only rows that ended at step zero. 158 rows
@@ -389,6 +390,13 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   on another node, took 643-921 s before their cold re-solve (its cold batch 1,959 s against 1,656 s here: the two nodes
   differ by about 15%). Rebuilt from the saved anchors with the tracked code, the run's own start choice moves the same
   1,084 rows the tally counts.
+- A moved start gives the cold answer [M, one GH200; `scratch/warm_cold/anchor_check/moved_compare.py`]: the 1,084 rows
+  of the starting-column test that took another anchor than the nearest (890 the second, 147 the third, 46 further, 7
+  none) and 883 unmoved kept rows, solved cold alone at cap 5000. Kept both ways: 710 moved, 818 control. |L_warm -
+  L_cold| median 0.0016 and 0.0005, 90% 0.074 and 0.036, above 1 in 9 (1.3%) and 13 (1.6%) rows; the largest are on
+  unmoved rows (989.6, 117.2), so a rare warm-against-cold split predates the change. The cold solve is not the
+  reference either: of the rows the warm run kept and the cold solve lost, 69 and 14 ended cold at step zero and 104 and
+  51 at the cap, at a warm log L like the others'.
 - Decided by the maintainer: the survey runs warm, 1000 live points, cap 5000 and n_eff 5000, one 46 h job per
   planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
