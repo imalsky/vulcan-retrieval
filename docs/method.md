@@ -183,8 +183,13 @@ of the weights of at least 100 (below it a weighted quantile's own error, about 
 gate). The solve refuses a spec that is not the one the run archived; the verdict refuses parts of different checks and a
 row set that is not each of the rows drawn, once, 1000 or more. It is written to the run's own `validation/` folder with
 the hash of the posterior file it drew its rows from, where the run's certificate and `nautilus_report` read it. Not
-covered: a draw the warm run rejected that a cold run would accept, a rare row of small warm weight and large cold
-likelihood, and a change of the joint shape that leaves every marginal; a planet run both ways is the test of those.
+covered: a rare row of small warm weight and large cold likelihood, a change of the joint shape that leaves every
+marginal (a planet run both ways is the test of those), and a draw the warm run rejected that a cold run would accept.
+Of the last, the draws whose warm solve ran out of its step cap remain; they lie inside the posterior, not at an edge.
+Every such draw of three first-campaign runs, solved cold and put back, moved no 16th, 50th or 84th percentile by more
+than 0.08 sigma, and the lower edge of Kzz by 0.07 dex at most (notes "Warm starts"); it is not measured for each run.
+The draws whose warm start was not physical, at low Kzz, moved it by up to 0.43 sigma: the start choice above removes
+them.
 
 ### posterior_forward_check variants
 

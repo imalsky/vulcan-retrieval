@@ -401,7 +401,11 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   planet; a run the wall budget stops once every shell is sampled again after exploration writes the posterior it has
   (`finished: false`), which at the first campaign's rates is WASP-39b near n_eff 3,700. A warm
   run is reported only after its cold re-solve passes (`docs/method.md` "Warm starts"), with the re-solve's cap at
-  30000 so that it reaches the columns a warm start reaches.
+  30000 so that it reaches the columns a warm start reaches. A warm solve starts from the nearest anchor whose start is
+  physical. The draws a warm run rejects at the step cap are a stated limit, not solved cold per run: in three
+  first-campaign runs, solved cold and put back, they moved no 16th, 50th or 84th percentile by more than 0.08 sigma
+  and the lower Kzz edge by 0.07 dex at most (log10 Kzz at 1 mbar; they lie at 10^10-10^11, inside the posterior),
+  against 0.20-0.37 dex for the step-zero draws the start choice removes (`scratch/warm_cold/deferred/kzz_values.py`).
 
 ## HPC (NAS GH200) and daw
 

@@ -70,7 +70,8 @@ def caveat(out: Path, verdict: dict) -> str:
     how = (
         "Warm starts: each solve continued from the nearest certified column, so the likelihood and which draws "
         "were rejected depend on the evaluation order; logZ_box is approximate, and an evidence claim needs a cold "
-        "run (warm_starts: false in the spec). "
+        "run (warm_starts: false in the spec). The draws rejected at the step cap are not checked; their measured "
+        'effect on earlier runs is in notes.md "Warm starts". '
     )
     if verdict["status"] == "PASS":
         return how + (
