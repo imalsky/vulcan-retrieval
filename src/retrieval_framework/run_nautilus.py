@@ -314,9 +314,9 @@ def make_loglike(
                 # A guess built from another draw's column can be no physical state for this draw, which the solve
                 # ends at step zero: the start is the nearest anchor that gives one (notes "Warm starts").
                 ok = partial(pipe.warm_start_ok_batch, Uj)
-                idx, dist, rank = anchors.nearest_physical(Zc[:, :k], ok, constants.WARM_START_TRIES)
+                idx, dist, rank = anchors.nearest_physical(Zc[:, :k], ok, constants.WARM_START_TRIES, np.asarray(act))
                 for key, n in (("warm_start_moved", rank > 0), ("warm_start_none", rank < 0)):
-                    tally[key] = tally.get(key, 0) + int((n & np.asarray(act))[:m].sum())
+                    tally[key] = tally.get(key, 0) + int(n[:m].sum())
                 Yw, rw = anchors.columns(idx)
                 L, Ynew, rnew, st = fns["warm"](Uj, jnp.asarray(Yw, pipe.dtype), jnp.asarray(rw, pipe.dtype), act)
                 # A warm start that froze at dt_min is re-solved cold, alone; a cold freeze still stops the run.

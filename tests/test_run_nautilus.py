@@ -219,6 +219,50 @@ def test_a_warm_start_takes_the_nearest_anchor_whose_start_is_physical(tmp_path)
     assert np.array_equal(used, code_a[order[np.arange(64), rank]][alive])
 
 
+@pytest.mark.parametrize("n_anchors", [1, 7, 8, 9, 40])
+def test_the_start_search_is_the_stable_order_of_distance(tmp_path, n_anchors):
+    """``nearest`` is a stable sort by distance (a tie to the older anchor, at the k-th place too), and
+    ``nearest_physical`` takes the first candidate whose start passes, searches only active rows and ends once every
+    active row has one.
+    """
+    k = constants.WARM_START_TRIES
+    rng = np.random.default_rng(n_anchors)
+    anchors = Anchors(tmp_path, 1)
+    grid = np.arange(1, 17) / 16.0  # exact binary distances, so ties are exact
+    z = rng.choice(grid, (n_anchors, 1))
+    anchors.add(z, np.arange(n_anchors, dtype=float)[:, None, None], np.zeros((n_anchors, 3)))
+    zq = np.array([[0.5], [0.25], [0.75], [0.5], [0.875]])
+    d2 = (zq - z.T) ** 2
+    want = np.argsort(d2, axis=1, kind="stable")[:, :k]
+    idx, dist = anchors.nearest(zq, k)
+    assert np.array_equal(idx, want)
+    assert np.array_equal(dist, np.sqrt(np.take_along_axis(d2, want, axis=1)))
+    # The order the search is given at Sol's case: the nearest are newer, the k-th place is a tie with the oldest.
+    tie = Anchors(tmp_path / "tie", 1)
+    zt = np.array([[0.875], [0.125], [0.375], [0.5625], [0.25], [0.4375], [0.5], [0.625], [0.75]])
+    tie.add(zt, np.zeros((9, 1, 1)), np.zeros((9, 3)))
+    assert tie.nearest(np.array([[0.5]]), 8)[0][0, -1] == 0  # 0.875 and 0.125 tie; the older one is kept
+
+    passes = rng.random(n_anchors) < 0.3  # a start passes from these anchors only
+    active = np.array([True, True, False, True, True])
+    widths = []
+
+    def ok(_Y, _refs):
+        widths.append(len(_Y))
+        return passes[_Y[:, 0, 0].astype(int)]
+
+    got, gdist, rank = anchors.nearest_physical(zq, ok, k, active)
+    hit = passes[want]
+    first = np.where(hit.any(1), hit.argmax(1), -1)
+    want_rank = np.where(active, first, 0)
+    assert np.array_equal(rank, want_rank)
+    assert np.array_equal(got, want[np.arange(len(zq)), np.maximum(want_rank, 0)])
+    assert np.array_equal(gdist, dist[np.arange(len(zq)), np.maximum(want_rank, 0)])
+    # One call per candidate place, until the last active row has its start (or the candidates run out).
+    last = want.shape[1] if (want_rank[active] < 0).any() else want_rank[active].max() + 1
+    assert widths == [len(zq)] * last
+
+
 def test_a_chunk_far_slower_than_the_runs_best_is_reported(tmp_path, caplog):
     """Seconds per solver iteration against the run's best of the mode, carried over a resume; a first chunk is not
     judged (it also pays the compile), and the report is a log line and a count, never a rejection.

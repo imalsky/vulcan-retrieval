@@ -96,17 +96,19 @@ class Anchors:
         dist = np.empty((len(zq), k))
         for j in range(0, len(zq), 64):
             d2 = ((zq[j : j + 64, None, :] - self.z[None]) ** 2).sum(-1)
-            # A partial sort: a full one took 6 times as long at 500,000 anchors. Then by distance, a tie to the
-            # older anchor.
-            near = np.argpartition(d2, k - 1, axis=1)[:, :k] if k < d2.shape[1] else np.tile(np.arange(k), (len(d2), 1))
-            dk = np.take_along_axis(d2, near, axis=1)
-            order = np.lexsort((near, dk), axis=1)
-            idx[j : j + 64] = np.take_along_axis(near, order, axis=1)
-            dist[j : j + 64] = np.sqrt(np.take_along_axis(dk, order, axis=1))
+            # A partial sort finds the k-th distance (a full sort took 6 times as long at 500,000 anchors); every
+            # anchor at or inside it is then ordered by distance, a tie to the older anchor, so a tie at the k-th
+            # place cannot drop the older one.
+            kth = np.partition(d2, k - 1, axis=1)[:, k - 1]
+            for r, row in enumerate(d2):
+                inside = np.flatnonzero(row <= kth[r])
+                near = inside[np.lexsort((inside, row[inside]))[:k]]
+                idx[j + r] = near
+                dist[j + r] = np.sqrt(row[near])
         return idx, dist
 
     def nearest_physical(
-        self, zq: np.ndarray, ok: Callable[[np.ndarray, np.ndarray], np.ndarray], k: int
+        self, zq: np.ndarray, ok: Callable[[np.ndarray, np.ndarray], np.ndarray], k: int, active: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return each query's nearest anchor whose warm start is physical, among its ``k`` nearest.
 
@@ -122,6 +124,8 @@ class Anchors:
             physical, [n].
         k : int
             Candidates tried per query.
+        active : numpy.ndarray of bool [n]
+            The queries searched; the others keep their nearest anchor, rank 0, and never prolong the search.
 
         Returns
         -------
@@ -132,7 +136,7 @@ class Anchors:
         cand, dist = self.nearest(zq, k)
         rows = np.arange(len(zq))
         rank = np.zeros(len(zq), int)
-        left = rows
+        left = rows[np.asarray(active, bool)]
         for j in range(cand.shape[1]):
             rank[left] = j
             left = left[~np.asarray(ok(*self.columns(cand[rows, rank])), bool)[left]]
