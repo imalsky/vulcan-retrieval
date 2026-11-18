@@ -420,7 +420,8 @@ posterior rows; second campaign, two cold runs stopped after 12.7 h (2000 live p
   check after it: guards on the tally (warm rows with no physical start; warm step-cap rejections against cold) and a
   cold spot-check at the run's end of 200 posterior rows and up to 100 warm rows rejected at the step cap
   (`warm_checks`; `docs/method.md` "Warm starts"). Both only warn, and the report carries them; the cold re-solve's
-  30000-step cap and its effective-sample-size gate went with the check. The draws a warm
+  30000-step cap and its effective-sample-size gate went with the check. The WASP-96b cold twin
+  (`runs/survey/wasp96b_cold.yaml`, one comparison of the whole posterior run both ways) is dropped. The draws a warm
   run rejects at the step cap are a stated limit, not solved cold per run beyond the spot-check's sample: in three
   first-campaign runs, solved cold and put back, they moved no 16th, 50th or 84th percentile by more than 0.08 sigma
   and the lower Kzz edge by 0.07 dex at most (log10 Kzz at 1 mbar; they lie at 10^10-10^11, inside the posterior),
