@@ -355,17 +355,6 @@ def compare(args) -> int:
     return int(bool(fails))
 
 
-def _wquant(x, w, q):
-    """The row of ``x`` at the weighted quantile ``q``: one rule for a weighted and an unweighted set."""
-    o = np.argsort(x)
-    c = np.cumsum(w[o])
-    return float(x[o][min(np.searchsorted(c, q * c[-1]), len(x) - 1)])
-
-
-def _wmedian(x, w):
-    return _wquant(x, w, 0.5)
-
-
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
