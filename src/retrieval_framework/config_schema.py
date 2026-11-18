@@ -98,7 +98,6 @@ class Config:
     # exojax ArtTransPure's chord quadrature: "simpson" or "trapezoid".
     rt_integration: str = "simpson"
     use_rayleigh: bool = True  # H2/He Rayleigh scattering (ExoJax; zero free params)
-    co_mode: str = "fixed_O"  # how the C/O guess is built (the engine repairs it exactly)
     count_min: int | None = None
     count_max: int | None = None
     # Largest integrator step, s; None is the VULCAN default. A cap stops large-dt Ros2 oscillations
@@ -283,7 +282,6 @@ class Config:
             "art_ptop_bar": float(self.art_ptop_bar),
             "rt_integration": str(self.rt_integration),
             "use_rayleigh": bool(self.use_rayleigh),
-            "co_mode": str(self.co_mode),
             "kzz_mode": str(self.kzz_mode),
             "cfg_overrides": dict(self.cfg_overrides),
             "gs_cgs": float(need(self.tp_gravity_cgs, "tp_gravity_cgs")),  # RT g at rp_cm = the T-P gravity
@@ -696,7 +694,6 @@ def describe_config(cfg: Config, name: str = "") -> str:
         f"    molecules: {' '.join(need(cfg.molecules, 'molecules'))}",
         (
             f"    photo={'ON' if cfg.use_photo else 'OFF'}   rayleigh={'on' if cfg.use_rayleigh else 'off'}"
-            f"   co_mode={cfg.co_mode}"
             f"   lane queue: {lanes}"
         ),
         rule("convergence  (VULCAN-master criteria; slope_cri/yconv_min/flux_cri inherit vulcan_cfg)"),

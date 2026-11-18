@@ -42,17 +42,16 @@ def test_gate_reads_the_resolved_conden_spec(conden, allow, refused):
 
 
 @pytest.mark.parametrize(
-    ("co_mode", "hi", "refused"),
+    ("hi", "refused"),
     [
-        ("fixed_O", 0.9, False),
-        ("fixed_O", 1.0, True),  # at the b_z positivity bound
-        ("fixed_O", 1.1, True),
-        ("proxy", 1.1, False),  # no b_z compensation, so no bound
+        (0.9, False),
+        (1.0, True),  # at the b_z positivity bound
+        (1.1, True),
     ],
 )
-def test_c_o_prior_reaching_the_positivity_bound_is_refused(co_mode, hi, refused):
+def test_c_o_prior_reaching_the_positivity_bound_is_refused(hi, refused):
     chem = SimpleNamespace(co_bz_bound=1.0)
-    cfg = SimpleNamespace(co_mode=co_mode, prior_c_o=(-1.0, hi))
+    cfg = SimpleNamespace(prior_c_o=(-1.0, hi))
     if refused:
         with pytest.raises(ValueError, match="positivity"):
             _refuse_c_o_bound(chem, cfg)

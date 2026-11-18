@@ -59,23 +59,21 @@ def _rtol_accept(chem: SimpleNamespace) -> float:
 
 
 def _refuse_c_o_bound(chem: SimpleNamespace, cfg: C.Config) -> None:
-    """Refuse a C/O prior that reaches the fixed-O positivity bound; ``co_mode="proxy"`` has no such bound.
+    """Refuse a C/O prior that reaches the fixed-O positivity bound.
 
     b_z must stay positive, else prior-corner columns get negative O carriers that the runner's clip turns into a
     wrong-inventory, finite-likelihood state. First order: on the baseline column; hot columns can bind slightly
     tighter.
     """
-    if str(cfg.co_mode) == "fixed_O":
-        bound = float(chem.co_bz_bound)
-        hi = float(C.need(cfg.prior_c_o, "prior_c_o")[1])
-        if hi >= bound:
-            raise ValueError(
-                f"prior_c_o upper bound {hi:+.3f} reaches the fixed-O b_z positivity "
-                f"bound {bound:+.3f} (baseline column): beyond it the O-only "
-                "compensation goes negative and the solver clips the inventory into "
-                f"silently-wrong states. Lower prior_c_o[1] below {bound:.3f} (with "
-                "margin), or use co_mode='proxy'."
-            )
+    bound = float(chem.co_bz_bound)
+    hi = float(C.need(cfg.prior_c_o, "prior_c_o")[1])
+    if hi >= bound:
+        raise ValueError(
+            f"prior_c_o upper bound {hi:+.3f} reaches the fixed-O b_z positivity "
+            f"bound {bound:+.3f} (baseline column): beyond it the O-only "
+            "compensation goes negative and the solver clips the inventory into "
+            f"silently-wrong states. Lower prior_c_o[1] below {bound:.3f} (with margin)."
+        )
 
 
 def _with_stage1_freeze(cd1: Any, cd2: Any) -> Any:
