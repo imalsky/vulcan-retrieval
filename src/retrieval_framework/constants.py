@@ -134,7 +134,7 @@ KZZ_FLOOR_MULTIPLES = (1.5, 2.0)
 BASELINE_METALLICITY_RTOL = 0.01
 # The conditioning map: equal bins over each prior box, for these parameters when the case infers them.
 COND_BINS = 10
-COND_PARAMS = ("lnKzz", "T1bar", "Tint", "lnZ")
+COND_PARAMS = ("lnKzz", "T1bar", "Tirr", "Tint", "lnZ", "c_o")
 # A network species with no opacity table, abundant in the observable layers, is reported with its abundance: the rule
 # and thresholds of jwst-transit-authority's certify.unmodeled_absorbers. Mean VMR over the transmission photosphere
 # PHOTOSPHERE_BAR (bar) above UNMODELED_VMR, an order of magnitude below the bulk carriers. NO_OPACITY_TABLE are the

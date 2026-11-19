@@ -246,7 +246,7 @@ def derived_quantities(out_dir: str | Path) -> dict[str, Any] | None:
 
 
 def _conditioning_map(out_dir: str | Path) -> dict[str, Any] | None:
-    """Return where the rejections sit, for lnKzz, the deep T-P parameter and lnZ, one at a time.
+    """Return where the rejections sit, for lnKzz, the T-P parameters, lnZ and C/O, one at a time.
 
     ``constants.COND_BINS`` equal bins over the prior box, each with the in-window proposals evaluated, the rejected
     fraction and the posterior weight. A batch redrawn after a resume counts twice. None without anchors/ (a cold run

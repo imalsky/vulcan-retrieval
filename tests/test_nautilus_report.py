@@ -376,7 +376,8 @@ def test_certificate_and_figures(tmp_path, monkeypatch):
     assert kzz["n_in_window"] == [19] + [9] * 9
     assert kzz["rejected_frac"] == pytest.approx([10 / 19] + [0.0] * 9)
     assert sum(kzz["posterior_weight"]) == pytest.approx(1.0)
-    assert "lnZ" in cond
+    assert {"lnZ", "c_o", "Tirr"} <= cond.keys()
+    assert sum(cond["c_o"]["n_in_window"]) == 100
     assert "Tint" not in cond
     text = " ".join(cert["caveats"])
     for phrase in (
