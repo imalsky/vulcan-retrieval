@@ -9,8 +9,7 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 - Version 0.28.0: the v5 model options (T at a deep level in place of Tint, the window on the chemistry grid, `s_o`, a
   Gaussian `lnM` and the grey deck; "Design records"), the rejected-draw log and the certificate's derived quantities.
   pyproject floors: vulcan-forward>=0.33.0 (no `kzz_mode`; `warm_start_ok` since 0.32.0), vulcan3>=0.19.0.
-  `requirements-hpc.txt` pins vulcan3 `6698920` and vulcan-forward `b224861` (0.32.0; the second campaign's code, with
-  `warm_start_ok`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. TestPyPI releases, tags confirmed by
+  `requirements-hpc.txt` pins vulcan3 `32c6a95` (0.19.0) and vulcan-forward `48b5f9e` (0.33.0), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. TestPyPI releases, tags confirmed by
   the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0, jwst-transit-authority 0.72.0.
 - Production: `run_nautilus`, the only sampler, warm starts from a growing anchor set, solver `ffi` (the spec's
   `runtime` block), one chemistry program per draw (v5: rtol 0.05 within 5000 accepted steps; v4 ran the presolve chain,
