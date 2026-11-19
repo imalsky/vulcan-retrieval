@@ -54,6 +54,7 @@ _CFG_OVERRIDES = {
     "use_settling": False,
     "fix_species": ["S8", "S8_l_s"],
     "fix_species_from_coldtrap_lev": False,  # whole-column pin (isothermal-safe)
+    "element_budget_tol": float("inf"),  # the pin opens the column; vulcan3 refuses a finite budget
     "start_conden_time": 0.0,
     "stop_conden_time": STOP_CONDEN,
     # Convergence mixing-ratio floor raised from the 1e-20 default: at 400 K
