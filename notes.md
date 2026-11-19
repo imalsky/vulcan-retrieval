@@ -307,6 +307,14 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   1.22x faster, known-length longest-first 1.14x; capped draws hold 20-37% of a warm batch's accepted steps (64% cold);
   rungs 66/33 1.03x; n_batch 3168 1.10x per draw before its sampler cost; 792 lanes ~5% (memory unmeasured); each batch
   split over 2 / 3 GPUs (stock nautilus `pool` splits a vectorized batch) 1.68x / 2.24x wall for +19% / +34% GPU-hours.
+- Sampling-phase fan-out (todo, after the survey): after exploration the shells are fixed and each batch is an
+  independent draw from one, so N jobs can draw and solve their own batches and a merge pools the per-shell counts
+  (nautilus sampler.py: `add_bound` only while exploring, the estimator per shell). Replay of 10 finished NAS runs [E]:
+  2 GPUs WASP-39b 64 -> 36 h (1.76x), HD 209458b 1.77x, WASP-107b 1.50x, short runs 1.3-1.5x; 4 GPUs 2.0-2.9x;
+  exploration (13-49% of wall time) stays serial. Extra GPU-hours +1-6% [M toy, E real]: worker startup ~6 min and
+  allocation on stale data (+1% calls at 2 workers, +6% at 4). Toy: logZ and mode weights match one run. On resume
+  nautilus restores its RNG and each bound's cached draws, so each worker must reseed and clear them. Scratch:
+  `scratch/multi_gpu/` (laptop and NAS).
 - T-P-invalid draws take no chemistry step and no RT from baseline v4 (the maintainer's choice; manifest_version 4).
   32.4% of the box prior is out of window [M, outside review]; the saving sits in the exploration phase and the first
   batches (the shells hold far fewer [I]). Not bitwise for the kept draws: fewer jobs on the lane queue shift the shared
