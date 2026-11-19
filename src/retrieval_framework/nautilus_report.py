@@ -74,6 +74,9 @@ _ARCHIVED_LINES = {
     "atom_list": '"atom_list": ["H", "O", "C", "N", "S"]',
     "art_pbtm_bar": '"art_pbtm_bar": 7.0',
 }
+# Removed options and the value that matches today's model; a run that set another value used a model this tree no
+# longer builds, so its report must be written at the last commit that had the option.
+_RETIRED_OPTIONS = {"tp_adiabat": (False, "5ab15f2"), "kzz_mode": ("scale", "5ab15f2")}
 
 
 def _tp_params(t: np.ndarray, names: list[str], cfgj: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -574,7 +577,7 @@ def config_from_json(path: Path) -> C.Config:
     Raises
     ------
     RuntimeError
-        If the run solved with a second program this tree no longer builds.
+        If the run solved with a second program, or set a removed option to a model, this tree no longer builds.
     ValueError
         If it lacks a key with no default, or ``validate_config`` refuses it.
     """
@@ -585,6 +588,12 @@ def config_from_json(path: Path) -> C.Config:
         raise RuntimeError(
             f"{path} ran the presolve chain or its retry pass, a second program this tree no longer builds: re-solve "
             "its draws at vulcan-retrieval 0a2dbf3"
+        )
+    retired = {k: d[k] for k, (today, _) in _RETIRED_OPTIONS.items() if k in d and d[k] != today}
+    if retired:
+        raise RuntimeError(
+            f"{path} ran {retired}, options this tree no longer builds: write its report at vulcan-retrieval "
+            + ", ".join(sorted({_RETIRED_OPTIONS[k][1] for k in retired}))
         )
     names = {f.name for f in fields(C.Config)}
     kw: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in d.items() if k in names}

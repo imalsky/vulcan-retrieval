@@ -129,6 +129,27 @@ def test_a_second_program_run_is_refused_rather_than_re_solved_without_it(tmp_pa
         NR.config_from_json(tmp_path / "config.json")
 
 
+@pytest.mark.parametrize(
+    ("key", "value", "refused"),
+    [
+        ("tp_adiabat", True, True),
+        ("kzz_mode", "powerlaw", True),
+        ("tp_adiabat", False, False),
+        ("kzz_mode", "scale", False),
+    ],
+)
+def test_a_run_on_a_removed_option_is_refused_and_its_default_is_read(tmp_path, key, value, refused):
+    """A removed option at its old default reads as today's model; any other value names the commit to report it at."""
+    _run_dir(tmp_path)
+    cfgj = json.loads((tmp_path / "config.json").read_text())
+    (tmp_path / "config.json").write_text(json.dumps({**cfgj, key: value}))
+    if refused:
+        with pytest.raises(RuntimeError, match="5ab15f2"):
+            NR.config_from_json(tmp_path / "config.json")
+    else:
+        NR.config_from_json(tmp_path / "config.json")
+
+
 def test_an_archived_config_is_rebuilt_with_every_drop_and_fill_logged(tmp_path, caplog):
     """An old config.json keeps working: a retired key is dropped and a newer key filled, each logged; a key with no
     default that the old run did not record is refused with the line that restores the value it ran with.
