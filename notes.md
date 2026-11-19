@@ -314,6 +314,10 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   allocation on stale data (+1% calls at 2 workers, +6% at 4). Toy: logZ and mode weights match one run. On resume
   nautilus restores its RNG and each bound's cached draws, so each worker must reseed and clear them. Scratch:
   `scratch/multi_gpu/` (laptop and NAS).
+- `Anchors.nearest` shortlists with a k-d tree and ranks the shortlist by the exhaustive search's own squared
+  distances and tie rule; a shortlist is kept only when every anchor left out is farther than the k-th, so the start
+  choice is bit-identical (`test_the_tree_search_is_the_brute_force_search_bit_for_bit`). One 1,584-row batch, 8 keys,
+  5,000 duplicated: 5.6 -> 0.12 s at 213,000 anchors, 13.8 -> 0.25 s at 500,000, the GPU idle meanwhile [M, Mac CPU].
 - T-P-invalid draws take no chemistry step and no RT from baseline v4 (the maintainer's choice; manifest_version 4).
   32.4% of the box prior is out of window [M, outside review]; the saving sits in the exploration phase and the first
   batches (the shells hold far fewer [I]). Not bitwise for the kept draws: fewer jobs on the lane queue shift the shared

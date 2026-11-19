@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from scipy.spatial import cKDTree
+
+from retrieval_framework import constants
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,6 +44,7 @@ class Anchors:
         self.refs = np.empty((0, self.N_REF))
         self.parts: list[np.ndarray] = []
         self.part, self.row = np.empty(0, int), np.empty(0, int)
+        self._tree: cKDTree | None = None
         for f in sorted(folder.glob("anchors_*.npz")):
             with np.load(f) as d:
                 self._append(d["z"], d["Y"], d["refs"])
@@ -59,6 +63,7 @@ class Anchors:
         self.parts.append(np.asarray(Y))
         self.z = np.concatenate([self.z, z])
         self.refs = np.concatenate([self.refs, refs])
+        self._tree = None
 
     def add(self, z: np.ndarray, Y: np.ndarray, refs: np.ndarray) -> None:
         """Append certified columns as one new file.
@@ -91,20 +96,30 @@ class Anchors:
         tuple of numpy.ndarray [n, k]
             ``(index, distance)``.
         """
-        k = min(k, len(self.z))
+        n = len(self.z)
+        k = min(k, n)
+        tree = self._tree
+        if tree is None:
+            tree = self._tree = cKDTree(self.z)
         idx = np.empty((len(zq), k), int)
         dist = np.empty((len(zq), k))
-        for j in range(0, len(zq), 64):
-            d2 = ((zq[j : j + 64, None, :] - self.z[None]) ** 2).sum(-1)
-            # A partial sort finds the k-th distance (a full sort took 6 times as long at 500,000 anchors); every
-            # anchor at or inside it is then ordered by distance, a tie to the older anchor, so a tie at the k-th
-            # place cannot drop the older one.
-            kth = np.partition(d2, k - 1, axis=1)[:, k - 1]
-            for r, row in enumerate(d2):
-                inside = np.flatnonzero(row <= kth[r])
-                near = inside[np.lexsort((inside, row[inside]))[:k]]
-                idx[j + r] = near
-                dist[j + r] = np.sqrt(row[near])
+        for r, q in enumerate(zq):
+            m = min(n, constants.ANCHOR_SHORTLIST_FACTOR * k)
+            while True:
+                tdist, cand = tree.query(q, m)
+                cand = np.atleast_1d(cand)
+                d2 = ((q[None, :] - self.z[cand]) ** 2).sum(-1)
+                kth = np.partition(d2, k - 1)[k - 1]
+                if m == n or np.atleast_1d(tdist)[-1] ** 2 > kth * (1.0 + constants.ANCHOR_SHORTLIST_MARGIN):
+                    break
+                m = min(n, 2 * m)
+            # Every anchor at or inside the k-th distance is ordered by distance, a tie to the older anchor, so a tie
+            # at the k-th place cannot drop the older one.
+            inside = cand[d2 <= kth]
+            d2_in = d2[d2 <= kth]
+            order = np.lexsort((inside, d2_in))[:k]
+            idx[r] = inside[order]
+            dist[r] = np.sqrt(d2_in[order])
         return idx, dist
 
     def nearest_physical(

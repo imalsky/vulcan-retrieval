@@ -290,6 +290,24 @@ def test_the_start_search_is_the_stable_order_of_distance(tmp_path, n_anchors):
     assert widths == [len(zq)] * last
 
 
+def test_the_tree_search_is_the_brute_force_search_bit_for_bit(tmp_path):
+    """The k-d tree only shortlists: index and distance equal an exhaustive search's, with duplicate keys (a batch
+    added twice after a resume), queries on an anchor, and k-th place ties.
+    """
+    k = constants.WARM_START_TRIES
+    rng = np.random.default_rng(7)
+    base = rng.uniform(0.0, 1.0, (3000, 8))
+    z = np.concatenate([base, base[:500], np.repeat(base[500:510], 40, axis=0)])
+    anchors = Anchors(tmp_path, 8)
+    anchors.add(z, np.zeros((len(z), 1, 1)), np.zeros((len(z), 3)))
+    zq = np.concatenate([rng.uniform(0.0, 1.0, (200, 8)), base[:20], base[500:510]])
+    d2 = ((zq[:, None, :] - z[None]) ** 2).sum(-1)
+    want = np.argsort(d2, axis=1, kind="stable")[:, :k]
+    idx, dist = anchors.nearest(zq, k)
+    assert np.array_equal(idx, want)
+    assert np.array_equal(dist, np.sqrt(np.take_along_axis(d2, want, axis=1)))
+
+
 def test_a_chunk_far_slower_than_the_runs_best_is_reported(tmp_path, caplog):
     """Seconds per solver iteration against the run's best of the mode, carried over a resume; a first chunk is not
     judged (it also pays the compile), and the report is a log line and a count, never a rejection.

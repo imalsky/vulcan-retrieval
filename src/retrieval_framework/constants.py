@@ -10,6 +10,8 @@ engine is imported. The methods behind the numbers are in docs/method.md.
 from __future__ import annotations
 
 __all__ = [
+    "ANCHOR_SHORTLIST_FACTOR",
+    "ANCHOR_SHORTLIST_MARGIN",
     "BASELINE_METALLICITY_RTOL",
     "BATCH_PER_LANE",
     "COND_BINS",
@@ -89,6 +91,11 @@ TERM_DT_MIN_FROZEN = 4
 # Anchors tried, nearest first, for a warm start that is physical: of the starts the nearest anchor cannot give, 97-98 %
 # come from one of the 4 nearest (notes "Warm starts").
 WARM_START_TRIES = 8
+# The nearest-anchor search shortlists with a k-d tree, then ranks by exact squared distances. A shortlist is kept once
+# its farthest tree distance squared exceeds the k-th exact one by this relative margin, far above the tree's float64
+# rounding (~1e-15), so no anchor left out can reach the k-th place; else it doubles. The first holds FACTOR x k.
+ANCHOR_SHORTLIST_MARGIN = 1.0e-9
+ANCHOR_SHORTLIST_FACTOR = 4
 # A warm run warns when more than this share of its in-window warm rows had no physical start among the anchors tried:
 # 7 of 17,424 warm rows (0.04 %) in the GPU test of the start choice (notes "Warm starts").
 WARM_NONE_WARN_FRAC = 0.005
