@@ -260,10 +260,10 @@ SPOT = {
         ),
         (
             {
-                "warm_start_guards": {"warnings": [], "skipped": ["step-cap guard: 0 in-window cold and 9 warm rows"]},
+                "warm_start_guards": {"warnings": [], "skipped": ["no-start guard: no in-window warm row"]},
                 "spot_check": {"status": "skipped", "reason": "it needs about 900 s"},
             },
-            ["Not computed: step-cap guard", "spot-check was skipped: it needs about 900 s"],
+            ["Not computed: no-start guard", "spot-check was skipped: it needs about 900 s"],
         ),
         ({}, ["records no warm-start guards", "records no end-of-run spot-check"]),
     ],

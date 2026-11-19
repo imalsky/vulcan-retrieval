@@ -177,13 +177,13 @@ in the log. Draws and spectra go to `nautilus_spectra.npz`.
 
 ### e2e_check
 
-Rungs, top to bottom; batch rungs run on the run's GPU, and each fixes every other setting:
+Rungs, top to bottom; batch rungs run on the run's GPU, and an unlisted setting keeps the spec's value:
 
 | Rung | Change |
 |---|---|
 | `production` | The spec's runtime and lanes, one batch of every draw through the production cold evaluator |
 | `shuffled` | The draws in another order; production against shuffled is the noise floor between two equivalent solves |
-| `fast` | The fast solver (JAX scans) in place of the CUDA kernel |
+| `fast` | `XLA_FLAGS` unset, the codegen chemistry RHS and the fast solver (JAX scans) in place of the CUDA kernel |
 | `solo_cpu` | Each draw alone, fast and codegen, on the CPU |
 | `reference_cpu` | The reference solver on the CPU: the parity pair behind the VULCAN 2 gates |
 
