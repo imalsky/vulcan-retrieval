@@ -325,3 +325,19 @@ def test_an_archived_manifest_hashes_as_it_was_written(tmp_path):
 def test_a_damaged_manifest_reads_as_unreadable(tmp_path, manifest):
     (tmp_path / provenance.MANIFEST_FILE).write_text(manifest)
     assert provenance.archived_manifest_digest(tmp_path).startswith("unreadable: ")
+
+
+def test_the_manifest_records_each_commit_and_a_matching_tree_raises_no_code_caveat(digest_pipe, monkeypatch):
+    """The commit is recorded but not hashed, so the report can tell whether it runs at the run's own commits."""
+    from retrieval_framework import nautilus_report
+
+    cfg = case_config(molecules=("H2O",))
+    monkeypatch.setattr(provenance, "_repo_states", lambda *_a, **_k: _repo(dirty=False))
+    manifest = provenance.target_manifest(cfg, digest_pipe)
+    assert manifest["code"]["r"]["commit"] == "a" * 40
+    digest = provenance.target_digest(cfg, digest_pipe)
+    same = nautilus_report._identity_caveats(manifest, digest, digest, _repo(dirty=False))
+    assert same == []
+    moved = nautilus_report._identity_caveats(manifest, digest, digest, _repo(commit="b" * 40))
+    assert len(moved) == 1
+    assert "another commit" in moved[0]

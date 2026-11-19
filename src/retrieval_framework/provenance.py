@@ -489,12 +489,18 @@ def target_manifest(cfg: C.Config, pipe: Pipeline) -> dict[str, Any]:
         "n_bin": int(pipe.n_bin),
         **science_data_identity(C.need(cfg.molecules, "molecules")),
         "case_inputs": case_inputs(cfg.vulcan_cfg_name, cfg.cfg_overrides),
-        # The source tree, not the commit: a docs-only commit must not refuse a resume. Not dirty_files: that list
-        # churns with any scratch edit, while src_diff moves only when the uncommitted code changes.
+        # The source tree binds the run, not the commit: a docs-only commit must not refuse a resume, so the commit is
+        # recorded but not hashed (`_canonical`). Not dirty_files: that list churns with any scratch edit, while
+        # src_diff moves only when the uncommitted code changes.
         "code": {
             r: None
             if s is None
-            else {"src_tree": s.get("src_tree"), "dirty": s.get("dirty"), "src_diff": s.get("src_diff")}
+            else {
+                "commit": s.get("commit"),
+                "src_tree": s.get("src_tree"),
+                "dirty": s.get("dirty"),
+                "src_diff": s.get("src_diff"),
+            }
             for r, s in _repo_states().items()
         },
         "versions": _versions(),
@@ -522,11 +528,15 @@ def _canonical(manifest: dict) -> str:
     """Return the one serialization the digest is taken over, shared by the live digest and the archived re-hash.
 
     From version 6 a repository's ``dirty`` is recorded but not hashed: editing a PBS script must not break a chained
-    resume, and ``src_diff`` binds the source. An older archived manifest hashes as it was written.
+    resume, and ``src_diff`` binds the source. From version 11 the ``commit`` is recorded but not hashed: ``src_tree``
+    binds the code. An older archived manifest hashes as it was written.
     """
-    if manifest.get("manifest_version", 0) >= 6:
+    version = manifest.get("manifest_version", 0)
+    if version >= 6:
+        unhashed = {"dirty", "commit"} if version >= 11 else {"dirty"}
         code = {
-            r: s if s is None else {k: v for k, v in s.items() if k != "dirty"} for r, s in manifest["code"].items()
+            r: s if s is None else {k: v for k, v in s.items() if k not in unhashed}
+            for r, s in manifest["code"].items()
         }
         manifest = {**manifest, "code": code}
     return json.dumps(manifest, sort_keys=True, default=str)
