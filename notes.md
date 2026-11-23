@@ -306,7 +306,7 @@ One entry per run: job id, settings, numbers as run; posterior medians with [16%
   1.22x faster, known-length longest-first 1.14x; capped draws hold 20-37% of a warm batch's accepted steps (64% cold);
   rungs 66/33 1.03x; n_batch 3168 1.10x per draw before its sampler cost; 792 lanes ~5% (memory unmeasured); each batch
   split over 2 / 3 GPUs (stock nautilus `pool` splits a vectorized batch) 1.68x / 2.24x wall for +19% / +34% GPU-hours.
-- Sampling-phase fan-out (todo, after the survey): after exploration the shells are fixed and each batch is an
+- Sampling-phase fan-out (not built and not tracked: dropped from the todo by the maintainer): after exploration the shells are fixed and each batch is an
   independent draw from one, so N jobs can draw and solve their own batches and a merge pools the per-shell counts
   (nautilus sampler.py: `add_bound` only while exploring, the estimator per shell). Replay of 10 finished NAS runs [E]:
   2 GPUs WASP-39b 64 -> 36 h (1.76x), HD 209458b 1.77x, WASP-107b 1.50x, short runs 1.3-1.5x; 4 GPUs 2.0-2.9x;
