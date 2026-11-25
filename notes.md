@@ -8,9 +8,10 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
 
 - Version 0.28.0: the v5 model options (T at a deep level in place of Tint, the window on the chemistry grid, `s_o`, a
   Gaussian `lnM` and the grey deck; "Design records"), the rejected-draw log and the certificate's derived quantities.
-  pyproject floors: vulcan-forward>=0.33.0 (no `kzz_mode`; `warm_start_ok` since 0.32.0), vulcan3>=0.19.0.
-  `requirements-hpc.txt` pins vulcan3 `32c6a95` (0.19.0) and vulcan-forward `48b5f9e` (0.33.0), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. TestPyPI releases, tags confirmed by
-  the maintainer: vulcan3 0.18.0, vulcan-forward 0.29.0, this repo 0.27.0, jwst-transit-authority 0.72.0.
+  pyproject floors: vulcan-forward>=0.34.0 (its cold seed passes the run config; `warm_start_ok` since 0.32.0),
+  vulcan3>=0.20.0. `requirements-hpc.txt` pins vulcan3 `eb13008` (0.20.0, tag `v0.20.0`) and vulcan-forward `f0748ae`
+  (0.34.0, tag `v0.34.0`), jax 0.6.2, exojax 2.6.0 and the stock nautilus-sampler 1.0.6. Latest on TestPyPI [M]:
+  vulcan3 0.20.0, vulcan-forward 0.34.0, this repo 0.28.0, jwst-transit-authority 0.73.0.
 - Production: `run_nautilus`, the only sampler, warm starts from a growing anchor set, solver `ffi` (the spec's
   `runtime` block), one chemistry program per draw (v5: rtol 0.05 within 5000 accepted steps; v4 ran the presolve chain,
   "Superseded designs"), per-instrument noise inflation and log10gamma down to -3. v4 sampled 15 parameters; v5 samples
@@ -18,26 +19,29 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   The headline run is v5 (`runs/w39b_smc_retrieval/wasp39_test1.yaml`, the external-review configuration; "Runs",
   wasp39_test1). WASP-107b ("Design records"): three finished runs ("Runs", w107b), specs and inputs removed; their
   certificates lack the report's fixed Kzz block, so the "Runs" Kzz numbers are hand-derived.
-- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`; "Design records", sulfur survey case). The NAS trees
-  are behind the pins: they need a pull, the bootstrap (vulcan-forward 0.31.1 has a new dependency), the kernel test and
-  the k-tables of H2CO and CS. The first submissions (retrieval `49badf9`) all ended unfinished (todo). The maintainer
-  decided: at most two survey runs at a time.
+- Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`; "Design records", sulfur survey case). The NAS
+  survey tree is at the pins [M, NAS]: its own install rebuilt, the kernel test passed (32 and 7 tests), all 14 k-tables
+  and both CIA files in place, the six specs through `submit.py --dry-run`, and the queue script at two runs. The first
+  submissions (retrieval `49badf9`) were stopped before any finished. The maintainer decided: at most two survey runs at
+  a time.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
   to v5 and the three WASP-107b runs solved the 2021 `SNCHO_photo_network.txt` (89): their config.json lacks `network`,
   `atom_list` and `art_pbtm_bar`, so the report and the forward checks refuse them until those lines are added (the
   refusal names them: the 2021 network, H,O,C,N,S, 7.0 bar). The maintainer decided against rerunning the finished runs
   on the 2025 file and against the WASP-107b prior-edge rerun (Tirr, C/O and log10 gamma edges widened).
-- Tests [M], daw CPU `-n 8`: normal 283 passed in 48 s; CI runs it serially on Python 3.10-3.12, and its stack-free unit
-  job (`fail_under` 80) enforces the coverage floor. Full tier: the job-path test
-  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) took 86.6 min alone on 10 unshared cores (retrieval
-  `2b89bf1`, vulcan3 `ae21fef`, vulcan-forward `2fdf5a2`), inside the 100-minute cap: first leg 58 min (cold chunk 36.8
-  min, three warm chunks 6.5-7.7), resume 1 min of rebuild and 25.9 min for four warm chunks. The other 15 slow tests:
-  14 min at `-n 8` for 13, and the two prior-draw tests 6 and 14 min, each alone ("HPC (NAS GH200) and daw", CPU cores).
+- Tests [M]: normal tier 303 passed in 27 s on the laptop (`-n 6`); CI runs it serially on Python 3.10-3.12, and its
+  stack-free unit job (`fail_under` 80) enforces the coverage floor. Full tier on daw CPU at retrieval `7432018` with
+  vulcan3 0.20.0 and vulcan-forward 0.34.0: the job-path test
+  (`test_run_nautilus_runs_the_smoke_case_end_to_end_and_resumes`) passed alone on 10 unshared cores in 50.4 min; the
+  rest at `-n 8` gave 315 passed, 2 failed, 1 xfailed in 15.2 min. Both failures (todo) fail the same way with the
+  pins before (vulcan3 0.19.0, vulcan-forward 0.33.0), so the release did not cause them.
 - Truth test [M] (`tests/test_truth_scores_highest.py`, slow): `generate_observations` at the smoke truth with the
   injected noise scaled to nothing (`truth_noise_inflation` 1e-30; the cloud at log10 kappa -3.0, so cloud_alpha acts),
   then the run's own cold batched log-likelihood (`run_nautilus.make_loglike`) on the truth and 8 points each stepped
   0.3 prior widths inside the prior, all solved cold at `count_max` 2000 and certified: the truth scores highest against
-  all 8. With the 120 ppm synthetic noise, chi^2 at the truth is 2.790 against 2.794-2.799 for the lnKzz step (a x16 Kzz
+  all 8. On daw at retrieval `7432018` one of the 8 (the fourth parameter's step) exhausts the 2000-step cap under
+  vulcan3 0.19.0, at vulcan3 `d86fb9b` (the bottom-up seed without the C35 boundary rows) and under 0.20.0 (todo); the 8 points that certify took
+  4035, 3360 and 4661 steps in total. With the 120 ppm synthetic noise, chi^2 at the truth is 2.790 against 2.794-2.799 for the lnKzz step (a x16 Kzz
   moves the three CO bins by chi^2 0.001-0.002) and 2.789 for cloud_alpha at the smoke cloud (-6.5): a noisy draw cannot
   rank those, so the test uses noise-free data.
 
