@@ -37,11 +37,11 @@ dependencies = [
     "scipy>=1.12",
     "PyYAML>=6",        # the run specification files (run_setup.load_spec)
     # The forward-model engine (chemistry + ExoJAX RT) owns the exojax pin.
-    # Floor: the engine without kzz_mode and the co_mode proxy (0.33.0); warm_start_ok,
-    # which the warm-start choice calls, came in 0.32.0.
-    "vulcan-forward>=0.33.0",
-    # Floor: vulcan-forward's own (the public names it imports).
-    "vulcan3>=0.19.0",
+    # Floor: the engine whose cold seed passes the run config to vulcan3's seed (0.34.0);
+    # warm_start_ok, which the warm-start choice calls, came in 0.32.0.
+    "vulcan-forward>=0.34.0",
+    # Floor: vulcan-forward's own (the seed functions that take the run config).
+    "vulcan3>=0.20.0",
 ]
 
 [project.urls]

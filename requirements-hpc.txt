@@ -6,7 +6,7 @@
 # The package metadata (vulcan-retrieval's pyproject) declares version FLOORS for
 # TestPyPI; THIS file carries the chemistry commits the next NAS run uses -- keep the
 # pins at or above those floors
-# (vulcan3>=0.19.0, vulcan-forward>=0.33.0).
+# (vulcan3>=0.20.0, vulcan-forward>=0.34.0).
 # vulcan-forward is pinned the same way: it sits between the two in the DAG and
 # is TestPyPI-only, so without a git pin `-e .` cannot resolve it at all.
 # ExoJax is a plain pip dependency; the opacity data (k-tables, CIA) are
@@ -29,6 +29,6 @@ h5py>=3
 # run_nautilus: the stock PyPI release (validate_env checks the version and refuses
 # the former SiLU / spread_batch fork, which carried the same version string)
 nautilus-sampler==1.0.6
-vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@32c6a950ddcd2906591c29a2a9095f31de60c634
-vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@48b5f9e7a202acaf5d42bf1617e26310d78b3d0f
+vulcan3 @ git+https://github.com/imalsky/VULCAN3.git@eb13008e76edbb0391e3eb0406b03d6ecbe441d1
+vulcan-forward @ git+https://github.com/imalsky/vulcan-forward.git@f0748aefc5043fd68b3e92facda6a5ec0d25f505
 -e .
