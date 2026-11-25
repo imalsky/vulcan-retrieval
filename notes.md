@@ -21,7 +21,8 @@ estimated or modelled, [I] inferred. sigma = posterior standard deviation, L = l
   certificates lack the report's fixed Kzz block, so the "Runs" Kzz numbers are hand-derived.
 - Next: the sulfur survey, six runs (`runs/survey/<planet>.yaml`; "Design records", sulfur survey case). The NAS
   survey tree runs the pinned code (later commits change notes.md only) [M, NAS]: its own install rebuilt, the kernel test passed (32 and 7 tests), all 14 k-tables
-  and both CIA files in place, the six specs through `submit.py --dry-run`, and the queue script at two runs. The first
+  and both CIA files in place, the six specs through `submit.py --dry-run`. Launched from `77382c1`: the queue script in tmux on cghfe02 at two runs
+  and one resume per planet, HD 189733b and HD 209458b first (NAS jobs 127918 and 127919). The first-campaign
   submissions (retrieval `49badf9`) were stopped before any finished. The maintainer decided: at most two survey runs at
   a time.
 - Network: `config.network`, required (no default); the base specs name the 2025 SNCHO file (93 species). Every run up
